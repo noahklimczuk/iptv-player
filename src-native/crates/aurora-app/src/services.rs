@@ -37,6 +37,18 @@ impl Services {
             tracing::error!("database failed its integrity check");
         }
 
+        // A library imported before this build — or before the classifier last changed
+        // its mind — has no language or quality on its rows, so the filters would have
+        // nothing to read. Sync does this too; this is for the copy already on disk.
+        let mut db = db;
+        match aurora_db::repo::filtering::reclassify_if_stale(&mut db) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("classified {n} library rows for filtering"),
+            // Not being able to classify is not a reason to refuse to start: the
+            // filters simply hide nothing until the next sync.
+            Err(e) => tracing::warn!("could not classify the library: {e}"),
+        }
+
         let http = HttpClient::new(HttpConfig::default())
             .map_err(|e| crate::AppError::Other(e.message))?;
 

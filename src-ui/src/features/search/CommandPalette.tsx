@@ -18,11 +18,13 @@ const GROUPS: { key: keyof SearchResults; label: string; icon: IconName }[] = [
 ];
 
 export function CommandPalette({
-  open, onClose, onPick,
+  open, onClose, onPick, initialQuery = '',
 }: {
   open: boolean;
   onClose: () => void;
   onPick: (hit: SearchHit) => void;
+  /** Opened from somewhere with a subject in mind — a programme title, say. */
+  initialQuery?: string;
 }) {
   const [text, setText] = useState('');
   const [results, setResults] = useState<SearchResults | null>(null);
@@ -31,12 +33,17 @@ export function CommandPalette({
 
   useEffect(() => {
     if (open) {
-      setText('');
+      setText(initialQuery);
       setResults(null);
       setCursor(0);
-      requestAnimationFrame(() => inputRef.current?.focus());
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        // Selected rather than appended to: the seed is a starting point, and typing
+        // over it is the most likely next thing.
+        inputRef.current?.select();
+      });
     }
-  }, [open]);
+  }, [open, initialQuery]);
 
   useEffect(() => {
     if (!open) return;

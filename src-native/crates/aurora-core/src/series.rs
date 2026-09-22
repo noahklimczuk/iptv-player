@@ -98,6 +98,8 @@ pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>)
     struct Accum {
         title: String,
         year: Option<i32>,
+        group: Option<String>,
+        quality: Option<String>,
         seasons: BTreeMap<u16, Vec<EpisodeRef>>,
     }
 
@@ -120,6 +122,8 @@ pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>)
         let slot = shows.entry(key).or_insert_with(|| Accum {
             title: cleaned.title.clone(),
             year: cleaned.year,
+            group: entry.group.clone(),
+            quality: None,
             seasons: BTreeMap::new(),
         });
 
@@ -129,6 +133,17 @@ pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>)
         }
         if slot.year.is_none() {
             slot.year = cleaned.year;
+        }
+        if slot.group.is_none() {
+            slot.group.clone_from(&entry.group);
+        }
+        // A show is only as good as its best episode stream.
+        let found = cleaned
+            .quality
+            .clone()
+            .or_else(|| title::detect_quality(&entry.name));
+        if title::quality_rank(found.as_deref()) > title::quality_rank(slot.quality.as_deref()) {
+            slot.quality = found;
         }
 
         let season = slot.seasons.entry(marker.season).or_default();
@@ -147,6 +162,8 @@ pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>)
         .map(|accum| SeriesGroup {
             title: accum.title,
             year: accum.year,
+            group: accum.group,
+            quality: accum.quality,
             seasons: accum
                 .seasons
                 .into_iter()

@@ -30,8 +30,13 @@ const xFor = (t: number, from: number) => ((t - from) / 60) * PX_PER_MIN;
 
 export function GuidePage({
   onTune,
+  onCatchup,
+  onSearch,
 }: {
   onTune: (channel: Channel) => void;
+  onCatchup: (channelId: number, start: number, stop: number) => Promise<void>;
+  /** Open the command palette looking for this title. */
+  onSearch: (query: string) => void;
 }) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const [from, setFrom] = useState(() => floorToSlot(Math.floor(Date.now() / 1000)));
@@ -120,7 +125,13 @@ export function GuidePage({
           }}
         >
           <PreviewPane channel={previewChannel} onTune={onTune} />
-          <InfoPane selected={selected} onTune={onTune} dvr={dvr} />
+          <InfoPane
+            selected={selected}
+            onTune={onTune}
+            onCatchup={onCatchup}
+            onSearch={onSearch}
+            dvr={dvr}
+          />
         </aside>
 
         {/* The grid. */}
@@ -344,9 +355,46 @@ function ChannelCell({
         {channel.name}
       </span>
       {channel.hasCatchup && (
-        <Icon name="back10" size={13} style={{ color: 'var(--text-faint)', marginLeft: 'auto' }} />
+        <span
+          role="img"
+          aria-label="Catch-up available"
+          title="Catch-up available"
+          style={{ marginLeft: 'auto', display: 'flex', color: 'var(--text-faint)' }}
+        >
+          <Icon name="back10" size={13} />
+        </span>
       )}
     </button>
+  );
+}
+
+/**
+ * The same channel at other qualities (README §7.3: "one entry with a quality
+ * selector"). Only appears when the provider actually carries more than one, which is
+ * also when collapsing duplicates has hidden the others from the list.
+ */
+function ChannelSources({
+  channel, onTune,
+}: { channel: Channel; onTune: (c: Channel) => void }) {
+  const { data } = useCommand('library.alternates', { kind: 'live', id: channel.id },
+    [channel.id]);
+  const alternates = (data ?? []).filter((a) => a.id !== channel.id);
+  if (alternates.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>Also in</span>
+      {alternates.map((a) => (
+        <Button
+          key={a.id}
+          size="sm"
+          variant="ghost"
+          onClick={() => onTune({ ...channel, id: a.id, name: a.name, quality: a.quality })}
+        >
+          {a.quality ?? 'Unknown'}
+        </Button>
+      ))}
+    </div>
   );
 }
 
@@ -521,12 +569,15 @@ function PreviewPane({
 }
 
 function InfoPane({
-  selected, onTune, dvr,
+  selected, onTune, onCatchup, onSearch, dvr,
 }: {
   selected: { ch: Channel; prog: Programme } | null;
   onTune: (c: Channel) => void;
+  onCatchup: (channelId: number, start: number, stop: number) => Promise<void>;
+  onSearch: (query: string) => void;
   dvr: ReturnType<typeof useDvrMarks>;
 }) {
+  const [catchupError, setCatchupError] = useState<string | null>(null);
   if (!selected) {
     return (
       <div
@@ -545,6 +596,8 @@ function InfoPane({
   const airing = prog.start <= now && prog.stop > now;
   // Nothing to schedule for a programme that is over; catch-up is a different button.
   const ended = prog.stop <= now;
+  // Anything that has begun can be caught up on; what is still to come cannot.
+  const started = prog.start <= now;
   const recording = dvr.recordingFor(ch, prog);
   const reminder = dvr.reminderFor(ch, prog);
   const rule = dvr.ruleFor(prog);
@@ -590,8 +643,25 @@ function InfoPane({
             Watch now
           </Button>
         )}
-        {airing && ch.hasCatchup && (
-          <Button size="sm" icon="back10">Watch from start</Button>
+        {/* Offered for anything already started, not only what is on now: the whole
+            point of catch-up is the programme that finished an hour ago. */}
+        {started && ch.hasCatchup && (
+          <Button
+            size="sm"
+            icon="back10"
+            onClick={() => {
+              setCatchupError(null);
+              void onCatchup(ch.id, prog.start, prog.stop).catch((e: unknown) =>
+                setCatchupError(e instanceof Error ? e.message : String(e)));
+            }}
+          >
+            {airing ? 'Watch from start' : 'Watch this'}
+          </Button>
+        )}
+        {catchupError && (
+          <div role="alert" style={{ color: 'var(--danger)', fontSize: 'var(--fs-sm)' }}>
+            {catchupError}
+          </div>
         )}
 
         <Button
@@ -630,7 +700,16 @@ function InfoPane({
           </Button>
         )}
 
-        <Button size="sm" variant="ghost" icon="search">Search this title</Button>
+        <ChannelSources channel={ch} onTune={onTune} />
+
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="search"
+          onClick={() => onSearch(prog.title)}
+        >
+          Search this title
+        </Button>
 
         {dvr.error && (
           <div role="alert" style={{ color: 'var(--danger)', fontSize: 'var(--fs-sm)' }}>

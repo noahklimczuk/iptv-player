@@ -2,7 +2,7 @@
 //! `invoke()` maps onto (dots become underscores).
 
 use aurora_core::markers::{MarkerKind, MarkerSource, SkipMarker};
-use aurora_db::repo::{channels, epg, library, markers, progress, search};
+use aurora_db::repo::{channels, epg, filtering, library, markers, progress, search};
 use aurora_player::{Aspect, PlayerState};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -31,6 +31,7 @@ pub fn channels_list(
             radio_only: false,
             limit: None,
             offset: 0,
+            library: filtering::LibraryFilter::load(&db)?,
         },
     )?)
 }
@@ -91,7 +92,13 @@ pub struct GuideSlice {
 #[tauri::command]
 pub fn epg_grid_slice(services: State<'_, Services>, args: GridSliceArgs) -> Result<GuideSlice> {
     let db = services.db.lock();
-    let all = channels::list(&db, &channels::ChannelFilter::default())?;
+    let all = channels::list(
+        &db,
+        &channels::ChannelFilter {
+            library: filtering::LibraryFilter::load(&db)?,
+            ..Default::default()
+        },
+    )?;
     let wanted: Vec<channels::ChannelRow> = if args.channel_ids.is_empty() {
         all
     } else {
@@ -167,19 +174,59 @@ pub struct MoviesArgs {
     pub genre: Option<String>,
 }
 
+fn browse_query(
+    db: &aurora_db::rusqlite::Connection,
+    sort: &str,
+    genre: Option<String>,
+    limit: u32,
+    offset: u32,
+) -> Result<library::BrowseQuery> {
+    Ok(library::BrowseQuery {
+        sort: match sort {
+            "title" => library::MovieSort::Title,
+            "year" => library::MovieSort::Year,
+            "rating" => library::MovieSort::Rating,
+            _ => library::MovieSort::RecentlyAdded,
+        },
+        genre,
+        limit: limit.clamp(1, 500),
+        offset,
+        library: filtering::LibraryFilter::load(db)?,
+    })
+}
+
 #[tauri::command]
 pub fn library_movies(
     services: State<'_, Services>,
     args: MoviesArgs,
 ) -> Result<Vec<library::MovieRow>> {
-    let sort = match args.sort.as_str() {
-        "title" => library::MovieSort::Title,
-        "year" => library::MovieSort::Year,
-        "rating" => library::MovieSort::Rating,
-        _ => library::MovieSort::RecentlyAdded,
-    };
     let db = services.db.lock();
-    Ok(library::list_movies(&db, sort, args.limit, args.offset)?)
+    let q = browse_query(&db, &args.sort, args.genre, args.limit, args.offset)?;
+    Ok(library::list_movies(&db, &q)?)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesArgs {
+    pub limit: u32,
+    pub offset: u32,
+    pub genre: Option<String>,
+}
+
+#[tauri::command]
+pub fn library_series(
+    services: State<'_, Services>,
+    args: SeriesArgs,
+) -> Result<Vec<library::SeriesRow>> {
+    let db = services.db.lock();
+    let q = browse_query(&db, "title", args.genre, args.limit, args.offset)?;
+    Ok(library::list_series(&db, &q)?)
+}
+
+#[tauri::command]
+pub fn library_genres(services: State<'_, Services>) -> Result<Vec<String>> {
+    let db = services.db.lock();
+    Ok(library::genres(&db)?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,13 +251,17 @@ pub struct SearchArgs {
     pub text: String,
 }
 
+/// Grouped so the palette can render its sections without re-sorting (README §10).
+///
+/// The flat `search::query` is the FTS half of this; the palette wants programmes and
+/// people beside it, and those are not in the index.
 #[tauri::command]
 pub fn search_query(
     services: State<'_, Services>,
     args: SearchArgs,
-) -> Result<Vec<search::SearchHit>> {
+) -> Result<search::SearchResults> {
     let db = services.db.lock();
-    Ok(search::query(&db, &args.text, 40)?)
+    Ok(search::grouped(&db, &args.text, now_unix(), 40)?)
 }
 
 /* ── Player ───────────────────────────────────────────────────────────────── */
@@ -228,6 +279,33 @@ pub fn player_play(services: State<'_, Services>, args: PlayArgs) -> Result<Play
     let (url, options) = {
         let db = services.db.lock();
         crate::window::resolve_playback(&db, &args.kind, args.id, args.position_secs)?
+    };
+    let mut player = services.player.lock();
+    player.load(&url, &options)?;
+    Ok(player.state())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatchupArgs {
+    pub channel_id: i64,
+    /// The programme's airtime, unix seconds.
+    pub start: i64,
+    pub stop: i64,
+}
+
+/// Play a past programme from its start (README §7.5).
+///
+/// Separate from `player_play` rather than another `kind`: catch-up is addressed by a
+/// channel *and* a time window, which does not fit an item id.
+#[tauri::command]
+pub fn player_play_catchup(
+    services: State<'_, Services>,
+    args: CatchupArgs,
+) -> Result<PlayerState> {
+    let (url, options) = {
+        let db = services.db.lock();
+        crate::window::resolve_catchup(&db, args.channel_id, args.start, args.stop, now_unix())?
     };
     let mut player = services.player.lock();
     player.load(&url, &options)?;

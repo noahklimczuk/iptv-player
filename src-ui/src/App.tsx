@@ -7,6 +7,7 @@ import { BrowsePage } from '@/features/browse/BrowsePage';
 import { RecordingsPage } from '@/features/dvr/RecordingsPage';
 import { GuidePage } from '@/features/guide/GuidePage';
 import { HomePage } from '@/features/home/HomePage';
+import { PlaylistPage } from '@/features/playlist/PlaylistPage';
 import { LivePage } from '@/features/live/LivePage';
 import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
 import { SkipButton } from '@/features/player/SkipButton';
@@ -31,6 +32,7 @@ const NAV: { to: string; icon: IconName; label: string }[] = [
   { to: '/movies', icon: 'film', label: 'Movies' },
   { to: '/series', icon: 'stack', label: 'Series' },
   { to: '/recordings', icon: 'record', label: 'Recordings' },
+  { to: '/playlist', icon: 'layers', label: 'Playlist' },
   { to: '/settings', icon: 'settings', label: 'Settings' },
 ];
 
@@ -68,6 +70,22 @@ export default function App() {
     setPlayerOpen(true);
   }, [ui]);
 
+  /**
+   * Play a past programme from its start.
+   *
+   * Not routed through the zapper: the zapper tunes a channel to its live edge, and
+   * this is the opposite request. The error is surfaced rather than swallowed because
+   * the three ways catch-up can refuse — no catch-up, outside the window, provider did
+   * not say how — are things the viewer can act on.
+   */
+  const playCatchup = useCallback(
+    async (channelId: number, start: number, stop: number) => {
+      await invoke('player.playCatchup', { channelId, start, stop });
+      setPlayerOpen(true);
+    },
+    [],
+  );
+
   const playEpisode = useCallback(async (episodeId: number) => {
     await invoke('player.play', { kind: 'episode', id: episodeId });
     setPlayerOpen(true);
@@ -76,9 +94,17 @@ export default function App() {
   const episode = useEpisodeAids(ui.player, (id) => void playEpisode(id));
 
   const onPick = useCallback((hit: SearchHit) => {
-    if (hit.kind === 'channel') {
+    // A programme hit carries the channel it is on, not the programme id: what the
+    // viewer wants from one is to watch it, and only the channel can do that.
+    if (hit.kind === 'channel' || hit.kind === 'programme') {
       const ch = (channels ?? []).find((c) => c.id === hit.refId);
-      if (ch) tune(ch);
+      if (ch) {
+        tune(ch);
+        return;
+      }
+      // An upcoming programme on a channel we cannot resolve: the guide is where it
+      // lives, which beats doing nothing.
+      navigate('/guide');
       return;
     }
     if (hit.kind === 'movie' || hit.kind === 'series') {
@@ -188,10 +214,11 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
-          <Route path="/guide" element={<GuidePage onTune={tune} />} />
+          <Route path="/guide" element={<GuidePage onTune={tune} onCatchup={playCatchup} onSearch={(q) => ui.setPalette(true, q)} />} />
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/recordings" element={<RecordingsPage />} />
+          <Route path="/playlist" element={<PlaylistPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
@@ -242,6 +269,7 @@ export default function App() {
 
       <CommandPalette
         open={ui.paletteOpen}
+        initialQuery={ui.paletteQuery}
         onClose={() => ui.setPalette(false)}
         onPick={onPick}
       />

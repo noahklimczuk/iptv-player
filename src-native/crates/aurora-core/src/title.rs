@@ -301,6 +301,7 @@ pub fn detect_quality(name: &str) -> Option<String> {
     for word in lower.split(|c: char| !c.is_alphanumeric()) {
         match word {
             "2160p" | "4k" | "uhd" => return Some("4K".into()),
+            "4320p" | "8k" => return Some("8K".into()),
             "1080p" | "1080" | "fhd" => return Some("FHD".into()),
             "720p" | "720" | "hd" => return Some("HD".into()),
             "sd" | "480p" | "360p" => return Some("SD".into()),
@@ -310,9 +311,48 @@ pub fn detect_quality(name: &str) -> Option<String> {
     None
 }
 
+/// Order quality tiers so duplicates can be collapsed onto the best copy
+/// (README §7.3, "collapse quality duplicates").
+///
+/// Takes whatever is stored — the tags `detect_quality` returns, or a raw `1080p` out
+/// of a provider's own field — and returns a number where bigger is better. Nothing
+/// known ranks below `SD`, so a tagged copy always beats an untagged one, and two
+/// untagged copies are left to the caller to break.
+pub fn quality_rank(quality: Option<&str>) -> u8 {
+    let Some(raw) = quality else { return 0 };
+    let normalized = detect_quality(raw).unwrap_or_else(|| raw.trim().to_uppercase());
+    match normalized.as_str() {
+        "4K" | "8K" => 4,
+        "FHD" => 3,
+        "HD" => 2,
+        "SD" => 1,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_ranks_best_first_whatever_the_spelling() {
+        assert!(quality_rank(Some("4K")) > quality_rank(Some("FHD")));
+        assert!(quality_rank(Some("FHD")) > quality_rank(Some("HD")));
+        assert!(quality_rank(Some("HD")) > quality_rank(Some("SD")));
+        assert!(quality_rank(Some("SD")) > quality_rank(None));
+        // Raw provider spellings rank the same as the tags we store.
+        assert_eq!(quality_rank(Some("1080p")), quality_rank(Some("FHD")));
+        assert_eq!(quality_rank(Some("2160p")), quality_rank(Some("4K")));
+        assert_eq!(quality_rank(Some("uhd")), quality_rank(Some("4K")));
+        assert_eq!(quality_rank(Some("720")), quality_rank(Some("HD")));
+    }
+
+    #[test]
+    fn an_unrecognised_quality_ranks_as_unknown_not_as_best() {
+        assert_eq!(quality_rank(Some("")), 0);
+        assert_eq!(quality_rank(Some("VIP")), 0);
+        assert_eq!(quality_rank(Some("H265")), 0);
+    }
 
     #[test]
     fn strips_scene_release_noise() {

@@ -3,6 +3,7 @@ import type { Theme } from '@/state/ui';
 import { Badge, Button } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { isNativeHost } from '@/ipc';
+import { FilterPanel } from '@/features/settings/FilterPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { useUi } from '@/state/ui';
 
@@ -109,6 +110,10 @@ export function SettingsPage() {
 
       <Section title="Artwork and metadata">
         <MetadataPanel />
+      </Section>
+
+      <Section title="Filtering">
+        <FilterPanel />
       </Section>
 
       <Section title="Library">

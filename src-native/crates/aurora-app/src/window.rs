@@ -1,5 +1,6 @@
 //! Window composition and playback URL resolution.
 
+use aurora_core::catchup;
 use aurora_db::repo::channels;
 use aurora_db::rusqlite::Connection;
 use aurora_player::backend::LoadOptions;
@@ -13,6 +14,95 @@ pub fn cache_secs_for(is_live: bool) -> u32 {
     } else {
         30
     }
+}
+
+/// Where a channel's catch-up configuration lives, for `resolve_catchup`.
+#[derive(Debug, Clone)]
+pub struct CatchupChannel {
+    pub name: String,
+    pub stream_url: String,
+    pub mode: Option<String>,
+    pub source: Option<String>,
+    pub days: u16,
+}
+
+pub fn catchup_channel(db: &Connection, channel_id: i64) -> Result<CatchupChannel> {
+    db.query_row(
+        "SELECT c.name, c.catchup_mode, c.catchup_source, c.catchup_days,
+                (SELECT url FROM channel_sources s WHERE s.channel_id = c.id
+                 ORDER BY s.priority, s.fail_count LIMIT 1)
+         FROM channels c WHERE c.id = ?1",
+        [channel_id],
+        |r| {
+            Ok(CatchupChannel {
+                name: r.get(0)?,
+                mode: r.get(1)?,
+                source: r.get(2)?,
+                days: r.get::<_, i64>(3)?.clamp(0, i64::from(u16::MAX)) as u16,
+                stream_url: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            })
+        },
+    )
+    .map_err(|_| AppError::Other(format!("unknown channel {channel_id}")))
+}
+
+/// Resolve "watch this programme from the start".
+///
+/// Fails with something the user can act on rather than a blank player: a channel
+/// without catch-up, a programme past the provider's window, and a provider whose
+/// configuration does not say how to ask are three different problems.
+pub fn resolve_catchup(
+    db: &Connection,
+    channel_id: i64,
+    start: i64,
+    stop: i64,
+    now: i64,
+) -> Result<(String, LoadOptions)> {
+    let ch = catchup_channel(db, channel_id)?;
+
+    let Some(mode) = ch.mode.as_deref().and_then(catchup::Mode::parse) else {
+        return Err(AppError::Other(format!(
+            "{} does not offer catch-up",
+            ch.name
+        )));
+    };
+    if !catchup::is_available(start, now, ch.days) {
+        return Err(AppError::Other(if start > now {
+            format!("{} has not aired yet", ch.name)
+        } else {
+            format!(
+                "That programme is outside {}'s {}-day catch-up window",
+                ch.name, ch.days
+            )
+        }));
+    }
+
+    let url = catchup::url_for(&catchup::Request {
+        stream_url: &ch.stream_url,
+        mode,
+        source: ch.source.as_deref(),
+        start,
+        stop,
+        now,
+    })
+    .ok_or_else(|| {
+        AppError::Other(format!(
+            "{} says it has catch-up but not how to request it",
+            ch.name
+        ))
+    })?;
+
+    Ok((
+        url,
+        LoadOptions {
+            // Catch-up is a recording being served back: seekable, and worth buffering
+            // like VOD rather than like a live edge.
+            is_live: false,
+            cache_secs: cache_secs_for(false),
+            title: Some(ch.name),
+            ..Default::default()
+        },
+    ))
 }
 
 /// Turn a library item into a playable URL plus the options it needs.
@@ -162,5 +252,95 @@ mod tests {
     fn a_missing_item_is_an_error_not_a_panic() {
         let db = aurora_db::open_memory().unwrap();
         assert!(resolve_playback(&db, "movie", 9999, None).is_err());
+    }
+
+    /// A channel with catch-up configured the way a provider would report it.
+    fn seed_channel(db: &Connection, mode: Option<&str>, days: i64, url: &str) -> i64 {
+        db.execute(
+            "INSERT OR IGNORE INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','xtream','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO channels (provider_id, provider_key, name, match_key,
+                                   catchup_mode, catchup_days, last_seen_at)
+             VALUES (1, 'c1', 'Channel Four', 'channelfour', ?1, ?2, 0)",
+            aurora_db::rusqlite::params![mode, days],
+        )
+        .unwrap();
+        let id = db.last_insert_rowid();
+        db.execute(
+            "INSERT INTO channel_sources (channel_id, url) VALUES (?1, ?2)",
+            aurora_db::rusqlite::params![id, url],
+        )
+        .unwrap();
+        id
+    }
+
+    const NOW: i64 = 1_760_000_000;
+
+    #[test]
+    fn catch_up_plays_back_seekable_and_named_after_the_channel() {
+        let db = aurora_db::open_memory().unwrap();
+        let id = seed_channel(&db, Some("shift"), 7, "http://example.com/live/a/b/9.ts");
+
+        let (url, opts) = resolve_catchup(&db, id, NOW - 7200, NOW - 3600, NOW).unwrap();
+
+        // A replay, not a live edge: seekable, buffered like VOD.
+        assert!(url.contains("utc=") && url.contains("lutc="), "{url}");
+        assert!(!opts.is_live);
+        assert_eq!(opts.cache_secs, cache_secs_for(false));
+        assert_eq!(opts.title.as_deref(), Some("Channel Four"));
+    }
+
+    #[test]
+    fn a_channel_without_catch_up_is_refused_by_name() {
+        let db = aurora_db::open_memory().unwrap();
+        let id = seed_channel(&db, None, 0, "http://example.com/live/a/b/9.ts");
+
+        let err = resolve_catchup(&db, id, NOW - 7200, NOW - 3600, NOW)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Channel Four"), "{err}");
+        assert!(err.contains("does not offer catch-up"), "{err}");
+    }
+
+    #[test]
+    fn too_early_and_too_late_are_different_refusals() {
+        let db = aurora_db::open_memory().unwrap();
+        let id = seed_channel(&db, Some("shift"), 7, "http://example.com/live/a/b/9.ts");
+
+        // Tomorrow: nothing to replay yet.
+        let future = resolve_catchup(&db, id, NOW + 86400, NOW + 90000, NOW)
+            .unwrap_err()
+            .to_string();
+        assert!(future.contains("has not aired yet"), "{future}");
+
+        // A month ago: the provider stopped keeping it, and the window is named so the
+        // viewer knows how far back they can go.
+        let old = resolve_catchup(&db, id, NOW - 30 * 86400, NOW - 29 * 86400, NOW)
+            .unwrap_err()
+            .to_string();
+        assert!(old.contains("7-day catch-up window"), "{old}");
+    }
+
+    #[test]
+    fn a_channel_that_cannot_be_asked_says_that_rather_than_guessing() {
+        let db = aurora_db::open_memory().unwrap();
+        // Xtream catch-up needs credentials out of the stream URL; this one has none,
+        // and inventing them would produce a URL that fails silently at the player.
+        let id = seed_channel(&db, Some("xtream"), 7, "http://example.com/stream.ts");
+
+        let err = resolve_catchup(&db, id, NOW - 7200, NOW - 3600, NOW)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not how to request it"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_channel_is_an_error_not_a_panic() {
+        let db = aurora_db::open_memory().unwrap();
+        assert!(resolve_catchup(&db, 4242, NOW - 7200, NOW - 3600, NOW).is_err());
     }
 }

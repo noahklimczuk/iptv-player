@@ -17,14 +17,17 @@ This repository holds two things:
 | Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 132 tests |
 | Playback state machine + error taxonomy | ✅ built, 13 tests |
 | libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings, recordings, first-run wizard) | ✅ built, 45 E2E journeys |
+| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 66 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
-| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 21 tests |
+| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 29 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
 | DVR: scheduling, series rules, conflicts, reminders, recordings library | ✅ built and tested; never pointed at a real provider |
 | TMDB enrichment: matching, artwork, cast and crew | ✅ built and tested; never called against the real API |
 | Artwork disk cache: download, evict, manage | ✅ built and tested; the UI does not read from it yet |
-| Timeshift, catch-up playback | ❌ not started |
+| Catch-up playback (§7.5) | ✅ built and tested; the URL builder has never met a real provider |
+| Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
+| Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
+| Timeshift / pause live TV (§7.6) | ❌ not started |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
 from what merely compiles. In particular the Phase 0 compositing spike — video behind a
@@ -438,6 +441,18 @@ move channels between groups; and bulk operations across a multi-select.
 that auto-hide, auto-group, auto-rename, or auto-favorite on every refresh. Ship useful presets:
 *Hide adult*, *Hide non-[language]*, *Hide "24/7" channels*, *Collapse quality duplicates
 (FHD/HD/SD of the same channel into one entry with a quality selector)*.
+
+> **Built so far.** The editor (`/playlist`) does rename, renumber, move between groups, hide and
+> show, across channels, movies and series alike, with a multi-select for bulk edits, a
+> hide-everything-this-search-matched action, and a reset that puts a provider's own values back. It
+> is the only screen that shows hidden entries, because hiding has to be reversible. Two of the
+> presets ship as library-wide settings rather than as rules: **Show English content only** and
+> **Collapse duplicates** (see `docs/DECISIONS.md` D14 and D15). Both apply everywhere a list is
+> read — live TV, the guide, movies, series, the home rails and search — while a lookup by id or by
+> channel number still resolves, so nothing the viewer can name becomes unplayable. A collapsed
+> entry keeps its other copies: the guide offers a channel's other qualities, and a film or show's
+> card offers its other sources. Still to build: drag-to-reorder, custom logos, named favourite
+> lists, and the user-defined rules engine itself.
 
 ### 7.4 Multi-view / mosaic
 

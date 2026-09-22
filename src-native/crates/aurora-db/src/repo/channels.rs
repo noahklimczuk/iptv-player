@@ -21,6 +21,8 @@ pub struct ChannelRow {
     pub hidden: bool,
     pub is_radio: bool,
     pub has_catchup: bool,
+    /// ISO 639-1, or nothing when the name never said (README §7.3).
+    pub lang: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -30,6 +32,10 @@ pub struct ChannelFilter {
     pub radio_only: bool,
     pub limit: Option<u32>,
     pub offset: u32,
+    /// The library-wide filters (README §7.3). Default is "show everything", so a
+    /// lookup that has to find a channel by id — playback, a recording, a favourite —
+    /// is never affected by what the viewer chose to hide from a list.
+    pub library: crate::repo::filtering::LibraryFilter,
 }
 
 /// Insert or update a batch of channels for one provider.
@@ -113,12 +119,12 @@ pub fn stale(conn: &Connection, provider_id: i64, before: i64) -> Result<Vec<i64
 pub fn list(conn: &Connection, filter: &ChannelFilter) -> Result<Vec<ChannelRow>> {
     let mut sql = String::from(
         r#"
-SELECT id,
+SELECT channels.id,
        COALESCE(custom_name, name),
        COALESCE(custom_number, number),
        COALESCE(custom_logo, logo),
        COALESCE(custom_group, group_title),
-       tvg_id, epg_channel_id, quality, hidden, is_radio, catchup_days
+       tvg_id, epg_channel_id, quality, hidden, is_radio, catchup_days, lang_code
 FROM channels WHERE 1=1
 "#,
     );
@@ -133,6 +139,7 @@ FROM channels WHERE 1=1
     if filter.group.is_some() {
         sql.push_str(" AND COALESCE(custom_group, group_title) = :group");
     }
+    sql.push_str(&filter.library.where_sql(crate::repo::filtering::Kind::Live));
     sql.push_str(" ORDER BY COALESCE(custom_number, number, 999999), sort_order, name");
     if let Some(limit) = filter.limit {
         sql.push_str(&format!(" LIMIT {limit} OFFSET {}", filter.offset));
@@ -152,6 +159,7 @@ FROM channels WHERE 1=1
             hidden: r.get::<_, i64>(8)? != 0,
             is_radio: r.get::<_, i64>(9)? != 0,
             has_catchup: r.get::<_, i64>(10)? > 0,
+            lang: r.get(11)?,
         })
     };
 

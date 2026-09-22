@@ -7,6 +7,7 @@ import type {
   ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
   MetadataReport, MetadataStatus, ParentalSettings, PinOutcome, Profile,
   Recording, RecordingConflict, RecordingRule, Reminder,
+  Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
   ValidationResult,
@@ -184,24 +185,204 @@ export function onIngestProgress(fn: (p: IngestProgress) => void) {
   return () => ingestListeners.delete(fn);
 }
 
+/* ── Playlist edits and library filters (README §7.3) ──────────────────────── */
+
+let filters: LibraryFilters = { englishOnly: false, hideDuplicates: false };
+
+/** One viewer edit. `null` means the override was cleared. */
+interface Edit {
+  name?: string | null;
+  number?: number | null;
+  group?: string | null;
+  hidden?: boolean;
+}
+const edits = new Map<string, Edit>();
+const editOf = (kind: PlaylistKind, id: number): Edit =>
+  edits.get(`${kind}:${id}`) ?? {};
+
+function putEdit(kind: PlaylistKind, id: number, patch: Edit) {
+  edits.set(`${kind}:${id}`, { ...editOf(kind, id), ...patch });
+}
+
+/** Channels with the viewer's renames, renumbers, regroups and hides applied. */
+function editedChannels(): Channel[] {
+  return fx.channels.map((c) => {
+    const e = editOf('live', c.id);
+    return {
+      ...c,
+      name: e.name ?? c.name,
+      number: e.number ?? c.number,
+      group: e.group ?? c.group,
+      hidden: e.hidden ?? c.hidden,
+      favorite: favorites.has(c.id),
+    };
+  });
+}
+
+const editedMovies = (): Movie[] =>
+  fx.movies.map((m) => ({ ...m, title: editOf('movies', m.id).name ?? m.title }));
+
+const editedSeries = (): Series[] =>
+  fx.series.map((s) => ({ ...s, title: editOf('series', s.id).name ?? s.title }));
+
+const isHidden = (kind: PlaylistKind, id: number, fallback = false): boolean =>
+  editOf(kind, id).hidden ?? fallback;
+
+/**
+ * Both filters, applied the way the host applies them
+ * (`aurora_db::repo::filtering::LibraryFilter::where_sql`).
+ *
+ * Duplicate collapsing asks "is there a better copy of this?" rather than grouping, and
+ * the better copy has to survive the other filters too — otherwise a Spanish 4K rip
+ * would suppress the English HD one it is not allowed to replace.
+ */
+function applyFilters<T extends { id: number; quality: string | null; lang?: string | null }>(
+  items: T[],
+  kind: PlaylistKind,
+  nameOf: (t: T) => string,
+  yearOf: (t: T) => number | null,
+): T[] {
+  let out = items.filter((t) => !isHidden(kind, t.id, 'hidden' in t ? !!t.hidden : false));
+  if (filters.englishOnly) out = out.filter((t) => !t.lang || t.lang === 'en');
+  if (!filters.hideDuplicates) return out;
+
+  const eligible = out;
+  const better = (a: T, b: T) =>
+    fx.qualityRank(a.quality) > fx.qualityRank(b.quality) ||
+    (fx.qualityRank(a.quality) === fx.qualityRank(b.quality) && a.id < b.id);
+  return out.filter(
+    (t) =>
+      !eligible.some(
+        (o) =>
+          o.id !== t.id &&
+          fx.matchKey(nameOf(o)) === fx.matchKey(nameOf(t)) &&
+          (yearOf(o) ?? 0) === (yearOf(t) ?? 0) &&
+          better(o, t),
+      ),
+  );
+}
+
+const visibleChannels = (): Channel[] =>
+  applyFilters(editedChannels(), 'live', (c) => c.name, () => null);
+const visibleMovies = (): Movie[] =>
+  applyFilters(editedMovies(), 'movies', (m) => m.title, (m) => m.year);
+const visibleSeries = (): Series[] =>
+  applyFilters(editedSeries(), 'series', (s) => s.title, (s) => s.year);
+
+/** Every row of one list, hidden ones included: the editor's own view. */
+function allRows(kind: PlaylistKind): PlaylistEntry[] {
+  if (kind === 'live') {
+    const list = editedChannels();
+    return list.map((c) => {
+      const original = fx.channels.find((f) => f.id === c.id)!;
+      const e = editOf('live', c.id);
+      return {
+        id: c.id,
+        name: c.name,
+        providerName: original.name,
+        number: c.number,
+        group: c.group,
+        quality: c.quality,
+        lang: c.lang ?? null,
+        hidden: c.hidden,
+        edited: e.name != null || e.number != null || e.group != null,
+        duplicates: list.filter(
+          (o) => o.id !== c.id && fx.matchKey(o.name) === fx.matchKey(c.name),
+        ).length,
+        provider: fx.providers[0]?.name ?? null,
+      };
+    });
+  }
+  const list = kind === 'movies' ? editedMovies() : editedSeries();
+  const source = kind === 'movies' ? fx.movies : fx.series;
+  return list.map((item) => {
+    const original = source.find((f) => f.id === item.id)!;
+    const e = editOf(kind, item.id);
+    return {
+      id: item.id,
+      name: item.title,
+      providerName: original.title,
+      number: null,
+      group: item.genres[0] ?? null,
+      quality: item.quality,
+      lang: item.lang ?? null,
+      hidden: isHidden(kind, item.id),
+      edited: e.name != null,
+      duplicates: list.filter(
+        (o) =>
+          o.id !== item.id &&
+          fx.matchKey(o.title) === fx.matchKey(item.title) &&
+          (o.year ?? 0) === (item.year ?? 0),
+      ).length,
+      provider: fx.providers[0]?.name ?? null,
+    };
+  });
+}
+
+interface RowQuery {
+  kind: PlaylistKind;
+  text?: string;
+  group?: string;
+  show?: PlaylistShow;
+  duplicatesOnly?: boolean;
+}
+
+function matchingRows(q: RowQuery): PlaylistEntry[] {
+  const text = q.text?.trim().toLowerCase();
+  return allRows(q.kind).filter((r) => {
+    if (q.show === 'visible' && r.hidden) return false;
+    if (q.show === 'hidden' && !r.hidden) return false;
+    if (q.group && r.group !== q.group) return false;
+    if (q.duplicatesOnly && r.duplicates === 0) return false;
+    if (text) {
+      const hit =
+        r.name.toLowerCase().includes(text) || r.providerName.toLowerCase().includes(text);
+      if (!hit) return false;
+    }
+    return true;
+  });
+}
+
+function filterCounts(kind: PlaylistKind): FilterCounts {
+  const rows = allRows(kind).filter((r) => !r.hidden);
+  const before = filters;
+  filters = { englishOnly: false, hideDuplicates: true };
+  const kept =
+    kind === 'live'
+      ? visibleChannels().length
+      : kind === 'movies'
+        ? visibleMovies().length
+        : visibleSeries().length;
+  filters = before;
+  return {
+    total: rows.length,
+    nonEnglish: rows.filter((r) => r.lang && r.lang !== 'en').length,
+    untagged: rows.filter((r) => !r.lang).length,
+    duplicates: rows.length - kept,
+  };
+}
+
 /* ── Rails (README §8.2) ───────────────────────────────────────────────────── */
 
 const asMovie = (m: Movie): CatalogItem => ({ kind: 'movie', ...m });
 const asSeries = (s: Series): CatalogItem => ({ kind: 'series', ...s });
 
 function buildRails(): Rail[] {
-  const byRating = [...fx.movies].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-  const byAdded = [...fx.movies].sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
+  // The home page is a view of the library, so it is the filtered library it views.
+  const shownMovies = visibleMovies();
+  const shownSeries = visibleSeries();
+  const byRating = [...shownMovies].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+  const byAdded = [...shownMovies].sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
   const continueItems = [...progress.values()]
     .filter((p) => !p.completed && p.positionSecs > 60)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map((p) => {
       if (p.itemKind === 'movie') {
-        const m = fx.movies.find((x) => x.id === p.itemId);
+        const m = shownMovies.find((x) => x.id === p.itemId);
         return m ? asMovie(m) : null;
       }
       const ep = fx.episodes.find((x) => x.id === p.itemId);
-      const s = ep && fx.series.find((x) => x.id === ep.seriesId);
+      const s = ep && shownSeries.find((x) => x.id === ep.seriesId);
       return s ? asSeries(s) : null;
     })
     .filter((x): x is CatalogItem => x !== null);
@@ -210,14 +391,14 @@ function buildRails(): Rail[] {
     id: `genre-${g}`,
     kind: 'genre',
     title: g,
-    items: fx.movies.filter((m) => m.genres.includes(g)).slice(0, 18).map(asMovie),
+    items: shownMovies.filter((m) => m.genres.includes(g)).slice(0, 18).map(asMovie),
   });
 
   const rails: Rail[] = [
     { id: 'continue', kind: 'continueWatching', title: 'Continue Watching', items: continueItems },
     {
       id: 'upnext', kind: 'upNext', title: 'Up Next',
-      items: fx.series.slice(6, 20).map(asSeries),
+      items: shownSeries.slice(6, 20).map(asSeries),
     },
     {
       id: 'top10', kind: 'top10', title: 'Top 10 Movies Today',
@@ -226,9 +407,9 @@ function buildRails(): Rail[] {
     { id: 'recent', kind: 'recentlyAdded', title: 'Recently Added', items: byAdded.slice(0, 20).map(asMovie) },
     {
       id: 'because', kind: 'becauseYouWatched',
-      title: `Because you watched ${fx.movies[3]!.title}`,
-      reason: fx.movies[3]!.title,
-      items: fx.movies.slice(60, 80).map(asMovie),
+      title: `Because you watched ${shownMovies[3]!.title}`,
+      reason: shownMovies[3]!.title,
+      items: shownMovies.slice(60, 80).map(asMovie),
     },
     {
       id: 'mylist', kind: 'myList', title: 'My List',
@@ -236,17 +417,17 @@ function buildRails(): Rail[] {
         const [kind, rawId] = key.split(':');
         const id = Number(rawId);
         if (kind === 'movie') {
-          const m = fx.movies.find((x) => x.id === id);
+          const m = shownMovies.find((x) => x.id === id);
           return m ? [asMovie(m)] : [];
         }
-        const s = fx.series.find((x) => x.id === id);
+        const s = shownSeries.find((x) => x.id === id);
         return s ? [asSeries(s)] : [];
       }),
     },
-    { id: 'series', kind: 'trending', title: 'Trending Series', items: fx.series.slice(0, 18).map(asSeries) },
+    { id: 'series', kind: 'trending', title: 'Trending Series', items: shownSeries.slice(0, 18).map(asSeries) },
     {
       id: '4k', kind: 'fourK', title: '4K & HDR',
-      items: fx.movies.filter((m) => m.quality === '4K').slice(0, 18).map(asMovie),
+      items: shownMovies.filter((m) => m.quality === '4K').slice(0, 18).map(asMovie),
     },
     {
       id: 'acclaimed', kind: 'acclaimed', title: 'Critically Acclaimed',
@@ -256,7 +437,7 @@ function buildRails(): Rail[] {
     genreRail('Thriller'),
     {
       id: 'short', kind: 'shortAndSweet', title: 'Short & Sweet',
-      items: fx.movies.filter((m) => (m.runtimeMins ?? 999) < 95).slice(0, 18).map(asMovie),
+      items: shownMovies.filter((m) => (m.runtimeMins ?? 999) < 95).slice(0, 18).map(asMovie),
     },
     genreRail('Documentary'),
   ];
@@ -274,6 +455,18 @@ function programmes(ch: Channel, from: number, to: number): Programme[] {
     progCache.set(key, v);
   }
   return v;
+}
+
+/**
+ * How far back each channel's catch-up goes.
+ *
+ * The host reads this per channel from the provider; the IPC contract does not carry
+ * it, because nothing in the UI can usefully act on it before the request is made. So
+ * the mock keeps its own, the way a real provider offers different depths per channel,
+ * and refuses the same way the host does.
+ */
+function catchupDays(channelId: number): number {
+  return channelId % 4 === 0 ? 2 : 7;
 }
 
 function nowNext(ch: Channel, now: number) {
@@ -299,26 +492,33 @@ function search(text: string): SearchResults {
 
   const onNow: SearchHit[] = [];
   const upcoming: SearchHit[] = [];
-  for (const ch of fx.channels) {
+  // Search is a way into the library, not a way around the filters.
+  const shownChannels = visibleChannels();
+  const shownMovies = visibleMovies();
+  const shownSeries = visibleSeries();
+  for (const ch of shownChannels) {
     for (const p of programmes(ch, now - 3600, now + 86400)) {
       if (!p.title.toLowerCase().includes(q)) continue;
-      const target = p.start <= now && p.stop > now ? onNow : upcoming;
-      if (target.length < 8) target.push(hit('programme', p.id, p.title, ch.name));
+      if (p.stop <= now) continue;
+      const target = p.start <= now ? onNow : upcoming;
+      // refId is the channel, matching the host: a programme hit is only useful if it
+      // can be watched, and only the channel can be tuned.
+      if (target.length < 8) target.push(hit('programme', ch.id, p.title, ch.name));
     }
   }
   const people = new Set<string>();
-  for (const m of fx.movies) {
+  for (const m of shownMovies) {
     for (const c of m.cast) if (c.toLowerCase().includes(q)) people.add(c);
   }
 
   return {
-    channels: fx.channels.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8)
+    channels: shownChannels.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8)
       .map((c) => hit('channel', c.id, c.name, c.group)),
     onNow,
     upcoming: upcoming.slice(0, 8),
-    movies: fx.movies.filter((m) => m.title.toLowerCase().includes(q)).slice(0, 12)
+    movies: shownMovies.filter((m) => m.title.toLowerCase().includes(q)).slice(0, 12)
       .map((m) => hit('movie', m.id, m.title, m.year ? String(m.year) : null)),
-    series: fx.series.filter((s) => s.title.toLowerCase().includes(q)).slice(0, 12)
+    series: shownSeries.filter((s) => s.title.toLowerCase().includes(q)).slice(0, 12)
       .map((s) => hit('series', s.id, s.title, s.year ? String(s.year) : null)),
     people: [...people].slice(0, 8).map((p, i) => hit('person', i, p, null)),
   };
@@ -664,7 +864,8 @@ type Handler<K extends CommandName> = (
 const handlers: { [K in CommandName]: Handler<K> } = {
   'library.rails': () => buildRails(),
   'library.movies': ({ sort, limit, offset, genre }) => {
-    let list = genre ? fx.movies.filter((m) => m.genres.includes(genre)) : [...fx.movies];
+    const all = visibleMovies();
+    let list = genre ? all.filter((m) => m.genres.includes(genre)) : [...all];
     const cmp: Record<string, (a: Movie, b: Movie) => number> = {
       recentlyAdded: (a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0),
       title: (a, b) => a.title.localeCompare(b.title),
@@ -675,7 +876,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return list.slice(offset, offset + limit);
   },
   'library.series': ({ limit, offset, genre }) => {
-    const list = genre ? fx.series.filter((s) => s.genres.includes(genre)) : fx.series;
+    const all = visibleSeries();
+    const list = genre ? all.filter((s) => s.genres.includes(genre)) : all;
     return list.slice(offset, offset + limit);
   },
   'library.episodes': ({ seriesId, season }) =>
@@ -730,25 +932,27 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
 
   'library.genres': () =>
-    [...new Set(fx.movies.flatMap((m) => m.genres))].sort(),
+    [...new Set([...visibleMovies(), ...visibleSeries()].flatMap((m) => m.genres))].sort(),
 
   'channels.list': ({ group, favoritesOnly } = {}) =>
-    fx.channels.filter(
+    visibleChannels().filter(
       (c) => (!group || c.group === group) && (!favoritesOnly || favorites.has(c.id)),
-    ).map((c) => ({ ...c, favorite: favorites.has(c.id) })),
+    ),
   'channels.groups': () => {
     const counts = new Map<string, number>();
-    for (const c of fx.channels) {
+    for (const c of visibleChannels()) {
       if (c.group) counts.set(c.group, (counts.get(c.group) ?? 0) + 1);
     }
     return [...counts].map(([name, count]) => ({ name, count }));
   },
-  'channels.byNumber': ({ number }) => fx.channels.find((c) => c.number === number) ?? null,
+  // Tuning by number is a lookup, not a list: a channel you can name is a channel you
+  // can watch, whatever the filters hide from the list.
+  'channels.byNumber': ({ number }) =>
+    editedChannels().find((c) => c.number === number) ?? null,
 
   'epg.gridSlice': ({ from, to, channelIds }): GuideSlice => {
-    const chans = channelIds.length
-      ? fx.channels.filter((c) => channelIds.includes(c.id))
-      : fx.channels;
+    const all = visibleChannels();
+    const chans = channelIds.length ? all.filter((c) => channelIds.includes(c.id)) : all;
     const map: Record<string, Programme[]> = {};
     for (const c of chans) {
       map[c.epgChannelId ?? String(c.id)] = programmes(c, from, to);
@@ -761,7 +965,87 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return nowNext(ch, Math.floor(Date.now() / 1000));
   },
 
+  'library.filters': () => filters,
+  'library.setFilters': (next) => {
+    filters = { ...next };
+    return filters;
+  },
+  'library.filterCounts': ({ kind }) => filterCounts(kind),
+  'library.alternates': ({ kind, id }): Alternate[] => {
+    const rows = allRows(kind);
+    const me = rows.find((r) => r.id === id);
+    if (!me) return [];
+    return rows
+      .filter((r) => fx.matchKey(r.name) === fx.matchKey(me.name) && !r.hidden)
+      .sort((a, b) => fx.qualityRank(b.quality) - fx.qualityRank(a.quality) || a.id - b.id)
+      .map((r) => ({ id: r.id, name: r.name, quality: r.quality, provider: r.provider }));
+  },
+
+  'playlist.list': ({ limit, offset, ...q }) => {
+    const rows = matchingRows(q);
+    return { rows: rows.slice(offset, offset + limit), total: rows.length };
+  },
+  'playlist.groups': ({ kind }) => {
+    const counts = new Map<string, number>();
+    for (const r of allRows(kind)) {
+      if (r.group) counts.set(r.group, (counts.get(r.group) ?? 0) + 1);
+    }
+    return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) =>
+      a.name.localeCompare(b.name));
+  },
+  'playlist.update': ({ kind, id, patch }) => {
+    const edit: Edit = {};
+    // An empty string or a zero clears the override, exactly as the host reads them.
+    if (patch.name !== undefined) edit.name = patch.name.trim() || null;
+    if (patch.number !== undefined) edit.number = patch.number === 0 ? null : patch.number;
+    if (patch.group !== undefined) edit.group = patch.group.trim() || null;
+    if (patch.hidden !== undefined) edit.hidden = patch.hidden;
+    putEdit(kind, id, edit);
+  },
+  'playlist.setHidden': ({ kind, ids, hidden }) => {
+    for (const id of ids) putEdit(kind, id, { hidden });
+    return ids.length;
+  },
+  'playlist.hideMatching': ({ hidden, ...q }) => {
+    const rows = matchingRows(q);
+    for (const r of rows) putEdit(q.kind, r.id, { hidden });
+    return rows.length;
+  },
+  'playlist.reset': ({ kind, ids }) => {
+    for (const id of ids) edits.delete(`${kind}:${id}`);
+    return ids.length;
+  },
+
   'search.query': ({ text }) => search(text),
+
+  'player.playCatchup': ({ channelId, start, stop }) => {
+    const ch = fx.channels.find((c) => c.id === channelId);
+    if (!ch) throw new Error(`unknown channel ${channelId}`);
+    // Mirrors the host's refusals, which are three different problems and say so.
+    if (!ch.hasCatchup) throw new Error(`${ch.name} does not offer catch-up`);
+    const now = Math.floor(Date.now() / 1000);
+    if (start > now) throw new Error(`${ch.name} has not aired yet`);
+    const days = catchupDays(ch.id);
+    if (start < now - days * 86400) {
+      throw new Error(`That programme is outside ${ch.name}'s ${days}-day catch-up window`);
+    }
+
+    const programme = programmes(ch, start - 1, stop + 1).find((p) => p.start === start);
+    return setPlayer({
+      status: 'playing',
+      // Catch-up is a recording served back: seekable, with a real duration, so the
+      // OSD shows a scrubber rather than a live edge.
+      isLive: false,
+      channelId,
+      itemKind: 'live',
+      itemId: channelId,
+      title: ch.name,
+      subtitle: programme?.title ?? null,
+      positionSecs: 0,
+      durationSecs: Math.max(1, stop - start),
+      error: null,
+    });
+  },
 
   'player.play': ({ kind, id, positionSecs }) => {
     if (kind === 'live') {

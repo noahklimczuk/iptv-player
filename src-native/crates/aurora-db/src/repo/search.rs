@@ -78,6 +78,141 @@ pub fn query(conn: &Connection, text: &str, limit: u32) -> Result<Vec<SearchHit>
     Ok(rows)
 }
 
+/// What the command palette shows, grouped the way it renders (README §10).
+///
+/// The FTS index only carries the library — channels, movies and series — because
+/// those change on sync. Programmes and people are queried live: an EPG row is only
+/// interesting relative to the current time, and reindexing a week of listings on
+/// every refresh would be stale within the hour.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub channels: Vec<SearchHit>,
+    pub on_now: Vec<SearchHit>,
+    pub upcoming: Vec<SearchHit>,
+    pub movies: Vec<SearchHit>,
+    pub series: Vec<SearchHit>,
+    pub people: Vec<SearchHit>,
+}
+
+/// Escape a LIKE pattern so `%` and `_` typed by the user match themselves.
+fn to_like(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let escaped = trimmed
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    Some(format!("%{escaped}%"))
+}
+
+/// Ids the library filters leave visible for one kind, for filtering the FTS results.
+///
+/// FTS5 cannot be joined onto the filter predicates in one statement without losing its
+/// ranking, so the surviving ids are fetched separately and the hits are sifted through
+/// them. Search is a small result set by construction, so this costs one extra query.
+fn visible_ids(
+    conn: &Connection,
+    kind: crate::repo::filtering::Kind,
+    filter: &crate::repo::filtering::LibraryFilter,
+) -> Result<std::collections::HashSet<i64>> {
+    let t = kind.table();
+    let sql = format!(
+        "SELECT {t}.id FROM {t} WHERE {t}.hidden = 0{}",
+        filter.where_sql(kind)
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn grouped(conn: &Connection, text: &str, now: i64, limit: u32) -> Result<SearchResults> {
+    use crate::repo::filtering::{Kind, LibraryFilter};
+    let mut out = SearchResults::default();
+
+    // A viewer who hid something, or asked for one language and one copy, meant it here
+    // too: search is a way into the library, not a way around it.
+    let filter = LibraryFilter::load(conn)?;
+    let channels = visible_ids(conn, Kind::Live, &filter)?;
+    let movies = visible_ids(conn, Kind::Movies, &filter)?;
+    let series = visible_ids(conn, Kind::Series, &filter)?;
+
+    for hit in query(conn, text, limit)? {
+        match hit.kind.as_str() {
+            "channel" if channels.contains(&hit.ref_id) => out.channels.push(hit),
+            "movie" if movies.contains(&hit.ref_id) => out.movies.push(hit),
+            "series" if series.contains(&hit.ref_id) => out.series.push(hit),
+            _ => {}
+        }
+    }
+
+    let Some(like) = to_like(text) else {
+        return Ok(out);
+    };
+
+    // Programmes still in the guide, on the channels this install actually carries.
+    // `ref_id` is the channel, not the programme: what a viewer wants from a search
+    // hit is to watch the thing, and that needs the channel.
+    let mut stmt = conn.prepare(
+        "SELECT c.id, COALESCE(c.custom_name, c.name), p.title, p.start, p.stop
+         FROM epg_programmes p
+         JOIN channels c ON c.epg_channel_id = p.channel_id
+         WHERE p.title LIKE ?1 ESCAPE '\\' AND p.stop > ?2 AND c.hidden = 0
+         ORDER BY p.start LIMIT ?3",
+    )?;
+    let rows = stmt
+        .query_map(params![like, now, limit], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for (channel_id, channel_name, title, start, _stop) in rows {
+        if !channels.contains(&channel_id) {
+            continue;
+        }
+        let hit = SearchHit {
+            kind: "programme".into(),
+            ref_id: channel_id,
+            title,
+            subtitle: Some(channel_name),
+        };
+        if start <= now {
+            out.on_now.push(hit);
+        } else {
+            out.upcoming.push(hit);
+        }
+    }
+
+    // Cast and crew, but only those attached to something in the library.
+    let mut stmt = conn.prepare(
+        "SELECT pe.tmdb_id, pe.name FROM people pe
+         WHERE pe.name LIKE ?1 ESCAPE '\\'
+           AND EXISTS (SELECT 1 FROM credits cr WHERE cr.person_id = pe.tmdb_id)
+         ORDER BY pe.name LIMIT ?2",
+    )?;
+    out.people = stmt
+        .query_map(params![like, limit], |r| {
+            Ok(SearchHit {
+                kind: "person".into(),
+                ref_id: r.get(0)?,
+                title: r.get(1)?,
+                subtitle: None,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +292,192 @@ mod tests {
     fn limit_is_respected() {
         let conn = seeded();
         assert_eq!(query(&conn, "matr", 1).unwrap().len(), 1);
+    }
+
+    const NOW: i64 = 1_760_000_000;
+
+    /// A library with an EPG and a cast, so every group the palette renders has a
+    /// source behind it.
+    fn seeded_grouped() -> Connection {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO channels (id, provider_id, provider_key, name, match_key,
+                                   epg_channel_id, last_seen_at)
+             VALUES (3, 1, 'c1', 'BBC One', 'bbcone', 'bbcone.uk', 0)",
+            [],
+        )
+        .unwrap();
+        // Hidden channels are not offered, so neither are their listings.
+        conn.execute(
+            "INSERT INTO channels (id, provider_id, provider_key, name, match_key,
+                                   epg_channel_id, hidden, last_seen_at)
+             VALUES (4, 1, 'c2', 'BBC Two', 'bbctwo', 'bbctwo.uk', 1, 0)",
+            [],
+        )
+        .unwrap();
+        for (ch, title, start, stop) in [
+            ("bbcone.uk", "Matrix Night", NOW - 600, NOW + 600),
+            ("bbcone.uk", "Matrix Night Encore", NOW + 3600, NOW + 7200),
+            ("bbcone.uk", "Matrix Night Repeat", NOW - 7200, NOW - 3600),
+            ("bbctwo.uk", "Matrix Night Elsewhere", NOW - 600, NOW + 600),
+        ] {
+            conn.execute(
+                "INSERT INTO epg_programmes (channel_id, start, stop, title)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![ch, start, stop, title],
+            )
+            .unwrap();
+        }
+        // The index points at library rows; a hit whose row is gone or filtered away is
+        // not offered, so the fixture has to carry the rows too.
+        conn.execute(
+            "INSERT INTO movies (id, provider_id, provider_key, title, match_key, year,
+                                 url, last_seen_at)
+             VALUES (1,1,'m1','The Matrix','thematrix',1999,'http://x',0),
+                    (2,1,'m2','Matrix Reloaded','matrixreloaded',2003,'http://x',0),
+                    (5,1,'m5','Amélie','amelie',2001,'http://x',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO series (id, provider_id, provider_key, title, match_key, last_seen_at)
+             VALUES (4,1,'s4','Breaking Bad','breakingbad',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO people (tmdb_id, name) VALUES (7, 'Keanu Reeves'), (8, 'Nobody Attached')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credits (item_kind, item_id, person_id, role, is_cast, ord)
+             VALUES ('movie', 1, 7, 'Neo', 1, 0)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn results_arrive_in_the_groups_the_palette_renders() {
+        let r = grouped(&seeded_grouped(), "matrix", NOW, 10).unwrap();
+        assert_eq!(r.movies.len(), 2);
+        assert!(r.channels.is_empty());
+        assert!(r.series.is_empty());
+        // One on air, one later today, and the one that already finished is gone.
+        assert_eq!(r.on_now.len(), 1);
+        assert_eq!(r.on_now[0].title, "Matrix Night");
+        assert_eq!(r.upcoming.len(), 1);
+        assert_eq!(r.upcoming[0].title, "Matrix Night Encore");
+    }
+
+    #[test]
+    fn a_programme_hit_points_at_its_channel_so_it_can_be_watched() {
+        let r = grouped(&seeded_grouped(), "matrix", NOW, 10).unwrap();
+        assert_eq!(r.on_now[0].ref_id, 3);
+        assert_eq!(r.on_now[0].subtitle.as_deref(), Some("BBC One"));
+        assert_eq!(r.on_now[0].kind, "programme");
+    }
+
+    #[test]
+    fn listings_on_a_hidden_channel_are_not_offered() {
+        let r = grouped(&seeded_grouped(), "matrix", NOW, 10).unwrap();
+        let all: Vec<&str> = r
+            .on_now
+            .iter()
+            .chain(r.upcoming.iter())
+            .map(|h| h.title.as_str())
+            .collect();
+        assert!(!all.contains(&"Matrix Night Elsewhere"), "{all:?}");
+    }
+
+    #[test]
+    fn only_people_attached_to_something_are_offered() {
+        let r = grouped(&seeded_grouped(), "keanu", NOW, 10).unwrap();
+        assert_eq!(r.people.len(), 1);
+        assert_eq!(r.people[0].ref_id, 7);
+        // Indexed but credited to nothing: offering them leads nowhere.
+        assert!(grouped(&seeded_grouped(), "nobody", NOW, 10)
+            .unwrap()
+            .people
+            .is_empty());
+    }
+
+    #[test]
+    fn like_wildcards_typed_by_a_user_are_literal() {
+        let conn = seeded_grouped();
+        // Without escaping, "%" matches every programme there is.
+        let r = grouped(&conn, "%", NOW, 10).unwrap();
+        assert!(r.on_now.is_empty(), "{:?}", r.on_now);
+        assert!(r.upcoming.is_empty());
+    }
+
+    #[test]
+    fn search_does_not_offer_what_the_viewer_hid() {
+        let conn = seeded_grouped();
+        assert_eq!(grouped(&conn, "matrix", NOW, 10).unwrap().movies.len(), 2);
+
+        conn.execute("UPDATE movies SET hidden = 1 WHERE id = 1", [])
+            .unwrap();
+        let r = grouped(&conn, "matrix", NOW, 10).unwrap();
+        assert_eq!(r.movies.len(), 1);
+        assert_eq!(r.movies[0].ref_id, 2);
+    }
+
+    #[test]
+    fn search_follows_the_library_filters() {
+        let mut conn = seeded_grouped();
+        conn.execute(
+            "INSERT INTO movies (id, provider_id, provider_key, title, match_key, year,
+                                 url, last_seen_at)
+             VALUES (9,1,'m9','[SPANISH] The Matrix','thematrix',1999,'http://x',0)",
+            [],
+        )
+        .unwrap();
+        index(
+            &mut conn,
+            &[("movie".into(), 9, "[SPANISH] The Matrix".into(), None)],
+        )
+        .unwrap();
+        crate::repo::filtering::reclassify(&mut conn).unwrap();
+        assert_eq!(grouped(&conn, "matrix", NOW, 10).unwrap().movies.len(), 3);
+
+        // Search is a way into the library, not a way around the filters.
+        crate::repo::filtering::LibraryFilter {
+            english_only: true,
+            hide_duplicates: false,
+        }
+        .save(&conn)
+        .unwrap();
+        let titles: Vec<String> = grouped(&conn, "matrix", NOW, 10)
+            .unwrap()
+            .movies
+            .iter()
+            .map(|h| h.title.clone())
+            .collect();
+        assert!(!titles.iter().any(|t| t.contains("SPANISH")), "{titles:?}");
+    }
+
+    #[test]
+    fn a_listing_on_a_filtered_out_channel_is_not_offered() {
+        let conn = seeded_grouped();
+        assert_eq!(grouped(&conn, "matrix", NOW, 10).unwrap().on_now.len(), 1);
+        conn.execute("UPDATE channels SET hidden = 1 WHERE id = 3", [])
+            .unwrap();
+        let r = grouped(&conn, "matrix", NOW, 10).unwrap();
+        assert!(r.on_now.is_empty(), "{:?}", r.on_now);
+    }
+
+    #[test]
+    fn an_empty_query_is_empty_in_every_group() {
+        let r = grouped(&seeded_grouped(), "   ", NOW, 10).unwrap();
+        assert_eq!(r, SearchResults::default());
     }
 }

@@ -15,6 +15,8 @@ interface UiState {
   /** Currently open detail modal, if any (README §8.4). */
   detail: CatalogItem | null;
   paletteOpen: boolean;
+  /** Seed text for the palette, so "Search this title" lands on results. */
+  paletteQuery: string;
 
   player: PlayerState | null;
   /** Channel banner shown briefly after a zap (README §7.2). */
@@ -27,7 +29,7 @@ interface UiState {
   toggleAnimations: () => void;
   toggleHoverPreviews: () => void;
   openDetail: (i: CatalogItem | null) => void;
-  setPalette: (open: boolean) => void;
+  setPalette: (open: boolean, query?: string) => void;
   setPlayer: (p: PlayerState) => void;
   showBanner: (channelId: number) => void;
   hideBanner: () => void;
@@ -51,6 +53,7 @@ export const useUi = create<UiState>((set, get) => ({
 
   detail: null,
   paletteOpen: false,
+  paletteQuery: '',
   player: null,
   banner: null,
   digits: '',
@@ -64,7 +67,7 @@ export const useUi = create<UiState>((set, get) => ({
   },
   toggleHoverPreviews: () => set((s) => ({ hoverPreviews: !s.hoverPreviews })),
   openDetail: (detail) => set({ detail }),
-  setPalette: (paletteOpen) => set({ paletteOpen }),
+  setPalette: (paletteOpen, paletteQuery = '') => set({ paletteOpen, paletteQuery }),
   setPlayer: (player) => set({ player }),
   showBanner: (channelId) =>
     set({ banner: { channelId, until: Date.now() + 5000 } }),

@@ -127,6 +127,54 @@ function Hero({
   );
 }
 
+/**
+ * The other copies of this title (README §13: "one card with a source picker").
+ *
+ * When duplicates are collapsed this is where the copies that were collapsed away go —
+ * the point of collapsing is one card, not one stream, and a provider whose 4K copy
+ * stalls is exactly when the HD one matters.
+ */
+function Sources({
+  item, onPlay,
+}: {
+  item: CatalogItem;
+  onPlay: (i: CatalogItem, episodeId?: number) => void;
+}) {
+  const { data } = useCommand(
+    'library.alternates',
+    { kind: item.kind === 'series' ? 'series' : 'movies', id: item.id },
+    [item.kind, item.id],
+  );
+  const alternates = (data ?? []).filter((a) => a.id !== item.id);
+  if (alternates.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 'var(--sp-4)' }}>
+      <div
+        style={{
+          fontSize: 'var(--fs-xs)', fontWeight: 700, letterSpacing: '0.06em',
+          textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 6,
+        }}
+      >
+        Also available as
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {alternates.map((a) => (
+          <Button
+            key={a.id}
+            size="sm"
+            icon="play"
+            onClick={() => onPlay({ ...item, id: a.id, quality: a.quality })}
+          >
+            {a.quality ?? 'Unknown quality'}
+            {a.provider ? ` · ${a.provider}` : ''}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Body({
   item, tab, setTab, season, setSeason, onPlay,
 }: {
@@ -172,6 +220,7 @@ function Body({
             <Badge tone="neutral">CC</Badge>
           </div>
           <p style={{ margin: 0, color: 'var(--text)', lineHeight: 1.6 }}>{item.overview}</p>
+          <Sources item={item} onPlay={onPlay} />
         </div>
 
         <div style={{ fontSize: 'var(--fs-sm)', display: 'grid', gap: 'var(--sp-3)', alignContent: 'start' }}>
