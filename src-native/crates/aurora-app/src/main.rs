@@ -45,6 +45,7 @@ fn main() {
             commands::library_playback_aids,
             commands::library_record_skip,
             commands::library_sync_chapters,
+            commands::library_series_prefs,
             commands::library_set_series_prefs,
             commands::search_query,
             commands::player_play,

@@ -357,6 +357,13 @@ const handlers: { [K in CommandName]: (a: CommandArgs<K>) => CommandResult<K> } 
     userSkips.set(key, [...list, [startSecs, endSecs]]);
   },
 
+  'library.seriesPrefs': ({ seriesId }) =>
+    seriesPrefs.get(seriesId) ?? {
+      alwaysSkipIntro: false,
+      alwaysSkipRecap: false,
+      autoplayNext: true,
+    },
+
   'library.setSeriesPrefs': ({ seriesId, prefs }) => {
     seriesPrefs.set(seriesId, prefs);
   },

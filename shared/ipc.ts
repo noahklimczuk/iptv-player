@@ -281,6 +281,7 @@ export interface Commands {
     startSecs: number;
     endSecs: number;
   }) => void;
+  'library.seriesPrefs': (args: { profileId: number; seriesId: number }) => SeriesPrefs;
   'library.setSeriesPrefs': (args: {
     profileId: number;
     seriesId: number;

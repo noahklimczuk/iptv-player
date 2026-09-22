@@ -16,7 +16,7 @@ This repository holds two things:
 | Persistence (SQLite, migrations, FTS5 search) | ✅ built, 64 tests |
 | Playback state machine + error taxonomy | ✅ built, 19 tests |
 | libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings) | ✅ built, 17 E2E journeys |
+| React UI (home, guide, live, browse, player, search, settings) | ✅ built, 19 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
 | Tauri host | ✅ compiles and tests on Linux with GTK dev packages |
 | Provider HTTP client, DVR, profiles | ❌ not started |

@@ -470,6 +470,22 @@ pub fn library_sync_chapters(services: State<'_, Services>, args: AidsArgs) -> R
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SeriesPrefsArgs {
+    pub profile_id: i64,
+    pub series_id: i64,
+}
+
+#[tauri::command]
+pub fn library_series_prefs(
+    services: State<'_, Services>,
+    args: SeriesPrefsArgs,
+) -> Result<markers::SeriesPrefs> {
+    let db = services.db.lock();
+    Ok(markers::prefs(&db, args.profile_id, args.series_id)?)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetSeriesPrefsArgs {
     pub profile_id: i64,
     pub series_id: i64,

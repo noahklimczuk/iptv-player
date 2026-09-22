@@ -131,3 +131,48 @@ test('Play now on the Up Next card starts the next episode immediately', async (
     )
     .toBeLessThan(5);
 });
+
+test('per-show playback preferences persist', async ({ page }) => {
+  await page.goto('/#/series');
+  await page.locator('[role="button"]').first().click();
+
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('tab', { name: 'episodes' }).click();
+
+  const alwaysSkip = dialog.getByRole('switch', { name: 'Always skip intros' });
+  await expect(alwaysSkip).toHaveAttribute('aria-checked', 'false');
+  await alwaysSkip.click();
+  await expect(alwaysSkip).toHaveAttribute('aria-checked', 'true');
+  await page.screenshot({ path: `${SHOTS}/17-series-prefs.png` });
+
+  // Reopening the show reflects the stored value rather than resetting.
+  await page.keyboard.press('Escape');
+  await page.locator('[role="button"]').first().click();
+  await dialog.getByRole('tab', { name: 'episodes' }).click();
+  await expect(
+    dialog.getByRole('switch', { name: 'Always skip intros' }),
+  ).toHaveAttribute('aria-checked', 'true');
+});
+
+test('auto-skip jumps the intro without being pressed', async ({ page }) => {
+  await page.goto('/#/series');
+  await page.locator('[role="button"]').first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('tab', { name: 'episodes' }).click();
+  await dialog.getByRole('switch', { name: 'Always skip intros' }).click();
+
+  await dialog.locator('button', { hasText: /^\d/ }).first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+
+  await seekTo(page, 45);
+
+  // No button press: the playhead should move itself past the intro.
+  await expect
+    .poll(async () =>
+      page
+        .getByRole('slider', { name: 'Seek' })
+        .evaluate((el) => Number((el as HTMLInputElement).value)),
+    )
+    .toBeGreaterThanOrEqual(92);
+  await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+});

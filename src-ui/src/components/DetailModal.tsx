@@ -4,9 +4,9 @@
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import type { CatalogItem, Episode } from '@shared/ipc';
+import type { CatalogItem, Episode, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
-import { getProgress } from '@/ipc';
+import { getProgress, invoke } from '@/ipc';
 import { duration, progressPct, runtime } from '@/lib/format';
 import { Badge, Button, IconButton, ProgressBar, Skeleton } from './Primitives';
 import { Icon } from './Icon';
@@ -209,10 +209,13 @@ function Body({
       </div>
 
       {tab === 'episodes' && isSeries && (
-        <Episodes
-          seriesId={item.id} seasons={item.seasons} season={season} setSeason={setSeason}
-          onPlay={(epId) => onPlay(item, epId)}
-        />
+        <>
+          <PlaybackPrefs seriesId={item.id} />
+          <Episodes
+            seriesId={item.id} seasons={item.seasons} season={season} setSeason={setSeason}
+            onPlay={(epId) => onPlay(item, epId)}
+          />
+        </>
       )}
       {tab === 'similar' && <Similar />}
       {tab === 'details' && <Details item={item} />}
@@ -226,6 +229,62 @@ function Meta({ label, value }: { label: string; value: string }) {
     <div>
       <span style={{ color: 'var(--text-faint)' }}>{label}: </span>
       <span style={{ color: 'var(--text-muted)' }}>{value}</span>
+    </div>
+  );
+}
+
+/**
+ * Per-show playback preferences (README §9: "remember per-show whether the user
+ * always skips"). They live on the show rather than in global Settings because that
+ * is the scope they apply at.
+ */
+function PlaybackPrefs({ seriesId }: { seriesId: number }) {
+  const { data } = useCommand('library.seriesPrefs', { profileId: 1, seriesId }, [seriesId]);
+  const [local, setLocal] = useState<SeriesPrefs | null>(null);
+  const prefs = local ?? data;
+
+  useEffect(() => setLocal(null), [seriesId]);
+
+  if (!prefs) return null;
+
+  const update = (patch: Partial<SeriesPrefs>) => {
+    const next = { ...prefs, ...patch };
+    setLocal(next);
+    void invoke('library.setSeriesPrefs', { profileId: 1, seriesId, prefs: next });
+  };
+
+  const toggles: [keyof SeriesPrefs, string][] = [
+    ['alwaysSkipIntro', 'Always skip intros'],
+    ['alwaysSkipRecap', 'Always skip recaps'],
+    ['autoplayNext', 'Autoplay next episode'],
+  ];
+
+  return (
+    <div
+      style={{
+        display: 'flex', gap: 'var(--sp-2)', flexWrap: 'wrap',
+        marginBottom: 'var(--sp-4)',
+      }}
+    >
+      {toggles.map(([key, label]) => (
+        <button
+          key={key}
+          role="switch"
+          aria-checked={prefs[key]}
+          onClick={() => update({ [key]: !prefs[key] } as Partial<SeriesPrefs>)}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 7,
+            padding: '7px 14px', borderRadius: 'var(--r-full)', cursor: 'pointer',
+            fontSize: 'var(--fs-sm)', fontWeight: 600,
+            border: `1px solid ${prefs[key] ? 'transparent' : 'var(--border-strong)'}`,
+            background: prefs[key] ? 'var(--accent)' : 'transparent',
+            color: prefs[key] ? 'var(--accent-text)' : 'var(--text-muted)',
+          }}
+        >
+          <Icon name={prefs[key] ? 'check' : 'plus'} size={14} />
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
