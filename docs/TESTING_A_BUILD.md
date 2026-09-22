@@ -1,7 +1,10 @@
 # Trying a Windows build
 
-Every push builds two things on a Windows runner and attaches them to the run under
-**Actions → the run → Artifacts**:
+The quickest route is **Releases → `latest-windows`**: a single `.exe` installer,
+replaced on every push, so the link never changes.
+
+Every push also attaches the raw builds to the run under **Actions → the run →
+Artifacts**:
 
 | Artifact | What it is |
 |---|---|
@@ -9,7 +12,9 @@ Every push builds two things on a Windows runner and attaches them to the run un
 | `aurora-tv-installers` | The NSIS `.exe` and the MSI. Installs to Program Files and writes to `%LOCALAPPDATA%`. |
 
 Use the portable one unless you are specifically testing the installer. It is a single
-folder you can delete, and its log is right there next to the exe.
+folder you can delete, and its log is right there next to the exe. It cannot be reduced
+to a single file — libmpv ships as a DLL that has to sit beside the exe, which is what
+the installer exists to do for you.
 
 ## The question this build exists to answer
 

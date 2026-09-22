@@ -124,6 +124,9 @@ jobs:
   windows-app:
     name: Windows app (portable + installer)
     runs-on: windows-latest
+    permissions:
+      # To publish the installer to Releases at the end of the job.
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -289,3 +292,47 @@ jobs:
             src-native/target/release/bundle/nsis/*.exe
             src-native/target/release/bundle/msi/*.msi
           if-no-files-found: error
+
+      - name: Publish the installer to Releases
+        # Actions artifacts expire and are awkward to find; a release is one link that
+        # never changes. The NSIS installer is a single self-contained .exe — it
+        # carries libmpv with it, which is why the portable build cannot be one file.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem 'src-native\target\release\bundle\nsis' -Filter '*.exe' |
+            Select-Object -First 1
+          if (-not $exe) { throw 'No NSIS installer was produced.' }
+          Write-Host "Publishing $($exe.Name) ($([math]::Round($exe.Length / 1MB)) MB)"
+
+          $tag = 'latest-windows'
+          # Built as an array rather than a here-string: a here-string terminator must
+          # sit at column zero, which depends on how YAML strips this block's indent.
+          $notes = @(
+            'Newest Windows build, replaced automatically on every push. Download the'
+            '.exe below and run it.'
+            ''
+            "* Commit: $env:GITHUB_SHA"
+            "* Branch: $env:GITHUB_REF_NAME"
+            "* Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            ''
+            'This is a development build, not a finished product. docs/TESTING_A_BUILD.md'
+            'says what to look at first and where the log is.'
+          ) -join "`n"
+
+          # gh exits non-zero when the release does not exist, which is information
+          # rather than an error, so the native-command trap is off around the probe.
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view $tag *> $null
+          $exists = ($LASTEXITCODE -eq 0)
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          if ($exists) {
+            gh release edit $tag --notes $notes --prerelease
+          } else {
+            gh release create $tag --prerelease --title 'Aurora TV — latest build' --notes $notes
+          }
+          gh release upload $tag $exe.FullName --clobber
+          Write-Host "Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"

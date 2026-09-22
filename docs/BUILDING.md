@@ -28,10 +28,17 @@ cross-check below.
 
 ```
 pnpm install
-pnpm dev                      # UI on :5173
-cd src-native
-cargo tauri dev               # host + WebView2 + mpv
+pnpm dev                                        # UI on :5173
+cd src-native/crates/aurora-app
+cargo tauri dev --no-default-features           # host + WebView2 + mpv
 ```
+
+`--no-default-features` is load-bearing. Tauri decides dev-versus-production by the
+`custom-protocol` cargo feature — `tauri::is_dev()` is literally
+`!cfg!(feature = "custom-protocol")` — and this crate has it in `default` so that a
+plain `cargo build --release` produces a shippable binary. Leaving it on during `dev`
+serves the last `vite build` output from inside the exe instead of the dev server, so
+nothing you edit shows up.
 
 You need:
 - **Rust** stable, MSVC toolchain (`x86_64-pc-windows-msvc`)
@@ -54,6 +61,22 @@ screenshots in `screenshots/` are produced.
 ```
 pnpm exec playwright test     # 12 journeys + screenshot capture
 ```
+
+## Getting a build without a Windows machine
+
+Every push builds the app on a Windows runner. Two ways to get the result:
+
+- **Releases → `latest-windows`** — one `.exe` installer, replaced on every push, so the
+  link never changes.
+- **Actions → the run → Artifacts** — `aurora-tv-portable` (a zip that runs in place and
+  keeps its state beside itself) and `aurora-tv-installers` (the NSIS `.exe` and the
+  MSI).
+
+The portable build cannot be a single file: libmpv ships as a DLL and has to sit next
+to the exe. The installer is a single file because it carries the DLL inside itself and
+lays both down on install.
+
+See `docs/TESTING_A_BUILD.md` for what to check on first launch.
 
 ## Cross-checking the Windows code from Linux
 
