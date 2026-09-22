@@ -4,6 +4,7 @@
 //! state is owned here and mirrored to the UI.
 
 pub mod commands;
+pub mod dvr;
 pub mod error;
 pub mod profiles;
 pub mod providers;

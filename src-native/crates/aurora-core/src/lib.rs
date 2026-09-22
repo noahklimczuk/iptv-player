@@ -8,6 +8,7 @@ pub mod classify;
 pub mod dvr;
 pub mod epg_match;
 pub mod error;
+pub mod fsname;
 pub mod m3u;
 pub mod markers;
 pub mod model;

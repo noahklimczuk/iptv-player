@@ -8,3 +8,4 @@ pub mod markers;
 pub mod profiles;
 pub mod progress;
 pub mod search;
+pub mod settings;

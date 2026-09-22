@@ -408,6 +408,70 @@ pub fn active_rules(conn: &Connection) -> Result<Vec<SeriesRule>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// A rule as the rules screen shows it — the stored form, not the matcher's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleView {
+    pub id: i64,
+    pub title: String,
+    pub channel_id: Option<i64>,
+    pub new_only: bool,
+    pub weekdays: Option<Vec<u8>>,
+    pub around_local_minute: Option<u16>,
+    pub pre_padding_secs: i64,
+    pub post_padding_secs: i64,
+    pub keep_episodes: Option<u16>,
+    pub priority: i32,
+    pub enabled: bool,
+    /// How many recordings this rule has scheduled or made.
+    pub scheduled: i64,
+}
+
+pub fn list_rules(conn: &Connection) -> Result<Vec<RuleView>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.title, r.channel_id, r.new_only, r.weekdays, r.around_local_minute,
+                r.pre_padding_secs, r.post_padding_secs, r.keep_episodes, r.priority, r.enabled,
+                (SELECT COUNT(*) FROM recordings WHERE rule_id = r.id)
+         FROM recording_rules r ORDER BY r.title",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let weekdays: Option<String> = r.get(4)?;
+        Ok(RuleView {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            channel_id: r.get(2)?,
+            new_only: r.get::<_, i64>(3)? != 0,
+            weekdays: weekdays.and_then(|s| serde_json::from_str(&s).ok()),
+            around_local_minute: r.get(5)?,
+            pre_padding_secs: r.get(6)?,
+            post_padding_secs: r.get(7)?,
+            keep_episodes: r.get(8)?,
+            priority: r.get(9)?,
+            enabled: r.get::<_, i64>(10)? != 0,
+            scheduled: r.get(11)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Reminders that have not yet fired, soonest first.
+pub fn list_reminders(conn: &Connection) -> Result<Vec<Reminder>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, channel_id, title, start, lead_secs FROM reminders
+         WHERE fired = 0 ORDER BY start",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Reminder {
+            id: r.get(0)?,
+            channel_id: r.get(1)?,
+            title: r.get(2)?,
+            start: r.get(3)?,
+            lead_secs: r.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Padding and priority for one rule, so expansion schedules with the rule's own values.
 fn rule_padding(conn: &Connection, rule_id: i64) -> Result<(i64, i64, i32)> {
     Ok(conn.query_row(
@@ -523,19 +587,38 @@ pub struct Reminder {
 pub fn add_reminder(
     conn: &Connection,
     channel_id: i64,
-    programme: &Programme,
+    title: &str,
+    start: i64,
     lead_secs: i64,
     now: i64,
 ) -> Result<Option<i64>> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO reminders (channel_id, title, start, lead_secs, created_at)
          VALUES (?1,?2,?3,?4,?5)",
-        params![channel_id, programme.title, programme.start, lead_secs, now],
+        params![channel_id, title, start, lead_secs, now],
     )?;
     if changed == 0 {
         return Ok(None);
     }
     Ok(Some(conn.last_insert_rowid()))
+}
+
+/// Set a reminder for a guide entry.
+pub fn remind_programme(
+    conn: &Connection,
+    channel_id: i64,
+    programme: &Programme,
+    lead_secs: i64,
+    now: i64,
+) -> Result<Option<i64>> {
+    add_reminder(
+        conn,
+        channel_id,
+        &programme.title,
+        programme.start,
+        lead_secs,
+        now,
+    )
 }
 
 pub fn remove_reminder(conn: &Connection, id: i64) -> Result<bool> {
@@ -1002,9 +1085,9 @@ mod tests {
     fn reminders_fire_once_inside_their_lead_time() {
         let mut conn = db();
         let prog = programme("Show", 10_000);
-        let id = add_reminder(&conn, 1, &prog, 120, 0).unwrap().unwrap();
+        let id = remind_programme(&conn, 1, &prog, 120, 0).unwrap().unwrap();
         // Duplicate for the same airing is absorbed.
-        assert!(add_reminder(&conn, 1, &prog, 120, 0).unwrap().is_none());
+        assert!(remind_programme(&conn, 1, &prog, 120, 0).unwrap().is_none());
 
         assert!(fire_reminders(&mut conn, 9_000).unwrap().is_empty());
         let fired = fire_reminders(&mut conn, 9_900).unwrap();
@@ -1016,13 +1099,13 @@ mod tests {
     #[test]
     fn reminders_can_be_removed_and_pruned() {
         let mut conn = db();
-        let id = add_reminder(&conn, 1, &programme("A", 10_000), 120, 0)
+        let id = remind_programme(&conn, 1, &programme("A", 10_000), 120, 0)
             .unwrap()
             .unwrap();
         assert!(remove_reminder(&conn, id).unwrap());
         assert!(!remove_reminder(&conn, id).unwrap());
 
-        add_reminder(&conn, 1, &programme("B", 10_000), 120, 0)
+        remind_programme(&conn, 1, &programme("B", 10_000), 120, 0)
             .unwrap()
             .unwrap();
         // A reminder for something that already started is no use to anyone.
@@ -1036,7 +1119,7 @@ mod tests {
         schedule(&conn, &manual(1, "Show", 10_000), 0)
             .unwrap()
             .unwrap();
-        add_reminder(&conn, 1, &programme("Show", 10_000), 120, 0)
+        remind_programme(&conn, 1, &programme("Show", 10_000), 120, 0)
             .unwrap()
             .unwrap();
         conn.execute("DELETE FROM channels WHERE id = 1", [])
@@ -1047,6 +1130,76 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn list_rules_shows_what_each_rule_has_scheduled() {
+        let conn = db();
+        let rule = create_rule(
+            &conn,
+            &NewRule {
+                title: "The Late Show",
+                keep_episodes: Some(5),
+                weekdays: Some(vec![0, 4]),
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        create_rule(
+            &conn,
+            &NewRule {
+                title: "Another",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        expand_rules(&conn, &[(programme("The Late Show", 100_000), 1i64)], 0, 0).unwrap();
+
+        let views = list_rules(&conn).unwrap();
+        // Ordered by title, so "Another" comes first.
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].title, "Another");
+        assert_eq!(views[0].scheduled, 0);
+        let late = views.iter().find(|v| v.id == rule).unwrap();
+        assert_eq!(late.scheduled, 1);
+        assert_eq!(late.keep_episodes, Some(5));
+        assert_eq!(late.weekdays.as_deref(), Some(&[0u8, 4][..]));
+        assert!(late.enabled);
+    }
+
+    #[test]
+    fn list_rules_includes_disabled_ones() {
+        let conn = db();
+        let id = create_rule(
+            &conn,
+            &NewRule {
+                title: "Show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        set_rule_enabled(&conn, id, false).unwrap();
+        // The matcher skips it; the screen that lets you re-enable it must not.
+        assert!(active_rules(&conn).unwrap().is_empty());
+        let views = list_rules(&conn).unwrap();
+        assert_eq!(views.len(), 1);
+        assert!(!views[0].enabled);
+    }
+
+    #[test]
+    fn list_reminders_hides_the_ones_already_shown() {
+        let mut conn = db();
+        remind_programme(&conn, 1, &programme("A", 10_000), 120, 0).unwrap();
+        remind_programme(&conn, 2, &programme("B", 20_000), 120, 0).unwrap();
+        assert_eq!(list_reminders(&conn).unwrap().len(), 2);
+
+        fire_reminders(&mut conn, 9_900).unwrap();
+        let left = list_reminders(&conn).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].title, "B");
     }
 
     #[test]
