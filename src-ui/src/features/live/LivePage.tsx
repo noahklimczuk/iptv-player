@@ -1,0 +1,238 @@
+/**
+ * Live TV — channel list, categories, favorites (README §7.3).
+ * The set-top-box behaviours (banner, digit entry, last-channel) live in
+ * features/player/ChannelBanner.tsx and hooks/useZapper.ts so they work from any screen.
+ */
+import { useMemo, useState } from 'react';
+import type { Channel } from '@shared/ipc';
+import { Badge, Button, EmptyState, Skeleton } from '@/components/Primitives';
+import { Icon } from '@/components/Icon';
+import { useCommand } from '@/hooks/useCommand';
+import { clockTime, progressPct } from '@/lib/format';
+
+export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
+  const [group, setGroup] = useState<string | undefined>(undefined);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [view, setView] = useState<'list' | 'grid'>('list');
+
+  const { data: groups } = useCommand('channels.groups', undefined, []);
+  const { data: channels, loading } = useCommand(
+    'channels.list',
+    { group, favoritesOnly },
+    [group, favoritesOnly],
+  );
+
+  const categories = useMemo(
+    () => [{ name: 'All', count: 0 }, ...(groups ?? [])],
+    [groups],
+  );
+
+  return (
+    <div style={{ padding: 'var(--sp-5) var(--sp-6)' }}>
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+          marginBottom: 'var(--sp-4)', flexWrap: 'wrap',
+        }}
+      >
+        <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>Live TV</h1>
+        <Button
+          size="sm"
+          variant={favoritesOnly ? 'primary' : 'secondary'}
+          icon="heart"
+          iconFilled={favoritesOnly}
+          onClick={() => setFavoritesOnly((f) => !f)}
+        >
+          Favorites
+        </Button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+          <Button
+            size="sm" icon="stack"
+            variant={view === 'list' ? 'primary' : 'ghost'}
+            onClick={() => setView('list')}
+          >
+            List
+          </Button>
+          <Button
+            size="sm" icon="grid"
+            variant={view === 'grid' ? 'primary' : 'ghost'}
+            onClick={() => setView('grid')}
+          >
+            Grid
+          </Button>
+        </div>
+      </div>
+
+      <div
+        className="no-scrollbar"
+        style={{
+          display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 'var(--sp-3)',
+          marginBottom: 'var(--sp-4)',
+        }}
+      >
+        {categories.map((c) => {
+          const value = c.name === 'All' ? undefined : c.name;
+          const active = group === value;
+          return (
+            <button
+              key={c.name}
+              onClick={() => setGroup(value)}
+              style={{
+                padding: '7px 15px', borderRadius: 'var(--r-full)', cursor: 'pointer',
+                whiteSpace: 'nowrap', fontSize: 'var(--fs-sm)', fontWeight: 600,
+                border: `1px solid ${active ? 'transparent' : 'var(--border)'}`,
+                background: active ? 'var(--text)' : 'var(--surface)',
+                color: active ? 'var(--text-invert)' : 'var(--text-muted)',
+              }}
+            >
+              {c.name}{c.count ? ` (${c.count})` : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {loading && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {Array.from({ length: 8 }, (_, i) => <Skeleton key={i} h={68} />)}
+        </div>
+      )}
+
+      {!loading && (channels ?? []).length === 0 && (
+        <EmptyState
+          icon="tv"
+          title={favoritesOnly ? 'No favorite channels yet' : 'No channels'}
+          body={
+            favoritesOnly
+              ? 'Press F while watching, or use the heart on any channel, to add it here.'
+              : 'Add a provider in Settings to populate your channel list.'
+          }
+        />
+      )}
+
+      {view === 'list' ? (
+        <div style={{ display: 'grid', gap: 4 }}>
+          {(channels ?? []).map((c) => (
+            <ChannelRow key={c.id} channel={c} onTune={onTune} />
+          ))}
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'grid', gap: 'var(--sp-3)',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+          }}
+        >
+          {(channels ?? []).map((c) => (
+            <ChannelTile key={c.id} channel={c} onTune={onTune} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChannelRow({ channel, onTune }: { channel: Channel; onTune: (c: Channel) => void }) {
+  const { data } = useCommand('epg.nowNext', { channelId: channel.id }, [channel.id]);
+  const now = Math.floor(Date.now() / 1000);
+  const pct = data?.now
+    ? progressPct(now - data.now.start, data.now.stop - data.now.start)
+    : 0;
+
+  return (
+    <button
+      onClick={() => onTune(channel)}
+      style={{
+        display: 'grid', gridTemplateColumns: '44px 44px 1fr auto', gap: 'var(--sp-3)',
+        alignItems: 'center', padding: 'var(--sp-3)', textAlign: 'left',
+        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        borderRadius: 'var(--r-md)', cursor: 'pointer', color: 'inherit',
+      }}
+    >
+      <span
+        style={{
+          fontSize: 'var(--fs-md)', fontWeight: 800, color: 'var(--text-faint)',
+          fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+        }}
+      >
+        {channel.number}
+      </span>
+      {channel.logo ? (
+        <img
+          src={channel.logo} alt=""
+          style={{ width: 40, height: 40, borderRadius: 'var(--r-sm)', objectFit: 'cover' }}
+        />
+      ) : <div style={{ width: 40 }} />}
+
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          <strong style={{ fontSize: 'var(--fs-md)' }}>{channel.name}</strong>
+          {channel.quality && <Badge tone={channel.quality === '4K' ? 'accent' : 'neutral'}>{channel.quality}</Badge>}
+          {channel.favorite && <Icon name="heart" size={13} filled style={{ color: 'var(--accent)' }} />}
+        </div>
+        <div
+          style={{
+            fontSize: 'var(--fs-sm)', color: 'var(--text-muted)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}
+        >
+          {data?.now
+            ? `${clockTime(data.now.start)} ${data.now.title}`
+            : 'No guide data'}
+          {data?.next && (
+            <span style={{ color: 'var(--text-faint)' }}>
+              {'  ·  Next: '}{data.next.title}
+            </span>
+          )}
+        </div>
+        {pct > 0 && (
+          <div
+            style={{
+              marginTop: 5, height: 2, background: 'var(--border)',
+              borderRadius: 'var(--r-full)', overflow: 'hidden', maxWidth: 260,
+            }}
+          >
+            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--live)' }} />
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        {channel.hasCatchup && <Badge tone="outline">Catch-up</Badge>}
+        <Icon name="play" size={18} filled style={{ color: 'var(--text-faint)' }} />
+      </div>
+    </button>
+  );
+}
+
+function ChannelTile({ channel, onTune }: { channel: Channel; onTune: (c: Channel) => void }) {
+  const { data } = useCommand('epg.nowNext', { channelId: channel.id }, [channel.id]);
+  return (
+    <button
+      onClick={() => onTune(channel)}
+      style={{
+        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        borderRadius: 'var(--r-md)', padding: 'var(--sp-3)', cursor: 'pointer',
+        textAlign: 'left', color: 'inherit', display: 'grid', gap: 'var(--sp-2)',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        {channel.logo && (
+          <img
+            src={channel.logo} alt=""
+            style={{ width: 42, height: 42, borderRadius: 'var(--r-sm)', objectFit: 'cover' }}
+          />
+        )}
+        <span style={{ color: 'var(--text-faint)', fontWeight: 800 }}>{channel.number}</span>
+      </div>
+      <strong style={{ fontSize: 'var(--fs-sm)' }}>{channel.name}</strong>
+      <span
+        style={{
+          fontSize: 'var(--fs-xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis',
+        }}
+      >
+        {data?.now?.title ?? '—'}
+      </span>
+    </button>
+  );
+}

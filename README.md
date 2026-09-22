@@ -1,16 +1,51 @@
-# IPTV Player — Build Prompt
+# Aurora TV
 
-This repository contains **one artifact: a super prompt**. It is a complete, self-contained
-specification you can hand to an AI coding agent (Claude Code, Cursor, Copilot Workspace, Codex,
-etc.) or to a human team, to build a full-featured, Windows-only IPTV player from scratch.
+A full-featured IPTV player for Windows: Netflix-style movies and series, a cable-grade
+live TV guide, and everything playing **inside the app** — no external player, ever.
 
-**How to use it:** copy everything below the horizontal rule into your agent's prompt (or point the
-agent at this file and say "implement `README.md`"). It is written to be executed in phases; tell
-the agent to start at Phase 0 and to stop for review at each milestone gate.
+This repository holds two things:
 
-**No application code lives in this repo yet.** This is the blueprint, not the build.
+1. **The build specification** — the super prompt below, which defines the whole product.
+2. **The implementation** in progress against it.
+
+## Status
+
+| | |
+|---|---|
+| Core domain logic (parsers, matching, rules, skip markers) | ✅ built, 105 tests |
+| Persistence (SQLite, migrations, FTS5 search) | ✅ built, 64 tests |
+| Playback state machine + error taxonomy | ✅ built, 19 tests |
+| libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
+| React UI (home, guide, live, browse, player, search, settings) | ✅ built, 19 E2E journeys |
+| Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
+| Tauri host | ✅ compiles and tests on Linux with GTK dev packages |
+| Provider HTTP client, DVR, profiles | ❌ not started |
+
+**Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
+from what merely compiles. In particular the Phase 0 compositing spike — video behind a
+transparent WebView2 — has never been run on real hardware, and everything about the
+playback experience depends on it.
+
+- `docs/ARCHITECTURE.md` — how the pieces fit together
+- `docs/BUILDING.md` — what builds on which platform, and how to run it
+- `docs/DECISIONS.md` — choices taken and why
+- `screenshots/` — the UI as it actually renders
+
+## Quick start
+
+```
+pnpm install
+pnpm dev          # the full UI in a browser, against an in-memory mock
+```
+
+On Windows, with Rust and libmpv present:
+
+```
+cd src-native && cargo tauri dev
+```
 
 ---
+
 
 # SUPER PROMPT — "Aurora TV": A Windows-Native, Full-Feature IPTV Player
 

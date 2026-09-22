@@ -1,0 +1,122 @@
+/* Design tokens — README §12. One source of truth; themes redefine the same names.
+   The page background is transparent by design: on Windows the mpv video surface sits
+   behind the WebView2 and must show through (docs/ARCHITECTURE.md). */
+
+:root {
+  /* Spacing — 8px scale */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+
+  /* Type scale */
+  --fs-xs: 12px; --fs-sm: 14px; --fs-md: 16px; --fs-lg: 20px;
+  --fs-xl: 24px; --fs-2xl: 32px; --fs-3xl: 48px; --fs-4xl: 64px;
+
+  /* Radii */
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-xl: 20px; --r-full: 999px;
+
+  /* Motion — nothing exceeds 320ms (README §12) */
+  --t-fast: 120ms; --t-base: 200ms; --t-slow: 320ms; --t-slower: 500ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Elevation */
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 4px 12px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 12px 32px rgb(0 0 0 / 0.55);
+  --shadow-4: 0 24px 64px rgb(0 0 0 / 0.65);
+
+  /* Layout */
+  --sidebar-w: 88px;
+  --topbar-h: 64px;
+  --guide-channel-w: 220px;
+  --guide-row-h: 64px;
+  --guide-px-per-min: 6px;
+}
+
+/* Dark (default) */
+:root, :root[data-theme='dark'] {
+  --bg:            #0b0b0f;
+  --bg-elevated:   #14141b;
+  --surface:       #1b1b24;
+  --surface-hover: #24242f;
+  --surface-sunk:  #0e0e13;
+  --border:        #2a2a36;
+  --border-strong: #3d3d4d;
+
+  --text:          #f4f4f6;
+  --text-muted:    #a1a1b0;
+  --text-faint:    #6e6e80;
+  --text-invert:   #0b0b0f;
+
+  --accent:        #7c5cff;
+  --accent-hover:  #9179ff;
+  --accent-sunk:   #5b3fe0;
+  --accent-text:   #ffffff;
+  --accent-2:      #2dd4bf;
+
+  --live:          #ef4444;
+  --success:       #34d399;
+  --warning:       #fbbf24;
+  --danger:        #f87171;
+
+  --scrim: linear-gradient(to top, rgb(11 11 15) 0%, rgb(11 11 15 / 0.75) 30%, transparent 75%);
+  --scrim-side: linear-gradient(to right, rgb(11 11 15) 0%, rgb(11 11 15 / 0.85) 35%, transparent 80%);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--accent);
+}
+
+/* OLED true black */
+:root[data-theme='oled'] {
+  --bg: #000000; --bg-elevated: #0a0a0a; --surface: #101010;
+  --surface-hover: #1a1a1a; --surface-sunk: #000000;
+  --border: #222222; --border-strong: #333333;
+  --scrim: linear-gradient(to top, #000 0%, rgb(0 0 0 / 0.75) 30%, transparent 75%);
+  --scrim-side: linear-gradient(to right, #000 0%, rgb(0 0 0 / 0.85) 35%, transparent 80%);
+}
+
+/* Light */
+:root[data-theme='light'] {
+  --bg:            #f7f7fa;
+  --bg-elevated:   #ffffff;
+  --surface:       #ffffff;
+  --surface-hover: #eeeef3;
+  --surface-sunk:  #e8e8ef;
+  --border:        #dcdce5;
+  --border-strong: #b9b9c8;
+
+  --text:          #14141b;
+  --text-muted:    #55556a;
+  --text-faint:    #8a8a9e;
+  --text-invert:   #ffffff;
+
+  --accent:        #5b3fe0;
+  --accent-hover:  #4a31c4;
+  --accent-sunk:   #3d28a8;
+
+  --scrim: linear-gradient(to top, rgb(247 247 250) 0%, rgb(247 247 250 / 0.8) 30%, transparent 75%);
+  --scrim-side: linear-gradient(to right, rgb(247 247 250) 0%, rgb(247 247 250 / 0.85) 35%, transparent 80%);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--accent);
+}
+
+/* High contrast */
+:root[data-theme='contrast'] {
+  --bg: #000000; --bg-elevated: #000000; --surface: #000000;
+  --surface-hover: #1f1f1f; --border: #ffffff; --border-strong: #ffffff;
+  --text: #ffffff; --text-muted: #ffffff; --text-faint: #e0e0e0;
+  --accent: #ffdd00; --accent-hover: #ffe84d; --accent-text: #000000;
+  --focus-ring: 0 0 0 3px #000, 0 0 0 7px #ffdd00;
+}
+
+/* TV mode — 10-foot UI (README §12). Scales the whole system up. */
+:root[data-density='tv'] {
+  --fs-xs: 15px; --fs-sm: 18px; --fs-md: 21px; --fs-lg: 26px;
+  --fs-xl: 32px; --fs-2xl: 42px; --fs-3xl: 60px; --fs-4xl: 80px;
+  --sidebar-w: 132px; --topbar-h: 88px;
+  --guide-channel-w: 300px; --guide-row-h: 88px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-fast: 1ms; --t-base: 1ms; --t-slow: 1ms; --t-slower: 1ms; }
+}
+:root[data-motion='off'] {
+  --t-fast: 1ms; --t-base: 1ms; --t-slow: 1ms; --t-slower: 1ms;
+}
