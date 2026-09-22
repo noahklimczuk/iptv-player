@@ -67,6 +67,20 @@ This type-checks the mpv/Win32 backend without an MSVC linker, which catches mos
 mistakes in code you cannot run locally. It does **not** work for `aurora-app`: a
 transitive C dependency needs MSVC's `lib.exe`.
 
+## Match CI's toolchain before trusting a local clippy run
+
+CI uses `dtolnay/rust-toolchain@stable`, which floats. A local toolchain even a few
+releases behind will pass `clippy -D warnings` on code the runner rejects, because each
+release adds lints — this has already cost one red build (`manual_checked_ops`, which
+did not exist in 1.94).
+
+```bash
+rustup toolchain install stable --profile minimal -c clippy -c rustfmt
+rustup target add x86_64-pc-windows-msvc   # for the mpv cross-check
+```
+
+`cargo clippy --version` should match what the runner prints in its Clippy step.
+
 ## Checking a real subscription
 
 The parsers are written from the Xtream spec and tested against a local server. Every

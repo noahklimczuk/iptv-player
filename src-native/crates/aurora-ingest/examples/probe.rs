@@ -208,11 +208,7 @@ fn report<T>(
 }
 
 fn pct(n: usize, total: usize) -> usize {
-    if total == 0 {
-        0
-    } else {
-        n * 100 / total
-    }
+    (n * 100).checked_div(total).unwrap_or(0)
 }
 
 /// The most common values, so a real catalogue's shape is visible at a glance.
