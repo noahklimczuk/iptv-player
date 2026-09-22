@@ -1,0 +1,10 @@
+node_modules/
+dist/
+target/
+src-native/target/
+.vite/
+*.log
+test-results/
+playwright-report/
+screenshots/
+.DS_Store
