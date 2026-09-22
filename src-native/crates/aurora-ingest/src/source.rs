@@ -77,6 +77,36 @@ pub fn parse_pasted_xtream(input: &str) -> Option<PastedXtream> {
     })
 }
 
+/// Whether an address looks like an Xtream panel root rather than a playlist link.
+///
+/// A provider that hands out a bare host with the username and password on a separate
+/// line — which is how most of them do it — leaves nothing in the URL to detect. But the
+/// shape is still a strong hint: a playlist link almost always carries a path, and
+/// usually ends in `.m3u` or `.m3u8`. A bare host with nothing after it is a panel.
+///
+/// This only ever picks the *default* the wizard offers; the user can always say
+/// otherwise. Getting it wrong costs one click, where offering no choice at all — as
+/// this did — costs the whole first run.
+pub fn looks_like_panel_root(input: &str) -> bool {
+    let trimmed = input.trim().trim_end_matches('/');
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return false;
+    }
+    if trimmed.contains('?') {
+        return false;
+    }
+    let after_scheme = match trimmed.find("://") {
+        Some(i) => &trimmed[i + 3..],
+        None => return false,
+    };
+    if after_scheme.is_empty() {
+        return false;
+    }
+    // Nothing after host[:port] — no path at all.
+    !after_scheme.contains('/')
+}
+
 fn urldecode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -124,6 +154,30 @@ mod tests {
         let got = parse_pasted_xtream("http://example.com/get.php?user=carol&pass=pw123").unwrap();
         assert_eq!(got.username, "carol");
         assert_eq!(got.password, "pw123");
+    }
+
+    #[test]
+    fn a_bare_host_is_recognised_as_a_panel_root() {
+        // The shape a provider's credentials card actually has: a host, and the
+        // username and password written underneath it.
+        assert!(looks_like_panel_root("http://12345678.panel-host.example"));
+        assert!(looks_like_panel_root("http://example.com:8080"));
+        assert!(looks_like_panel_root("https://panel.example.com/"));
+        assert!(looks_like_panel_root("  http://example.com  "));
+    }
+
+    #[test]
+    fn a_playlist_link_is_not_a_panel_root() {
+        assert!(!looks_like_panel_root("http://example.com/playlist.m3u"));
+        assert!(!looks_like_panel_root(
+            "http://example.com/get.php?username=a&password=b"
+        ));
+        assert!(!looks_like_panel_root("http://example.com/iptv/list.m3u8"));
+        // Not a URL at all.
+        assert!(!looks_like_panel_root("example.com"));
+        assert!(!looks_like_panel_root("/home/me/list.m3u"));
+        assert!(!looks_like_panel_root(""));
+        assert!(!looks_like_panel_root("http://"));
     }
 
     #[test]

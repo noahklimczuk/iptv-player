@@ -3,7 +3,7 @@
 use aurora_core::rules::{Rule, RuleSet};
 use aurora_db::rusqlite::{params, OptionalExtension};
 use aurora_ingest::credentials::credential_ref;
-use aurora_ingest::source::{parse_pasted_xtream, SourceKind};
+use aurora_ingest::source::{looks_like_panel_root, parse_pasted_xtream, SourceKind};
 use aurora_ingest::sync::{self, Phase, Progress, SyncOptions, SyncReport};
 use aurora_ingest::xtream::XtreamClient;
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,17 @@ pub fn providers_detect(args: PastedArgs) -> DetectedSource {
             url: p.base_url,
             username: Some(p.username),
             password: Some(p.password),
+        },
+        // A bare host carries no credentials to find, but its shape says what it is:
+        // a panel root, with the username and password written on a separate line of
+        // whatever the provider sent. Defaulting to Xtream is what makes those
+        // credentials enterable at all — the wizard only offers the fields for a
+        // provider it believes has them.
+        None if looks_like_panel_root(&args.text) => DetectedSource {
+            kind: "xtream".into(),
+            url: args.text.trim().trim_end_matches('/').to_string(),
+            username: None,
+            password: None,
         },
         None => DetectedSource {
             kind: "m3u".into(),
@@ -324,6 +335,32 @@ mod tests {
         assert_eq!(got.kind, "xtream");
         assert_eq!(got.url, "http://example.com:8080");
         assert_eq!(got.username.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn a_bare_panel_host_offers_the_credential_fields() {
+        // The shape on a provider's credentials card: a host on one line, the username
+        // and password on the next two. There is nothing in the URL to parse, so the
+        // only thing that makes those fields appear is recognising the shape.
+        let got = providers_detect(PastedArgs {
+            text: "http://panel.example.com".into(),
+        });
+        assert_eq!(got.kind, "xtream");
+        assert_eq!(got.url, "http://panel.example.com");
+        assert_eq!(
+            got.username, None,
+            "there is nothing to fill in, only to offer"
+        );
+        assert_eq!(got.password, None);
+    }
+
+    #[test]
+    fn a_trailing_slash_is_not_carried_into_the_base_url() {
+        let got = providers_detect(PastedArgs {
+            text: "http://panel.example.com/".into(),
+        });
+        assert_eq!(got.kind, "xtream");
+        assert_eq!(got.url, "http://panel.example.com");
     }
 
     #[test]

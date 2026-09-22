@@ -112,3 +112,44 @@ test('the wizard can be skipped', async ({ page }) => {
   await page.getByRole('button', { name: 'Skip for now' }).click();
   await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
 });
+
+test('a bare panel host offers the credential fields', async ({ page }) => {
+  await openWizard(page);
+
+  // The shape on a provider's credentials card: a host on one line, the username and
+  // password on the next two. Nothing in the URL to detect — which is exactly why this
+  // journey used to dead-end, with the fields never appearing.
+  await page.getByLabel('Provider address').fill('http://12345678.panel-host.example');
+
+  // The banner must say what actually happened. Claiming the credentials were "filled
+  // in for you" when the fields are empty is a lie the user can see.
+  await expect(page.getByText(/Looks like a panel login/)).toBeVisible();
+  await expect(page.getByText(/filled in for you/)).toBeHidden();
+
+  await expect(page.getByLabel('Username')).toBeVisible();
+  await expect(page.getByLabel('Password')).toBeVisible();
+  // Nothing was invented to fill them with.
+  await expect(page.getByLabel('Username')).toHaveValue('');
+
+  await page.getByLabel('Username').fill('AB12CD34');
+  await page.getByLabel('Password').fill('not-a-real-password');
+  await expect(page.getByLabel('Username')).toHaveValue('AB12CD34');
+
+  await page.screenshot({ path: `${SHOTS}/19-wizard-bare-host.png` });
+});
+
+test('the provider type can be chosen when detection guesses wrong', async ({ page }) => {
+  await openWizard(page);
+  await page.getByLabel('Provider address').fill('http://example.com/list.m3u');
+
+  // Detected as a playlist, and no credentials asked for.
+  await expect(page.getByLabel('Username')).toBeHidden();
+
+  // But a panel that happens to serve its playlist at a path is still reachable:
+  // the choice is always offered, never inferred away.
+  await page.getByRole('button', { name: 'Xtream / panel login' }).click();
+  await expect(page.getByLabel('Username')).toBeVisible();
+
+  await page.getByRole('button', { name: 'M3U playlist URL' }).click();
+  await expect(page.getByLabel('Username')).toBeHidden();
+});

@@ -1078,6 +1078,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
         return { kind: 'xtream', url: base, username, password };
       }
     }
+    // A bare host has no credentials to find, but its shape says it is a panel root —
+    // mirrors aurora_ingest::source::looks_like_panel_root.
+    const withoutSlash = trimmed.replace(/\/+$/, '');
+    const afterScheme = withoutSlash.split('://')[1] ?? '';
+    if (isHttp && !withoutSlash.includes('?') && afterScheme && !afterScheme.includes('/')) {
+      return { kind: 'xtream', url: withoutSlash, username: null, password: null };
+    }
     return { kind: 'm3u', url: trimmed, username: null, password: null };
   },
 

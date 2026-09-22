@@ -34,7 +34,7 @@ export function SetupWizard({ onFinished }: { onFinished: () => void }) {
     name: '', kind: 'm3u', url: '', username: '', password: '',
   });
   const [pasted, setPasted] = useState('');
-  const [detected, setDetected] = useState(false);
+  const [detected, setDetected] = useState<'none' | 'credentials' | 'panel'>('none');
   const [checking, setChecking] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [content, setContent] = useState({ live: true, vod: true, series: true });
@@ -48,9 +48,12 @@ export function SetupWizard({ onFinished }: { onFinished: () => void }) {
   const detect = useCallback(async (text: string) => {
     setPasted(text);
     setValidation(null);
-    if (!text.trim()) { setDetected(false); return; }
+    if (!text.trim()) { setDetected('none'); return; }
     const d = await invoke('providers.detect', { text });
-    setDetected(d.kind === 'xtream');
+    // Two different things, and saying the wrong one is a lie the user can see: a URL
+    // carrying credentials fills the fields in, a bare panel host only offers them.
+    if (d.kind !== 'xtream') setDetected('none');
+    else setDetected(d.username ? 'credentials' : 'panel');
     setDraft((prev) => ({
       ...prev,
       kind: d.kind,
@@ -232,7 +235,9 @@ function SourceStep({
   setDraft: React.Dispatch<React.SetStateAction<DraftProvider>>;
   pasted: string;
   onPaste: (text: string) => void;
-  detected: boolean;
+  /** What detection could tell from the address: nothing, a full credential pair, or
+      a panel root whose credentials the user still has to type. */
+  detected: 'none' | 'credentials' | 'panel';
   checking: boolean;
   validation: ValidationResult | null;
   onCheck: () => void;
@@ -255,17 +260,56 @@ function SourceStep({
         />
       </Field>
 
-      {detected && (
+      {detected !== 'none' && (
         <div
           style={{
             display: 'flex', alignItems: 'center', gap: 8, marginBottom: 'var(--sp-3)',
-            fontSize: 'var(--fs-sm)', color: 'var(--success)',
+            fontSize: 'var(--fs-sm)',
+            color: detected === 'credentials' ? 'var(--success)' : 'var(--text-muted)',
           }}
         >
-          <Icon name="check" size={15} />
-          Recognised an Xtream address — username and password filled in for you.
+          <Icon name={detected === 'credentials' ? 'check' : 'info'} size={15} />
+          {detected === 'credentials'
+            ? 'Recognised an Xtream address — username and password filled in for you.'
+            : 'Looks like a panel login. Enter the username and password your provider gave you.'}
         </div>
       )}
+
+      {/*
+        Always offered, never inferred away. Detection can only read credentials out of
+        a URL that carries them; a provider that gives you a bare host and a separate
+        username and password — which is most of them — leaves nothing to detect. This
+        used to mean those fields never appeared and the subscription could not be
+        entered at all.
+      */}
+      {/* A group of buttons, so deliberately not a <label>: that element labels a form
+          control, and a button inside one has its click forwarded to the control. */}
+      <div role="group" aria-label="Provider type" style={{ marginBottom: 'var(--sp-3)' }}>
+        <span
+          style={{
+            display: 'block', marginBottom: 5, fontSize: 'var(--fs-sm)',
+            fontWeight: 600, color: 'var(--text-muted)',
+          }}
+        >
+          Provider type
+        </span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {([
+            ['xtream', 'Xtream / panel login'],
+            ['m3u', 'M3U playlist URL'],
+          ] as const).map(([value, label]) => (
+            <Button
+              key={value}
+              size="sm"
+              variant={draft.kind === value ? 'primary' : 'secondary'}
+              aria-pressed={draft.kind === value}
+              onClick={() => setDraft((d) => ({ ...d, kind: value }))}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      </div>
 
       <Field label="Name this provider">
         <input
