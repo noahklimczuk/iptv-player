@@ -33,11 +33,19 @@ pub enum Reply {
 
 impl Reply {
     pub fn ok(body: impl Into<Vec<u8>>) -> Self {
-        Reply::Body { status: 200, headers: Vec::new(), body: body.into() }
+        Reply::Body {
+            status: 200,
+            headers: Vec::new(),
+            body: body.into(),
+        }
     }
 
     pub fn status(status: u16) -> Self {
-        Reply::Body { status, headers: Vec::new(), body: b"error".to_vec() }
+        Reply::Body {
+            status,
+            headers: Vec::new(),
+            body: b"error".to_vec(),
+        }
     }
 
     pub fn with_header(mut self, name: &str, value: &str) -> Self {
@@ -107,7 +115,12 @@ impl TestServer {
             }
         });
 
-        Self { port, stop, hits, log }
+        Self {
+            port,
+            stop,
+            hits,
+            log,
+        }
     }
 
     /// Always answer the same way.
@@ -162,7 +175,8 @@ where
             break;
         }
         if let Some((k, v)) = h.split_once(':') {
-            req.headers.push((k.trim().to_string(), v.trim().to_string()));
+            req.headers
+                .push((k.trim().to_string(), v.trim().to_string()));
         }
     }
 
@@ -170,7 +184,11 @@ where
     log.lock().expect("log").push(req.clone());
 
     match responder(index, &req) {
-        Reply::Body { status, headers, body } => {
+        Reply::Body {
+            status,
+            headers,
+            body,
+        } => {
             let mut head = format!(
                 "HTTP/1.1 {status} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
                 reason(status),

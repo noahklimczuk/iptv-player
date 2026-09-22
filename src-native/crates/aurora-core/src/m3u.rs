@@ -34,6 +34,7 @@ impl Pending {
     }
 }
 
+#[derive(Debug)]
 pub struct Parsed {
     pub header: PlaylistHeader,
     pub result: PlaylistParseResult,

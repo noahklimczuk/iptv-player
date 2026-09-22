@@ -49,7 +49,9 @@ pub struct HttpClient {
 
 impl std::fmt::Debug for HttpClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpClient").field("config", &self.config).finish()
+        f.debug_struct("HttpClient")
+            .field("config", &self.config)
+            .finish()
     }
 }
 
@@ -78,7 +80,11 @@ impl HttpClient {
             .build()
             .map_err(|e| NetFailure::classify(&e.to_string()))?;
 
-        Ok(Self { inner, config, sleep: Box::new(std::thread::sleep) })
+        Ok(Self {
+            inner,
+            config,
+            sleep: Box::new(std::thread::sleep),
+        })
     }
 
     #[cfg(test)]
@@ -212,7 +218,11 @@ fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
 }
 
 fn looks_gzipped(url: &str) -> bool {
-    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .to_ascii_lowercase();
     path.ends_with(".gz") || path.ends_with(".gzip")
 }
 
@@ -280,7 +290,9 @@ mod tests {
     #[test]
     fn fetches_a_body() {
         let server = TestServer::always(Reply::ok("#EXTM3U\n"));
-        let got = client(&server).fetch_string(&server.url("/playlist.m3u")).unwrap();
+        let got = client(&server)
+            .fetch_string(&server.url("/playlist.m3u"))
+            .unwrap();
         assert_eq!(got, "#EXTM3U\n");
         assert_eq!(server.request_count(), 1);
     }
@@ -306,7 +318,9 @@ mod tests {
         let payload = b"<tv><channel id=\"a\"/></tv>";
         let body = gzip(payload);
         let server = TestServer::always(Reply::ok(body));
-        let got = client(&server).fetch_bytes(&server.url("/epg.xml.gz")).unwrap();
+        let got = client(&server)
+            .fetch_bytes(&server.url("/epg.xml.gz"))
+            .unwrap();
         assert_eq!(got, payload);
     }
 
@@ -316,7 +330,9 @@ mod tests {
         let mut body = gzip(b"<tv>");
         body.extend(gzip(b"</tv>"));
         let server = TestServer::always(Reply::ok(body));
-        let got = client(&server).fetch_bytes(&server.url("/epg.xml.gz")).unwrap();
+        let got = client(&server)
+            .fetch_bytes(&server.url("/epg.xml.gz"))
+            .unwrap();
         assert_eq!(got, b"<tv></tv>");
     }
 
@@ -331,16 +347,56 @@ mod tests {
     }
 
     #[test]
+    fn inflates_by_content_type_when_the_url_has_no_gz_extension() {
+        // Providers frequently serve a gzipped guide from a plain `.php` endpoint and
+        // only say so in the header.
+        let body = gzip(b"<tv></tv>");
+        let server =
+            TestServer::always(Reply::ok(body).with_header("Content-Type", "application/gzip"));
+        let got = client(&server)
+            .fetch_bytes(&server.url("/xmltv.php"))
+            .unwrap();
+        assert_eq!(got, b"<tv></tv>");
+    }
+
+    #[test]
+    fn a_connection_closed_before_any_reply_is_an_error() {
+        let server = TestServer::always(Reply::Reset);
+        let c = HttpClient::new(HttpConfig {
+            max_attempts: 1,
+            ..Default::default()
+        })
+        .unwrap()
+        .without_sleeping();
+        let err = c.fetch_string(&server.url("/x")).unwrap_err();
+        assert!(!err.message.is_empty());
+        assert!(!err.actions.is_empty());
+    }
+
+    #[test]
+    fn fetches_are_plain_get_requests() {
+        let server = TestServer::always(Reply::ok("ok"));
+        client(&server).fetch_string(&server.url("/x")).unwrap();
+        assert_eq!(server.requests()[0].method, "GET");
+    }
+
+    #[test]
     fn plain_bodies_are_not_mistaken_for_gzip() {
         let server = TestServer::always(Reply::ok("not compressed"));
-        let got = client(&server).fetch_string(&server.url("/epg.xml")).unwrap();
+        let got = client(&server)
+            .fetch_string(&server.url("/epg.xml"))
+            .unwrap();
         assert_eq!(got, "not compressed");
     }
 
     #[test]
     fn retries_a_transient_failure_then_succeeds() {
         let server = TestServer::start(|i, _| {
-            if i < 2 { Reply::status(503) } else { Reply::ok("finally") }
+            if i < 2 {
+                Reply::status(503)
+            } else {
+                Reply::ok("finally")
+            }
         });
         let got = client(&server).fetch_string(&server.url("/x")).unwrap();
         assert_eq!(got, "finally");
@@ -350,9 +406,12 @@ mod tests {
     #[test]
     fn gives_up_after_the_configured_attempts() {
         let server = TestServer::always(Reply::status(503));
-        let c = HttpClient::new(HttpConfig { max_attempts: 3, ..Default::default() })
-            .unwrap()
-            .without_sleeping();
+        let c = HttpClient::new(HttpConfig {
+            max_attempts: 3,
+            ..Default::default()
+        })
+        .unwrap()
+        .without_sleeping();
         let err = c.fetch_string(&server.url("/x")).unwrap_err();
         assert_eq!(err.code, ErrorCode::ServerError);
         assert_eq!(server.request_count(), 3, "must not retry forever");
@@ -363,7 +422,11 @@ mod tests {
         let server = TestServer::always(Reply::status(401));
         let err = client(&server).fetch_string(&server.url("/x")).unwrap_err();
         assert_eq!(err.code, ErrorCode::Unauthorized);
-        assert_eq!(server.request_count(), 1, "bad credentials will not fix themselves");
+        assert_eq!(
+            server.request_count(),
+            1,
+            "bad credentials will not fix themselves"
+        );
         assert!(!err.retryable);
     }
 
@@ -385,9 +448,12 @@ mod tests {
             (503, ErrorCode::ServerError),
         ] {
             let server = TestServer::always(Reply::status(status));
-            let c = HttpClient::new(HttpConfig { max_attempts: 1, ..Default::default() })
-                .unwrap()
-                .without_sleeping();
+            let c = HttpClient::new(HttpConfig {
+                max_attempts: 1,
+                ..Default::default()
+            })
+            .unwrap()
+            .without_sleeping();
             let err = c.fetch_string(&server.url("/x")).unwrap_err();
             assert_eq!(err.code, expected, "status {status}");
             assert!(!err.message.is_empty());
@@ -402,9 +468,12 @@ mod tests {
             announced: 5000,
             send: b"#EXTM3U\n\n".to_vec(),
         });
-        let c = HttpClient::new(HttpConfig { max_attempts: 1, ..Default::default() })
-            .unwrap()
-            .without_sleeping();
+        let c = HttpClient::new(HttpConfig {
+            max_attempts: 1,
+            ..Default::default()
+        })
+        .unwrap()
+        .without_sleeping();
         let result = c.fetch_string(&server.url("/playlist.m3u"));
         assert!(
             result.is_err(),
@@ -429,9 +498,12 @@ mod tests {
     #[test]
     fn an_oversized_body_is_refused_before_it_is_read() {
         let server = TestServer::always(Reply::ok(vec![b'x'; 4096]));
-        let c = HttpClient::new(HttpConfig { max_bytes: 1024, ..Default::default() })
-            .unwrap()
-            .without_sleeping();
+        let c = HttpClient::new(HttpConfig {
+            max_bytes: 1024,
+            ..Default::default()
+        })
+        .unwrap()
+        .without_sleeping();
         let err = c.fetch_bytes(&server.url("/huge.m3u")).unwrap_err();
         assert!(err.message.contains("implausibly large"), "{}", err.message);
     }
@@ -440,9 +512,12 @@ mod tests {
     fn a_body_without_content_length_is_still_capped() {
         // take() bounds the reader even when the server never declares a length.
         let server = TestServer::always(Reply::ok(vec![b'x'; 4096]));
-        let c = HttpClient::new(HttpConfig { max_bytes: 100, ..Default::default() })
-            .unwrap()
-            .without_sleeping();
+        let c = HttpClient::new(HttpConfig {
+            max_bytes: 100,
+            ..Default::default()
+        })
+        .unwrap()
+        .without_sleeping();
         // Declared length trips the guard first; assert we never exceed the cap either way.
         match c.fetch_bytes(&server.url("/huge.m3u")) {
             Ok(body) => assert!(body.len() <= 100),
@@ -468,7 +543,8 @@ mod tests {
 
     #[test]
     fn redacts_xtream_query_credentials() {
-        let got = redact("http://example.com/player_api.php?username=alice&password=hunter2&action=x");
+        let got =
+            redact("http://example.com/player_api.php?username=alice&password=hunter2&action=x");
         assert!(!got.contains("alice"), "{got}");
         assert!(!got.contains("hunter2"), "{got}");
         assert!(got.contains("action=x"), "non-secret params survive: {got}");
