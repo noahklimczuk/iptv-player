@@ -147,6 +147,43 @@ mod tests {
         );
     }
 
+    /// The one test that actually proves the point.
+    ///
+    /// Everything above asserts about strings; only creating the file shows the
+    /// filesystem agrees. On Windows this is the whole reason the module exists, and
+    /// CI runs it there. On Linux it still catches a name with an embedded separator.
+    #[test]
+    fn every_mangled_name_can_actually_be_created() {
+        let dir = std::env::temp_dir().join(format!("aurora-fsname-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for title in [
+            "Ratched: Season 1",
+            "CON",
+            "nul",
+            "COM1.ts",
+            "Show...",
+            "AC/DC Live",
+            "Who? What!",
+            "Zürich <live>",
+            "日本のニュース",
+            r#"A "quoted" title"#,
+            "///",
+            &"long ".repeat(80),
+        ] {
+            let name = recording_filename(title, Some(1), Some(2), 1_700_000_000);
+            let path = dir.join(&name);
+            std::fs::write(&path, b"x")
+                .unwrap_or_else(|e| panic!("cannot create {name:?} (from {title:?}): {e}"));
+            // And the file we asked for is the file that exists: Windows silently
+            // rewriting the name would show up here.
+            assert!(path.exists(), "{name:?} did not survive the filesystem");
+            std::fs::remove_file(&path).unwrap();
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn two_airings_of_the_same_untitled_programme_do_not_collide() {
         let a = recording_filename("Film", None, None, 100);
