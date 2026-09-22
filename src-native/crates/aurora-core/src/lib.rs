@@ -5,6 +5,7 @@
 //! See `docs/DECISIONS.md` D2.
 
 pub mod classify;
+pub mod dvr;
 pub mod epg_match;
 pub mod error;
 pub mod m3u;

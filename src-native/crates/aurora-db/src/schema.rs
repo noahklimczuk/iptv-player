@@ -334,6 +334,79 @@ CREATE TABLE pin_attempts (
 );
 "#,
     },
+    Migration {
+        version: 6,
+        name: "dvr",
+        sql: r#"
+-- README §5 listed `recordings`, `recording_rules` and `reminders` among the core
+-- tables, and migration 1 never created them. Nothing noticed because nothing had
+-- tried to record anything yet.
+CREATE TABLE recording_rules (
+    id                  INTEGER PRIMARY KEY,
+    title               TEXT    NOT NULL,   -- as shown to the user
+    title_key           TEXT    NOT NULL,   -- normalized, what matching compares
+    channel_id          INTEGER REFERENCES channels(id) ON DELETE CASCADE,
+    new_only            INTEGER NOT NULL DEFAULT 0,
+    weekdays            TEXT,               -- JSON array, 0 = Monday, NULL = any
+    around_local_minute INTEGER,            -- minutes past local midnight, NULL = any
+    time_slack_secs     INTEGER NOT NULL DEFAULT 900,
+    pre_padding_secs    INTEGER NOT NULL DEFAULT 60,
+    post_padding_secs   INTEGER NOT NULL DEFAULT 300,
+    keep_episodes       INTEGER,            -- prune oldest beyond this, NULL = keep all
+    priority            INTEGER NOT NULL DEFAULT 0,
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    created_at          INTEGER NOT NULL
+);
+CREATE INDEX idx_rules_active ON recording_rules(enabled, title_key);
+
+CREATE TABLE recordings (
+    id             INTEGER PRIMARY KEY,
+    channel_id     INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    rule_id        INTEGER REFERENCES recording_rules(id) ON DELETE SET NULL,
+    programme_id   INTEGER,                -- guide row it came from, if any
+    title          TEXT    NOT NULL,
+    sub_title      TEXT,
+    description    TEXT,
+    season         INTEGER,
+    episode        INTEGER,
+    -- Airtime as the guide gave it, kept so the library can show what was actually on.
+    air_start      INTEGER NOT NULL,
+    air_stop       INTEGER NOT NULL,
+    -- Airtime plus padding: what the recorder actually opens and closes on.
+    start          INTEGER NOT NULL,
+    stop           INTEGER NOT NULL,
+    state          TEXT    NOT NULL DEFAULT 'scheduled'
+                   CHECK (state IN ('scheduled','recording','completed','failed','skipped')),
+    reason         TEXT,                   -- why a failed/skipped row ended that way
+    priority       INTEGER NOT NULL DEFAULT 0,
+    file_path      TEXT,
+    bytes          INTEGER NOT NULL DEFAULT 0,
+    duration_secs  INTEGER NOT NULL DEFAULT 0,
+    keep           INTEGER NOT NULL DEFAULT 0,   -- exempt from quota pruning
+    watched        INTEGER NOT NULL DEFAULT 0,
+    created_at     INTEGER NOT NULL
+);
+-- Rule expansion runs on every EPG refresh and must not schedule the same airing
+-- twice. This is what makes it idempotent.
+CREATE UNIQUE INDEX idx_recordings_unique ON recordings(channel_id, start, title);
+CREATE INDEX idx_recordings_due   ON recordings(state, start);
+CREATE INDEX idx_recordings_start ON recordings(start DESC);
+
+-- "Remind me when this starts" — the guide's other button. No recorder involved.
+CREATE TABLE reminders (
+    id            INTEGER PRIMARY KEY,
+    channel_id    INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    programme_id  INTEGER,
+    title         TEXT    NOT NULL,
+    start         INTEGER NOT NULL,
+    lead_secs     INTEGER NOT NULL DEFAULT 120,
+    fired         INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_reminders_unique ON reminders(channel_id, start, title);
+CREATE INDEX idx_reminders_due ON reminders(fired, start);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 5;
+pub const LATEST_VERSION: u32 = 6;

@@ -84,35 +84,79 @@ mod tests {
         assert!(crate::integrity_check(&conn).unwrap());
     }
 
+    /// Every table the schema is supposed to have.
+    ///
+    /// This list used to stop at `epg_manual_map`, which is why `recordings`,
+    /// `recording_rules` and `reminders` were documented in the README from the start
+    /// and never actually created. A missing table is only found by naming it.
+    const EXPECTED_TABLES: &[&str] = &[
+        "providers",
+        "channels",
+        "channel_sources",
+        "epg_channels",
+        "epg_programmes",
+        "movies",
+        "series",
+        "episodes",
+        "profiles",
+        "watch_progress",
+        "favorites",
+        "my_list",
+        "settings",
+        "rules",
+        "search_index",
+        "epg_manual_map",
+        "skip_markers",
+        "series_prefs",
+        "parental",
+        "parental_locks",
+        "pin_attempts",
+        "recordings",
+        "recording_rules",
+        "reminders",
+    ];
+
+    fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = ?1",
+            [table],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+            == 1
+    }
+
     #[test]
     fn all_expected_tables_exist() {
         let conn = crate::open_memory().unwrap();
-        for table in [
-            "providers",
-            "channels",
-            "channel_sources",
-            "epg_channels",
-            "epg_programmes",
-            "movies",
-            "series",
-            "episodes",
-            "profiles",
-            "watch_progress",
-            "favorites",
-            "my_list",
-            "settings",
-            "rules",
-            "search_index",
-            "epg_manual_map",
-        ] {
-            let n: i64 = conn
-                .query_row(
-                    "SELECT count(*) FROM sqlite_master WHERE name = ?1",
-                    [table],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(n, 1, "missing table {table}");
+        for table in EXPECTED_TABLES {
+            assert!(table_exists(&conn, table), "missing table {table}");
         }
+    }
+
+    /// Every table must also be reachable by upgrading an old database, not just by
+    /// creating a fresh one — an installed copy takes the migration path, and that is
+    /// the one nobody exercises by accident.
+    #[test]
+    fn an_older_database_upgrades_to_the_same_schema() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+        // Stop at the version before the newest, then let `run` finish the job.
+        let stop_at = LATEST_VERSION - 1;
+        for m in MIGRATIONS.iter().filter(|m| m.version <= stop_at) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(&format!("PRAGMA user_version = {stop_at}"))
+            .unwrap();
+
+        run(&conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), LATEST_VERSION);
+        for table in EXPECTED_TABLES {
+            assert!(
+                table_exists(&conn, table),
+                "missing table {table} after upgrade"
+            );
+        }
+        assert!(crate::integrity_check(&conn).unwrap());
     }
 }
