@@ -3,14 +3,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aurora_db::rusqlite::Connection;
 use aurora_player::{create_backend, PlayerBackend};
 use parking_lot::Mutex;
-use rusqlite_shim::Connection;
-
-/// `aurora_db` re-exports the connection type; alias it so this file reads clearly.
-mod rusqlite_shim {
-    pub use rusqlite::Connection;
-}
 
 pub struct Services {
     /// Single writer connection. Reads go through the same lock for now; the read pool

@@ -10,6 +10,9 @@ pub mod repo;
 pub mod schema;
 
 pub use error::{DbError, Result};
+/// Re-exported so downstream crates share this crate's exact rusqlite version
+/// rather than linking a second, incompatible one.
+pub use rusqlite;
 
 use std::path::Path;
 

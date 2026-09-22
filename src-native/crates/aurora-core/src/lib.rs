@@ -8,6 +8,7 @@ pub mod classify;
 pub mod epg_match;
 pub mod error;
 pub mod m3u;
+pub mod markers;
 pub mod model;
 pub mod rules;
 pub mod series;

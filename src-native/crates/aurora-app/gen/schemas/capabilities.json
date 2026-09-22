@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Aurora TV's main window. Deliberately minimal: the UI reaches the system only through this app's own typed commands, never through a generic filesystem or HTTP plugin (README §18).","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging"]}}

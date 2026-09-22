@@ -7,13 +7,22 @@
 | `aurora-core`, `aurora-db` | ✅ builds and tests | ✅ |
 | `aurora-player` (trait + NullBackend) | ✅ builds and tests | ✅ |
 | `aurora-player::mpv` (Win32 + libmpv) | ⚠️ `cargo check --target x86_64-pc-windows-msvc` only | ✅ |
-| `aurora-app` (Tauri host) | ❌ needs GTK on Linux | ✅ |
+| `aurora-app` (Tauri host) | ✅ with GTK dev packages (below) | ✅ |
 | `src-ui` (React) | ✅ | ✅ |
 
 A bare `cargo test` in `src-native/` runs the three portable crates
-(`default-members` in `Cargo.toml`). That is deliberate: it keeps the test suite
-runnable on any host. **A green `cargo test` on Linux does not mean the Windows app
-builds** — only the `windows` CI job proves that.
+(`default-members` in `Cargo.toml`), so the suite runs on a host with no GTK. Install
+the packages below and `cargo test --workspace` additionally builds and tests the Tauri
+host:
+
+```
+sudo apt-get install -y --no-install-recommends \
+  libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev
+```
+
+**A green Linux build still does not mean the Windows app works** — the mpv/Win32
+backend is `#[cfg(windows)]` and is only compiled by the Windows CI job and the
+cross-check below.
 
 ## Development on Windows (the real target)
 

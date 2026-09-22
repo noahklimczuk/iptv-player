@@ -1,8 +1,8 @@
 //! Window composition and playback URL resolution.
 
 use aurora_db::repo::channels;
+use aurora_db::rusqlite::Connection;
 use aurora_player::backend::LoadOptions;
-use rusqlite::Connection;
 
 use crate::error::{AppError, Result};
 
@@ -37,7 +37,7 @@ pub fn resolve_playback(
                     "SELECT url FROM channel_sources WHERE channel_id = ?1
                      ORDER BY priority, fail_count LIMIT 1",
                     [id],
-                    |r| r.get(0),
+                    |r| r.get::<_, String>(0),
                 )
                 .map_err(aurora_db::DbError::from)?;
 
@@ -54,7 +54,7 @@ pub fn resolve_playback(
         "movie" => {
             let (url, title): (String, String) = db
                 .query_row("SELECT url, title FROM movies WHERE id = ?1", [id], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
                 })
                 .map_err(aurora_db::DbError::from)?;
             Ok((
@@ -71,7 +71,7 @@ pub fn resolve_playback(
         "episode" => {
             let (url, title): (String, Option<String>) = db
                 .query_row("SELECT url, title FROM episodes WHERE id = ?1", [id], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
                 .map_err(aurora_db::DbError::from)?;
             Ok((
