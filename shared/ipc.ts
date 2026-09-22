@@ -416,6 +416,41 @@ export interface DvrStorage {
   maxConcurrent: number;
 }
 
+
+/** README §4.5: how far metadata enrichment has got for one content type. */
+export interface EnrichmentCoverage {
+  total: number;
+  matched: number;
+  /** Searched, nothing confident enough. Not a failure — some titles aren't listed. */
+  noMatch: number;
+  /** The attempt itself failed; these are retried after a cooldown. */
+  failed: number;
+}
+
+export interface MetadataStatus {
+  /** Whether a key is stored. Never the key itself. */
+  hasKey: boolean;
+  /** False when the key would be lost on restart, so the UI can say so. */
+  keyIsPersistent: boolean;
+  movies: EnrichmentCoverage;
+  series: EnrichmentCoverage;
+}
+
+export interface MetadataReport {
+  matched: number;
+  noMatch: number;
+  failed: number;
+}
+
+export interface CreditEntry {
+  personId: number;
+  name: string;
+  profilePath: string | null;
+  /** Character for cast, job for crew. */
+  role: string | null;
+  isCast: boolean;
+}
+
 /** The typed command surface. Every UI data need goes through exactly one of these. */
 export interface Commands {
   'library.rails': (args: { profileId: number }) => Rail[];
@@ -563,6 +598,19 @@ export interface Commands {
   'dvr.removeReminder': (args: { id: number }) => boolean;
   'dvr.storage': () => DvrStorage;
 
+  'metadata.status': () => MetadataStatus;
+  /** Null clears the stored key. The key is never read back. */
+  'metadata.setKey': (args: { key: string | null }) => void;
+  /** Enrich one batch and report what happened. Call again to continue. */
+  'metadata.run': (args: {
+    batch?: number;
+    movies?: boolean;
+    series?: boolean;
+  }) => MetadataReport;
+  'metadata.credits': (args: { kind: 'movie' | 'series'; id: number }) => CreditEntry[];
+  /** Forget a title's match so the next pass looks again. */
+  'metadata.rematch': (args: { kind: 'movie' | 'series'; id: number }) => void;
+
   'providers.list': () => Provider[];
   'providers.detect': (args: { text: string }) => DetectedSource;
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
@@ -580,6 +628,9 @@ export interface Events {
   'ingest.progress': IngestProgress;
   'library.refreshed': { added: number; removed: number; updated: number };
   'toast': { level: 'info' | 'success' | 'warning' | 'error'; message: string };
+  /** Enrichment progress, so a long metadata pass is never a frozen spinner. */
+  'metadata.progress': { done: number; total: number };
+  'metadata.done': MetadataReport;
   /** What one DVR tick changed, so the recordings page stays live (README §7.7). */
   'dvr.tick': {
     started: number[];

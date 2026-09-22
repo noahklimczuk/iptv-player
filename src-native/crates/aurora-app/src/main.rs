@@ -1,7 +1,7 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aurora_app::{commands, dvr, profiles, providers, services::Services};
+use aurora_app::{commands, dvr, metadata, profiles, providers, services::Services};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -103,6 +103,11 @@ fn main() {
             dvr::dvr_add_reminder,
             dvr::dvr_remove_reminder,
             dvr::dvr_storage,
+            metadata::metadata_status,
+            metadata::metadata_set_key,
+            metadata::metadata_run,
+            metadata::metadata_credits,
+            metadata::metadata_rematch,
             profiles::profiles_list,
             profiles::profiles_create,
             profiles::profiles_delete,

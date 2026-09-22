@@ -9,6 +9,7 @@ import type {
 import {
   invokeMock,
   onDvrTick as onMockDvrTick,
+  onMetadataProgress as onMockMetadataProgress,
   onIngestProgress as onMockIngestProgress,
   onPlayerState as onMockPlayerState,
 } from './mock';
@@ -80,6 +81,26 @@ export function onDvrTick(fn: (t: Events['dvr.tick']) => void): () => void {
   };
   let dispose: (() => void) | undefined;
   void w.__TAURI__?.event?.listen('dvr.tick', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** Enrichment progress, so a long metadata pass is never a frozen spinner. */
+export function onMetadataProgress(fn: (p: Events['metadata.progress']) => void): () => void {
+  if (!isNativeHost()) return onMockMetadataProgress(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (
+          e: string,
+          cb: (p: { payload: Events['metadata.progress'] }) => void,
+        ) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('metadata.progress', (e) => fn(e.payload)).then((d) => {
     dispose = d;
   });
   return () => dispose?.();

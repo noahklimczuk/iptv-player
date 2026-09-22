@@ -3,6 +3,7 @@ import type { Theme } from '@/state/ui';
 import { Badge, Button } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { isNativeHost } from '@/ipc';
+import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { useUi } from '@/state/ui';
 
 export function SettingsPage() {
@@ -104,6 +105,10 @@ export function SettingsPage() {
             {ui.hoverPreviews ? 'On' : 'Off'}
           </Button>
         </Field>
+      </Section>
+
+      <Section title="Artwork and metadata">
+        <MetadataPanel />
       </Section>
 
       <Section title="Library">

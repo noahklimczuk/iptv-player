@@ -6,6 +6,7 @@
 pub mod commands;
 pub mod dvr;
 pub mod error;
+pub mod metadata;
 pub mod profiles;
 pub mod providers;
 pub mod services;

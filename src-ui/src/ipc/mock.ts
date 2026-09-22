@@ -4,7 +4,7 @@
  */
 import type {
   CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
-  DvrStorage, ParentalSettings, PinOutcome, Profile,
+  CreditEntry, DvrStorage, MetadataReport, MetadataStatus, ParentalSettings, PinOutcome, Profile,
   Recording, RecordingConflict, RecordingRule, Reminder,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
@@ -559,6 +559,84 @@ function findConflicts(maxConcurrent: number): RecordingConflict[] {
   return out;
 }
 
+
+/* ── Metadata enrichment ────────────────────────────────────────────────────
+   Mirrors aurora_ingest::enrich: a bounded batch per call, a no-match recorded
+   so the same title is never asked about twice, and a stored key the UI can see
+   the presence of but never the value of. ─────────────────────────────────── */
+
+let metadataKey: string | null = 'demo-key-not-a-real-one';
+type EnrichState = 'matched' | 'nomatch' | 'failed';
+const enriched = new Map<string, EnrichState>();
+const mockCredits = new Map<string, CreditEntry[]>();
+
+const CAST_POOL = [
+  'Ines Lindqvist', 'Marcus Oyelaran', 'Priya Raghunathan', 'Tomas Berg',
+  'Adaeze Nwosu', 'Jonah Whitfield', 'Elif Demirci', 'Rafael Monteiro',
+];
+const CREW_POOL: [string, string][] = [
+  ['Dana Kovalenko', 'Director'],
+  ['Sam Okonkwo', 'Screenplay'],
+  ['Mira Haddad', 'Original Music Composer'],
+];
+
+/** Deterministic, so a screenshot of the same title is the same twice. */
+function creditsFor(kind: 'movie' | 'series', id: number): CreditEntry[] {
+  const key = `${kind}:${id}`;
+  const existing = mockCredits.get(key);
+  if (existing) return existing;
+
+  const cast: CreditEntry[] = Array.from({ length: 5 }, (_, i) => {
+    const name = CAST_POOL[(id + i) % CAST_POOL.length]!;
+    return {
+      personId: ((id + i) % CAST_POOL.length) + 1,
+      name,
+      profilePath: null,
+      role: `${name.split(' ')[0]}'s character`,
+      isCast: true,
+    };
+  });
+  const crew: CreditEntry[] = CREW_POOL.map(([name, job], i) => ({
+    personId: 100 + i,
+    name,
+    profilePath: null,
+    role: job,
+    isCast: false,
+  }));
+  const all = [...cast, ...crew];
+  mockCredits.set(key, all);
+  return all;
+}
+
+function enrichmentCoverage(kind: 'movie' | 'series') {
+  const total = kind === 'movie' ? fx.movies.length : fx.series.length;
+  let matched = 0;
+  let noMatch = 0;
+  let failed = 0;
+  for (const [key, state] of enriched) {
+    if (!key.startsWith(`${kind}:`)) continue;
+    if (state === 'matched') matched += 1;
+    else if (state === 'nomatch') noMatch += 1;
+    else failed += 1;
+  }
+  return { total, matched, noMatch, failed };
+}
+
+// Most of the demo library is already enriched, with a few left so the button does
+// something visible when pressed.
+for (const m of fx.movies.slice(0, Math.max(0, fx.movies.length - 6))) {
+  enriched.set(`movie:${m.id}`, 'matched');
+}
+for (const s of fx.series.slice(0, Math.max(0, fx.series.length - 3))) {
+  enriched.set(`series:${s.id}`, 'matched');
+}
+
+const metadataListeners = new Set<(p: { done: number; total: number }) => void>();
+export function onMetadataProgress(fn: (p: { done: number; total: number }) => void) {
+  metadataListeners.add(fn);
+  return () => metadataListeners.delete(fn);
+}
+
 /* ── Command dispatch ──────────────────────────────────────────────────────── */
 
 type Handler<K extends CommandName> = (
@@ -877,6 +955,62 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       prunable,
       maxConcurrent: MAX_CONCURRENT,
     };
+  },
+
+  /* ── Metadata enrichment ────────────────────────────────────────────────── */
+
+  'metadata.status': (): MetadataStatus => ({
+    hasKey: metadataKey !== null,
+    // The browser mock has nowhere durable to put a key, and says so rather than
+    // pretending, exactly as the in-memory credential store does on the host.
+    keyIsPersistent: false,
+    movies: enrichmentCoverage('movie'),
+    series: enrichmentCoverage('series'),
+  }),
+
+  'metadata.setKey': ({ key }) => {
+    metadataKey = key && key.trim() ? key.trim() : null;
+  },
+
+  'metadata.run': async ({ batch, movies = true, series = true }): Promise<MetadataReport> => {
+    if (!metadataKey) {
+      throw new Error('No metadata API key is set. Add one in Settings to fetch artwork and cast.');
+    }
+    const limit = batch ?? 50;
+    const work: [string, 'movie' | 'series'][] = [];
+    if (movies) {
+      for (const m of fx.movies) {
+        if (!enriched.has(`movie:${m.id}`)) work.push([`movie:${m.id}`, 'movie']);
+      }
+    }
+    if (series) {
+      for (const s of fx.series) {
+        if (!enriched.has(`series:${s.id}`)) work.push([`series:${s.id}`, 'series']);
+      }
+    }
+
+    const slice = work.slice(0, limit);
+    const report: MetadataReport = { matched: 0, noMatch: 0, failed: 0 };
+    for (let i = 0; i < slice.length; i += 1) {
+      for (const fn of metadataListeners) fn({ done: i, total: slice.length });
+      await new Promise((r) => setTimeout(r, 60));
+      const [key] = slice[i]!;
+      // Every fifth title has no match, so the "not everything is found" case is
+      // reachable in the demo rather than being a state nobody ever sees.
+      const outcome: EnrichState = i % 5 === 4 ? 'nomatch' : 'matched';
+      enriched.set(key, outcome);
+      if (outcome === 'matched') report.matched += 1;
+      else report.noMatch += 1;
+    }
+    for (const fn of metadataListeners) fn({ done: slice.length, total: slice.length });
+    return report;
+  },
+
+  'metadata.credits': ({ kind, id }) => creditsFor(kind, id),
+
+  'metadata.rematch': ({ kind, id }) => {
+    enriched.delete(`${kind}:${id}`);
+    mockCredits.delete(`${kind}:${id}`);
   },
 
   'providers.list': () => fx.providers,
