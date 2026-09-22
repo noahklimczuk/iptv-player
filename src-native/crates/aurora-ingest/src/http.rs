@@ -605,22 +605,29 @@ mod tests {
         assert!(got.contains("example.com"), "{got}");
     }
 
-    #[test]
-    fn a_refused_connection_is_not_reported_as_a_dns_problem() {
-        // The trap this guards: reqwest's Display is "error sending request for url
-        // (<url>)", every Xtream URL contains `username=`, and the shared classifier
-        // looks for "name". Classifying on that string told everyone whose provider was
-        // simply down to go and check their DNS.
+    /// Provoke a connect failure whose URL carries credentials.
+    ///
+    /// What an OS does with a dead port is not portable — Linux refuses immediately,
+    /// Windows lets the connect deadline elapse — so nothing here asserts which.
+    fn connect_failure_to_a_dead_port() -> reqwest::Error {
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .build()
             .unwrap();
-        // Port 1 is reserved and nothing listens on it, so this is refused immediately.
-        let err = client
+        // Port 1 is reserved and nothing listens on it.
+        client
             .get("http://127.0.0.1:1/player_api.php?username=someone&password=secret")
             .send()
-            .unwrap_err();
+            .unwrap_err()
+    }
 
+    #[test]
+    fn a_connect_failure_is_not_reported_as_a_dns_problem() {
+        // The trap this guards: reqwest's Display is "error sending request for url
+        // (<url>)", every Xtream URL contains `username=`, and the shared classifier
+        // looks for "name". Classifying on that string told everyone whose provider was
+        // unreachable — for any reason — to go and check their DNS.
+        let err = connect_failure_to_a_dead_port();
         assert!(err.is_connect(), "expected a connect failure, got {err}");
         assert!(
             err.to_string().contains("username"),
@@ -628,36 +635,69 @@ mod tests {
         );
 
         let failure = classify_reqwest(&err);
-        assert!(
-            failure.cause.to_lowercase().contains("refused")
-                || failure.message.to_lowercase().contains("listening"),
-            "a refused connection must say so, got {:?} / {:?}",
-            failure.message,
-            failure.cause
+        // Refused on Linux, timed out on Windows. Either is honest; DNS is not.
+        assert_ne!(
+            failure.code,
+            ErrorCode::Dns,
+            "the `name` inside `username` is not a name-resolution failure: {:?}",
+            failure.message
         );
+        let cause = failure.cause.to_lowercase();
         assert!(
-            !failure.cause.to_lowercase().contains("dns"),
-            "the name in `username` is not a DNS failure: {:?}",
-            failure.cause
+            !cause.contains("dns") && !cause.contains("resolve"),
+            "must not send the user to their DNS settings: {cause}"
         );
     }
 
     #[test]
     fn the_cause_chain_carries_the_reason_and_not_the_url() {
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(2))
-            .build()
-            .unwrap();
-        let err = client
-            .get("http://127.0.0.1:1/player_api.php?username=someone&password=secret")
-            .send()
-            .unwrap_err();
-
+        let err = connect_failure_to_a_dead_port();
         let causes = cause_chain(&err);
-        assert!(causes.contains("refused"), "{causes}");
+
+        assert!(
+            !causes.is_empty(),
+            "a connect failure always blames something"
+        );
+        assert!(causes.contains("connect"), "{causes}");
         // A password must not be reachable through the string we classify on.
         assert!(!causes.contains("secret"), "{causes}");
         assert!(!causes.contains("username"), "{causes}");
+    }
+
+    #[test]
+    fn the_cause_chains_both_platforms_actually_produce_avoid_dns() {
+        // Copied verbatim from the two runners, because the first version of these
+        // tests asserted Linux's behaviour and went red on Windows. Feeding both
+        // strings through the classifier here means either platform's wording is
+        // guarded everywhere, not only where it happens to occur.
+        for chain in [
+            // Linux
+            "client error (connect); tcp connect error; connection refused (os error 111)",
+            // Windows
+            "client error (connect); tcp connect error; deadline has elapsed",
+        ] {
+            let failure = NetFailure::classify(chain);
+            assert_ne!(failure.code, ErrorCode::Dns, "{chain}");
+            let cause = failure.cause.to_lowercase();
+            assert!(
+                !cause.contains("dns") && !cause.contains("resolve"),
+                "{chain} -> {cause}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_connection_and_a_dns_failure_read_differently() {
+        // Classified from text, so this is portable: it is the taxonomy under test, not
+        // the operating system.
+        let refused = NetFailure::classify("tcp connect error; connection refused");
+        assert_eq!(refused.code, ErrorCode::Refused);
+        assert!(refused.message.to_lowercase().contains("listening"));
+
+        let dns = NetFailure::classify("failed to lookup address: name or service not known");
+        assert_eq!(dns.code, ErrorCode::Dns);
+        // One sends you to the address you typed, the other to your network settings.
+        assert_ne!(refused.message, dns.message);
     }
 
     #[test]

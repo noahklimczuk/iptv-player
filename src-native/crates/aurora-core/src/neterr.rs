@@ -22,6 +22,9 @@ pub struct NetFailure {
 #[serde(rename_all = "camelCase")]
 pub enum ErrorCode {
     Dns,
+    /// The host resolved and answered, but nothing is listening. Distinct from `Dns`:
+    /// one sends you to your network settings, the other to the address you typed.
+    Refused,
     Tls,
     Unauthorized,
     Forbidden,
@@ -86,7 +89,7 @@ impl NetFailure {
             )
         } else if l.contains("refused") {
             (
-                ErrorCode::Dns,
+                ErrorCode::Refused,
                 "Nothing is listening at that address",
                 "The server refused the connection. The address or port may be wrong, \
                  or the provider may be down.",
