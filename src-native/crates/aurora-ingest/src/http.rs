@@ -230,7 +230,9 @@ fn looks_gzipped(url: &str) -> bool {
 pub fn redact(url: &str) -> String {
     let mut out = url.to_string();
     // Xtream carries them as query parameters.
-    for key in ["password", "pass", "token", "username", "user"] {
+    for key in [
+        "password", "pass", "token", "username", "user", "api_key", "apikey",
+    ] {
         if let Some(start) = out.to_ascii_lowercase().find(&format!("{key}=")) {
             let value_start = start + key.len() + 1;
             let end = out[value_start..]
@@ -491,8 +493,19 @@ mod tests {
         })
         .unwrap()
         .without_sleeping();
+        let started = std::time::Instant::now();
         let err = c.fetch_string(&server.url("/x")).unwrap_err();
+        let elapsed = started.elapsed();
+
         assert_eq!(err.code, ErrorCode::Timeout);
+        // And it timed out rather than being refused: a connection the server closes
+        // comes back in about a millisecond and classifies as something else entirely.
+        // This is what caught the accepted socket inheriting the listener's
+        // non-blocking flag on Windows (see testserver::start).
+        assert!(
+            elapsed >= Duration::from_millis(300),
+            "returned after {elapsed:?} — the connection was dropped, not held open"
+        );
     }
 
     #[test]
@@ -563,6 +576,21 @@ mod tests {
         let got = redact("http://alice:hunter2@example.com/x");
         assert!(!got.contains("hunter2"), "{got}");
         assert!(got.contains("example.com"), "{got}");
+    }
+
+    #[test]
+    fn a_metadata_api_key_is_redacted_too() {
+        // TMDB carries its key in the query string, and a key in a log line is a leaked
+        // credential exactly like a provider password is.
+        let got = redact("https://api.themoviedb.org/3/search/movie?api_key=abcd1234&query=Heat");
+        assert!(!got.contains("abcd1234"), "{got}");
+        assert!(
+            got.contains("query=Heat"),
+            "the rest of the URL is still readable"
+        );
+
+        let got = redact("https://example.com/x?apikey=secret");
+        assert!(!got.contains("secret"), "{got}");
     }
 
     #[test]

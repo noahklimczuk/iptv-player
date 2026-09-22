@@ -102,6 +102,14 @@ impl TestServer {
             while !s.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        // The listener is non-blocking so the accept loop can poll the
+                        // stop flag. Windows gives the accepted socket the listening
+                        // socket's properties, including that flag, where POSIX accept()
+                        // does not — so without this, `Reply::Hang` reads WouldBlock,
+                        // returns immediately, drops the stream and closes the
+                        // connection. The client then sees a reset instead of the
+                        // timeout the test is about.
+                        let _ = stream.set_nonblocking(false);
                         let (h, l, responder) = (h.clone(), l.clone(), responder.clone());
                         thread::spawn(move || {
                             let _ = handle(stream, h, l, responder);
