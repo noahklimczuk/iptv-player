@@ -3,9 +3,10 @@
  * Mirrors the real host's behaviour closely enough to develop and screenshot every screen.
  */
 import type {
-  CatalogItem, Channel, CommandArgs, CommandName, CommandResult, GuideSlice,
-  MarkerKind, Movie, PlaybackAids, PlayerState, Programme, Progress, Rail, SearchHit,
-  SearchResults, Series, SeriesPrefs, SkipMarker,
+  CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
+  GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
+  Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
+  ValidationResult,
 } from '@shared/ipc';
 import * as fx from './fixtures';
 
@@ -158,6 +159,15 @@ export function onPlayerState(fn: (s: PlayerState) => void) {
   return () => listeners.delete(fn);
 }
 
+const ingestListeners = new Set<(p: IngestProgress) => void>();
+function emitIngest(p: IngestProgress) {
+  ingestListeners.forEach((l) => l(p));
+}
+export function onIngestProgress(fn: (p: IngestProgress) => void) {
+  ingestListeners.add(fn);
+  return () => ingestListeners.delete(fn);
+}
+
 /* ── Rails (README §8.2) ───────────────────────────────────────────────────── */
 
 const asMovie = (m: Movie): CatalogItem => ({ kind: 'movie', ...m });
@@ -300,7 +310,11 @@ function search(text: string): SearchResults {
 
 /* ── Command dispatch ──────────────────────────────────────────────────────── */
 
-const handlers: { [K in CommandName]: (a: CommandArgs<K>) => CommandResult<K> } = {
+type Handler<K extends CommandName> = (
+  a: CommandArgs<K>,
+) => CommandResult<K> | Promise<CommandResult<K>>;
+
+const handlers: { [K in CommandName]: Handler<K> } = {
   'library.rails': () => buildRails(),
   'library.movies': ({ sort, limit, offset, genre }) => {
     let list = genre ? fx.movies.filter((m) => m.genres.includes(genre)) : [...fx.movies];
@@ -467,6 +481,85 @@ const handlers: { [K in CommandName]: (a: CommandArgs<K>) => CommandResult<K> } 
   },
 
   'providers.list': () => fx.providers,
+
+  /* ── Provider setup. Mirrors aurora_ingest so the wizard behaves the same in a
+        browser as it does on Windows, minus the actual network. ────────────── */
+
+  'providers.detect': ({ text }): DetectedSource => {
+    const trimmed = text.trim();
+    const isHttp = /^https?:\/\//i.test(trimmed);
+    const [before, query] = trimmed.split('?');
+    if (isHttp && query) {
+      const params = new URLSearchParams(query);
+      const username = params.get('username') ?? params.get('user');
+      const password = params.get('password') ?? params.get('pass');
+      if (username && password) {
+        const base = (before ?? '').replace(/\/[^/]*$/, '').replace(/\/+$/, '');
+        return { kind: 'xtream', url: base, username, password };
+      }
+    }
+    return { kind: 'm3u', url: trimmed, username: null, password: null };
+  },
+
+  'providers.validate': ({ draft }): ValidationResult => {
+    const base: ValidationResult = {
+      ok: false, message: '', detail: null, expiresAt: null, daysUntilExpiry: null,
+      maxConnections: null, activeConnections: null, isTrial: false,
+      credentialsDetected: false,
+    };
+    if (!/^https?:\/\//i.test(draft.url.trim())) {
+      return { ...base, message: 'That does not look like a URL',
+        detail: 'A provider address starts with http:// or https://' };
+    }
+    // The mock accepts anything well-formed; the shape of the answer is what the
+    // wizard is being exercised against.
+    if (draft.kind === 'xtream') {
+      if (!draft.username || !draft.password) {
+        return { ...base, message: 'Username and password are required',
+          detail: 'An Xtream panel needs both.' };
+      }
+      return {
+        ...base, ok: true, message: 'Connected',
+        expiresAt: Math.floor(Date.now() / 1000) + 41 * 86400,
+        daysUntilExpiry: 41, maxConnections: 2, activeConnections: 1,
+      };
+    }
+    return { ...base, ok: true, message: `Found ${fx.channels.length} entries` };
+  },
+
+  'providers.save': () => ({ id: 1 }),
+
+  'providers.refresh': async (): Promise<SyncReport> => {
+    // Walk the same phases the host emits, and only resolve once they are done —
+    // so the wizard's progress UI is genuinely exercised rather than skipped past.
+    const phases: IngestProgress[] = [
+      { phase: 'fetchingPlaylist', done: 0, total: 0 },
+      { phase: 'importingChannels', done: fx.channels.length, total: fx.channels.length },
+      { phase: 'importingMovies', done: fx.movies.length, total: fx.movies.length },
+      { phase: 'importingSeries', done: fx.series.length, total: fx.series.length },
+      { phase: 'fetchingEpg', done: 0, total: 0 },
+      { phase: 'matchingEpg', done: 0, total: 0 },
+      { phase: 'indexing', done: 0, total: 0 },
+      { phase: 'done', done: 1, total: 1 },
+    ];
+    for (const p of phases) {
+      emitIngest(p);
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    return {
+      channels: fx.channels.length,
+      movies: fx.movies.length,
+      series: fx.series.length,
+      episodes: fx.episodes.length,
+      epgChannels: fx.channels.length,
+      epgProgrammes: fx.channels.length * 48,
+      channelsMissing: 0,
+      epgMatched: fx.channels.length - 2,
+      epgUnmatched: fx.channels.slice(-2).map((c) => c.name),
+      warnings: [],
+    };
+  },
 };
 
 export function isInMyList(kind: 'movie' | 'series', id: number) {
@@ -483,7 +576,7 @@ export async function invokeMock<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
 ): Promise<CommandResult<K>> {
-  const fn = handlers[name] as (a: CommandArgs<K>) => CommandResult<K>;
+  const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
-  return fn(args);
+  return await fn(args);
 }

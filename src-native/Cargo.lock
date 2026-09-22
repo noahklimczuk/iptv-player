@@ -106,6 +106,7 @@ version = "0.1.0"
 dependencies = [
  "aurora-core",
  "aurora-db",
+ "aurora-ingest",
  "aurora-player",
  "parking_lot",
  "serde",

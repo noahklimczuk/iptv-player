@@ -3,8 +3,14 @@
  * present, an in-memory mock otherwise, so the UI is developable and screenshot-able
  * without Windows.
  */
-import type { CommandArgs, CommandName, CommandResult, PlayerState } from '@shared/ipc';
-import { invokeMock, onPlayerState as onMockPlayerState } from './mock';
+import type {
+  CommandArgs, CommandName, CommandResult, IngestProgress, PlayerState,
+} from '@shared/ipc';
+import {
+  invokeMock,
+  onIngestProgress as onMockIngestProgress,
+  onPlayerState as onMockPlayerState,
+} from './mock';
 
 interface TauriInternals {
   invoke: (cmd: string, args: unknown) => Promise<unknown>;
@@ -36,6 +42,23 @@ export function onPlayerState(fn: (s: PlayerState) => void): () => void {
   };
   let dispose: (() => void) | undefined;
   void w.__TAURI__?.event?.listen('player.state', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** Refresh progress, so a long import is never a frozen spinner (README C8). */
+export function onIngestProgress(fn: (p: IngestProgress) => void): () => void {
+  if (!isNativeHost()) return onMockIngestProgress(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (e: string, cb: (p: { payload: IngestProgress }) => void) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('ingest.progress', (e) => fn(e.payload)).then((d) => {
     dispose = d;
   });
   return () => dispose?.();

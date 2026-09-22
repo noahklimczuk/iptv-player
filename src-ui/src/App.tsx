@@ -12,6 +12,7 @@ import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
 import { PlayerOverlay } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
+import { SetupWizard } from '@/features/setup/SetupWizard';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useCommand } from '@/hooks/useCommand';
 import { useEpisodeAids } from '@/hooks/useEpisodeAids';
@@ -34,7 +35,12 @@ export default function App() {
   const location = useLocation();
   const ui = useUi();
   const [playerOpen, setPlayerOpen] = useState(false);
+  // Shown until a provider exists. `?setup` forces it for demos and tests.
+  const [setupDone, setSetupDone] = useState(
+    () => !new URLSearchParams(window.location.search).has('setup'),
+  );
 
+  const { data: providers } = useCommand('providers.list', undefined, []);
   const { data: channels } = useCommand('channels.list', {}, []);
   // Every tune path funnels through here, so digit entry and Ch+/Ch- surface the
   // player exactly like clicking a channel does.
@@ -109,6 +115,11 @@ export default function App() {
     const t = window.setTimeout(() => ui.hideBanner(), 5000);
     return () => window.clearTimeout(t);
   }, [ui.banner, ui]);
+
+  const needsSetup = !setupDone || providers?.length === 0;
+  if (needsSetup) {
+    return <SetupWizard onFinished={() => setSetupDone(true)} />;
+  }
 
   return (
     <div style={{ display: 'flex', height: '100%', background: 'var(--bg)' }}>

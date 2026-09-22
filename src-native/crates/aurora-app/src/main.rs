@@ -1,7 +1,7 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aurora_app::{commands, services::Services};
+use aurora_app::{commands, providers, services::Services};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -60,6 +60,10 @@ fn main() {
             commands::player_set_aspect,
             commands::player_state,
             commands::progress_save,
+            providers::providers_detect,
+            providers::providers_validate,
+            providers::providers_save,
+            providers::providers_refresh,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");

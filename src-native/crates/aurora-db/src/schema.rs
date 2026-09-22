@@ -280,6 +280,16 @@ CREATE TABLE series_prefs (
 );
 "#,
     },
+    Migration {
+        version: 4,
+        name: "provider_username",
+        sql: r#"
+-- An Xtream line has a username, which is not the same thing as what the user
+-- chose to call the provider in the sidebar. Overloading `name` for both meant a
+-- provider renamed to "My IPTV" would try to authenticate as "My IPTV".
+ALTER TABLE providers ADD COLUMN username TEXT;
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 3;
+pub const LATEST_VERSION: u32 = 4;

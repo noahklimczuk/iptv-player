@@ -7,7 +7,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 |---|---|---|
 | 0 — Spike | libmpv behind transparent WebView2 | **Written, compiles for Windows, NOT run.** See the caveat below. |
 | 1 — Foundation | Workspace, typed IPC, SQLite + migrations, tokens, app shell, CI | **Done** |
-| 2 — Ingestion | M3U + Xtream + XMLTV parsing, classification, series grouping, rules | **Parsers done and tested. The provider HTTP client is not written** — nothing fetches a playlist over the network yet. |
+| 2 — Ingestion | M3U + Xtream + XMLTV fetching and parsing, classification, series grouping, rules | **Done.** aurora-ingest fetches, parses, reconciles and indexes; credentials go to the OS store. Stalker portals (§4.3, Optional) and per-series episode listings are not built. |
 | 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Real decoding unverified. |
 | 4 — Live TV | Channel list, zap, banner, number entry, favorites | **Done** |
 | 5 — EPG | XMLTV ingest, matching, guide grid, info pane | **Done** |
@@ -15,6 +15,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
 | 8 — DVR | Recording, timeshift, catch-up | **Not started.** Catch-up is modelled in the schema and surfaced in the UI; nothing records. |
 | 9 — Personalization | Profiles, parental controls, search, palette | **Search + command palette done.** Profiles/PIN/parental controls: schema only. |
+| 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
 | 11 — Hardening | Perf budgets, soak, diagnostics | **Not started.** No §16 budget is measured yet. |
 | 12 — Release | Installers, signing, auto-update | **CI type-checks Windows; no installer is produced.** |
@@ -26,10 +27,12 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | Parsers handle hostile real-world input | 82 `aurora-core` tests, run on every commit |
 | Schema, migrations, reconciliation, search | 49 `aurora-db` tests |
 | Playback state machine and error taxonomy | 19 `aurora-player` tests |
+| Fetching, retry, gzip, credential redaction | 74 `aurora-ingest` tests, against a server that simulates 401/403/404/429/timeout/mid-stream disconnect |
+| A refresh never destroys user data | `aurora-ingest::sync` tests assert renames, numbers and hidden flags survive |
 | Skip markers: chapter parsing, learning, merge | 25 `aurora-core` + 13 `aurora-db` tests |
 | The Tauri host compiles and its URL resolution works | 4 `aurora-app` tests (Linux, with GTK dev packages) |
 | The mpv/Win32 backend compiles for Windows | `cargo check --target x86_64-pc-windows-msvc` |
-| Every screen renders and the journeys work | 19 Playwright runs against the production bundle |
+| Every screen renders and the journeys work | 26 Playwright runs against the production bundle |
 | Video actually decodes and composites | **Not verified anywhere yet** — Phase 0 |
 
 ## The Phase 0 caveat
@@ -54,8 +57,9 @@ were built first.
 ## Nearest useful next steps
 
 1. **Run the Phase 0 spike on Windows.** Everything else is downstream of that answer.
-2. **Provider HTTP client** — the parsers are ready and tested; nothing calls them over
-   the network yet, so the app cannot ingest a real subscription.
+2. **Point it at a real subscription.** Ingestion is built and tested against a local
+   server, but has never met an actual provider — the fork-tolerance in
+   `aurora_core::xtream` is written from the spec, not from observed traffic.
 3. **Profiles**, which most of §11 depends on — the per-show preferences already
    written are keyed by profile, but everything currently runs as profile 1.
 4. **DVR** (Phase 8), the largest untouched block.

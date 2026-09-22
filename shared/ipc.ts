@@ -249,6 +249,64 @@ export interface EpgCoverage {
   unmatched: string[];
 }
 
+/* ── Provider setup (README §4, §13) ──────────────────────────────────────── */
+
+export type SourceKind = 'xtream' | 'm3u';
+
+export interface DraftProvider {
+  name: string;
+  kind: SourceKind;
+  url: string;
+  username?: string | null;
+  password?: string | null;
+}
+
+/** What paste-detection made of whatever the user dropped in the box. */
+export interface DetectedSource {
+  kind: SourceKind;
+  url: string;
+  username: string | null;
+  password: string | null;
+}
+
+/** Result of checking credentials before anything is saved. */
+export interface ValidationResult {
+  ok: boolean;
+  message: string;
+  detail: string | null;
+  expiresAt: number | null;
+  daysUntilExpiry: number | null;
+  maxConnections: number | null;
+  activeConnections: number | null;
+  isTrial: boolean;
+  credentialsDetected: boolean;
+}
+
+export type IngestPhase =
+  | 'authenticating' | 'fetchingPlaylist' | 'importingChannels' | 'importingMovies'
+  | 'importingSeries' | 'fetchingEpg' | 'matchingEpg' | 'indexing' | 'done';
+
+export interface IngestProgress {
+  phase: IngestPhase;
+  done: number;
+  /** Zero when the total is not knowable yet, e.g. while streaming an EPG. */
+  total: number;
+}
+
+/** README §4.6: what actually changed in this refresh. */
+export interface SyncReport {
+  channels: number;
+  movies: number;
+  series: number;
+  episodes: number;
+  epgChannels: number;
+  epgProgrammes: number;
+  channelsMissing: number;
+  epgMatched: number;
+  epgUnmatched: string[];
+  warnings: string[];
+}
+
 export interface LibraryStats {
   channels: number;
   movies: number;
@@ -339,6 +397,10 @@ export interface Commands {
   'favorites.toggle': (args: { profileId: number; channelId: number }) => boolean;
 
   'providers.list': () => Provider[];
+  'providers.detect': (args: { text: string }) => DetectedSource;
+  'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
+  'providers.save': (args: { draft: DraftProvider }) => { id: number };
+  'providers.refresh': (args: { providerId: number }) => SyncReport;
 }
 
 export type CommandName = keyof Commands;
@@ -348,7 +410,7 @@ export type CommandResult<K extends CommandName> = ReturnType<Commands[K]>;
 /** Push events from the host. */
 export interface Events {
   'player.state': PlayerState;
-  'ingest.progress': { provider: string; phase: string; done: number; total: number };
+  'ingest.progress': IngestProgress;
   'library.refreshed': { added: number; removed: number; updated: number };
   'toast': { level: 'info' | 'success' | 'warning' | 'error'; message: string };
 }
