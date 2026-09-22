@@ -10,6 +10,7 @@ pub mod dvr;
 pub mod epg_match;
 pub mod error;
 pub mod fsname;
+pub mod lang;
 pub mod m3u;
 pub mod markers;
 pub mod model;

@@ -227,6 +227,8 @@ pub fn run(
                 match_key: &match_key,
                 year: group.year,
                 poster: None,
+                group: group.group.as_deref(),
+                quality: group.quality.as_deref(),
             },
             options.now_unix,
         )
@@ -339,6 +341,10 @@ pub fn run(
         total: 0,
     });
     reindex(db, options.provider_id).map_err(db_failure)?;
+    // Language and quality are columns the list queries filter on, so they are derived
+    // once here rather than per paint (README §7.3). Doing it after everything is
+    // written, rather than per upsert, means one pass and one definition of the answer.
+    aurora_db::repo::filtering::reclassify(db).map_err(db_failure)?;
 
     on_progress(Progress {
         phase: Phase::Done,
@@ -617,6 +623,22 @@ mod tests {
         #EXTINF:-1 group-title=\"XXX Adult\",Blocked Channel\n\
         http://example.com/live/u/p/999.ts\n";
 
+    /// Shaped like a real subscription: the same channel twice at two qualities, a
+    /// tagged foreign one, and a film whose quality is only in its name.
+    const MIXED: &str = "#EXTM3U\n\
+        #EXTINF:-1 group-title=\"News\",CNN HD\n\
+        http://example.com/live/u/p/1.ts\n\
+        #EXTINF:-1 group-title=\"News\",CNN FHD\n\
+        http://example.com/live/u/p/2.ts\n\
+        #EXTINF:-1 tvg-language=\"French\" group-title=\"France\",TF1\n\
+        http://example.com/live/u/p/3.ts\n\
+        #EXTINF:-1 group-title=\"AR | Arabic\",MBC 1\n\
+        http://example.com/live/u/p/4.ts\n\
+        #EXTINF:-1 group-title=\"Movies\",Dune (2021) 2160p\n\
+        http://example.com/movie/u/p/9.mkv\n\
+        #EXTINF:-1 group-title=\"Series | FHD\",Severance S01E01 1080p\n\
+        http://example.com/series/u/p/7.mkv\n";
+
     const EPG: &str = r#"<tv>
         <channel id="cnn.us"><display-name>CNN</display-name></channel>
         <channel id="bbcone.uk"><display-name>BBC One</display-name></channel>
@@ -649,6 +671,81 @@ mod tests {
 
     fn no_rules() -> RuleSet {
         RuleSet::compile(&[]).unwrap()
+    }
+
+    #[test]
+    fn an_import_classifies_language_and_quality_for_every_list() {
+        let server = TestServer::start(|_, _| Reply::ok(MIXED));
+        let mut conn = db();
+        let opts = options(&server);
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        // Live: the reported language wins, the group answers for the untagged one, and
+        // an English-looking name stays unknown rather than being guessed at.
+        let rows: Vec<(String, Option<String>, i64)> = {
+            let mut stmt = conn
+                .prepare("SELECT name, lang_code, quality_rank FROM channels ORDER BY name")
+                .unwrap();
+            let out = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            out
+        };
+        let by_name = |n: &str| rows.iter().find(|r| r.0 == n).cloned().unwrap();
+        assert_eq!(by_name("CNN HD").1, None);
+        assert_eq!(by_name("CNN HD").2, 2);
+        assert_eq!(by_name("CNN FHD").2, 3);
+        assert_eq!(by_name("TF1").1.as_deref(), Some("fr"));
+        assert_eq!(by_name("MBC 1").1.as_deref(), Some("ar"));
+
+        // Movies: the quality is in the title, and the year is not mistaken for one.
+        let (quality, rank): (Option<String>, i64) = conn
+            .query_row("SELECT quality, quality_rank FROM movies", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(quality.as_deref(), Some("4K"));
+        assert_eq!(rank, 4);
+
+        // Series: the quality comes off the episode entries, the group off the category.
+        let (group, quality, rank): (Option<String>, Option<String>, i64) = conn
+            .query_row(
+                "SELECT group_title, quality, quality_rank FROM series",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(group.as_deref(), Some("Series | FHD"));
+        assert_eq!(quality.as_deref(), Some("FHD"));
+        assert_eq!(rank, 3);
+    }
+
+    #[test]
+    fn the_filters_work_on_what_an_import_produced() {
+        use aurora_db::repo::filtering::LibraryFilter;
+        let server = TestServer::start(|_, _| Reply::ok(MIXED));
+        let mut conn = db();
+        let opts = options(&server);
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        let both = LibraryFilter {
+            english_only: true,
+            hide_duplicates: true,
+        };
+        let rows = channels::list(
+            &conn,
+            &channels::ChannelFilter {
+                library: both,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        // One CNN, the better one; no TF1, no MBC.
+        assert_eq!(names, vec!["CNN FHD"], "{names:?}");
     }
 
     #[test]

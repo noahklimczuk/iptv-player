@@ -17,8 +17,13 @@ pub struct MovieRow {
     pub overview: Option<String>,
     pub runtime_mins: Option<u32>,
     pub rating: Option<f32>,
+    pub certification: Option<String>,
     pub genres: Vec<String>,
-    pub url: String,
+    pub cast: Vec<String>,
+    pub added_at: Option<i64>,
+    pub logo_art: Option<String>,
+    /// ISO 639-1, or nothing when the title never said (README §7.3).
+    pub lang: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -81,8 +86,30 @@ pub fn upsert_movies(
     Ok(n)
 }
 
-const MOVIE_SELECT: &str = "SELECT id, title, year, quality, poster, backdrop, overview,
-                                   runtime_mins, rating, genres, url FROM movies";
+/// The stream URL is deliberately absent. It carries the provider's username and
+/// password in the path, and the renderer has no use for it: playback is resolved on
+/// the host (README C10).
+const MOVIE_SELECT: &str = "SELECT movies.id, COALESCE(custom_title, title), year, quality,
+                                   poster, backdrop, overview, runtime_mins, rating,
+                                   genres, certification, added_at, logo_art, lang_code,
+                                   (SELECT group_concat(p.name, char(31))
+                                      FROM credits c JOIN people p ON p.tmdb_id = c.person_id
+                                     WHERE c.item_kind = 'movie' AND c.item_id = movies.id
+                                       AND c.is_cast = 1
+                                     ORDER BY c.ord)
+                            FROM movies";
+
+/// `group_concat` cannot be ordered portably, and a comma would split names that
+/// contain one, so the separator is a unit separator no name has.
+fn split_names(raw: Option<String>) -> Vec<String> {
+    raw.map(|s| {
+        s.split('\u{1f}')
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
+}
 
 fn map_movie(r: &rusqlite::Row<'_>) -> rusqlite::Result<MovieRow> {
     let genres: Option<String> = r.get(9)?;
@@ -99,36 +126,180 @@ fn map_movie(r: &rusqlite::Row<'_>) -> rusqlite::Result<MovieRow> {
         genres: genres
             .and_then(|g| serde_json::from_str(&g).ok())
             .unwrap_or_default(),
-        url: r.get(10)?,
+        certification: r.get(10)?,
+        added_at: r.get(11)?,
+        logo_art: r.get(12)?,
+        lang: r.get(13)?,
+        cast: split_names(r.get(14)?),
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MovieSort {
+    #[default]
     RecentlyAdded,
     Title,
     Year,
     Rating,
 }
 
-pub fn list_movies(
-    conn: &Connection,
-    sort: MovieSort,
-    limit: u32,
-    offset: u32,
-) -> Result<Vec<MovieRow>> {
-    let order = match sort {
-        MovieSort::RecentlyAdded => "added_at DESC, id DESC",
+/// What a browse page asks for: a sort, a page, an optional genre, and whatever the
+/// library-wide filters are set to (README §7.3, §8.5).
+#[derive(Debug, Clone, Default)]
+pub struct BrowseQuery {
+    pub sort: MovieSort,
+    pub genre: Option<String>,
+    pub limit: u32,
+    pub offset: u32,
+    pub library: crate::repo::filtering::LibraryFilter,
+}
+
+/// Genres are stored as a JSON array, so matching one means matching its text. The
+/// quotes make `"Action"` fail to match `"Action Comedy"`, which a bare LIKE would not.
+fn genre_clause(table: &str, genre: &Option<String>) -> String {
+    match genre {
+        Some(_) => format!(" AND {table}.genres LIKE '%\"' || :genre || '\"%'"),
+        None => String::new(),
+    }
+}
+
+pub fn list_movies(conn: &Connection, q: &BrowseQuery) -> Result<Vec<MovieRow>> {
+    let order = match q.sort {
+        MovieSort::RecentlyAdded => "added_at DESC, movies.id DESC",
         MovieSort::Title => "title COLLATE NOCASE",
         MovieSort::Year => "year DESC NULLS LAST, title",
         MovieSort::Rating => "rating DESC NULLS LAST, title",
     };
-    let sql = format!("{MOVIE_SELECT} ORDER BY {order} LIMIT ?1 OFFSET ?2");
+    let sql = format!(
+        "{MOVIE_SELECT} WHERE movies.hidden = 0{}{} ORDER BY {order} LIMIT :limit OFFSET :offset",
+        q.library.where_sql(crate::repo::filtering::Kind::Movies),
+        genre_clause("movies", &q.genre),
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map(params![limit, offset], map_movie)?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let rows = match &q.genre {
+        Some(g) => stmt
+            .query_map(
+                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset, ":genre": g },
+                map_movie,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        None => stmt
+            .query_map(
+                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset },
+                map_movie,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+    };
     Ok(rows)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesRow {
+    pub id: i64,
+    pub title: String,
+    pub year: Option<i32>,
+    pub quality: Option<String>,
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
+    pub logo_art: Option<String>,
+    pub overview: Option<String>,
+    pub rating: Option<f32>,
+    pub certification: Option<String>,
+    pub genres: Vec<String>,
+    pub cast: Vec<String>,
+    pub seasons: Vec<u16>,
+    pub added_at: Option<i64>,
+    pub lang: Option<String>,
+}
+
+const SERIES_SELECT: &str = "SELECT series.id, COALESCE(custom_title, title), year, quality,
+                                    poster, backdrop, logo_art, overview, rating,
+                                    certification, genres, added_at, lang_code,
+                                    (SELECT group_concat(p.name, char(31))
+                                       FROM credits c JOIN people p ON p.tmdb_id = c.person_id
+                                      WHERE c.item_kind = 'series' AND c.item_id = series.id
+                                        AND c.is_cast = 1
+                                      ORDER BY c.ord),
+                                    (SELECT group_concat(DISTINCT e.season)
+                                       FROM episodes e WHERE e.series_id = series.id)
+                             FROM series";
+
+fn map_series(r: &rusqlite::Row<'_>) -> rusqlite::Result<SeriesRow> {
+    let genres: Option<String> = r.get(10)?;
+    let seasons: Option<String> = r.get(14)?;
+    let mut seasons: Vec<u16> = seasons
+        .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    seasons.sort_unstable();
+    Ok(SeriesRow {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        year: r.get::<_, Option<i64>>(2)?.map(|v| v as i32),
+        quality: r.get(3)?,
+        poster: r.get(4)?,
+        backdrop: r.get(5)?,
+        logo_art: r.get(6)?,
+        overview: r.get(7)?,
+        rating: r.get::<_, Option<f64>>(8)?.map(|v| v as f32),
+        certification: r.get(9)?,
+        genres: genres
+            .and_then(|g| serde_json::from_str(&g).ok())
+            .unwrap_or_default(),
+        added_at: r.get(11)?,
+        lang: r.get(12)?,
+        cast: split_names(r.get(13)?),
+        seasons,
+    })
+}
+
+pub fn list_series(conn: &Connection, q: &BrowseQuery) -> Result<Vec<SeriesRow>> {
+    let order = match q.sort {
+        MovieSort::RecentlyAdded => "added_at DESC, series.id DESC",
+        MovieSort::Title => "title COLLATE NOCASE",
+        MovieSort::Year => "year DESC NULLS LAST, title",
+        MovieSort::Rating => "rating DESC NULLS LAST, title",
+    };
+    let sql = format!(
+        "{SERIES_SELECT} WHERE series.hidden = 0{}{} ORDER BY {order} LIMIT :limit OFFSET :offset",
+        q.library.where_sql(crate::repo::filtering::Kind::Series),
+        genre_clause("series", &q.genre),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = match &q.genre {
+        Some(g) => stmt
+            .query_map(
+                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset, ":genre": g },
+                map_series,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        None => stmt
+            .query_map(
+                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset },
+                map_series,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+    };
+    Ok(rows)
+}
+
+/// Every genre present in the library, for the browse filters.
+pub fn genres(conn: &Connection) -> Result<Vec<String>> {
+    let mut out = std::collections::BTreeSet::new();
+    for table in ["movies", "series"] {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT genres FROM {table} WHERE genres IS NOT NULL AND hidden = 0"
+        ))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for raw in rows {
+            if let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) {
+                out.extend(list.into_iter().filter(|g| !g.trim().is_empty()));
+            }
+        }
+    }
+    Ok(out.into_iter().collect())
 }
 
 /// README §13: the same film from three providers should be one card, not three.
@@ -160,6 +331,10 @@ pub struct NewSeries<'a> {
     pub match_key: &'a str,
     pub year: Option<i32>,
     pub poster: Option<&'a str>,
+    /// The provider's own category, which is also where a language tag often hides.
+    pub group: Option<&'a str>,
+    /// The best quality any of its episode streams advertised.
+    pub quality: Option<&'a str>,
 }
 
 pub fn upsert_series(
@@ -174,15 +349,19 @@ pub fn upsert_series(
         match_key,
         year,
         poster,
+        group,
+        quality,
     } = *series;
     conn.execute(
         r#"INSERT INTO series (provider_id, provider_key, title, match_key, year, poster,
-                               added_at, last_seen_at)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?7)
+                               group_title, quality, added_at, last_seen_at)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)
            ON CONFLICT (provider_id, provider_key) DO UPDATE SET
              title = excluded.title, match_key = excluded.match_key,
              year = COALESCE(excluded.year, series.year),
              poster = COALESCE(excluded.poster, series.poster),
+             group_title = COALESCE(excluded.group_title, series.group_title),
+             quality = COALESCE(excluded.quality, series.quality),
              last_seen_at = excluded.last_seen_at"#,
         params![
             provider_id,
@@ -191,6 +370,8 @@ pub fn upsert_series(
             match_key,
             year,
             poster,
+            group,
+            quality,
             now
         ],
     )?;
@@ -372,10 +553,26 @@ mod tests {
         )
         .unwrap();
 
-        let by_title = list_movies(&conn, MovieSort::Title, 10, 0).unwrap();
+        let by_title = list_movies(
+            &conn,
+            &BrowseQuery {
+                sort: MovieSort::Title,
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(by_title[0].title, "Alien");
 
-        let by_year = list_movies(&conn, MovieSort::Year, 10, 0).unwrap();
+        let by_year = list_movies(
+            &conn,
+            &BrowseQuery {
+                sort: MovieSort::Year,
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(by_year[0].title, "Alien");
     }
 
@@ -394,7 +591,15 @@ mod tests {
 
         upsert_movies(&mut conn, p, &[movie("1", "Alien (1979)", Some(1979))], 200).unwrap();
 
-        let m = &list_movies(&conn, MovieSort::Title, 10, 0).unwrap()[0];
+        let m = &list_movies(
+            &conn,
+            &BrowseQuery {
+                sort: MovieSort::Title,
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .unwrap()[0];
         assert_eq!(m.overview.as_deref(), Some("In space..."));
         assert_eq!(m.backdrop.as_deref(), Some("b.jpg"));
         assert_eq!(m.rating, Some(8.4));
@@ -430,6 +635,8 @@ mod tests {
                 match_key: "breakingbad",
                 year: Some(2008),
                 poster: None,
+                group: None,
+                quality: None,
             },
             0,
         )
@@ -644,6 +851,8 @@ mod tests {
                 match_key: "show",
                 year: Some(2020),
                 poster: None,
+                group: None,
+                quality: None,
             },
             1,
         )

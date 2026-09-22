@@ -82,6 +82,26 @@ const CHANNEL_GROUPS = [
   { name: 'Documentary', base: 500, names: ['Terra', 'Deep Field', 'The Record'] },
 ] as const;
 
+/**
+ * The parts of a real playlist the filters exist for (README §7.3): other languages,
+ * and the same channel listed two or three times at different qualities.
+ *
+ * `lang` is given rather than derived. The host works it out with
+ * `aurora_core::lang`; duplicating that here would be a second implementation to
+ * disagree with, so the mock is simply told the answer a real import would reach.
+ */
+const FOREIGN_CHANNELS = [
+  { name: 'FR | TF1', group: 'France', lang: 'fr', base: 700 },
+  { name: 'FR | Canal+ Sport', group: 'France', lang: 'fr', base: 701 },
+  { name: 'DE | RTL', group: 'Deutschland', lang: 'de', base: 702 },
+  { name: 'ES | Antena 3', group: 'España', lang: 'es', base: 703 },
+  { name: 'AR | MBC 1', group: 'Arabic', lang: 'ar', base: 704 },
+  { name: 'IT | Rai 1', group: 'Italia', lang: 'it', base: 705 },
+] as const;
+
+/** Channels the provider lists more than once. The best copy is the one to keep. */
+const QUALITY_VARIANTS = ['Meridian News', 'Apex Sports 1', 'Lantern Cinema'] as const;
+
 export const channels: Channel[] = (() => {
   const out: Channel[] = [];
   let id = 1;
@@ -100,11 +120,71 @@ export const channels: Channel[] = (() => {
         isRadio: false,
         hasCatchup: rand() > 0.45,
         favorite: rand() > 0.8,
+        lang: null,
       });
+    });
+  }
+  // Lesser copies of channels already in the list, the way a panel repeats them.
+  for (const name of QUALITY_VARIANTS) {
+    const original = out.find((c) => c.name === name)!;
+    for (const q of ['SD', 'HD'] as const) {
+      if (original.quality === q) continue;
+      out.push({
+        ...original,
+        id: id++,
+        name: `${name} ${q}`,
+        number: 900 + out.length,
+        quality: q,
+        favorite: false,
+        // The same EPG channel: it is the same channel.
+        epgChannelId: original.epgChannelId,
+      });
+    }
+  }
+  for (const f of FOREIGN_CHANNELS) {
+    out.push({
+      id: id++,
+      name: f.name,
+      number: f.base,
+      logo: art(f.name, 96, 96),
+      group: f.group,
+      epgChannelId: `${f.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
+      quality: 'HD',
+      hidden: false,
+      isRadio: false,
+      hasCatchup: false,
+      favorite: false,
+      lang: f.lang,
     });
   }
   return out;
 })();
+
+/**
+ * What the host's duplicate collapsing groups by: a normalized title. Mirrors
+ * `aurora_core::title::match_key` closely enough for the mock's purposes — the quality
+ * suffix comes off, and so does a language prefix.
+ */
+export function matchKey(name: string): string {
+  return name
+    .replace(/^\s*[\[(]?[A-Za-z]{2,4}[\])]?\s*[:|\-–]\s*/, '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\b(4k|uhd|fhd|hd|sd|1080p|720p|2160p)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/** Bigger is better; 0 is "the provider never said". */
+export function qualityRank(quality: string | null | undefined): number {
+  switch (quality) {
+    case '4K': return 4;
+    case 'FHD': return 3;
+    case 'HD': return 2;
+    case 'SD': return 1;
+    default: return 0;
+  }
+}
 
 /* ── EPG ───────────────────────────────────────────────────────────────────── */
 
@@ -195,6 +275,7 @@ function makeMovie(id: number): Movie {
     cast: [person(), person(), person(), person()],
     match: int(72, 99),
     addedAt: Math.floor(Date.now() / 1000) - int(0, 90) * 86400,
+    lang: null,
   };
 }
 
@@ -222,11 +303,36 @@ function makeSeries(id: number): Series {
     seasons: Array.from({ length: seasonCount }, (_, i) => i + 1),
     match: int(70, 99),
     addedAt: Math.floor(Date.now() / 1000) - int(0, 120) * 86400,
+    lang: null,
   };
 }
 
-export const movies: Movie[] = Array.from({ length: 160 }, (_, i) => makeMovie(i + 1));
-export const series: Series[] = Array.from({ length: 70 }, (_, i) => makeSeries(i + 1));
+export const movies: Movie[] = (() => {
+  const out = Array.from({ length: 160 }, (_, i) => makeMovie(i + 1));
+  // Foreign-language films, tagged the way a provider tags them.
+  const foreign: [string, string][] = [
+    ['[SPANISH] La Casa del Lago', 'es'],
+    ['[FRENCH] Le Dernier Quai', 'fr'],
+    ['[ARABIC] Bab El Shams', 'ar'],
+  ];
+  for (const [t, lang] of foreign) {
+    const m = makeMovie(out.length + 1);
+    out.push({ ...m, title: t, lang, quality: 'FHD' });
+  }
+  // The same film twice, once better than the other.
+  const twice = out[0]!;
+  out.push({ ...twice, id: out.length + 1, quality: 'SD', poster: twice.poster });
+  return out;
+})();
+
+export const series: Series[] = (() => {
+  const out = Array.from({ length: 70 }, (_, i) => makeSeries(i + 1));
+  const s = makeSeries(out.length + 1);
+  out.push({ ...s, title: '[SPANISH] La Casa de Papel del Norte', lang: 'es' });
+  const twice = out[0]!;
+  out.push({ ...twice, id: out.length + 1, quality: 'SD' });
+  return out;
+})();
 
 export const episodes: Episode[] = (() => {
   const out: Episode[] = [];

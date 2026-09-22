@@ -454,6 +454,49 @@ CREATE TABLE enrichment (
 CREATE INDEX idx_enrichment_state ON enrichment(state, attempted_at);
 "#,
     },
+    Migration {
+        version: 8,
+        name: "filtering",
+        sql: r#"
+-- README §7.3: "Hide non-[language]" and "collapse quality duplicates". Both are
+-- answered per row at query time, so both need a column that SQL can read.
+--
+-- `lang_code` is ISO 639-1 as `aurora_core::lang` worked it out, or NULL when the name
+-- said nothing. NULL is not "English" — a filter that treated it as non-English would
+-- empty the library of every provider that tags nothing, which is most of them.
+--
+-- `quality_rank` orders duplicates onto the best copy. 0 is unknown, which ranks below
+-- SD, so a tagged copy always wins over an untagged one.
+--
+-- `hidden` and `custom_title` mirror what `channels` already has, so the playlist
+-- editor works the same on all three lists and a refresh never discards either
+-- (README §4.6).
+ALTER TABLE channels ADD COLUMN lang_code    TEXT;
+ALTER TABLE channels ADD COLUMN quality_rank INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE movies ADD COLUMN lang_code    TEXT;
+ALTER TABLE movies ADD COLUMN quality_rank INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE movies ADD COLUMN hidden       INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE movies ADD COLUMN custom_title TEXT;
+
+-- Series never carried a quality or a category at all: the provider advertises a
+-- quality per episode stream, and the show is the thing being collapsed and grouped.
+ALTER TABLE series ADD COLUMN group_title  TEXT;
+ALTER TABLE series ADD COLUMN lang_code    TEXT;
+ALTER TABLE series ADD COLUMN quality      TEXT;
+ALTER TABLE series ADD COLUMN quality_rank INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE series ADD COLUMN hidden       INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE series ADD COLUMN custom_title TEXT;
+
+-- The duplicate query groups by match key and picks the best rank, on every list paint.
+CREATE INDEX idx_channels_dupe ON channels(match_key, quality_rank DESC, id);
+CREATE INDEX idx_movies_dupe   ON movies(match_key, quality_rank DESC, id);
+CREATE INDEX idx_series_dupe   ON series(match_key, quality_rank DESC, id);
+CREATE INDEX idx_channels_lang ON channels(lang_code);
+CREATE INDEX idx_movies_lang   ON movies(lang_code);
+CREATE INDEX idx_series_lang   ON series(lang_code);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 7;
+pub const LATEST_VERSION: u32 = 8;

@@ -152,6 +152,12 @@ pub struct EpgChannel {
 pub struct SeriesGroup {
     pub title: String,
     pub year: Option<i32>,
+    /// The provider's category for this show, which is also where a language tag often
+    /// hides (README §7.3).
+    pub group: Option<String>,
+    /// The best quality any of its episode entries advertised, so the same show listed
+    /// twice at two qualities collapses onto the better one.
+    pub quality: Option<String>,
     pub seasons: Vec<Season>,
 }
 

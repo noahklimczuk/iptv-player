@@ -1,7 +1,7 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aurora_app::{commands, dvr, metadata, profiles, providers, services::Services};
+use aurora_app::{commands, dvr, metadata, playlist, profiles, providers, services::Services};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -69,6 +69,8 @@ fn main() {
             commands::epg_grid_slice,
             commands::epg_now_next,
             commands::library_movies,
+            commands::library_series,
+            commands::library_genres,
             commands::library_episodes,
             commands::library_playback_aids,
             commands::library_record_skip,
@@ -112,6 +114,16 @@ fn main() {
             metadata::artwork_status,
             metadata::artwork_prefetch,
             metadata::artwork_clear,
+            playlist::library_filters,
+            playlist::library_set_filters,
+            playlist::library_filter_counts,
+            playlist::library_alternates,
+            playlist::playlist_list,
+            playlist::playlist_groups,
+            playlist::playlist_update,
+            playlist::playlist_set_hidden,
+            playlist::playlist_hide_matching,
+            playlist::playlist_reset,
             profiles::profiles_list,
             profiles::profiles_create,
             profiles::profiles_delete,

@@ -21,6 +21,8 @@ export interface Channel {
   isRadio: boolean;
   hasCatchup: boolean;
   favorite?: boolean;
+  /** ISO 639-1 as the host worked it out, or null when the name never said. */
+  lang?: string | null;
 }
 
 export interface Programme {
@@ -58,6 +60,7 @@ export interface Movie {
   /** Percentage match computed locally from viewing history (README §8.4). */
   match?: number;
   addedAt: number | null;
+  lang?: string | null;
 }
 
 export interface Series {
@@ -76,6 +79,7 @@ export interface Series {
   seasons: number[];
   match?: number;
   addedAt: number | null;
+  lang?: string | null;
 }
 
 export interface Episode {
@@ -467,6 +471,82 @@ export interface CreditEntry {
   isCast: boolean;
 }
 
+/* ── Playlist editing and library filters (README §7.3) ────────────────────── */
+
+/** Which of the three lists an edit or a filter is about. */
+export type PlaylistKind = 'live' | 'movies' | 'series';
+
+export interface LibraryFilters {
+  /**
+   * Hide what is positively tagged as another language. Anything the provider did not
+   * tag is kept: treating unknown as foreign empties most real libraries.
+   */
+  englishOnly: boolean;
+  /** Show one entry per title — the highest-quality copy of it. */
+  hideDuplicates: boolean;
+}
+
+/** What each filter would hide, so the settings screen can say before it is turned on. */
+export interface FilterCounts {
+  total: number;
+  nonEnglish: number;
+  untagged: number;
+  duplicates: number;
+}
+
+/** One row of the playlist editor, the same shape for channels, films and shows. */
+export interface PlaylistEntry {
+  id: number;
+  /** What it is called now — the viewer's name for it if they gave it one. */
+  name: string;
+  /** What the provider calls it, shown when the two differ. */
+  providerName: string;
+  /** Channels only; null for films and shows. */
+  number: number | null;
+  group: string | null;
+  quality: Quality | null;
+  lang: string | null;
+  hidden: boolean;
+  /** Any override is set, so the row can offer a reset. */
+  edited: boolean;
+  /** How many other copies of this title exist. */
+  duplicates: number;
+  provider: string | null;
+}
+
+export interface PlaylistPage {
+  rows: PlaylistEntry[];
+  /** Matches in total, not on this page. */
+  total: number;
+}
+
+/** Which rows the editor is looking at. */
+export type PlaylistShow = 'all' | 'visible' | 'hidden';
+
+export interface PlaylistQuery {
+  kind: PlaylistKind;
+  text?: string;
+  group?: string;
+  show?: PlaylistShow;
+  duplicatesOnly?: boolean;
+}
+
+/** An edit. An absent field is left alone; an empty string or a 0 clears an override. */
+export interface PlaylistPatch {
+  name?: string;
+  number?: number;
+  group?: string;
+  hidden?: boolean;
+}
+
+/** Another copy of the same title — the source picker behind a collapsed entry. */
+export interface Alternate {
+  id: number;
+  name: string;
+  quality: Quality | null;
+  provider: string | null;
+}
+
 /** The typed command surface. Every UI data need goes through exactly one of these. */
 export interface Commands {
   'library.rails': (args: { profileId: number }) => Rail[];
@@ -497,6 +577,26 @@ export interface Commands {
     prefs: SeriesPrefs;
   }) => void;
   'library.genres': () => string[];
+  'library.filters': () => LibraryFilters;
+  'library.setFilters': (args: LibraryFilters) => LibraryFilters;
+  'library.filterCounts': (args: { kind: PlaylistKind }) => FilterCounts;
+  'library.alternates': (args: { kind: PlaylistKind; id: number }) => Alternate[];
+
+  'playlist.list': (args: PlaylistQuery & { limit: number; offset: number }) => PlaylistPage;
+  'playlist.groups': (args: { kind: PlaylistKind }) => { name: string; count: number }[];
+  'playlist.update': (args: {
+    kind: PlaylistKind;
+    id: number;
+    patch: PlaylistPatch;
+  }) => void;
+  'playlist.setHidden': (args: {
+    kind: PlaylistKind;
+    ids: number[];
+    hidden: boolean;
+  }) => number;
+  /** Hide everything the query matches, however many pages of it there are. */
+  'playlist.hideMatching': (args: PlaylistQuery & { hidden: boolean }) => number;
+  'playlist.reset': (args: { kind: PlaylistKind; ids: number[] }) => number;
 
   'channels.list': (args: { group?: string; favoritesOnly?: boolean }) => Channel[];
   'channels.groups': () => { name: string; count: number }[];
