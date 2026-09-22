@@ -9,7 +9,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 1 — Foundation | Workspace, typed IPC, SQLite + migrations, tokens, app shell, CI | **Done** |
 | 2 — Ingestion | M3U + Xtream + XMLTV fetching and parsing, classification, series grouping, rules | **Done.** aurora-ingest fetches, parses, reconciles and indexes; credentials go to the OS store. Stalker portals (§4.3, Optional) and per-series episode listings are not built. |
 | 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Real decoding unverified. |
-| 4 — Live TV | Channel list, zap, banner, number entry, favorites | **Done** |
+| 4 — Live TV | Channel list, zap, banner, number entry, favorites | **Done.** The playlist editor (§7.3) adds rename, renumber, regroup, hide and bulk edit over channels, movies and series; drag-to-reorder, custom logos, named favourite lists and the user-defined rules engine are not built. |
 | 5 — EPG | XMLTV ingest, matching, guide grid, info pane | **Done** |
 | 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, but unverified against the real API.** TMDB matching, the client, credits storage, the artwork disk cache and the settings panel are built and tested; nothing has run with a real key. The cache downloads, evicts and reports — but the UI still renders from remote URLs, because *serving* from it needs Tauri's asset protocol confirmed on hardware (same gate as Phase 0). |
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
@@ -103,7 +103,14 @@ were built first.
    is only observable with a subscription. The refusals are deliberate: a channel that
    advertises catch-up without saying how to ask for it gets a message, not a guessed
    URL that fails silently at the player.
-5. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
+5. **The filters against a real playlist.** `aurora_core::lang` is written from the
+   conventions playlists use and tested against names shaped like them, but the only way
+   to know how much of a real 10,000-entry subscription it can classify is to point
+   `examples/probe.rs` at one and read the language histogram. The failure mode to watch
+   for is the opposite of the obvious one: not content wrongly hidden, but a provider
+   whose tagging is so sparse that "English only" hides almost nothing.
+
+6. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
    points at remote URLs. Closing that needs `assetProtocol` enabled in
    `tauri.conf.json`, scoped to the cache folder, and the swap done with a fallback to
    the remote URL so a misconfigured protocol degrades to today's behaviour rather than

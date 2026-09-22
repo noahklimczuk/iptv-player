@@ -7,6 +7,7 @@ import { BrowsePage } from '@/features/browse/BrowsePage';
 import { RecordingsPage } from '@/features/dvr/RecordingsPage';
 import { GuidePage } from '@/features/guide/GuidePage';
 import { HomePage } from '@/features/home/HomePage';
+import { PlaylistPage } from '@/features/playlist/PlaylistPage';
 import { LivePage } from '@/features/live/LivePage';
 import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
 import { SkipButton } from '@/features/player/SkipButton';
@@ -31,6 +32,7 @@ const NAV: { to: string; icon: IconName; label: string }[] = [
   { to: '/movies', icon: 'film', label: 'Movies' },
   { to: '/series', icon: 'stack', label: 'Series' },
   { to: '/recordings', icon: 'record', label: 'Recordings' },
+  { to: '/playlist', icon: 'layers', label: 'Playlist' },
   { to: '/settings', icon: 'settings', label: 'Settings' },
 ];
 
@@ -216,6 +218,7 @@ export default function App() {
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/recordings" element={<RecordingsPage />} />
+          <Route path="/playlist" element={<PlaylistPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>

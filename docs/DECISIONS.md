@@ -128,10 +128,45 @@ wiping fetched artwork or a TMDB result with a missing overview blanking the one
 playlist supplied. It is a convention rather than something the schema enforces, so both
 sides say so in a comment where the columns are listed.
 
+## D14 — An unknown language is kept, not hidden
+
+`aurora_core::lang` answers "what language is this in?" with a code or with nothing, and
+"English only" hides only what came back as a language other than English. Untagged
+content stays.
+
+The alternative — treat unknown as foreign — is more thorough and much worse. Providers
+tag inconsistently: a playlist will label its Arabic and French sections carefully and
+leave the English-language blocks bare, because to that provider English is the default.
+Hiding the unknown would empty most libraries of exactly the content the viewer wanted
+to keep, and the failure would look like a broken import rather than a filter doing its
+job.
+
+So the detector is allowed to say nothing, and it says nothing often: a bare `CNN`, a
+`VIP|` prefix, `The German Doctor`. The settings screen shows the untagged count beside
+the non-English one, because that number is what explains why the filter is not more
+aggressive.
+
+## D15 — Filters run at query time; nothing is deleted
+
+English-only and duplicate collapsing are `AND` clauses on the list queries, driven by
+two columns (`lang_code`, `quality_rank`) computed once at import. Turning a filter off
+restores the library exactly, because nothing left.
+
+Deleting would be simpler to query and impossible to undo — and pointless, since the
+next provider refresh brings every deleted row back. The columns are the compromise:
+classification is a Rust decision with tests, stored as data SQL can sort and compare,
+so a list paint costs a predicate rather than a pass over the catalogue.
+
+Duplicate collapsing is phrased as "no better copy of this exists" rather than as a
+`GROUP BY`, which lets it compose with whatever else a query already asks — a genre, a
+sort, a page — instead of forcing every query to be rewritten around a subquery. The
+inner search carries the same language rule, so a 4K Spanish rip cannot suppress the
+English HD copy it is not allowed to replace.
+
 ## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in
 `docs/ROADMAP.md` against their phases: Stalker portals (§4.3, marked Optional), downloads (§8.6,
-Optional), timeshift and catch-up playback (§7.6, Phase 8 — recording itself is built), casting,
+Optional), timeshift (§7.6, Phase 8 — recording and catch-up are built), casting,
 voice search, gamepad (§14.3), and a local artwork cache (§12 — enrichment stores absolute TMDB
 image URLs, so every poster is currently fetched from the network on each paint).
