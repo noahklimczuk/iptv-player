@@ -163,6 +163,26 @@ sort, a page — instead of forcing every query to be rewritten around a subquer
 inner search carries the same language rule, so a 4K Spanish rip cannot suppress the
 English HD copy it is not allowed to replace.
 
+## D16 — A failing stream is demoted, never banned
+
+A channel's sources are ordered by the provider's priority, with one adjustment: a
+source that failed recently sorts last for a cooling-off period proportional to how many
+times in a row it has failed, capped at six minutes. Anything that has worked since it
+last failed is healthy again immediately.
+
+The obvious alternative — sort by `fail_count` — is what the schema originally implied,
+and it is wrong in both directions. It never forgets, so the stream the viewer actually
+wants is permanently demoted by one bad evening; and it has no sense of *when*, so a
+failure from last week counts the same as one from ten seconds ago.
+
+Ranking also never filters. A channel whose every source is currently sick must still
+offer all of them to try, because returning an empty list turns "the provider is having
+a moment" into "this channel does not exist".
+
+Rollovers within a single tune are bounded. A provider in a total outage would otherwise
+spin through every URL it owns for ever, and a stopped picture with an error on it is
+more honest than an endless reconnect.
+
 ## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in

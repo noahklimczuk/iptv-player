@@ -105,6 +105,33 @@ pub fn resolve_catchup(
     ))
 }
 
+/// Every URL a channel can be played from, best bet first, plus the options they share.
+///
+/// Returns the list rather than a winner because one URL is only a guess: providers
+/// hand out streams that 404, stall, or die mid-programme, and the next one along is
+/// usually fine (README §7.14, §23 item 4).
+pub fn live_sources(
+    db: &Connection,
+    channel_id: i64,
+    now: i64,
+) -> Result<(Vec<aurora_db::repo::sources::Source>, LoadOptions)> {
+    let ch = channels::list(db, &channels::ChannelFilter::default())?
+        .into_iter()
+        .find(|c| c.id == channel_id)
+        .ok_or_else(|| AppError::Other(format!("unknown channel {channel_id}")))?;
+
+    let sources = aurora_db::repo::sources::for_channel(db, channel_id, now)?;
+    Ok((
+        sources,
+        LoadOptions {
+            is_live: true,
+            cache_secs: cache_secs_for(true),
+            title: Some(ch.name),
+            ..Default::default()
+        },
+    ))
+}
+
 /// Turn a library item into a playable URL plus the options it needs.
 ///
 /// Credentials live in Windows Credential Manager, not the database (README C10), so
@@ -117,29 +144,12 @@ pub fn resolve_playback(
 ) -> Result<(String, LoadOptions)> {
     match kind {
         "live" => {
-            let ch = channels::list(db, &channels::ChannelFilter::default())?
+            let (sources, options) = live_sources(db, id, crate::now_unix())?;
+            let first = sources
                 .into_iter()
-                .find(|c| c.id == id)
-                .ok_or_else(|| AppError::Other(format!("unknown channel {id}")))?;
-
-            let url: String = db
-                .query_row(
-                    "SELECT url FROM channel_sources WHERE channel_id = ?1
-                     ORDER BY priority, fail_count LIMIT 1",
-                    [id],
-                    |r| r.get::<_, String>(0),
-                )
-                .map_err(aurora_db::DbError::from)?;
-
-            Ok((
-                url,
-                LoadOptions {
-                    is_live: true,
-                    cache_secs: cache_secs_for(true),
-                    title: Some(ch.name),
-                    ..Default::default()
-                },
-            ))
+                .next()
+                .ok_or_else(|| AppError::Other(format!("channel {id} has no stream URL")))?;
+            Ok((first.url, options))
         }
         "movie" => {
             let (url, title): (String, String) = db

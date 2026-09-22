@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::Result;
+use crate::now_unix;
 use crate::services::Services;
 use crate::AppError;
 
@@ -614,13 +615,6 @@ pub fn dvr_storage(services: State<'_, Services>) -> Result<Storage> {
         },
         max_concurrent: services.dvr.max_concurrent(),
     })
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

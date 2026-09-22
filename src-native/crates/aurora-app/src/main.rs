@@ -1,7 +1,9 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aurora_app::{commands, dvr, metadata, playlist, profiles, providers, services::Services};
+use aurora_app::{
+    commands, dvr, metadata, now_unix, playlist, profiles, providers, services::Services,
+};
 
 /// Send the log somewhere a person can read it.
 ///
@@ -33,6 +35,10 @@ fn init_logging(data_dir: &std::path::Path) {
     }
 }
 
+/// How often the player's state is read. Fast enough that the OSD's clock and buffer
+/// readout look live, slow enough to be free.
+const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -62,7 +68,25 @@ fn main() {
 
             let services = Services::new(data_dir)?;
             let scheduler = std::sync::Arc::clone(&services.dvr);
+            let playback_handle = std::sync::Arc::clone(&services.playback);
             app.manage(services);
+
+            // The player's heartbeat. The backend only knows its state when asked, and
+            // the UI's OSD is driven by a `player.state` event, so without this a
+            // stream that died leaves the interface showing it playing — and nothing
+            // would ever notice a live channel needs rolling to its next source.
+            use tauri::Emitter;
+            let playback = std::sync::Arc::clone(&playback_handle);
+            let player_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("aurora-player".into())
+                .spawn(move || loop {
+                    std::thread::sleep(PLAYER_TICK);
+                    if let Some(state) = playback.tick(now_unix()) {
+                        let _ = player_handle.emit("player.state", &state);
+                    }
+                })
+                .expect("spawning the player thread");
 
             // The DVR has to keep its own time: nothing in the UI is guaranteed to be
             // open when a recording is due, and a minimised window still records.
@@ -171,11 +195,4 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }

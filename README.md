@@ -28,6 +28,8 @@ This repository holds two things:
 | Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
 | Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
 | Timeshift / pause live TV (§7.6) | ❌ not started |
+| Stream failover: demote a dead source, roll to the next (§7.14) | ✅ built and tested; never seen a real stream drop |
+| Windows installer + portable build from CI | ✅ built on every push; the app itself has still never been run |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
 from what merely compiles. In particular the Phase 0 compositing spike — video behind a

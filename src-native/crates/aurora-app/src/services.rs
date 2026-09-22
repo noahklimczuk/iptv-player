@@ -16,6 +16,8 @@ pub struct Services {
     /// is a Phase 11 optimisation (docs/ROADMAP.md).
     pub db: Arc<Mutex<Connection>>,
     pub player: Arc<Mutex<Box<dyn PlayerBackend>>>,
+    /// Owns tuning, failover and the state heartbeat (README §7.14).
+    pub playback: Arc<crate::playback::Playback>,
     pub http: Arc<HttpClient>,
     /// Provider passwords. Never touches the database (README C10).
     pub credentials: Arc<dyn CredentialStore>,
@@ -63,14 +65,20 @@ impl Services {
         let max_concurrent =
             max_connections(&db.lock()).unwrap_or(crate::dvr::DEFAULT_MAX_CONCURRENT);
 
+        let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(create_backend()));
+
         Ok(Self {
+            playback: Arc::new(crate::playback::Playback::new(
+                Arc::clone(&db),
+                Arc::clone(&player),
+            )),
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
             dvr: Arc::new(
                 crate::dvr::Dvr::new(Arc::clone(&db), Arc::new(StreamRecorder), folder)
                     .with_max_concurrent(max_concurrent),
             ),
             db,
-            player: Arc::new(Mutex::new(create_backend())),
+            player,
             http: Arc::new(http),
             credentials: Arc::from(default_store()),
             data_dir,

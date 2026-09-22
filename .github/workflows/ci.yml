@@ -175,25 +175,38 @@ jobs:
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
           & 7z x $archive "-o$mpv" -y | Out-Null
 
-          # The runtime DLL and the .def that describes its exports.
           $dll = Get-ChildItem $mpv -Recurse -Filter '*mpv*.dll' | Select-Object -First 1
-          $def = Get-ChildItem $mpv -Recurse -Filter 'mpv.def'   | Select-Object -First 1
-          if (-not $dll -or -not $def) {
+          if (-not $dll) {
             Get-ChildItem $mpv -Recurse | ForEach-Object { Write-Host $_.FullName }
-            throw 'The libmpv archive did not contain both a DLL and mpv.def.'
+            throw 'The libmpv archive contained no DLL.'
           }
+          Write-Host "Runtime library: $($dll.Name)"
 
           # libmpv2-sys emits `cargo:rustc-link-lib=mpv`, so the MSVC linker needs an
-          # mpv.lib. The dev archive ships a GNU-style .dll.a, which link.exe cannot
-          # read, so the import library is generated from the .def. /name: must match
-          # the DLL that will actually be loaded at runtime.
+          # mpv.lib. The archive ships only a GNU-style .dll.a, which link.exe cannot
+          # read, and no .def — so the import library is built from the DLL's own
+          # export table. /name: must match the DLL that is loaded at runtime.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath = & $vswhere -latest -products * -property installationPath
           Import-Module (Join-Path $vsPath 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
           Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation `
             -DevCmdArguments '-arch=x64 -host_arch=x64'
+
           Push-Location $mpv
-          & lib /def:$($def.FullName) /name:$($dll.Name) /out:mpv.lib /MACHINE:X64
+          $def = Join-Path $mpv 'mpv.def'
+          # dumpbin's export table is four columns — ordinal, hint, RVA, name — and
+          # nothing else in its output has that shape.
+          $names = & dumpbin /exports $dll.FullName |
+            Select-String -Pattern '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if (-not $names -or $names.Count -lt 10) {
+            & dumpbin /exports $dll.FullName | Select-Object -First 40
+            throw "Only $($names.Count) exports found in $($dll.Name); expected libmpv's full API."
+          }
+          Write-Host "Generating an import library from $($names.Count) exports"
+          @('EXPORTS') + $names | Out-File $def -Encoding ascii
+
+          & lib /def:$def /name:$($dll.Name) /out:mpv.lib /MACHINE:X64
           if ($LASTEXITCODE -ne 0) { throw "lib.exe failed with $LASTEXITCODE" }
           Pop-Location
 
