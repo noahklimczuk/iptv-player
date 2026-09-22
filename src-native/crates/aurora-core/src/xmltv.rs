@@ -63,8 +63,16 @@ struct ProgBuilder {
 }
 
 const CREDIT_ROLES: &[&str] = &[
-    "director", "actor", "writer", "adapter", "producer", "composer", "editor", "presenter",
-    "commentator", "guest",
+    "director",
+    "actor",
+    "writer",
+    "adapter",
+    "producer",
+    "composer",
+    "editor",
+    "presenter",
+    "commentator",
+    "guest",
 ];
 
 /// Parse an XMLTV document, pushing items into `sink` as they complete.
@@ -89,7 +97,12 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
     loop {
         match xml.read_event_into(&mut buf) {
             Ok(Event::Eof) => break,
-            Err(e) => return Err(CoreError::Xmltv(format!("at byte {}: {e}", xml.buffer_position()))),
+            Err(e) => {
+                return Err(CoreError::Xmltv(format!(
+                    "at byte {}: {e}",
+                    xml.buffer_position()
+                )))
+            }
             Ok(Event::Start(e)) => {
                 let name = e.name().as_ref().to_vec();
                 text.clear();
@@ -394,10 +407,7 @@ pub fn parse_time(raw: &str) -> Option<i64> {
     if s.len() < 8 {
         return None;
     }
-    let digits: String = s
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.len() < 8 {
         return None;
     }
@@ -416,8 +426,7 @@ pub fn parse_time(raw: &str) -> Option<i64> {
         return None;
     }
 
-    let mut unix =
-        days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second;
+    let mut unix = days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second;
 
     // Optional trailing offset, e.g. " +0100" / "-0530" / "+01:00".
     let rest = s[digits.len()..].trim();

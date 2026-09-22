@@ -94,9 +94,14 @@ fn tidy(s: &str) -> String {
 /// Entries without a recognizable marker are returned in the second tuple slot so the caller
 /// can decide what to do with them rather than having them silently vanish.
 pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>) {
-    // show key → (display title, year, season → episodes)
-    let mut shows: BTreeMap<String, (String, Option<i32>, BTreeMap<u16, Vec<EpisodeRef>>)> =
-        BTreeMap::new();
+    /// What we accumulate per show while scanning the flat entry list.
+    struct Accum {
+        title: String,
+        year: Option<i32>,
+        seasons: BTreeMap<u16, Vec<EpisodeRef>>,
+    }
+
+    let mut shows: BTreeMap<String, Accum> = BTreeMap::new();
     let mut ungrouped = Vec::new();
 
     for (idx, entry) in entries.iter().enumerate() {
@@ -112,19 +117,21 @@ pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>)
             continue;
         }
 
-        let slot = shows
-            .entry(key)
-            .or_insert_with(|| (cleaned.title.clone(), cleaned.year, BTreeMap::new()));
+        let slot = shows.entry(key).or_insert_with(|| Accum {
+            title: cleaned.title.clone(),
+            year: cleaned.year,
+            seasons: BTreeMap::new(),
+        });
 
         // Prefer the longest observed spelling of the show name — provider entries vary.
-        if cleaned.title.len() > slot.0.len() {
-            slot.0 = cleaned.title.clone();
+        if cleaned.title.len() > slot.title.len() {
+            slot.title.clone_from(&cleaned.title);
         }
-        if slot.1.is_none() {
-            slot.1 = cleaned.year;
+        if slot.year.is_none() {
+            slot.year = cleaned.year;
         }
 
-        let season = slot.2.entry(marker.season).or_default();
+        let season = slot.seasons.entry(marker.season).or_default();
         if !season.iter().any(|e| e.number == marker.episode) {
             season.push(EpisodeRef {
                 number: marker.episode,
@@ -137,10 +144,11 @@ pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>)
 
     let groups = shows
         .into_values()
-        .map(|(title, year, seasons)| SeriesGroup {
-            title,
-            year,
-            seasons: seasons
+        .map(|accum| SeriesGroup {
+            title: accum.title,
+            year: accum.year,
+            seasons: accum
+                .seasons
                 .into_iter()
                 .map(|(number, mut episodes)| {
                     episodes.sort_by_key(|e| e.number);
@@ -167,13 +175,12 @@ mod tests {
         assert_eq!(parse_episode_marker("Show s1e2").unwrap().episode, 2);
         assert_eq!(parse_episode_marker("Show 1x02").unwrap().episode, 2);
         assert_eq!(
-            parse_episode_marker("Show Season 2 Episode 10").unwrap().episode,
+            parse_episode_marker("Show Season 2 Episode 10")
+                .unwrap()
+                .episode,
             10
         );
-        assert_eq!(
-            parse_episode_marker("Show S01 E05").unwrap().episode,
-            5
-        );
+        assert_eq!(parse_episode_marker("Show S01 E05").unwrap().episode, 5);
     }
 
     #[test]

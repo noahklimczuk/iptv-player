@@ -6,6 +6,14 @@ members = [
   "crates/aurora-player",
   "crates/aurora-app",
 ]
+# aurora-app pulls in Tauri, whose Linux backend needs GTK and whose Windows build
+# needs the MSVC toolchain. Excluding it from the default set keeps a bare
+# `cargo test` working on any host; CI builds it explicitly on windows-latest.
+default-members = [
+  "crates/aurora-core",
+  "crates/aurora-db",
+  "crates/aurora-player",
+]
 
 [workspace.package]
 version = "0.1.0"

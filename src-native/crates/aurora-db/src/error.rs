@@ -12,8 +12,10 @@ pub enum DbError {
         source: rusqlite::Error,
     },
 
-    #[error("database is newer than this build (schema v{found}, supported v{supported}) — \
-             update Aurora TV or restore a backup")]
+    #[error(
+        "database is newer than this build (schema v{found}, supported v{supported}) — \
+             update Aurora TV or restore a backup"
+    )]
     SchemaTooNew { found: u32, supported: u32 },
 
     #[error(transparent)]

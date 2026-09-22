@@ -71,9 +71,9 @@ pub fn parse<R: BufRead>(reader: R) -> Parsed {
             continue;
         }
 
-        if line.starts_with("#EXTM3U") {
+        if let Some(header_attrs) = line.strip_prefix("#EXTM3U") {
             saw_header = true;
-            for (k, v) in parse_attributes(&line["#EXTM3U".len()..]) {
+            for (k, v) in parse_attributes(header_attrs) {
                 match k.as_str() {
                     "url-tvg" | "x-tvg-url" | "tvg-url" => {
                         for u in v.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -204,7 +204,10 @@ fn build_entry(pending: Pending, url: &str, line_no: usize) -> PlaylistEntry {
         .or_else(|| get("tvg-name"))
         .unwrap_or_else(|| "Unnamed".to_string());
 
-    let group = pending.group_override.clone().or_else(|| get("group-title"));
+    let group = pending
+        .group_override
+        .clone()
+        .or_else(|| get("group-title"));
 
     let catchup = get("catchup")
         .or_else(|| get("catchup-type"))
@@ -442,12 +445,15 @@ https://example.com/live/cnn.ts
 
     #[test]
     fn extinf_with_no_url_is_reported_not_merged() {
-        let p = parse_str(
-            "#EXTM3U\n#EXTINF:-1,Orphan\n#EXTINF:-1,Real\nhttps://example.com/r.ts\n",
-        );
+        let p =
+            parse_str("#EXTM3U\n#EXTINF:-1,Orphan\n#EXTINF:-1,Real\nhttps://example.com/r.ts\n");
         assert_eq!(p.result.entries.len(), 1);
         assert_eq!(p.result.entries[0].name, "Real");
-        assert!(p.result.warnings.iter().any(|w| w.message.contains("no URL")));
+        assert!(p
+            .result
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("no URL")));
     }
 
     #[test]
@@ -489,7 +495,8 @@ https://example.com/live/cnn.ts
 
     #[test]
     fn unquoted_attribute_values_are_accepted() {
-        let p = parse_str("#EXTM3U\n#EXTINF:-1 tvg-chno=5 tvg-id=abc,Ch\nhttps://example.com/s.ts\n");
+        let p =
+            parse_str("#EXTM3U\n#EXTINF:-1 tvg-chno=5 tvg-id=abc,Ch\nhttps://example.com/s.ts\n");
         let e = &p.result.entries[0];
         assert_eq!(e.number, Some(5));
         assert_eq!(e.tvg_id.as_deref(), Some("abc"));

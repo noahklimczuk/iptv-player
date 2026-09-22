@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Everything that is platform-independent. Runs on Linux because it is fast and
+  # because aurora-core / aurora-db / aurora-player deliberately have no platform
+  # dependencies (docs/DECISIONS.md D2, D3).
+  core:
+    name: Core tests + UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-native
+
+      - name: Rust formatting
+        working-directory: src-native
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        working-directory: src-native
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: src-native
+        run: cargo test --all-features
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm exec tsc -p tsconfig.json --noEmit
+      - name: Build UI
+        run: pnpm exec vite build
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: End-to-end journeys
+        run: pnpm exec playwright test
+        env:
+          PLAYWRIGHT_CHROMIUM_FROM_PACKAGE: '1'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
+  # The Windows-only half: the mpv/Win32 compositing layer and the Tauri host.
+  # This is the only runner that can compile aurora-app, so a green core job alone
+  # does NOT mean the app builds.
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-native
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - name: Build UI (Tauri bundles this as frontendDist)
+        run: pnpm exec vite build
+
+      - name: Type-check every Windows-only crate
+        # `cargo check` does not link, so this verifies the mpv/Win32 backend and the
+        # Tauri host compile without needing libmpv's import library on the runner.
+        working-directory: src-native
+        run: cargo check --workspace --all-targets
+
+      - name: Tests (portable crates, on Windows)
+        working-directory: src-native
+        run: cargo test
+
+  # The full link+bundle needs libmpv's import library and mpv-2.dll on the runner.
+  # Enable this once the SDK is vendored or fetched — see docs/BUILDING.md. It is kept
+  # separate and non-blocking so a missing dependency does not mask real breakage in
+  # the jobs above.
+  windows-bundle:
+    name: Windows installer (requires libmpv)
+    runs-on: windows-latest
+    if: ${{ vars.AURORA_HAVE_LIBMPV == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-native
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vite build
+      - name: Build release binaries
+        working-directory: src-native
+        run: cargo build --workspace --release
+        env:
+          MPV_SOURCE: ${{ github.workspace }}\third-party\mpv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-tv-windows
+          path: src-native/target/release/aurora-app.exe
+          if-no-files-found: error

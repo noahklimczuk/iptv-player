@@ -152,16 +152,29 @@ pub struct NewEpisode {
     pub still: Option<String>,
 }
 
+/// A show as the provider describes it, before enrichment.
+#[derive(Debug, Clone, Default)]
+pub struct NewSeries<'a> {
+    pub provider_key: &'a str,
+    pub title: &'a str,
+    pub match_key: &'a str,
+    pub year: Option<i32>,
+    pub poster: Option<&'a str>,
+}
+
 pub fn upsert_series(
     conn: &mut Connection,
     provider_id: i64,
-    provider_key: &str,
-    title: &str,
-    match_key: &str,
-    year: Option<i32>,
-    poster: Option<&str>,
+    series: &NewSeries<'_>,
     now: i64,
 ) -> Result<i64> {
+    let NewSeries {
+        provider_key,
+        title,
+        match_key,
+        year,
+        poster,
+    } = *series;
     conn.execute(
         r#"INSERT INTO series (provider_id, provider_key, title, match_key, year, poster,
                                added_at, last_seen_at)
@@ -171,7 +184,15 @@ pub fn upsert_series(
              year = COALESCE(excluded.year, series.year),
              poster = COALESCE(excluded.poster, series.poster),
              last_seen_at = excluded.last_seen_at"#,
-        params![provider_id, provider_key, title, match_key, year, poster, now],
+        params![
+            provider_id,
+            provider_key,
+            title,
+            match_key,
+            year,
+            poster,
+            now
+        ],
     )?;
     Ok(conn.query_row(
         "SELECT id FROM series WHERE provider_id = ?1 AND provider_key = ?2",
@@ -221,7 +242,11 @@ pub struct EpisodeRow {
     pub url: String,
 }
 
-pub fn episodes_for(conn: &Connection, series_id: i64, season: Option<u16>) -> Result<Vec<EpisodeRow>> {
+pub fn episodes_for(
+    conn: &Connection,
+    series_id: i64,
+    season: Option<u16>,
+) -> Result<Vec<EpisodeRow>> {
     let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<EpisodeRow> {
         Ok(EpisodeRow {
             id: r.get(0)?,
@@ -291,7 +316,10 @@ mod tests {
         upsert_movies(
             &mut conn,
             p,
-            &[movie("1", "Zulu", Some(1964)), movie("2", "Alien", Some(1979))],
+            &[
+                movie("1", "Zulu", Some(1964)),
+                movie("2", "Alien", Some(1979)),
+            ],
             100,
         )
         .unwrap();
@@ -322,7 +350,10 @@ mod tests {
         assert_eq!(m.overview.as_deref(), Some("In space..."));
         assert_eq!(m.backdrop.as_deref(), Some("b.jpg"));
         assert_eq!(m.rating, Some(8.4));
-        assert_eq!(m.title, "Alien (1979)", "provider title should still update");
+        assert_eq!(
+            m.title, "Alien (1979)",
+            "provider title should still update"
+        );
     }
 
     #[test]
@@ -342,15 +373,44 @@ mod tests {
     fn series_and_episodes_round_trip() {
         let mut conn = crate::open_memory().unwrap();
         let p = provider(&conn);
-        let sid = upsert_series(&mut conn, p, "s1", "Breaking Bad", "breakingbad", Some(2008), None, 0)
-            .unwrap();
+        let sid = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Breaking Bad",
+                match_key: "breakingbad",
+                year: Some(2008),
+                poster: None,
+            },
+            0,
+        )
+        .unwrap();
         upsert_episodes(
             &mut conn,
             sid,
             &[
-                NewEpisode { season: 1, episode: 2, title: Some("Two".into()), url: "u2".into(), still: None },
-                NewEpisode { season: 1, episode: 1, title: Some("One".into()), url: "u1".into(), still: None },
-                NewEpisode { season: 2, episode: 1, title: None, url: "u3".into(), still: None },
+                NewEpisode {
+                    season: 1,
+                    episode: 2,
+                    title: Some("Two".into()),
+                    url: "u2".into(),
+                    still: None,
+                },
+                NewEpisode {
+                    season: 1,
+                    episode: 1,
+                    title: Some("One".into()),
+                    url: "u1".into(),
+                    still: None,
+                },
+                NewEpisode {
+                    season: 2,
+                    episode: 1,
+                    title: None,
+                    url: "u3".into(),
+                    still: None,
+                },
             ],
             0,
         )
@@ -369,13 +429,34 @@ mod tests {
     fn reimporting_an_episode_updates_rather_than_duplicating() {
         let mut conn = crate::open_memory().unwrap();
         let p = provider(&conn);
-        let sid = upsert_series(&mut conn, p, "s1", "Show", "show", None, None, 0).unwrap();
-        let ep = NewEpisode { season: 1, episode: 1, title: Some("T".into()), url: "old".into(), still: None };
-        upsert_episodes(&mut conn, sid, &[ep.clone()], 0).unwrap();
+        let sid = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Show",
+                match_key: "show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        let ep = NewEpisode {
+            season: 1,
+            episode: 1,
+            title: Some("T".into()),
+            url: "old".into(),
+            still: None,
+        };
+        upsert_episodes(&mut conn, sid, std::slice::from_ref(&ep), 0).unwrap();
         upsert_episodes(
             &mut conn,
             sid,
-            &[NewEpisode { url: "new".into(), title: None, ..ep }],
+            &[NewEpisode {
+                url: "new".into(),
+                title: None,
+                ..ep
+            }],
             0,
         )
         .unwrap();
@@ -383,15 +464,42 @@ mod tests {
         let rows = episodes_for(&conn, sid, None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].url, "new");
-        assert_eq!(rows[0].title.as_deref(), Some("T"), "title should not be nulled");
+        assert_eq!(
+            rows[0].title.as_deref(),
+            Some("T"),
+            "title should not be nulled"
+        );
     }
 
     #[test]
     fn series_upsert_is_stable_across_refreshes() {
         let mut conn = crate::open_memory().unwrap();
         let p = provider(&conn);
-        let a = upsert_series(&mut conn, p, "s1", "Show", "show", None, None, 0).unwrap();
-        let b = upsert_series(&mut conn, p, "s1", "Show HD", "show", Some(2020), None, 1).unwrap();
+        let a = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Show",
+                match_key: "show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        let b = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Show HD",
+                match_key: "show",
+                year: Some(2020),
+                poster: None,
+            },
+            1,
+        )
+        .unwrap();
         assert_eq!(a, b, "same provider_key must map to the same row");
     }
 }

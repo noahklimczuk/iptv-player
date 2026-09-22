@@ -7,12 +7,29 @@ use crate::model::MediaKind;
 use crate::series;
 
 const MOVIE_GROUP_HINTS: &[&str] = &[
-    "vod", "movie", "movies", "film", "films", "cinema", "peliculas", "filme", "kino",
+    "vod",
+    "movie",
+    "movies",
+    "film",
+    "films",
+    "cinema",
+    "peliculas",
+    "filme",
+    "kino",
 ];
 const SERIES_GROUP_HINTS: &[&str] = &[
-    "series", "serie", "tv show", "tvshow", "shows", "staffel", "temporada", "saison",
+    "series",
+    "serie",
+    "tv show",
+    "tvshow",
+    "shows",
+    "staffel",
+    "temporada",
+    "saison",
 ];
-const VIDEO_EXTS: &[&str] = &[".mkv", ".mp4", ".avi", ".mov", ".m4v", ".flv", ".wmv", ".mpg"];
+const VIDEO_EXTS: &[&str] = &[
+    ".mkv", ".mp4", ".avi", ".mov", ".m4v", ".flv", ".wmv", ".mpg",
+];
 
 pub fn classify(name: &str, url: &str, group: Option<&str>) -> MediaKind {
     let lower_url = url.to_ascii_lowercase();
@@ -76,7 +93,11 @@ mod tests {
     #[test]
     fn episode_marker_beats_group() {
         assert_eq!(
-            classify("Breaking Bad S01E02", "https://example.com/x.mkv", Some("Movies")),
+            classify(
+                "Breaking Bad S01E02",
+                "https://example.com/x.mkv",
+                Some("Movies")
+            ),
             MediaKind::Episode
         );
     }

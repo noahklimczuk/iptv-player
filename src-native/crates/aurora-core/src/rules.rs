@@ -147,9 +147,9 @@ impl RuleSet {
                 Action::SetNumber(n) => entry.number = Some(*n),
                 Action::Rename(replacement) => {
                     entry.name = match (rule.match_kind, re.as_ref()) {
-                        (Match::Regex, Some(re)) => {
-                            re.replace_all(&entry.name, replacement.as_str()).into_owned()
-                        }
+                        (Match::Regex, Some(re)) => re
+                            .replace_all(&entry.name, replacement.as_str())
+                            .into_owned(),
                         _ => replacement.clone(),
                     };
                     outcome.renamed = true;
@@ -234,7 +234,12 @@ pub mod presets {
     }
 
     pub fn hide_247() -> Rule {
-        let mut r = Rule::new(Field::Name, Match::Regex, r"(?i)\b24[\s/\-]?7\b", Action::Hide);
+        let mut r = Rule::new(
+            Field::Name,
+            Match::Regex,
+            r"(?i)\b24[\s/\-]?7\b",
+            Action::Hide,
+        );
         r.id = "preset-hide-247".into();
         r
     }
@@ -290,8 +295,18 @@ mod tests {
     #[test]
     fn regroup_and_renumber() {
         let rs = RuleSet::compile(&[
-            Rule::new(Field::Name, Match::Contains, "bbc", Action::SetGroup("UK".into())),
-            Rule::new(Field::Name, Match::Equals, "BBC One", Action::SetNumber(101)),
+            Rule::new(
+                Field::Name,
+                Match::Contains,
+                "bbc",
+                Action::SetGroup("UK".into()),
+            ),
+            Rule::new(
+                Field::Name,
+                Match::Equals,
+                "BBC One",
+                Action::SetNumber(101),
+            ),
         ])
         .unwrap();
         let mut e = entry("BBC One", Some("Misc"));

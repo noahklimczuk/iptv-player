@@ -129,8 +129,7 @@ pub fn grid_slice(
     if epg_channel_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(epg_channel_ids.len())
+    let placeholders = std::iter::repeat_n("?", epg_channel_ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
@@ -177,7 +176,10 @@ pub fn now_next(
 
 /// README §4.4: prune old programmes on a schedule so the DB does not grow unbounded.
 pub fn prune_before(conn: &Connection, cutoff: i64) -> Result<usize> {
-    Ok(conn.execute("DELETE FROM epg_programmes WHERE stop < ?1", params![cutoff])? )
+    Ok(conn.execute(
+        "DELETE FROM epg_programmes WHERE stop < ?1",
+        params![cutoff],
+    )?)
 }
 
 /// Remove everything for a set of channels before reimporting them, so a refresh does not
@@ -343,7 +345,7 @@ mod tests {
             display_names: vec!["Channel A".into()],
             icon: Some("https://example.com/a.png".into()),
         };
-        upsert_channels(&mut conn, &[c.clone()]).unwrap();
+        upsert_channels(&mut conn, std::slice::from_ref(&c)).unwrap();
         upsert_channels(&mut conn, &[c]).unwrap();
         let n: i64 = conn
             .query_row("SELECT count(*) FROM epg_channels", [], |r| r.get(0))

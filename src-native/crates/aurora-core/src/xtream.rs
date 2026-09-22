@@ -27,7 +27,9 @@ fn lenient_f32<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<f3
     })
 }
 
-fn lenient_string<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+fn lenient_string<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<String>, D::Error> {
     Ok(match serde_json::Value::deserialize(d)? {
         serde_json::Value::String(s) if !s.trim().is_empty() => Some(s),
         serde_json::Value::Number(n) => Some(n.to_string()),
@@ -43,9 +45,7 @@ where
 {
     let v = serde_json::Value::deserialize(d)?;
     match v {
-        serde_json::Value::Array(_) => {
-            Ok(serde_json::from_value(v).unwrap_or_default())
-        }
+        serde_json::Value::Array(_) => Ok(serde_json::from_value(v).unwrap_or_default()),
         _ => Ok(Vec::new()),
     }
 }
@@ -215,12 +215,13 @@ pub fn parse_json<T: serde::de::DeserializeOwned>(body: &str) -> Result<T> {
     let trimmed = body.trim_start();
     if trimmed.starts_with('<') {
         return Err(CoreError::Provider(
-            "provider returned HTML instead of JSON (bad credentials, or the panel is down)"
-                .into(),
+            "provider returned HTML instead of JSON (bad credentials, or the panel is down)".into(),
         ));
     }
     if trimmed.is_empty() {
-        return Err(CoreError::Provider("provider returned an empty body".into()));
+        return Err(CoreError::Provider(
+            "provider returned an empty body".into(),
+        ));
     }
     serde_json::from_str(trimmed).map_err(|e| CoreError::Provider(format!("invalid JSON: {e}")))
 }
@@ -333,7 +334,14 @@ mod tests {
             "https://example.com/live/u/p/12.ts"
         );
         assert_eq!(
-            stream_url("https://example.com", "u", "p", MediaKind::Movie, 3, Some("mkv")),
+            stream_url(
+                "https://example.com",
+                "u",
+                "p",
+                MediaKind::Movie,
+                3,
+                Some("mkv")
+            ),
             "https://example.com/movie/u/p/3.mkv"
         );
         assert_eq!(

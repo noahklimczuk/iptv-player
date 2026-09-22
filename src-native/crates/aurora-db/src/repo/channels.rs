@@ -102,8 +102,8 @@ ON CONFLICT (provider_id, provider_key) DO UPDATE SET
 /// Channels not seen in the latest refresh. README §4.6 keeps them visible with a badge
 /// rather than deleting them out from under the user's favorites.
 pub fn stale(conn: &Connection, provider_id: i64, before: i64) -> Result<Vec<i64>> {
-    let mut stmt = conn
-        .prepare("SELECT id FROM channels WHERE provider_id = ?1 AND last_seen_at < ?2")?;
+    let mut stmt =
+        conn.prepare("SELECT id FROM channels WHERE provider_id = ?1 AND last_seen_at < ?2")?;
     let rows = stmt
         .query_map(params![provider_id, before], |r| r.get(0))?
         .collect::<std::result::Result<Vec<i64>, _>>()?;
@@ -340,7 +340,13 @@ mod tests {
         let mut sport = entry("Sky Sports", Some(401));
         sport.group = Some("Sports".into());
         let news = entry("CNN", Some(202));
-        upsert_batch(&mut conn, p, &[("a".into(), &sport), ("b".into(), &news)], 0).unwrap();
+        upsert_batch(
+            &mut conn,
+            p,
+            &[("a".into(), &sport), ("b".into(), &news)],
+            0,
+        )
+        .unwrap();
 
         let rows = list(
             &conn,

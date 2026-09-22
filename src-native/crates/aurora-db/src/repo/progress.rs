@@ -68,8 +68,8 @@ pub fn save(
     duration_secs: i64,
     now: i64,
 ) -> Result<bool> {
-    let completed = duration_secs > 0
-        && (position_secs as f32 / duration_secs as f32) >= kind.complete_ratio();
+    let completed =
+        duration_secs > 0 && (position_secs as f32 / duration_secs as f32) >= kind.complete_ratio();
 
     conn.execute(
         r#"INSERT INTO watch_progress
@@ -226,15 +226,30 @@ mod tests {
     fn completion_is_sticky_but_restarting_clears_it() {
         let conn = db();
         save(&conn, 1, ItemKind::Movie, 1, 9500, 10_000, 0).unwrap();
-        assert!(get(&conn, 1, ItemKind::Movie, 1).unwrap().unwrap().completed);
+        assert!(
+            get(&conn, 1, ItemKind::Movie, 1)
+                .unwrap()
+                .unwrap()
+                .completed
+        );
 
         // Scrubbing back mid-film should not un-complete it.
         save(&conn, 1, ItemKind::Movie, 1, 5000, 10_000, 1).unwrap();
-        assert!(get(&conn, 1, ItemKind::Movie, 1).unwrap().unwrap().completed);
+        assert!(
+            get(&conn, 1, ItemKind::Movie, 1)
+                .unwrap()
+                .unwrap()
+                .completed
+        );
 
         // Starting over from the top should.
         save(&conn, 1, ItemKind::Movie, 1, 10, 10_000, 2).unwrap();
-        assert!(!get(&conn, 1, ItemKind::Movie, 1).unwrap().unwrap().completed);
+        assert!(
+            !get(&conn, 1, ItemKind::Movie, 1)
+                .unwrap()
+                .unwrap()
+                .completed
+        );
     }
 
     #[test]
@@ -262,8 +277,11 @@ mod tests {
     #[test]
     fn progress_is_per_profile() {
         let conn = db();
-        conn.execute("INSERT INTO profiles (id,name,created_at) VALUES (2,'Kid',0)", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO profiles (id,name,created_at) VALUES (2,'Kid',0)",
+            [],
+        )
+        .unwrap();
         save(&conn, 1, ItemKind::Movie, 1, 3000, 10_000, 0).unwrap();
         assert!(get(&conn, 2, ItemKind::Movie, 1).unwrap().is_none());
     }
@@ -302,9 +320,19 @@ mod tests {
     fn mark_unwatched_reopens_an_episode() {
         let conn = db();
         mark_watched(&conn, 1, ItemKind::Episode, 5, true, 0).unwrap();
-        assert!(get(&conn, 1, ItemKind::Episode, 5).unwrap().unwrap().completed);
+        assert!(
+            get(&conn, 1, ItemKind::Episode, 5)
+                .unwrap()
+                .unwrap()
+                .completed
+        );
         mark_watched(&conn, 1, ItemKind::Episode, 5, false, 1).unwrap();
-        assert!(!get(&conn, 1, ItemKind::Episode, 5).unwrap().unwrap().completed);
+        assert!(
+            !get(&conn, 1, ItemKind::Episode, 5)
+                .unwrap()
+                .unwrap()
+                .completed
+        );
     }
 
     #[test]

@@ -83,7 +83,11 @@ impl EpgIndex {
                 keys.push((k, c.id.clone()));
             }
         }
-        Self { by_id, by_key, keys }
+        Self {
+            by_id,
+            by_key,
+            keys,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -253,7 +257,10 @@ mod tests {
     #[test]
     fn matches_any_display_name_alias() {
         assert_eq!(
-            index().resolve(None, "BBC 1 FHD", None).unwrap().epg_channel_id,
+            index()
+                .resolve(None, "BBC 1 FHD", None)
+                .unwrap()
+                .epg_channel_id,
             "bbcone.uk"
         );
     }
@@ -285,7 +292,9 @@ mod tests {
 
     #[test]
     fn unknown_channels_return_none() {
-        assert!(index().resolve(None, "Totally Unknown Network", None).is_none());
+        assert!(index()
+            .resolve(None, "Totally Unknown Network", None)
+            .is_none());
     }
 
     #[test]

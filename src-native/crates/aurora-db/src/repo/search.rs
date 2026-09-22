@@ -42,7 +42,11 @@ pub fn clear_kind(conn: &Connection, kind: &str) -> Result<usize> {
 fn to_fts_query(input: &str) -> Option<String> {
     let terms: Vec<String> = input
         .split_whitespace()
-        .map(|t| t.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+        })
         .filter(|t| !t.is_empty())
         .map(|t| format!("\"{t}\"*"))
         .collect();

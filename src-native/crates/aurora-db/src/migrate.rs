@@ -88,9 +88,22 @@ mod tests {
     fn all_expected_tables_exist() {
         let conn = crate::open_memory().unwrap();
         for table in [
-            "providers", "channels", "channel_sources", "epg_channels", "epg_programmes",
-            "movies", "series", "episodes", "profiles", "watch_progress", "favorites",
-            "my_list", "settings", "rules", "search_index", "epg_manual_map",
+            "providers",
+            "channels",
+            "channel_sources",
+            "epg_channels",
+            "epg_programmes",
+            "movies",
+            "series",
+            "episodes",
+            "profiles",
+            "watch_progress",
+            "favorites",
+            "my_list",
+            "settings",
+            "rules",
+            "search_index",
+            "epg_manual_map",
         ] {
             let n: i64 = conn
                 .query_row(
