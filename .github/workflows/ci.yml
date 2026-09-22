@@ -266,7 +266,20 @@ jobs:
           $path = Join-Path $env:RUNNER_TEMP 'bundle.conf.json'
           $cfg | Out-File $path -Encoding utf8
           Get-Content $path
-          pnpm exec tauri build --config $path
+
+          # Run from the directory holding tauri.conf.json so the CLI finds the app
+          # without guessing, and call the shim by its full path: `pnpm exec` resolves
+          # against the nearest package, and this directory is not one.
+          $bin = Join-Path $env:GITHUB_WORKSPACE 'node_modules\.bin'
+          $cli = Get-ChildItem $bin -Filter 'tauri*' |
+            Where-Object { $_.Extension -in '.CMD', '.cmd', '.exe' } |
+            Select-Object -First 1
+          if (-not $cli) {
+            Get-ChildItem $bin -Filter 'tauri*' | ForEach-Object { Write-Host $_.FullName }
+            throw "No runnable Tauri CLI shim in $bin."
+          }
+          & $cli.FullName build --config $path
+          if ($LASTEXITCODE -ne 0) { throw "tauri build failed with $LASTEXITCODE" }
 
       - name: Upload the installers
         uses: actions/upload-artifact@v4
