@@ -1,7 +1,7 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aurora_app::{commands, providers, services::Services};
+use aurora_app::{commands, profiles, providers, services::Services};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -60,6 +60,16 @@ fn main() {
             commands::player_set_aspect,
             commands::player_state,
             commands::progress_save,
+            profiles::profiles_list,
+            profiles::profiles_create,
+            profiles::profiles_delete,
+            profiles::profiles_rename,
+            profiles::profiles_set_limits,
+            profiles::profiles_set_pin,
+            profiles::profiles_verify_pin,
+            profiles::profiles_parental,
+            profiles::profiles_set_parental,
+            profiles::profiles_watched_today,
             providers::providers_detect,
             providers::providers_validate,
             providers::providers_save,

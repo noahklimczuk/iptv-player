@@ -249,6 +249,34 @@ export interface EpgCoverage {
   unmatched: string[];
 }
 
+/* ── Profiles and parental controls (README §11) ──────────────────────────── */
+
+export interface Profile {
+  id: number;
+  name: string;
+  avatar: string | null;
+  isKids: boolean;
+  /** Whether a PIN is required. The hash itself never crosses this boundary. */
+  hasPin: boolean;
+  /** Highest age rating this profile may watch, if limited. */
+  maxAge: number | null;
+  allowUnrated: boolean;
+  dailyLimitMin: number | null;
+}
+
+export interface ParentalSettings {
+  hasMasterPin: boolean;
+  hideAdult: boolean;
+  lockSettings: boolean;
+}
+
+export type PinOutcome =
+  | { ok: null }
+  | 'ok'
+  | 'notRequired'
+  | { wrong: { remaining: number } }
+  | { lockedOut: { until: number } };
+
 /* ── Provider setup (README §4, §13) ──────────────────────────────────────── */
 
 export type SourceKind = 'xtream' | 'm3u';
@@ -395,6 +423,32 @@ export interface Commands {
     id: number;
   }) => boolean;
   'favorites.toggle': (args: { profileId: number; channelId: number }) => boolean;
+
+  'profiles.list': () => Profile[];
+  'profiles.create': (args: {
+    name: string;
+    avatar?: string | null;
+    isKids: boolean;
+    maxAge?: number | null;
+    dailyLimitMin?: number | null;
+  }) => number;
+  'profiles.delete': (args: { profileId: number }) => boolean;
+  'profiles.rename': (args: { profileId: number; name: string }) => void;
+  'profiles.setLimits': (args: {
+    profileId: number;
+    maxAge: number | null;
+    allowUnrated: boolean;
+    dailyLimitMin: number | null;
+  }) => void;
+  'profiles.setPin': (args: { profileId: number; pin: string | null }) => void;
+  'profiles.verifyPin': (args: { profileId?: number; pin: string }) => PinOutcome;
+  'profiles.parental': () => ParentalSettings;
+  'profiles.setParental': (args: {
+    hideAdult: boolean;
+    lockSettings: boolean;
+    masterPin?: string | null;
+  }) => void;
+  'profiles.watchedToday': (args: { profileId: number }) => number;
 
   'providers.list': () => Provider[];
   'providers.detect': (args: { text: string }) => DetectedSource;

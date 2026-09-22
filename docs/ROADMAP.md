@@ -14,7 +14,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 6 — Movies | Rails, hero, hover preview, detail modal, browse | **Done** |
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
 | 8 — DVR | Recording, timeshift, catch-up | **Not started.** Catch-up is modelled in the schema and surfaced in the UI; nothing records. |
-| 9 — Personalization | Profiles, parental controls, search, palette | **Search + command palette done.** Profiles/PIN/parental controls: schema only. |
+| 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
 | 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
 | 11 — Hardening | Perf budgets, soak, diagnostics | **Not started.** No §16 budget is measured yet. |
@@ -32,7 +32,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | Skip markers: chapter parsing, learning, merge | 25 `aurora-core` + 13 `aurora-db` tests |
 | The Tauri host compiles and its URL resolution works | 4 `aurora-app` tests (Linux, with GTK dev packages) |
 | The mpv/Win32 backend compiles for Windows | `cargo check --target x86_64-pc-windows-msvc` |
-| Every screen renders and the journeys work | 26 Playwright runs against the production bundle |
+| Every screen renders and the journeys work | 32 Playwright runs against the production bundle |
 | Video actually decodes and composites | **Not verified anywhere yet** — Phase 0 |
 
 ## The Phase 0 caveat
@@ -60,6 +60,6 @@ were built first.
 2. **Point it at a real subscription.** Ingestion is built and tested against a local
    server, but has never met an actual provider — the fork-tolerance in
    `aurora_core::xtream` is written from the spec, not from observed traffic.
-3. **Profiles**, which most of §11 depends on — the per-show preferences already
-   written are keyed by profile, but everything currently runs as profile 1.
-4. **DVR** (Phase 8), the largest untouched block.
+3. **DVR** (Phase 8), the largest untouched block.
+4. **TMDB enrichment**, so the catalog shows real artwork instead of generated
+   gradients.

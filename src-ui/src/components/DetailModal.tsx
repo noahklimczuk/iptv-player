@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { CatalogItem, Episode, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
 import { getProgress, invoke } from '@/ipc';
+import { useProfile } from '@/state/profile';
 import { duration, progressPct, runtime } from '@/lib/format';
 import { Badge, Button, IconButton, ProgressBar, Skeleton } from './Primitives';
 import { Icon } from './Icon';
@@ -239,7 +240,12 @@ function Meta({ label, value }: { label: string; value: string }) {
  * is the scope they apply at.
  */
 function PlaybackPrefs({ seriesId }: { seriesId: number }) {
-  const { data } = useCommand('library.seriesPrefs', { profileId: 1, seriesId }, [seriesId]);
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  const { data } = useCommand(
+    'library.seriesPrefs',
+    { profileId, seriesId },
+    [seriesId, profileId],
+  );
   const [local, setLocal] = useState<SeriesPrefs | null>(null);
   const prefs = local ?? data;
 
@@ -250,7 +256,7 @@ function PlaybackPrefs({ seriesId }: { seriesId: number }) {
   const update = (patch: Partial<SeriesPrefs>) => {
     const next = { ...prefs, ...patch };
     setLocal(next);
-    void invoke('library.setSeriesPrefs', { profileId: 1, seriesId, prefs: next });
+    void invoke('library.setSeriesPrefs', { profileId, seriesId, prefs: next });
   };
 
   const toggles: [keyof SeriesPrefs, string][] = [

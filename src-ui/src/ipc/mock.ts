@@ -4,6 +4,7 @@
  */
 import type {
   CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
+  ParentalSettings, PinOutcome, Profile,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
   ValidationResult,
@@ -105,6 +106,19 @@ function followingEpisode(episodeId: number) {
       ) ?? null
   );
 }
+
+/** Profile state, mirroring aurora-db's defaults. */
+const mockProfiles: Profile[] = [
+  {
+    id: 1, name: 'Me', avatar: 'default', isKids: false, hasPin: false,
+    maxAge: null, allowUnrated: true, dailyLimitMin: null,
+  },
+];
+const mockPins = new Map<number, string | null>();
+let mockMasterPin: string | null = null;
+let mockParental: ParentalSettings = {
+  hasMasterPin: false, hideAdult: true, lockSettings: false,
+};
 
 let player: PlayerState = {
   status: 'idle',
@@ -479,6 +493,54 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     favorites.add(channelId);
     return true;
   },
+
+  /* ── Profiles (README §11) ────────────────────────────────────────────── */
+
+  'profiles.list': () => mockProfiles,
+  'profiles.create': ({ name, avatar, isKids, maxAge, dailyLimitMin }) => {
+    const id = Math.max(0, ...mockProfiles.map((p) => p.id)) + 1;
+    mockProfiles.push({
+      id, name, avatar: avatar ?? null, isKids, hasPin: false,
+      maxAge: maxAge ?? null,
+      // A kids profile blocks unrated content by default, as the host does.
+      allowUnrated: !isKids,
+      dailyLimitMin: dailyLimitMin ?? null,
+    });
+    return id;
+  },
+  'profiles.delete': ({ profileId }) => {
+    if (mockProfiles.length <= 1) return false;
+    const i = mockProfiles.findIndex((p) => p.id === profileId);
+    if (i < 0) return false;
+    mockProfiles.splice(i, 1);
+    return true;
+  },
+  'profiles.rename': ({ profileId, name }) => {
+    const p = mockProfiles.find((x) => x.id === profileId);
+    if (p) p.name = name;
+  },
+  'profiles.setLimits': ({ profileId, maxAge, allowUnrated, dailyLimitMin }) => {
+    const p = mockProfiles.find((x) => x.id === profileId);
+    if (p) Object.assign(p, { maxAge, allowUnrated, dailyLimitMin });
+  },
+  'profiles.setPin': ({ profileId, pin }) => {
+    const p = mockProfiles.find((x) => x.id === profileId);
+    if (p) { p.hasPin = pin !== null; mockPins.set(profileId, pin); }
+  },
+  'profiles.verifyPin': ({ profileId, pin }): PinOutcome => {
+    const stored = profileId == null ? mockMasterPin : mockPins.get(profileId) ?? null;
+    if (stored == null) return 'notRequired';
+    return stored === pin ? 'ok' : { wrong: { remaining: 4 } };
+  },
+  'profiles.parental': (): ParentalSettings => mockParental,
+  'profiles.setParental': ({ hideAdult, lockSettings, masterPin }) => {
+    mockParental = {
+      hideAdult, lockSettings,
+      hasMasterPin: masterPin !== undefined ? masterPin !== null : mockParental.hasMasterPin,
+    };
+    if (masterPin !== undefined) mockMasterPin = masterPin;
+  },
+  'profiles.watchedToday': () => 42,
 
   'providers.list': () => fx.providers,
 

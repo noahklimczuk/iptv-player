@@ -12,6 +12,7 @@ import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
 import { PlayerOverlay } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
+import { ProfilePicker } from '@/features/profiles/ProfilePicker';
 import { SetupWizard } from '@/features/setup/SetupWizard';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useCommand } from '@/hooks/useCommand';
@@ -19,6 +20,7 @@ import { useEpisodeAids } from '@/hooks/useEpisodeAids';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { invoke } from '@/ipc';
+import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
 
 const NAV: { to: string; icon: IconName; label: string }[] = [
@@ -48,6 +50,9 @@ export default function App() {
   const tune = zapper.tune;
 
   useEffect(() => bindPlayerState(), []);
+
+  const profile = useProfile();
+  useEffect(() => { void profile.load(); }, [profile.load]);
 
   const play = useCallback(async (item: CatalogItem, episodeId?: number) => {
     ui.openDetail(null);
@@ -121,6 +126,12 @@ export default function App() {
     return <SetupWizard onFinished={() => setSetupDone(true)} />;
   }
 
+  // "Who's watching?" comes after setup — there is no point choosing a profile for
+  // an empty library.
+  if (profile.picking || !profile.active) {
+    return <ProfilePicker />;
+  }
+
   return (
     <div style={{ display: 'flex', height: '100%', background: 'var(--bg)' }}>
       <nav
@@ -166,7 +177,12 @@ export default function App() {
       </nav>
 
       <main style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}>
-        <TopBar onSearch={() => ui.setPalette(true)} title={titleFor(location.pathname)} />
+        <TopBar
+          onSearch={() => ui.setPalette(true)}
+          title={titleFor(location.pathname)}
+          profileName={profile.active.name}
+          onSwitchProfile={() => profile.setPicking(true)}
+        />
         <Routes>
           <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
@@ -235,7 +251,14 @@ function titleFor(path: string): string {
   return hit?.label ?? 'Aurora TV';
 }
 
-function TopBar({ title, onSearch }: { title: string; onSearch: () => void }) {
+function TopBar({
+  title, onSearch, profileName, onSwitchProfile,
+}: {
+  title: string;
+  onSearch: () => void;
+  profileName: string;
+  onSwitchProfile: () => void;
+}) {
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const t = window.setInterval(() => setClock(new Date()), 15_000);
@@ -277,6 +300,18 @@ function TopBar({ title, onSearch }: { title: string; onSearch: () => void }) {
         >
           {String(clock.getHours()).padStart(2, '0')}:{String(clock.getMinutes()).padStart(2, '0')}
         </span>
+        <button
+          onClick={onSwitchProfile}
+          aria-label={`Switch profile (currently ${profileName})`}
+          title={`Switch profile (currently ${profileName})`}
+          style={{
+            width: 32, height: 32, borderRadius: 'var(--r-md)', cursor: 'pointer',
+            border: '1px solid var(--border)', background: 'var(--surface)',
+            color: 'var(--text)', fontWeight: 700, fontSize: 'var(--fs-sm)',
+          }}
+        >
+          {profileName.slice(0, 1).toUpperCase()}
+        </button>
       </div>
     </header>
   );
