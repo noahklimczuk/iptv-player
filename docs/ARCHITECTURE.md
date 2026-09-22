@@ -32,6 +32,7 @@ src-native/                      Cargo workspace
     recorder.rs                  Recorder trait + StreamRecorder (stream → .ts)
     tmdb.rs                      MetadataClient trait + TMDB client
     enrich.rs                    search → choose → write, in bounded batches
+    artwork.rs                   content-addressed image cache, LRU eviction
   crates/aurora-player/          playback abstraction
     backend.rs                   PlayerBackend trait + NullBackend (all platforms)
     mpv.rs                       #[cfg(windows)] libmpv + child HWND

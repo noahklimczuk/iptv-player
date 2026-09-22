@@ -102,3 +102,28 @@ test('the detail modal shows enriched cast and director', async ({ page }) => {
   await settle(page, 400);
   await page.screenshot({ path: `${SHOTS}/32-detail-credits.png` });
 });
+
+test('the artwork cache reports its size and can be filled and emptied', async ({ page }) => {
+  await openMetadata(page);
+
+  await expect(page.getByText('Artwork cache')).toBeVisible();
+  await expect(page.getByText(/\d+ images ·/)).toBeVisible();
+
+  const download = page.getByRole('button', { name: 'Download artwork' });
+  await download.click();
+  await expect(page.getByRole('status').last()).toContainText(/downloaded|already downloaded/, {
+    timeout: 20_000,
+  });
+
+  await settle(page, 300);
+  await page.screenshot({ path: `${SHOTS}/33-artwork-cache.png` });
+
+  // Clearing needs no confirmation: the library keeps the remote URLs, so the only
+  // cost is the next download.
+  const clear = page.getByRole('button', { name: 'Clear cache' });
+  await clear.click();
+  await expect(page.getByRole('status').last()).toContainText(/images removed|image removed/);
+  await expect(page.getByText('0 images · 0 MB')).toBeVisible();
+  // Nothing left to clear, so the button stands down.
+  await expect(clear).toBeDisabled();
+});

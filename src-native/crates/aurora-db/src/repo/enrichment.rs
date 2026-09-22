@@ -328,6 +328,27 @@ pub fn prune_people(conn: &Connection) -> Result<usize> {
     )?)
 }
 
+/// Every artwork URL the library references, for the disk cache to fetch.
+///
+/// Distinct, because the same backdrop can be shared by a film and its series entry, and
+/// downloading it twice costs a request for nothing.
+pub fn artwork_urls(conn: &Connection, limit: u32) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT url FROM (
+             SELECT poster   AS url FROM movies UNION
+             SELECT backdrop AS url FROM movies UNION
+             SELECT logo_art AS url FROM movies UNION
+             SELECT poster   AS url FROM series UNION
+             SELECT backdrop AS url FROM series UNION
+             SELECT logo_art AS url FROM series
+         )
+         WHERE url IS NOT NULL AND url <> ''
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// What enrichment recorded for a title, for the settings screen and for re-matching.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -758,6 +779,50 @@ mod tests {
         assert_eq!(s.state, State::Failed);
         assert_eq!(s.tmdb_id, None, "a stale id must not outlive its match");
         assert_eq!(s.confidence, None);
+    }
+
+    #[test]
+    fn artwork_urls_are_collected_once_each_across_both_tables() {
+        let mut conn = db();
+        let id = movie(&conn, "m1", "The Matrix", Some(1999));
+        save(
+            &mut conn,
+            ItemKind::Movie,
+            id,
+            &sample_metadata(),
+            &artwork(),
+            0.9,
+            100,
+        )
+        .unwrap();
+
+        // A series sharing one of the same images, plus one of its own.
+        conn.execute(
+            "INSERT INTO series (provider_id,provider_key,title,match_key,poster,backdrop,last_seen_at)
+             VALUES (1,'s1','Show','show','https://img/p.jpg','https://img/other.jpg',0)",
+            [],
+        )
+        .unwrap();
+
+        let mut urls = artwork_urls(&conn, 100).unwrap();
+        urls.sort();
+        assert_eq!(
+            urls,
+            vec![
+                "https://img/b.jpg".to_string(),
+                "https://img/l.png".to_string(),
+                "https://img/other.jpg".to_string(),
+                "https://img/p.jpg".to_string(),
+            ],
+            "the shared poster appears once, not twice"
+        );
+    }
+
+    #[test]
+    fn a_library_with_no_artwork_yields_no_urls() {
+        let conn = db();
+        movie(&conn, "m1", "Unenriched", None);
+        assert!(artwork_urls(&conn, 100).unwrap().is_empty());
     }
 
     #[test]

@@ -442,6 +442,22 @@ export interface MetadataReport {
   failed: number;
 }
 
+export interface ArtworkCacheStatus {
+  folder: string;
+  files: number;
+  usedBytes: number;
+  /** Eviction brings the cache back under this. */
+  maxBytes: number;
+}
+
+export interface ArtworkPrefetchReport {
+  downloaded: number;
+  /** Already on disk, so nothing was requested. */
+  cached: number;
+  failed: number;
+  evicted: number;
+}
+
 export interface CreditEntry {
   personId: number;
   name: string;
@@ -611,6 +627,12 @@ export interface Commands {
   /** Forget a title's match so the next pass looks again. */
   'metadata.rematch': (args: { kind: 'movie' | 'series'; id: number }) => void;
 
+  'artwork.status': () => ArtworkCacheStatus;
+  /** Download the library's artwork into the local cache, then evict to the budget. */
+  'artwork.prefetch': (args: { limit?: number }) => ArtworkPrefetchReport;
+  /** Empty the cache. Always safe — the library keeps the remote URLs. */
+  'artwork.clear': () => number;
+
   'providers.list': () => Provider[];
   'providers.detect': (args: { text: string }) => DetectedSource;
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
@@ -631,6 +653,7 @@ export interface Events {
   /** Enrichment progress, so a long metadata pass is never a frozen spinner. */
   'metadata.progress': { done: number; total: number };
   'metadata.done': MetadataReport;
+  'artwork.progress': { done: number; total: number };
   /** What one DVR tick changed, so the recordings page stays live (README §7.7). */
   'dvr.tick': {
     started: number[];

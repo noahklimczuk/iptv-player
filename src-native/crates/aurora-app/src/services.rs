@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use aurora_db::rusqlite::Connection;
+use aurora_ingest::artwork;
 use aurora_ingest::credentials::{default_store, CredentialStore};
 use aurora_ingest::http::{HttpClient, HttpConfig};
 use aurora_ingest::recorder::StreamRecorder;
@@ -20,6 +21,9 @@ pub struct Services {
     pub credentials: Arc<dyn CredentialStore>,
     /// The recording scheduler. Holds its own handle on `db`.
     pub dvr: Arc<crate::dvr::Dvr>,
+    /// Downloaded posters and backdrops. Deletable at any time — the library stores
+    /// remote URLs, so this is only an accelerator.
+    pub artwork: Arc<artwork::Cache>,
     pub data_dir: PathBuf,
 }
 
@@ -48,6 +52,7 @@ impl Services {
             max_connections(&db.lock()).unwrap_or(crate::dvr::DEFAULT_MAX_CONCURRENT);
 
         Ok(Self {
+            artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
             dvr: Arc::new(
                 crate::dvr::Dvr::new(Arc::clone(&db), Arc::new(StreamRecorder), folder)
                     .with_max_concurrent(max_concurrent),

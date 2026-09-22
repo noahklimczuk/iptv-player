@@ -11,7 +11,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Real decoding unverified. |
 | 4 — Live TV | Channel list, zap, banner, number entry, favorites | **Done** |
 | 5 — EPG | XMLTV ingest, matching, guide grid, info pane | **Done** |
-| 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, but enrichment is unverified against the real API.** TMDB matching, the client, credits storage and the settings panel are built and tested; nothing has run with a real key. Artwork is referenced by URL — there is no local image cache yet. |
+| 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, but unverified against the real API.** TMDB matching, the client, credits storage, the artwork disk cache and the settings panel are built and tested; nothing has run with a real key. The cache downloads, evicts and reports — but the UI still renders from remote URLs, because *serving* from it needs Tauri's asset protocol confirmed on hardware (same gate as Phase 0). |
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
 | 8 — DVR | Recording, timeshift, catch-up | **Recording done; timeshift not started.** Scheduling with padding, conflict detection against the connection limit, series rules, reminders, a quota, and a recordings library. The recorder writes MPEG-TS to disk and has never been pointed at a real provider. Timeshift (pause live TV) and catch-up playback are not built. |
 | 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
@@ -39,10 +39,12 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | Metadata matching declines rather than guessing | 15 `aurora-core` tests: sequels, remakes, ambiguous titles, foreign originals |
 | TMDB responses are parsed, including the ones missing half their fields | 16 `aurora-ingest` tests |
 | Enrichment records every outcome and never asks twice | 15 `aurora-db` + 11 `aurora-ingest` tests |
-| Every screen renders and the journeys work | 44 Playwright runs against the production bundle |
+| Artwork is cached, evicted and survives a crashed download | 21 `aurora-ingest` tests |
+| Every screen renders and the journeys work | 45 Playwright runs against the production bundle |
 | Video actually decodes and composites | **Not verified anywhere yet** — Phase 0 |
 | A recording survives a real provider's stream | **Not verified** — the recorder has only met the test server |
 | TMDB's real responses match what the client expects | **Not verified** — parsed from the documented shape, never called with a key |
+| The WebView can load a cached image | **Not verified** — `artwork::asset_url` builds the URL from Tauri's documented format, and nothing has run the app to confirm the asset protocol serves it |
 
 ## The Phase 0 caveat
 
@@ -74,7 +76,9 @@ were built first.
    still-growing file, which is a different problem from scheduling.
 4. **Catch-up playback.** The schema and the UI already carry a provider's catch-up
    window; nothing builds the URL to play from it yet.
-5. **An artwork disk cache.** Enrichment stores absolute TMDB image URLs, so every
-   poster is fetched from the network on each paint. Caching them locally is what
-   README §12 means by "no layout shift" on a cold start, and what makes the library
-   usable offline.
+5. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
+   points at remote URLs. Closing that needs `assetProtocol` enabled in
+   `tauri.conf.json`, scoped to the cache folder, and the swap done with a fallback to
+   the remote URL so a misconfigured protocol degrades to today's behaviour rather than
+   breaking every image. It is one config flag and one component change, but neither is
+   verifiable without running the app.

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use aurora_db::repo::enrichment::{self, Coverage, CreditRow, ItemKind};
+use aurora_ingest::artwork;
 use aurora_ingest::enrich::{self, Options, Report};
 use aurora_ingest::tmdb::{TmdbClient, CREDENTIAL_KEY};
 use serde::{Deserialize, Serialize};
@@ -145,6 +146,59 @@ pub fn metadata_rematch(services: State<'_, Services>, args: CreditsArgs) -> Res
     enrichment::forget(&db, kind, args.id)?;
     enrichment::prune_people(&db)?;
     Ok(())
+}
+
+/// What the artwork panel shows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtworkStatus {
+    pub folder: String,
+    pub files: usize,
+    pub used_bytes: u64,
+    pub max_bytes: u64,
+}
+
+#[tauri::command]
+pub fn artwork_status(services: State<'_, Services>) -> Result<ArtworkStatus> {
+    let cache = &services.artwork;
+    Ok(ArtworkStatus {
+        folder: cache.dir().to_string_lossy().into_owned(),
+        files: cache.len(),
+        used_bytes: cache.total_bytes(),
+        max_bytes: cache.max_bytes(),
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefetchArgs {
+    pub limit: Option<u32>,
+}
+
+/// Download the library's artwork, emitting `artwork.progress` as it goes.
+#[tauri::command]
+pub fn artwork_prefetch(
+    app: tauri::AppHandle,
+    services: State<'_, Services>,
+    args: PrefetchArgs,
+) -> Result<artwork::PrefetchReport> {
+    let db = services.db.lock();
+    let report = artwork::prefetch(
+        &db,
+        &services.http,
+        &services.artwork,
+        args.limit.unwrap_or(artwork::DEFAULT_PREFETCH_LIMIT),
+        |p| {
+            let _ = app.emit("artwork.progress", &p);
+        },
+    )?;
+    Ok(report)
+}
+
+/// Empty the cache. Always safe: the library keeps the remote URLs.
+#[tauri::command]
+pub fn artwork_clear(services: State<'_, Services>) -> Result<usize> {
+    Ok(services.artwork.clear())
 }
 
 fn now_unix() -> i64 {

@@ -33,6 +33,9 @@ quick-xml = "0.36"
 regex = "1"
 argon2 = "0.5"
 getrandom = "0.3"
+# Content-addressing for the artwork cache. Already in the tree via rustls, so this
+# costs nothing to build.
+sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }

@@ -9,6 +9,7 @@ import type {
 import {
   invokeMock,
   onDvrTick as onMockDvrTick,
+  onArtworkProgress as onMockArtworkProgress,
   onMetadataProgress as onMockMetadataProgress,
   onIngestProgress as onMockIngestProgress,
   onPlayerState as onMockPlayerState,
@@ -101,6 +102,26 @@ export function onMetadataProgress(fn: (p: Events['metadata.progress']) => void)
   };
   let dispose: (() => void) | undefined;
   void w.__TAURI__?.event?.listen('metadata.progress', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** Artwork download progress, for the cache panel in settings. */
+export function onArtworkProgress(fn: (p: Events['artwork.progress']) => void): () => void {
+  if (!isNativeHost()) return onMockArtworkProgress(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (
+          e: string,
+          cb: (p: { payload: Events['artwork.progress'] }) => void,
+        ) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('artwork.progress', (e) => fn(e.payload)).then((d) => {
     dispose = d;
   });
   return () => dispose?.();

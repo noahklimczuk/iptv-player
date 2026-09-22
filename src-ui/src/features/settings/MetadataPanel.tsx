@@ -9,7 +9,8 @@ import { useEffect, useState } from 'react';
 import type { EnrichmentCoverage } from '@shared/ipc';
 import { Badge, Button, ProgressBar } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
-import { invoke, onMetadataProgress } from '@/ipc';
+import { invoke, onArtworkProgress, onMetadataProgress } from '@/ipc';
+import { bytes } from '@/lib/format';
 
 export function MetadataPanel() {
   const [nonce, setNonce] = useState(0);
@@ -140,6 +141,110 @@ export function MetadataPanel() {
             {remaining} {remaining === 1 ? 'title' : 'titles'} to go.
           </span>
         )}
+      </div>
+
+      {progress && progress.total > 0 && (
+        <div>
+          <ProgressBar percent={(progress.done / progress.total) * 100} height={4} />
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', marginTop: 4 }}>
+            {progress.done} of {progress.total}
+          </div>
+        </div>
+      )}
+
+      {message && (
+        <div role="status" style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
+          {message}
+        </div>
+      )}
+      {error && (
+        <div role="alert" style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)' }}>
+          {error}
+        </div>
+      )}
+
+      <ArtworkCachePanel />
+    </div>
+  );
+}
+
+/**
+ * The local artwork cache.
+ *
+ * Enrichment stores the remote URL, so this is purely an accelerator: emptying it costs
+ * nothing but the next download, which is why Clear needs no confirmation.
+ */
+function ArtworkCachePanel() {
+  const [nonce, setNonce] = useState(0);
+  const { data: cache } = useCommand('artwork.status', undefined, [nonce]);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => onArtworkProgress(setProgress), []);
+
+  const act = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    setProgress(null);
+    try {
+      setMessage(await fn());
+      setNonce((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 'var(--sp-4)', display: 'grid', gap: 'var(--sp-3)' }}>
+      <div style={{ fontWeight: 650 }}>Artwork cache</div>
+      <p style={{ margin: 0, fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+        Posters and backdrops are downloaded once and kept on disk. The library stores the
+        original addresses, so clearing this only costs the next download.
+      </p>
+
+      {cache && (
+        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
+          {cache.files} {cache.files === 1 ? 'image' : 'images'} · {bytes(cache.usedBytes)}
+          {cache.maxBytes > 0 && <> of {bytes(cache.maxBytes)}</>}
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', marginTop: 2 }}>
+            {cache.folder}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 'var(--sp-2)', flexWrap: 'wrap' }}>
+        <Button
+          size="sm"
+          icon="stack"
+          disabled={busy}
+          onClick={() => void act(async () => {
+            const r = await invoke('artwork.prefetch', {});
+            if (r.downloaded === 0 && r.failed === 0) return 'Everything is already downloaded.';
+            const parts = [`${r.downloaded} downloaded`];
+            if (r.failed) parts.push(`${r.failed} unavailable`);
+            if (r.evicted) parts.push(`${r.evicted} evicted to stay under the limit`);
+            return parts.join(' · ');
+          })}
+        >
+          {busy ? 'Downloading…' : 'Download artwork'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy || !cache?.files}
+          onClick={() => void act(async () => {
+            const removed = await invoke('artwork.clear', undefined);
+            return `${removed} ${removed === 1 ? 'image' : 'images'} removed.`;
+          })}
+        >
+          Clear cache
+        </Button>
       </div>
 
       {progress && progress.total > 0 && (

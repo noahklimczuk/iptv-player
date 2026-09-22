@@ -4,7 +4,8 @@
  */
 import type {
   CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
-  CreditEntry, DvrStorage, MetadataReport, MetadataStatus, ParentalSettings, PinOutcome, Profile,
+  ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
+  MetadataReport, MetadataStatus, ParentalSettings, PinOutcome, Profile,
   Recording, RecordingConflict, RecordingRule, Reminder,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
@@ -637,6 +638,23 @@ export function onMetadataProgress(fn: (p: { done: number; total: number }) => v
   return () => metadataListeners.delete(fn);
 }
 
+
+/* ── Artwork cache ──────────────────────────────────────────────────────────
+   There is no disk in a browser, so this models the counts the panel shows and
+   nothing else. On the host the same commands drive a real content-addressed
+   store under the data directory. ─────────────────────────────────────────── */
+
+const ARTWORK_MAX_BYTES = 2 * 1024 ** 3;
+/** A plausible average across w342 posters and w1280 backdrops. */
+const ARTWORK_AVG_BYTES = 90 * 1024;
+let artworkFiles = Math.round((fx.movies.length + fx.series.length) * 1.4);
+
+const artworkListeners = new Set<(p: { done: number; total: number }) => void>();
+export function onArtworkProgress(fn: (p: { done: number; total: number }) => void) {
+  artworkListeners.add(fn);
+  return () => artworkListeners.delete(fn);
+}
+
 /* ── Command dispatch ──────────────────────────────────────────────────────── */
 
 type Handler<K extends CommandName> = (
@@ -1011,6 +1029,35 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'metadata.rematch': ({ kind, id }) => {
     enriched.delete(`${kind}:${id}`);
     mockCredits.delete(`${kind}:${id}`);
+  },
+
+  'artwork.status': (): ArtworkCacheStatus => ({
+    folder: 'C:\\Users\\You\\AppData\\Local\\Aurora TV\\artwork',
+    files: artworkFiles,
+    usedBytes: artworkFiles * ARTWORK_AVG_BYTES,
+    maxBytes: ARTWORK_MAX_BYTES,
+  }),
+
+  'artwork.prefetch': async ({ limit }): Promise<ArtworkPrefetchReport> => {
+    const wanted = Math.round((fx.movies.length + fx.series.length) * 2.6);
+    const missing = Math.max(0, Math.min(limit ?? 500, wanted - artworkFiles));
+    for (let i = 0; i < missing; i += 1) {
+      if (i % 10 === 0) {
+        for (const fn of artworkListeners) fn({ done: i, total: missing });
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    }
+    for (const fn of artworkListeners) fn({ done: missing, total: missing });
+    // One URL in twenty is dead, so the "not everything downloads" case is reachable.
+    const failed = Math.floor(missing / 20);
+    artworkFiles += missing - failed;
+    return { downloaded: missing - failed, cached: artworkFiles - missing, failed, evicted: 0 };
+  },
+
+  'artwork.clear': () => {
+    const removed = artworkFiles;
+    artworkFiles = 0;
+    return removed;
   },
 
   'providers.list': () => fx.providers,
