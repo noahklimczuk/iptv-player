@@ -265,18 +265,21 @@ pub struct PrefetchProgress {
     pub total: usize,
 }
 
-/// Download the library's artwork into the cache, then evict down to the budget.
+/// Download a list of images into the cache, then evict down to the budget.
+///
+/// Takes URLs rather than a database handle on purpose: a pass over five hundred images
+/// is minutes of network time, and a caller sharing its connection behind a lock must
+/// not hold that lock throughout — the DVR scheduler needs it to decide whether a
+/// recording is due.
 ///
 /// A failure never stops the pass: one dead poster URL among five hundred must not cost
 /// the other four hundred and ninety-nine.
-pub fn prefetch(
-    db: &aurora_db::rusqlite::Connection,
+pub fn prefetch_urls(
     http: &HttpClient,
     cache: &Cache,
-    limit: u32,
+    urls: &[String],
     mut on_progress: impl FnMut(PrefetchProgress),
-) -> aurora_db::Result<PrefetchReport> {
-    let urls = aurora_db::repo::enrichment::artwork_urls(db, limit)?;
+) -> PrefetchReport {
     let total = urls.len();
     let mut report = PrefetchReport::default();
 
@@ -301,7 +304,23 @@ pub fn prefetch(
 
     on_progress(PrefetchProgress { done: total, total });
     report.evicted = cache.evict();
-    Ok(report)
+    report
+}
+
+/// Read the library's artwork URLs and fetch them.
+///
+/// Convenience for a caller that owns its connection outright. A host sharing one
+/// behind a lock should read the URLs under the lock, release it, and call
+/// [`prefetch_urls`].
+pub fn prefetch(
+    db: &aurora_db::rusqlite::Connection,
+    http: &HttpClient,
+    cache: &Cache,
+    limit: u32,
+    on_progress: impl FnMut(PrefetchProgress),
+) -> aurora_db::Result<PrefetchReport> {
+    let urls = aurora_db::repo::enrichment::artwork_urls(db, limit)?;
+    Ok(prefetch_urls(http, cache, &urls, on_progress))
 }
 
 /// The URL a WebView can load a cached file from.

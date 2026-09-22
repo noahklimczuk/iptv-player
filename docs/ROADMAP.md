@@ -17,7 +17,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
 | 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
-| 11 — Hardening | Perf budgets, soak, diagnostics | **Not started.** No §16 budget is measured yet. |
+| 11 — Hardening | Perf budgets, soak, diagnostics | **Not started.** No §16 budget is measured yet. One known correctness issue is listed below. |
 | 12 — Release | Installers, signing, auto-update | **CI type-checks Windows; no installer is produced.** |
 
 ## What is actually verified
@@ -45,6 +45,23 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | A recording survives a real provider's stream | **Not verified** — the recorder has only met the test server |
 | TMDB's real responses match what the client expects | **Not verified** — parsed from the documented shape, never called with a key |
 | The WebView can load a cached image | **Not verified** — `artwork::asset_url` builds the URL from Tauri's documented format, and nothing has run the app to confirm the asset protocol serves it |
+
+## The known issue worth fixing before release
+
+`providers_refresh` holds the single writer connection across the whole of `sync::run`,
+which fetches the playlist and a potentially very large EPG over the network. Every other
+command blocks for the duration.
+
+That used to be a responsiveness problem and is now a correctness one, because the DVR
+scheduler takes the same lock every ten seconds to decide whether a recording is due. A
+recording that falls inside a long refresh does not start until the refresh finishes.
+
+`metadata::enrich_batch` shows the shape of the fix and has a test that fails if the lock
+is ever held across the network again: plan under the lock, fetch without it, write under
+it again. Applying the same to `sync::run` means splitting it into fetch and apply halves,
+which changes what partial state a failed import can leave behind — worth doing
+deliberately rather than in passing. The alternative is giving the DVR its own connection,
+which WAL supports but which is an architectural decision, not a patch.
 
 ## The Phase 0 caveat
 

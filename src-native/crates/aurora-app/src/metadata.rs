@@ -7,9 +7,11 @@
 use std::sync::Arc;
 
 use aurora_db::repo::enrichment::{self, Coverage, CreditRow, ItemKind};
+use aurora_db::rusqlite::Connection;
 use aurora_ingest::artwork;
 use aurora_ingest::enrich::{self, Options, Report};
-use aurora_ingest::tmdb::{TmdbClient, CREDENTIAL_KEY};
+use aurora_ingest::tmdb::{MetadataClient, TmdbClient, CREDENTIAL_KEY};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 
@@ -100,13 +102,49 @@ pub fn metadata_run(
         series: args.series.unwrap_or(true),
     };
 
-    let mut db = services.db.lock();
-    let report = enrich::run(&mut db, &client, &options, now_unix(), |p| {
+    enrich_batch(&services.db, &client, &options, now_unix(), |p| {
         // Best effort: a dropped progress event must never fail the pass.
         let _ = app.emit("metadata.progress", &p);
-    })?;
+    })
+    .inspect(|report| {
+        let _ = app.emit("metadata.done", report);
+    })
+}
 
-    let _ = app.emit("metadata.done", &report);
+/// Enrich one batch against a shared connection, holding the lock only to plan and to
+/// write.
+///
+/// Enrichment does one or two network round trips per title. Holding the single writer
+/// connection for the whole pass would stall every other command — including the DVR
+/// scheduler thread, which takes the same lock to decide whether a recording is due.
+/// Pressing "Fetch metadata" must not cost someone a recording.
+pub fn enrich_batch(
+    db: &Mutex<Connection>,
+    client: &dyn MetadataClient,
+    options: &Options,
+    now: i64,
+    mut on_progress: impl FnMut(enrich::Progress),
+) -> Result<Report> {
+    let work = {
+        let db = db.lock();
+        enrich::plan(&db, options, now)?
+    };
+
+    let total = work.len();
+    let mut report = Report::default();
+    for (done, item) in work.iter().enumerate() {
+        on_progress(enrich::Progress { done, total });
+
+        // No lock held across this.
+        let outcome = enrich::fetch_one(client, item);
+
+        {
+            let mut db = db.lock();
+            enrich::apply(&mut db, item, &outcome, now)?;
+        }
+        enrich::tally(&mut report, &outcome);
+    }
+    on_progress(enrich::Progress { done: total, total });
     Ok(report)
 }
 
@@ -182,17 +220,25 @@ pub fn artwork_prefetch(
     services: State<'_, Services>,
     args: PrefetchArgs,
 ) -> Result<artwork::PrefetchReport> {
-    let db = services.db.lock();
-    let report = artwork::prefetch(
-        &db,
+    // Read the list under the lock, then release it: downloading five hundred images is
+    // minutes of network time, and nothing else can touch the database while this
+    // connection is held.
+    let urls = {
+        let db = services.db.lock();
+        aurora_db::repo::enrichment::artwork_urls(
+            &db,
+            args.limit.unwrap_or(artwork::DEFAULT_PREFETCH_LIMIT),
+        )?
+    };
+
+    Ok(artwork::prefetch_urls(
         &services.http,
         &services.artwork,
-        args.limit.unwrap_or(artwork::DEFAULT_PREFETCH_LIMIT),
+        &urls,
         |p| {
             let _ = app.emit("artwork.progress", &p);
         },
-    )?;
-    Ok(report)
+    ))
 }
 
 /// Empty the cache. Always safe: the library keeps the remote URLs.
@@ -233,6 +279,124 @@ mod tests {
         // "there is no key" is the state the user asked for either way.
         let _ = store.delete(CREDENTIAL_KEY);
         assert!(store.get(CREDENTIAL_KEY).is_err());
+    }
+
+    /// Takes its time answering, like a real network call.
+    struct SlowClient {
+        delay: std::time::Duration,
+    }
+
+    impl MetadataClient for SlowClient {
+        fn search(
+            &self,
+            _kind: aurora_ingest::tmdb::Kind,
+            _title: &str,
+            _year: Option<i32>,
+        ) -> std::result::Result<Vec<aurora_core::tmdb::Candidate>, aurora_core::neterr::NetFailure>
+        {
+            std::thread::sleep(self.delay);
+            Ok(Vec::new())
+        }
+
+        fn details(
+            &self,
+            _kind: aurora_ingest::tmdb::Kind,
+            id: i64,
+        ) -> std::result::Result<aurora_core::tmdb::Metadata, aurora_core::neterr::NetFailure>
+        {
+            Ok(aurora_core::tmdb::Metadata {
+                tmdb_id: id,
+                ..Default::default()
+            })
+        }
+
+        fn image_url(
+            &self,
+            _path: Option<&str>,
+            _size: aurora_ingest::tmdb::ImageSize,
+        ) -> Option<String> {
+            None
+        }
+    }
+
+    fn seeded(movies: usize) -> Mutex<Connection> {
+        let conn = aurora_db::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for i in 0..movies {
+            conn.execute(
+                "INSERT INTO movies (provider_id,provider_key,title,match_key,url,last_seen_at)
+                 VALUES (1,?1,?2,?2,'https://example.com/m.mkv',0)",
+                aurora_db::rusqlite::params![format!("m{i}"), format!("Film {i}")],
+            )
+            .unwrap();
+        }
+        Mutex::new(conn)
+    }
+
+    /// The regression guard for the bug this structure exists to prevent.
+    ///
+    /// The DVR scheduler runs on its own thread and takes this same lock every ten
+    /// seconds to decide whether a recording is due. If enrichment held it across its
+    /// network calls, pressing "Fetch metadata" would stall the scheduler for the
+    /// length of the pass — and a recording due in that window would simply not start.
+    #[test]
+    fn enrichment_does_not_hold_the_database_lock_across_the_network() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let db = Arc::new(seeded(6));
+        let client = SlowClient {
+            delay: std::time::Duration::from_millis(40),
+        };
+
+        let acquired = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        // Stand in for the DVR thread: take the lock repeatedly while the pass runs.
+        let contender = std::thread::spawn({
+            let db = Arc::clone(&db);
+            let acquired = Arc::clone(&acquired);
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if let Some(guard) = db.try_lock_for(std::time::Duration::from_millis(5)) {
+                        drop(guard);
+                        acquired.fetch_add(1, Ordering::Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+        });
+
+        let report = enrich_batch(
+            &db,
+            &client,
+            &Options {
+                series: false,
+                ..Default::default()
+            },
+            1_000,
+            |_| {},
+        )
+        .unwrap();
+
+        stop.store(true, Ordering::Relaxed);
+        contender.join().unwrap();
+
+        assert_eq!(report.no_match, 6, "every title was looked up");
+        // Six titles at 40ms each is ~240ms of network. A contender polling every few
+        // milliseconds must have got in many times; if the lock were held for the pass
+        // it would have got in roughly never.
+        assert!(
+            acquired.load(Ordering::Relaxed) > 10,
+            "the lock was only free {} times during a ~240ms pass",
+            acquired.load(Ordering::Relaxed)
+        );
     }
 
     #[test]

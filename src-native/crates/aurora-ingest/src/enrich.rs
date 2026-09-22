@@ -69,14 +69,38 @@ fn kind_of(item: ItemKind) -> Kind {
     }
 }
 
-/// Enrich one batch. Returns what happened, so the caller can decide whether to go again.
-pub fn run(
-    db: &mut Connection,
-    client: &dyn MetadataClient,
-    options: &Options,
-    now: i64,
-    mut on_progress: impl FnMut(Progress),
-) -> aurora_db::Result<Report> {
+/// One title to look up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Work {
+    pub kind: ItemKind,
+    pub item: enrichment::Pending,
+}
+
+/// A successful lookup: everything to be written onto the title.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Matched {
+    pub meta: aurora_core::tmdb::Metadata,
+    pub artwork: Artwork,
+    pub confidence: f32,
+}
+
+/// What a lookup produced, before anything is written.
+///
+/// The match is boxed because it carries a whole `Metadata` while the other two
+/// variants carry nothing, and every `Outcome` in the pass would otherwise be sized for
+/// the largest.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    Matched(Box<Matched>),
+    /// Searched, nothing confident enough.
+    NoMatch,
+    /// The attempt failed; worth retrying after the cooldown.
+    Failed,
+}
+
+/// Which titles this pass would look up. Needs the database only for as long as this
+/// call takes.
+pub fn plan(db: &Connection, options: &Options, now: i64) -> aurora_db::Result<Vec<Work>> {
     let mut kinds = Vec::new();
     if options.movies {
         kinds.push(ItemKind::Movie);
@@ -89,54 +113,113 @@ pub fn run(
     let mut work = Vec::new();
     for kind in kinds {
         for item in enrichment::pending(db, kind, options.batch, retry_before)? {
-            work.push((kind, item));
+            work.push(Work { kind, item });
         }
     }
+    Ok(work)
+}
 
+/// Look one title up. Touches the network and nothing else — deliberately, so the
+/// caller can hold no database lock while this runs.
+///
+/// That separation is the point: enrichment does one or two network round trips per
+/// title, and holding the single writer connection across them would stall every other
+/// command, including the DVR scheduler deciding whether a recording is due.
+pub fn fetch_one(client: &dyn MetadataClient, work: &Work) -> Outcome {
+    let query = Query::new(&work.item.title, work.item.year);
+    let candidates = match client.search(kind_of(work.kind), &query.title, query.year) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!(
+                "metadata search failed for {:?}: {}",
+                work.item.title,
+                e.message
+            );
+            return Outcome::Failed;
+        }
+    };
+
+    let Some(best) = tmdb::pick_best(&query, &candidates) else {
+        // Declining is a real answer, and recording it is what stops the same question
+        // being asked on every refresh from now on.
+        return Outcome::NoMatch;
+    };
+    let (tmdb_id, confidence) = (best.candidate.id, best.score);
+
+    let meta = match client.details(kind_of(work.kind), tmdb_id) {
+        Ok(m) => m,
+        Err(e) => {
+            // Matched, but the details call failed. Not a no-match: the title is in the
+            // database, so this is worth retrying.
+            tracing::debug!("metadata details failed for {tmdb_id}: {}", e.message);
+            return Outcome::Failed;
+        }
+    };
+
+    let artwork = Artwork {
+        poster: client.image_url(meta.poster_path.as_deref(), ImageSize::Poster),
+        backdrop: client.image_url(meta.backdrop_path.as_deref(), ImageSize::Backdrop),
+        logo: client.image_url(meta.logo_path.as_deref(), ImageSize::Logo),
+    };
+    Outcome::Matched(Box::new(Matched {
+        meta,
+        artwork,
+        confidence,
+    }))
+}
+
+/// Write one outcome. Brief, so the lock is held per title rather than per pass.
+pub fn apply(
+    db: &mut Connection,
+    work: &Work,
+    outcome: &Outcome,
+    now: i64,
+) -> aurora_db::Result<()> {
+    match outcome {
+        Outcome::Matched(m) => enrichment::save(
+            db,
+            work.kind,
+            work.item.id,
+            &m.meta,
+            &m.artwork,
+            m.confidence,
+            now,
+        ),
+        Outcome::NoMatch => enrichment::mark(db, work.kind, work.item.id, State::NoMatch, now),
+        Outcome::Failed => enrichment::mark(db, work.kind, work.item.id, State::Failed, now),
+    }
+}
+
+/// Count one outcome into a report.
+pub fn tally(report: &mut Report, outcome: &Outcome) {
+    match outcome {
+        Outcome::Matched(_) => report.matched += 1,
+        Outcome::NoMatch => report.no_match += 1,
+        Outcome::Failed => report.failed += 1,
+    }
+}
+
+/// Enrich one batch against a connection the caller owns outright.
+///
+/// Convenience for tests and for any caller that is not sharing its connection. A host
+/// that holds one behind a lock should drive [`plan`], [`fetch_one`] and [`apply`]
+/// itself so the lock is never held across the network.
+pub fn run(
+    db: &mut Connection,
+    client: &dyn MetadataClient,
+    options: &Options,
+    now: i64,
+    mut on_progress: impl FnMut(Progress),
+) -> aurora_db::Result<Report> {
+    let work = plan(db, options, now)?;
     let total = work.len();
     let mut report = Report::default();
-    for (done, (kind, item)) in work.into_iter().enumerate() {
+
+    for (done, item) in work.iter().enumerate() {
         on_progress(Progress { done, total });
-
-        let query = Query::new(&item.title, item.year);
-        let candidates = match client.search(kind_of(kind), &query.title, query.year) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::debug!("metadata search failed for {:?}: {}", item.title, e.message);
-                enrichment::mark(db, kind, item.id, State::Failed, now)?;
-                report.failed += 1;
-                continue;
-            }
-        };
-
-        let Some(best) = tmdb::pick_best(&query, &candidates) else {
-            // Declining is a real answer, and recording it is what stops the same
-            // question being asked on every refresh from now on.
-            enrichment::mark(db, kind, item.id, State::NoMatch, now)?;
-            report.no_match += 1;
-            continue;
-        };
-        let (tmdb_id, confidence) = (best.candidate.id, best.score);
-
-        let meta = match client.details(kind_of(kind), tmdb_id) {
-            Ok(m) => m,
-            Err(e) => {
-                // Matched, but the details call failed. Not a no-match: the title is in
-                // the database, so this is worth retrying after the cooldown.
-                tracing::debug!("metadata details failed for {tmdb_id}: {}", e.message);
-                enrichment::mark(db, kind, item.id, State::Failed, now)?;
-                report.failed += 1;
-                continue;
-            }
-        };
-
-        let artwork = Artwork {
-            poster: client.image_url(meta.poster_path.as_deref(), ImageSize::Poster),
-            backdrop: client.image_url(meta.backdrop_path.as_deref(), ImageSize::Backdrop),
-            logo: client.image_url(meta.logo_path.as_deref(), ImageSize::Logo),
-        };
-        enrichment::save(db, kind, item.id, &meta, &artwork, confidence, now)?;
-        report.matched += 1;
+        let outcome = fetch_one(client, item);
+        apply(db, item, &outcome, now)?;
+        tally(&mut report, &outcome);
     }
 
     on_progress(Progress { done: total, total });

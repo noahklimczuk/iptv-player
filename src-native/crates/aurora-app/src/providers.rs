@@ -240,6 +240,17 @@ pub fn providers_refresh(
 
     let rules = load_rules(&services)?;
 
+    // KNOWN ISSUE: this holds the single writer connection across `sync::run`, which
+    // fetches the playlist and a potentially very large EPG over the network. Every
+    // other command blocks for the duration — including the DVR scheduler thread, which
+    // takes this lock to decide whether a recording is due, so a recording that falls
+    // inside a long refresh does not start until the refresh ends.
+    //
+    // `metadata::enrich_batch` shows the shape of the fix: plan under the lock, fetch
+    // without it, write under it again. Doing the same here means splitting `sync::run`
+    // into fetch and apply halves, which changes what partial state a failed import can
+    // leave behind — a bigger call than it looks, so it is tracked in docs/ROADMAP.md
+    // rather than made here.
     let mut db = services.db.lock();
     let report = sync::run(&mut db, &services.http, &options, &rules, |p: Progress| {
         // Best-effort: a dropped progress event must never fail an import.
