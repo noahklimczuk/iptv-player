@@ -33,6 +33,20 @@ jobs:
         with:
           workspaces: src-native
 
+      # Before anything cargo, deliberately. In production mode
+      # `tauri::generate_context!` embeds the frontend at compile time and panics if
+      # `frontendDist` is missing, so aurora-app does not compile without a built UI.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build UI
+        run: pnpm exec vite build
+
       - name: Rust formatting
         working-directory: src-native
         run: cargo fmt --all --check
@@ -45,19 +59,8 @@ jobs:
         working-directory: src-native
         run: cargo test --workspace
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm exec tsc -p tsconfig.json --noEmit
-      - name: Build UI
-        run: pnpm exec vite build
 
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium

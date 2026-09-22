@@ -10,6 +10,18 @@
 | `aurora-app` (Tauri host) | ✅ with GTK dev packages (below) | ✅ |
 | `src-ui` (React) | ✅ | ✅ |
 
+**Build the UI before you build `aurora-app`.** In production mode
+`tauri::generate_context!` embeds the frontend at compile time, so the macro panics —
+`The frontendDist configuration is set to "../../../dist" but this path doesn't exist`
+— if `dist/` is not there yet. On a fresh clone:
+
+```
+pnpm install && pnpm exec vite build
+```
+
+The portable crates have no such requirement, which is why this only bites on a command
+that reaches `aurora-app`.
+
 A bare `cargo test` in `src-native/` runs the three portable crates
 (`default-members` in `Cargo.toml`), so the suite runs on a host with no GTK. Install
 the packages below and `cargo test --workspace` additionally builds and tests the Tauri
