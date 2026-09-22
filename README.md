@@ -12,12 +12,13 @@ This repository holds two things:
 
 | | |
 |---|---|
-| Core domain logic (parsers, matching, rules) | ✅ built, 82 tests |
-| Persistence (SQLite, migrations, FTS5 search) | ✅ built, 49 tests |
-| Playback state machine + error taxonomy | ✅ built, 18 tests |
+| Core domain logic (parsers, matching, rules, skip markers) | ✅ built, 105 tests |
+| Persistence (SQLite, migrations, FTS5 search) | ✅ built, 64 tests |
+| Playback state machine + error taxonomy | ✅ built, 19 tests |
 | libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings) | ✅ built, 12 E2E journeys |
-| Tauri host | ⚠️ written, compiles only on the Windows CI runner |
+| React UI (home, guide, live, browse, player, search, settings) | ✅ built, 17 E2E journeys |
+| Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
+| Tauri host | ✅ compiles and tests on Linux with GTK dev packages |
 | Provider HTTP client, DVR, profiles | ❌ not started |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified

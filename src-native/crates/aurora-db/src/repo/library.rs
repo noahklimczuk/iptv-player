@@ -1,6 +1,6 @@
 //! Movies, series, and episodes.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -284,6 +284,54 @@ pub fn episodes_for(
     Ok(rows)
 }
 
+/// The episode after this one, crossing a season boundary when needed.
+///
+/// This is deliberately *not* `progress::next_episode`, which finds the next
+/// **unwatched** episode for a Continue Watching rail. The Next Episode button has to
+/// go to the literal next one even if the viewer has seen it.
+pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<EpisodeRow>> {
+    let Some((series_id, season, episode)) = conn
+        .query_row(
+            "SELECT series_id, season, episode FROM episodes WHERE id = ?1",
+            params![episode_id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+
+    Ok(conn
+        .query_row(
+            "SELECT id, season, episode, title, overview, still, runtime_mins, url
+             FROM episodes
+             WHERE series_id = ?1
+               AND (season > ?2 OR (season = ?2 AND episode > ?3))
+             ORDER BY season, episode
+             LIMIT 1",
+            params![series_id, season, episode],
+            |r| {
+                Ok(EpisodeRow {
+                    id: r.get(0)?,
+                    season: r.get::<_, i64>(1)? as u16,
+                    episode: r.get::<_, i64>(2)? as u16,
+                    title: r.get(3)?,
+                    overview: r.get(4)?,
+                    still: r.get(5)?,
+                    runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    url: r.get(7)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +517,106 @@ mod tests {
             Some("T"),
             "title should not be nulled"
         );
+    }
+
+    #[test]
+    fn following_episode_walks_the_season_then_crosses_into_the_next() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let sid = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s",
+                title: "Show",
+                match_key: "show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[
+                NewEpisode {
+                    season: 1,
+                    episode: 1,
+                    url: "a".into(),
+                    ..Default::default()
+                },
+                NewEpisode {
+                    season: 1,
+                    episode: 2,
+                    url: "b".into(),
+                    ..Default::default()
+                },
+                NewEpisode {
+                    season: 2,
+                    episode: 1,
+                    url: "c".into(),
+                    ..Default::default()
+                },
+            ],
+            0,
+        )
+        .unwrap();
+
+        let eps = episodes_for(&conn, sid, None).unwrap();
+        let next = following_episode(&conn, eps[0].id).unwrap().unwrap();
+        assert_eq!((next.season, next.episode), (1, 2));
+
+        // Crosses the season boundary.
+        let across = following_episode(&conn, eps[1].id).unwrap().unwrap();
+        assert_eq!((across.season, across.episode), (2, 1));
+
+        // The last episode has no successor.
+        assert!(following_episode(&conn, eps[2].id).unwrap().is_none());
+    }
+
+    #[test]
+    fn following_episode_handles_gaps_and_unknown_ids() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let sid = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s",
+                title: "Show",
+                match_key: "show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        // A provider that is missing episode 2 entirely.
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[
+                NewEpisode {
+                    season: 1,
+                    episode: 1,
+                    url: "a".into(),
+                    ..Default::default()
+                },
+                NewEpisode {
+                    season: 1,
+                    episode: 5,
+                    url: "b".into(),
+                    ..Default::default()
+                },
+            ],
+            0,
+        )
+        .unwrap();
+
+        let eps = episodes_for(&conn, sid, None).unwrap();
+        let next = following_episode(&conn, eps[0].id).unwrap().unwrap();
+        assert_eq!(next.episode, 5, "should skip the gap, not stop at it");
+
+        assert!(following_episode(&conn, 99_999).unwrap().is_none());
     }
 
     #[test]

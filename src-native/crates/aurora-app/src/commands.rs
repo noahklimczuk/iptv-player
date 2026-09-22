@@ -1,7 +1,8 @@
 //! The typed IPC surface. Mirrors `shared/ipc.ts`; the names here are what the UI's
 //! `invoke()` maps onto (dots become underscores).
 
-use aurora_db::repo::{channels, epg, library, progress, search};
+use aurora_core::markers::{MarkerKind, MarkerSource, SkipMarker};
+use aurora_db::repo::{channels, epg, library, markers, progress, search};
 use aurora_player::{Aspect, PlayerState};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -367,6 +368,128 @@ pub fn progress_save(services: State<'_, Services>, args: SaveProgressArgs) -> R
         args.duration_secs,
         now_unix(),
     )?)
+}
+
+/* ── Skip markers & next episode (README §9) ──────────────────────────────── */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodeIdArgs {
+    pub episode_id: i64,
+}
+
+/// The markers the Skip button should offer, plus when the Up Next card is due.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodePlaybackAids {
+    pub markers: Vec<SkipMarker>,
+    pub up_next_at_secs: Option<f64>,
+    pub next_episode: Option<library::EpisodeRow>,
+    pub prefs: markers::SeriesPrefs,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AidsArgs {
+    pub profile_id: i64,
+    pub episode_id: i64,
+    /// Runtime of the loaded file, which the UI knows from player state.
+    pub duration_secs: f64,
+}
+
+#[tauri::command]
+pub fn library_playback_aids(
+    services: State<'_, Services>,
+    args: AidsArgs,
+) -> Result<EpisodePlaybackAids> {
+    let db = services.db.lock();
+
+    let resolved = markers::resolve(&db, args.episode_id, markers::DEFAULT_MIN_SAMPLES)?;
+    let prefs = match markers::series_id_of(&db, args.episode_id)? {
+        Some(series_id) => markers::prefs(&db, args.profile_id, series_id)?,
+        None => markers::SeriesPrefs::default(),
+    };
+
+    Ok(EpisodePlaybackAids {
+        up_next_at_secs: aurora_core::markers::up_next_at(
+            &resolved,
+            args.duration_secs,
+            UP_NEXT_TAIL_SECS,
+        ),
+        markers: resolved,
+        next_episode: library::following_episode(&db, args.episode_id)?,
+        prefs,
+    })
+}
+
+/// How long before the end the Up Next card appears when there is no credits marker.
+const UP_NEXT_TAIL_SECS: f64 = 45.0;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordSkipArgs {
+    pub episode_id: i64,
+    pub kind: String,
+    pub start_secs: f64,
+    pub end_secs: f64,
+}
+
+/// Remember that the viewer skipped a region, so later episodes of the show can offer
+/// the button without being asked.
+#[tauri::command]
+pub fn library_record_skip(services: State<'_, Services>, args: RecordSkipArgs) -> Result<()> {
+    let Some(kind) = MarkerKind::parse(&args.kind) else {
+        return Err(crate::AppError::Other(format!(
+            "unknown marker kind {:?}",
+            args.kind
+        )));
+    };
+    let marker = SkipMarker::new(kind, args.start_secs, args.end_secs, MarkerSource::User);
+    if !marker.is_plausible() {
+        // An accidental one-second drag must not teach the series anything.
+        return Ok(());
+    }
+    let db = services.db.lock();
+    markers::record(&db, args.episode_id, &marker, now_unix())?;
+    Ok(())
+}
+
+/// Store the chapter-derived markers for the file the player just loaded.
+#[tauri::command]
+pub fn library_sync_chapters(services: State<'_, Services>, args: AidsArgs) -> Result<usize> {
+    let chapters = services.player.lock().chapters();
+    let derived = aurora_core::markers::from_chapters(&chapters, args.duration_secs);
+    let mut db = services.db.lock();
+    Ok(markers::set_chapter_markers(
+        &mut db,
+        args.episode_id,
+        &derived,
+        now_unix(),
+    )?)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSeriesPrefsArgs {
+    pub profile_id: i64,
+    pub series_id: i64,
+    pub prefs: markers::SeriesPrefs,
+}
+
+#[tauri::command]
+pub fn library_set_series_prefs(
+    services: State<'_, Services>,
+    args: SetSeriesPrefsArgs,
+) -> Result<()> {
+    let db = services.db.lock();
+    markers::set_prefs(
+        &db,
+        args.profile_id,
+        args.series_id,
+        &args.prefs,
+        now_unix(),
+    )?;
+    Ok(())
 }
 
 fn now_unix() -> i64 {

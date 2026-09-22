@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use aurora_core::markers::Chapter;
+
 use crate::error::PlayerError;
 use crate::state::{Aspect, PlayerState, PlayerStatus};
 
@@ -69,6 +71,9 @@ pub trait PlayerBackend: Send {
     fn set_subtitle_track(&mut self, track_id: Option<i64>) -> Result<(), PlayerError>;
     fn set_aspect(&mut self, aspect: Aspect) -> Result<(), PlayerError>;
     fn state(&self) -> PlayerState;
+    /// Chapters in the loaded file, if it has any. Empty is normal — most IPTV VOD
+    /// carries none, which is why skip markers also learn from the viewer (README §9).
+    fn chapters(&self) -> Vec<Chapter>;
     /// Re-attach the video surface after the window is resized or moved.
     fn resize(&mut self, width: u32, height: u32) -> Result<(), PlayerError>;
 }
@@ -78,6 +83,15 @@ pub trait PlayerBackend: Send {
 #[derive(Debug, Default)]
 pub struct NullBackend {
     state: PlayerState,
+    chapters: Vec<Chapter>,
+}
+
+impl NullBackend {
+    /// Stand in for a file's chapter list, so marker handling can be exercised
+    /// without a decoder.
+    pub fn set_chapters(&mut self, chapters: Vec<Chapter>) {
+        self.chapters = chapters;
+    }
 }
 
 impl PlayerBackend for NullBackend {
@@ -85,6 +99,7 @@ impl PlayerBackend for NullBackend {
         if url.trim().is_empty() {
             return Err(PlayerError::Command("empty URL".into()));
         }
+        self.chapters.clear();
         self.state = PlayerState {
             status: PlayerStatus::Playing,
             title: options.title.clone(),
@@ -170,6 +185,10 @@ impl PlayerBackend for NullBackend {
 
     fn state(&self) -> PlayerState {
         self.state.clone()
+    }
+
+    fn chapters(&self) -> Vec<Chapter> {
+        self.chapters.clone()
     }
 
     fn resize(&mut self, _width: u32, _height: u32) -> Result<(), PlayerError> {
@@ -282,6 +301,25 @@ mod tests {
         b.stop().unwrap();
         assert_eq!(b.state().status, PlayerStatus::Idle);
         assert_eq!(b.state().volume, 200, "volume survives a stop");
+    }
+
+    #[test]
+    fn chapters_are_reported_and_cleared_on_the_next_load() {
+        let mut b = NullBackend::default();
+        assert!(b.chapters().is_empty());
+
+        b.load("https://example.com/e1.mkv", &LoadOptions::default())
+            .unwrap();
+        b.set_chapters(vec![Chapter {
+            title: Some("Intro".into()),
+            start_secs: 0.0,
+        }]);
+        assert_eq!(b.chapters().len(), 1);
+
+        // A new file must not inherit the previous one's chapters.
+        b.load("https://example.com/e2.mkv", &LoadOptions::default())
+            .unwrap();
+        assert!(b.chapters().is_empty());
     }
 
     #[test]

@@ -8,10 +8,13 @@ import { GuidePage } from '@/features/guide/GuidePage';
 import { HomePage } from '@/features/home/HomePage';
 import { LivePage } from '@/features/live/LivePage';
 import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
+import { SkipButton } from '@/features/player/SkipButton';
+import { UpNextCard } from '@/features/player/UpNextCard';
 import { PlayerOverlay } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useCommand } from '@/hooks/useCommand';
+import { useEpisodeAids } from '@/hooks/useEpisodeAids';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { invoke } from '@/ipc';
@@ -51,6 +54,13 @@ export default function App() {
     }
     setPlayerOpen(true);
   }, [ui]);
+
+  const playEpisode = useCallback(async (episodeId: number) => {
+    await invoke('player.play', { kind: 'episode', id: episodeId });
+    setPlayerOpen(true);
+  }, []);
+
+  const episode = useEpisodeAids(ui.player, (id) => void playEpisode(id));
 
   const onPick = useCallback((hit: SearchHit) => {
     if (hit.kind === 'channel') {
@@ -161,7 +171,38 @@ export default function App() {
           player={ui.player}
           onClose={() => setPlayerOpen(false)}
           onGuide={() => { setPlayerOpen(false); navigate('/guide'); }}
+          nextEpisode={episode.aids?.nextEpisode ?? null}
+          onPlayNext={episode.aids?.nextEpisode ? episode.playNext : undefined}
         />
+      )}
+
+      {playerOpen && (
+        /* One stack above the transport bar. Skip Credits and Up Next can both be
+           live during the credits, so they queue rather than overlap. */
+        <div
+          style={{
+            position: 'fixed', right: 'var(--sp-6)', bottom: 148, zIndex: 166,
+            display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
+            gap: 'var(--sp-3)', pointerEvents: 'none',
+          }}
+        >
+          <div style={{ pointerEvents: 'auto' }}>
+            <UpNextCard
+              episode={episode.aids?.nextEpisode ?? null}
+              visible={episode.upNextVisible}
+              autoplay={episode.aids?.prefs.autoplayNext ?? true}
+              onPlay={episode.playNext}
+              onCancel={episode.dismissUpNext}
+            />
+          </div>
+          <div style={{ pointerEvents: 'auto' }}>
+            <SkipButton
+              marker={episode.activeMarker}
+              autoSkip={episode.autoSkip}
+              onSkip={episode.skip}
+            />
+          </div>
+        </div>
       )}
 
       <ChannelBanner channel={bannerChannel} liftForOsd={playerOpen} />

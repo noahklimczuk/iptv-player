@@ -6,7 +6,7 @@
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PlayerState } from '@shared/ipc';
+import type { Episode, PlayerState } from '@shared/ipc';
 import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { invoke } from '@/ipc';
@@ -15,11 +15,14 @@ import { clockTime, duration, progressPct } from '@/lib/format';
 const HIDE_AFTER_MS = 3200;
 
 export function PlayerOverlay({
-  player, onClose, onGuide,
+  player, onClose, onGuide, nextEpisode, onPlayNext,
 }: {
   player: PlayerState;
   onClose: () => void;
   onGuide: () => void;
+  /** The episode after this one, when a series is playing (README §9). */
+  nextEpisode?: Episode | null;
+  onPlayNext?: () => void;
 }) {
   const [visible, setVisible] = useState(true);
   const [showStats, setShowStats] = useState(false);
@@ -159,6 +162,13 @@ export function PlayerOverlay({
                       onClick={() => void invoke('player.seek', { positionSecs: 10, relative: true })}
                     />
                   </>
+                )}
+                {nextEpisode && onPlayNext && (
+                  <IconButton
+                    icon="skip"
+                    label={`Next episode: S${nextEpisode.season} E${nextEpisode.episode}`}
+                    onClick={onPlayNext}
+                  />
                 )}
                 <IconButton
                   icon={player.muted ? 'volumeOff' : 'volume'}

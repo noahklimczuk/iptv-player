@@ -3,8 +3,9 @@
  * Mirrors the real host's behaviour closely enough to develop and screenshot every screen.
  */
 import type {
-  CatalogItem, Channel, CommandArgs, CommandName, CommandResult, GuideSlice, Movie,
-  PlayerState, Programme, Progress, Rail, SearchHit, SearchResults, Series,
+  CatalogItem, Channel, CommandArgs, CommandName, CommandResult, GuideSlice,
+  MarkerKind, Movie, PlaybackAids, PlayerState, Programme, Progress, Rail, SearchHit,
+  SearchResults, Series, SeriesPrefs, SkipMarker,
 } from '@shared/ipc';
 import * as fx from './fixtures';
 
@@ -26,6 +27,82 @@ for (const p of fx.seedProgress) {
     completed: false,
     updatedAt: Math.floor(Date.now() / 1000) - fx.seedProgress.indexOf(p) * 7200,
   });
+}
+
+/**
+ * Skip-marker state, mirroring aurora-core::markers and aurora-db::repo::markers so
+ * the browser build behaves the same as the Windows one.
+ */
+const MIN_SAMPLES = 2;
+const UP_NEXT_TAIL_SECS = 45;
+
+/** Chapter-derived markers, keyed by episode id. */
+const chapterMarkers = new Map<number, SkipMarker[]>();
+/** The viewer's own skips, keyed by `seriesId:kind`. */
+const userSkips = new Map<string, [number, number][]>();
+const seriesPrefs = new Map<number, SeriesPrefs>();
+
+// Episodes of odd-numbered series ship with chapters; even-numbered ones have none,
+// so the "learn from the viewer" path is reachable in the demo too.
+for (const ep of fx.episodes) {
+  if (ep.seriesId % 2 !== 1) continue;
+  const runtime = (ep.runtimeMins ?? 45) * 60;
+  chapterMarkers.set(ep.id, [
+    { kind: 'intro', startSecs: 28, endSecs: 92, source: 'chapters' },
+    { kind: 'credits', startSecs: runtime - 50, endSecs: runtime, source: 'chapters' },
+  ]);
+}
+
+const median = (xs: number[]) => {
+  const v = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 === 0 ? (v[mid - 1]! + v[mid]!) / 2 : v[mid]!;
+};
+
+const plausible = (m: SkipMarker) =>
+  m.startSecs >= 0 && m.endSecs - m.startSecs >= 5 && m.endSecs - m.startSecs <= 300;
+
+function resolveMarkers(episodeId: number): SkipMarker[] {
+  const ep = fx.episodes.find((e) => e.id === episodeId);
+  const own = chapterMarkers.get(episodeId) ?? [];
+  const out = own.filter(plausible);
+  if (!ep) return out;
+
+  for (const kind of ['intro', 'recap', 'credits'] as MarkerKind[]) {
+    if (out.some((m) => m.kind === kind)) continue;
+    // Learn from the viewer's own skips elsewhere in this series.
+    const observations = userSkips.get(`${ep.seriesId}:${kind}`) ?? [];
+    if (observations.length < MIN_SAMPLES) continue;
+    const learned: SkipMarker = {
+      kind,
+      startSecs: median(observations.map(([start]) => start)),
+      endSecs: median(observations.map(([, end]) => end)),
+      source: 'learned',
+    };
+    if (plausible(learned)) out.push(learned);
+  }
+  return out.sort((a, b) => a.startSecs - b.startSecs);
+}
+
+function upNextAt(markers: SkipMarker[], durationSecs: number): number | null {
+  if (durationSecs <= 0) return null;
+  const credits = markers.find((m) => m.kind === 'credits');
+  if (credits) return credits.startSecs;
+  return Math.max(durationSecs - UP_NEXT_TAIL_SECS, durationSecs * 0.5);
+}
+
+function followingEpisode(episodeId: number) {
+  const ep = fx.episodes.find((e) => e.id === episodeId);
+  if (!ep) return null;
+  return (
+    fx.episodes
+      .filter((e) => e.seriesId === ep.seriesId)
+      .sort((a, b) => a.season - b.season || a.episode - b.episode)
+      .find(
+        (e) =>
+          e.season > ep.season || (e.season === ep.season && e.episode > ep.episode),
+      ) ?? null
+  );
 }
 
 let player: PlayerState = {
@@ -51,8 +128,28 @@ let player: PlayerState = {
 };
 
 const listeners = new Set<(s: PlayerState) => void>();
+
+/**
+ * Advance the playhead while playing. On Windows this comes from mpv's time-pos
+ * property; here it has to be simulated, otherwise Skip Intro and Up Next could
+ * never trigger in the browser build.
+ */
+let ticker: ReturnType<typeof setInterval> | undefined;
+function ensureTicker() {
+  if (ticker) return;
+  ticker = setInterval(() => {
+    if (player.status !== 'playing') return;
+    const next = player.positionSecs + 1;
+    if (!player.isLive && player.durationSecs > 0 && next >= player.durationSecs) {
+      setPlayer({ positionSecs: player.durationSecs, status: 'paused' });
+      return;
+    }
+    setPlayer({ positionSecs: next });
+  }, 1000);
+}
 function setPlayer(patch: Partial<PlayerState>) {
   player = { ...player, ...patch };
+  if (player.status === 'playing') ensureTicker();
   listeners.forEach((l) => l(player));
   return player;
 }
@@ -234,6 +331,36 @@ const handlers: { [K in CommandName]: (a: CommandArgs<K>) => CommandResult<K> } 
       unmatched: fx.channels.slice(-2).map((c) => c.name),
     },
   }),
+  'library.playbackAids': ({ episodeId }): PlaybackAids => {
+    const ep = fx.episodes.find((e) => e.id === episodeId);
+    const duration = (ep?.runtimeMins ?? 45) * 60;
+    const markers = resolveMarkers(episodeId);
+    return {
+      markers,
+      upNextAtSecs: upNextAt(markers, duration),
+      nextEpisode: followingEpisode(episodeId),
+      prefs:
+        (ep && seriesPrefs.get(ep.seriesId)) ?? {
+          alwaysSkipIntro: false,
+          alwaysSkipRecap: false,
+          autoplayNext: true,
+        },
+    };
+  },
+
+  'library.recordSkip': ({ episodeId, kind, startSecs, endSecs }) => {
+    const ep = fx.episodes.find((e) => e.id === episodeId);
+    if (!ep) return;
+    if (endSecs - startSecs < 5 || endSecs - startSecs > 300) return;
+    const key = `${ep.seriesId}:${kind}`;
+    const list = userSkips.get(key) ?? [];
+    userSkips.set(key, [...list, [startSecs, endSecs]]);
+  },
+
+  'library.setSeriesPrefs': ({ seriesId, prefs }) => {
+    seriesPrefs.set(seriesId, prefs);
+  },
+
   'library.genres': () =>
     [...new Set(fx.movies.flatMap((m) => m.genres))].sort(),
 

@@ -90,6 +90,33 @@ export interface Episode {
   airDate: number | null;
 }
 
+/** README §9: intro / recap / credits regions the Skip button can jump. */
+export type MarkerKind = 'intro' | 'recap' | 'credits';
+/** Where a marker came from, so the UI can explain itself. */
+export type MarkerSource = 'chapters' | 'user' | 'learned';
+
+export interface SkipMarker {
+  kind: MarkerKind;
+  startSecs: number;
+  endSecs: number;
+  source: MarkerSource;
+}
+
+export interface SeriesPrefs {
+  alwaysSkipIntro: boolean;
+  alwaysSkipRecap: boolean;
+  autoplayNext: boolean;
+}
+
+/** Everything the player needs to drive Skip and Up Next for one episode. */
+export interface PlaybackAids {
+  markers: SkipMarker[];
+  /** Playhead position at which the Up Next card should appear. */
+  upNextAtSecs: number | null;
+  nextEpisode: Episode | null;
+  prefs: SeriesPrefs;
+}
+
 export interface Progress {
   itemKind: 'movie' | 'episode' | 'channel' | 'recording';
   itemId: number;
@@ -243,6 +270,22 @@ export interface Commands {
   'library.series': (args: { limit: number; offset: number; genre?: string }) => Series[];
   'library.episodes': (args: { seriesId: number; season?: number }) => Episode[];
   'library.stats': () => LibraryStats;
+  'library.playbackAids': (args: {
+    profileId: number;
+    episodeId: number;
+    durationSecs: number;
+  }) => PlaybackAids;
+  'library.recordSkip': (args: {
+    episodeId: number;
+    kind: MarkerKind;
+    startSecs: number;
+    endSecs: number;
+  }) => void;
+  'library.setSeriesPrefs': (args: {
+    profileId: number;
+    seriesId: number;
+    prefs: SeriesPrefs;
+  }) => void;
   'library.genres': () => string[];
 
   'channels.list': (args: { group?: string; favoritesOnly?: boolean }) => Channel[];

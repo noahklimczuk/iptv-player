@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 
+use aurora_core::markers::Chapter;
 use libmpv2::{events::Event, Mpv};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -391,6 +392,25 @@ impl PlayerBackend for MpvBackend {
 
     fn state(&self) -> PlayerState {
         self.state.clone()
+    }
+
+    fn chapters(&self) -> Vec<Chapter> {
+        let count: i64 = self.mpv.get_property("chapter-list/count").unwrap_or(0);
+        (0..count)
+            .filter_map(|i| {
+                let start: f64 = self
+                    .mpv
+                    .get_property(&format!("chapter-list/{i}/time"))
+                    .ok()?;
+                Some(Chapter {
+                    title: self
+                        .mpv
+                        .get_property(&format!("chapter-list/{i}/title"))
+                        .ok(),
+                    start_secs: start,
+                })
+            })
+            .collect()
     }
 
     /// Keep the video child window exactly on the WebView2's client rect. Called from

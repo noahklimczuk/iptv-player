@@ -245,6 +245,41 @@ CREATE TABLE epg_manual_map (
 );
 "#,
     },
+    Migration {
+        version: 3,
+        name: "skip_markers_and_series_prefs",
+        sql: r#"
+-- README §9: Skip Intro / Skip Recap / Skip Credits.
+--
+-- One row per (episode, kind, source): a chapter-derived marker and a user's own
+-- skip can coexist, and aurora_core::markers::merge decides which one the button
+-- uses. Keeping the user's row even when chapters win is what lets the series
+-- learn from it.
+CREATE TABLE skip_markers (
+    id          INTEGER PRIMARY KEY,
+    episode_id  INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL CHECK (kind IN ('intro','recap','credits')),
+    source      TEXT    NOT NULL CHECK (source IN ('chapters','user','learned')),
+    start_secs  REAL    NOT NULL,
+    end_secs    REAL    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (episode_id, kind, source)
+);
+CREATE INDEX idx_markers_episode ON skip_markers(episode_id, kind);
+
+-- Per-profile, per-show playback preferences (README §9: "remember per-show
+-- whether the user always skips").
+CREATE TABLE series_prefs (
+    profile_id        INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    series_id         INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    always_skip_intro INTEGER NOT NULL DEFAULT 0,
+    always_skip_recap INTEGER NOT NULL DEFAULT 0,
+    autoplay_next     INTEGER NOT NULL DEFAULT 1,
+    updated_at        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (profile_id, series_id)
+);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 2;
+pub const LATEST_VERSION: u32 = 3;
