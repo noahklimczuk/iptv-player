@@ -12,16 +12,17 @@ This repository holds two things:
 
 | | |
 |---|---|
-| Core domain logic (parsers, matching, rules, skip markers, parental) | ✅ built, 128 tests |
-| Persistence (SQLite, migrations, FTS5 search, profiles) | ✅ built, 82 tests |
-| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh) | ✅ built, 74 tests |
-| Playback state machine + error taxonomy | ✅ built, 19 tests |
+| Core domain logic (parsers, matching, rules, skip markers, parental, DVR scheduling) | ✅ built, 157 tests |
+| Persistence (SQLite, migrations, FTS5 search, profiles, recordings) | ✅ built, 120 tests |
+| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder) | ✅ built, 81 tests |
+| Playback state machine + error taxonomy | ✅ built, 13 tests |
 | libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings, first-run wizard) | ✅ built, 32 E2E journeys |
+| React UI (home, guide, live, browse, player, search, settings, recordings, first-run wizard) | ✅ built, 39 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
-| Tauri host | ✅ compiles and tests on Linux with GTK dev packages |
+| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 18 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
-| DVR, TMDB artwork | ❌ not started |
+| DVR: scheduling, series rules, conflicts, reminders, recordings library | ✅ built and tested; never pointed at a real provider |
+| Timeshift, catch-up playback, TMDB artwork | ❌ not started |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
 from what merely compiles. In particular the Phase 0 compositing spike — video behind a

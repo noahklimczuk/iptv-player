@@ -57,10 +57,51 @@ Design tokens (README §12) are declared as CSS custom properties in `src-ui/src
 and exposed to Tailwind v4 via `@theme`. One source of truth, themeable at runtime by swapping a
 `data-theme` attribute — which is what the OLED / Light / High-Contrast themes need.
 
-## D6 — Deferred from this pass
+## D7 — Recordings are the provider's stream copied verbatim, not remuxed
+
+**Context.** A DVR has to turn a live HTTP stream into a file. The obvious instinct is to
+remux into MP4 so the result is a "normal" video file.
+
+**Decision.** Copy the bytes straight to `.ts` with no container work at all.
+
+**Consequence.** MPEG-TS is designed to be cut anywhere: a recording interrupted by a crash,
+a dropped connection or a closed window is playable up to the point it stopped. An MP4
+truncated the same way is a broken file, because its index is written at the end. It also
+means no ffmpeg dependency and no CPU cost during recording. The price is larger files and a
+container some external players handle less gracefully — acceptable, since the player that
+matters here is mpv, which handles it natively.
+
+## D8 — The DVR keeps its own clock, on its own thread
+
+**Context.** Recordings are due whether or not the UI is open, the window is focused, or
+anyone is looking.
+
+**Decision.** `aurora_app::dvr::Dvr::tick` does the whole job — reap finished, stop expired,
+start due — and a dedicated thread calls it every ten seconds. The UI learns what changed
+from a `dvr.tick` event; it never drives the schedule.
+
+**Consequence.** A minimised window still records. Because `tick` takes `now` as an argument,
+the entire scheduler is testable on a fake clock without waiting for real time to pass, which
+is what the eleven `aurora-app` DVR tests do. The trade is a fixed poll interval rather than a
+timer per recording; ten seconds is well inside the default one-minute pre-padding, so a
+recording still starts before its programme does.
+
+## D9 — Conflicts are resolved when the schedule changes, not at record time
+
+**Context.** A subscription allows N simultaneous streams. More than N recordings can be
+scheduled for the same window.
+
+**Decision.** `find_conflicts` runs over the upcoming schedule and the UI shows the clash as
+soon as it exists, naming the recording that will lose.
+
+**Consequence.** A viewer who sees "will not record" a day ahead can do something about it; one
+who finds out afterwards cannot. The scheduler still enforces the limit at record time as a
+backstop, but by then it is only reporting.
+
+## D10 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in
 `docs/ROADMAP.md` against their phases: Stalker portals (§4.3, marked Optional), downloads (§8.6,
-Optional), DVR recording and timeshift (§7.6–7.7, Phase 8), casting, voice search, gamepad (§14.3),
-and the metadata-enrichment network client (§4.5 — the model and cache layer exist, the TMDB HTTP
-calls do not).
+Optional), timeshift and catch-up playback (§7.6, Phase 8 — recording itself is built), casting,
+voice search, gamepad (§14.3), and the metadata-enrichment network client (§4.5 — the model and
+cache layer exist, the TMDB HTTP calls do not).
