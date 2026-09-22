@@ -13,7 +13,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 5 — EPG | XMLTV ingest, matching, guide grid, info pane | **Done** |
 | 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, but unverified against the real API.** TMDB matching, the client, credits storage, the artwork disk cache and the settings panel are built and tested; nothing has run with a real key. The cache downloads, evicts and reports — but the UI still renders from remote URLs, because *serving* from it needs Tauri's asset protocol confirmed on hardware (same gate as Phase 0). |
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
-| 8 — DVR | Recording, timeshift, catch-up | **Recording done; timeshift not started.** Scheduling with padding, conflict detection against the connection limit, series rules, reminders, a quota, and a recordings library. The recorder writes MPEG-TS to disk and has never been pointed at a real provider. Timeshift (pause live TV) and catch-up playback are not built. |
+| 8 — DVR | Recording, timeshift, catch-up | **Recording and catch-up done; timeshift not started.** Scheduling with padding, conflict detection against the connection limit, series rules, reminders, a quota, and a recordings library. The recorder writes MPEG-TS to disk and has never been pointed at a real provider. Catch-up builds the four common URL conventions and plays from the guide; the conventions come from documentation, not from observed traffic. Timeshift (pause live TV) is not built. |
 | 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
 | 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
@@ -97,8 +97,12 @@ were built first.
 3. **Timeshift** — pause and rewind live TV, the half of Phase 8 that recording does
    not cover. It needs a ring buffer on disk and a player that can seek inside a
    still-growing file, which is a different problem from scheduling.
-4. **Catch-up playback.** The schema and the UI already carry a provider's catch-up
-   window; nothing builds the URL to play from it yet.
+4. **Catch-up against a real provider.** `aurora_core::catchup` builds the four
+   conventions panels use (Xtream `timeshift.php`, append, shift, flussonic) and
+   "Watch from start" plays them, but which convention a given panel actually honours
+   is only observable with a subscription. The refusals are deliberate: a channel that
+   advertises catch-up without saying how to ask for it gets a message, not a guessed
+   URL that fails silently at the player.
 5. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
    points at remote URLs. Closing that needs `assetProtocol` enabled in
    `tauri.conf.json`, scoped to the cache folder, and the swap done with a fallback to

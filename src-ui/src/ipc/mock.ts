@@ -276,6 +276,18 @@ function programmes(ch: Channel, from: number, to: number): Programme[] {
   return v;
 }
 
+/**
+ * How far back each channel's catch-up goes.
+ *
+ * The host reads this per channel from the provider; the IPC contract does not carry
+ * it, because nothing in the UI can usefully act on it before the request is made. So
+ * the mock keeps its own, the way a real provider offers different depths per channel,
+ * and refuses the same way the host does.
+ */
+function catchupDays(channelId: number): number {
+  return channelId % 4 === 0 ? 2 : 7;
+}
+
 function nowNext(ch: Channel, now: number) {
   const day = 86400;
   const list = programmes(ch, now - day, now + day);
@@ -762,6 +774,35 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
 
   'search.query': ({ text }) => search(text),
+
+  'player.playCatchup': ({ channelId, start, stop }) => {
+    const ch = fx.channels.find((c) => c.id === channelId);
+    if (!ch) throw new Error(`unknown channel ${channelId}`);
+    // Mirrors the host's refusals, which are three different problems and say so.
+    if (!ch.hasCatchup) throw new Error(`${ch.name} does not offer catch-up`);
+    const now = Math.floor(Date.now() / 1000);
+    if (start > now) throw new Error(`${ch.name} has not aired yet`);
+    const days = catchupDays(ch.id);
+    if (start < now - days * 86400) {
+      throw new Error(`That programme is outside ${ch.name}'s ${days}-day catch-up window`);
+    }
+
+    const programme = programmes(ch, start - 1, stop + 1).find((p) => p.start === start);
+    return setPlayer({
+      status: 'playing',
+      // Catch-up is a recording served back: seekable, with a real duration, so the
+      // OSD shows a scrubber rather than a live edge.
+      isLive: false,
+      channelId,
+      itemKind: 'live',
+      itemId: channelId,
+      title: ch.name,
+      subtitle: programme?.title ?? null,
+      positionSecs: 0,
+      durationSecs: Math.max(1, stop - start),
+      error: null,
+    });
+  },
 
   'player.play': ({ kind, id, positionSecs }) => {
     if (kind === 'live') {

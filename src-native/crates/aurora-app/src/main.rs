@@ -77,6 +77,7 @@ fn main() {
             commands::library_set_series_prefs,
             commands::search_query,
             commands::player_play,
+            commands::player_play_catchup,
             commands::player_pause,
             commands::player_resume,
             commands::player_stop,

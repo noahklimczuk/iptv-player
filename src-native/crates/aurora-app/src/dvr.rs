@@ -744,6 +744,21 @@ mod tests {
         wait_until(|| dvr.bytes_so_far(id).unwrap_or(0) >= at_least);
     }
 
+    /// Wait until the recorder thread has actually ended.
+    ///
+    /// The byte counter reaches the end of the body a moment before the thread marks
+    /// itself finished, and `reap` keys off the latter — waiting on bytes instead
+    /// leaves a window where the next tick legitimately finds the recording still
+    /// running.
+    fn wait_for_finish(dvr: &Dvr, id: i64) {
+        wait_until(|| {
+            dvr.active
+                .lock()
+                .get(&id)
+                .is_some_and(|a| a.handle.is_finished())
+        });
+    }
+
     #[test]
     fn a_due_recording_starts_and_completes_when_the_stream_ends() {
         let db = seeded_db();
@@ -763,7 +778,7 @@ mod tests {
         assert_eq!(state_of(&db, id), RecordingState::Recording);
 
         // The canned body ends on its own, so the next tick finds it finished.
-        wait_for_bytes(&dvr, id, 4_096);
+        wait_for_finish(&dvr, id);
         let report = dvr.tick(1_100).unwrap();
         assert_eq!(report.completed, vec![id]);
         assert!(report.failed.is_empty());

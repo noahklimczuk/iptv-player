@@ -234,6 +234,33 @@ pub fn player_play(services: State<'_, Services>, args: PlayArgs) -> Result<Play
     Ok(player.state())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatchupArgs {
+    pub channel_id: i64,
+    /// The programme's airtime, unix seconds.
+    pub start: i64,
+    pub stop: i64,
+}
+
+/// Play a past programme from its start (README §7.5).
+///
+/// Separate from `player_play` rather than another `kind`: catch-up is addressed by a
+/// channel *and* a time window, which does not fit an item id.
+#[tauri::command]
+pub fn player_play_catchup(
+    services: State<'_, Services>,
+    args: CatchupArgs,
+) -> Result<PlayerState> {
+    let (url, options) = {
+        let db = services.db.lock();
+        crate::window::resolve_catchup(&db, args.channel_id, args.start, args.stop, now_unix())?
+    };
+    let mut player = services.player.lock();
+    player.load(&url, &options)?;
+    Ok(player.state())
+}
+
 #[tauri::command]
 pub fn player_pause(services: State<'_, Services>) -> Result<PlayerState> {
     let mut p = services.player.lock();

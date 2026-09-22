@@ -4,6 +4,7 @@
 //! which is what keeps the majority of a Windows-only application verifiable in CI.
 //! See `docs/DECISIONS.md` D2.
 
+pub mod catchup;
 pub mod classify;
 pub mod dvr;
 pub mod epg_match;

@@ -515,6 +515,15 @@ export interface Commands {
     id: number;
     positionSecs?: number;
   }) => PlayerState;
+  /**
+   * Play a past programme from its start (README §7.5). Addressed by channel and
+   * airtime rather than an item id, because catch-up has no library row of its own.
+   */
+  'player.playCatchup': (args: {
+    channelId: number;
+    start: number;
+    stop: number;
+  }) => PlayerState;
   'player.pause': () => PlayerState;
   'player.resume': () => PlayerState;
   'player.stop': () => PlayerState;

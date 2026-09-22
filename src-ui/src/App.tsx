@@ -68,6 +68,22 @@ export default function App() {
     setPlayerOpen(true);
   }, [ui]);
 
+  /**
+   * Play a past programme from its start.
+   *
+   * Not routed through the zapper: the zapper tunes a channel to its live edge, and
+   * this is the opposite request. The error is surfaced rather than swallowed because
+   * the three ways catch-up can refuse — no catch-up, outside the window, provider did
+   * not say how — are things the viewer can act on.
+   */
+  const playCatchup = useCallback(
+    async (channelId: number, start: number, stop: number) => {
+      await invoke('player.playCatchup', { channelId, start, stop });
+      setPlayerOpen(true);
+    },
+    [],
+  );
+
   const playEpisode = useCallback(async (episodeId: number) => {
     await invoke('player.play', { kind: 'episode', id: episodeId });
     setPlayerOpen(true);
@@ -188,7 +204,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
-          <Route path="/guide" element={<GuidePage onTune={tune} />} />
+          <Route path="/guide" element={<GuidePage onTune={tune} onCatchup={playCatchup} />} />
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/recordings" element={<RecordingsPage />} />
