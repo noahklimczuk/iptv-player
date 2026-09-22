@@ -11,7 +11,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Real decoding unverified. |
 | 4 — Live TV | Channel list, zap, banner, number entry, favorites | **Done** |
 | 5 — EPG | XMLTV ingest, matching, guide grid, info pane | **Done** |
-| 6 — Movies | Rails, hero, hover preview, detail modal, browse | **Done** |
+| 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, but enrichment is unverified against the real API.** TMDB matching, the client, credits storage and the settings panel are built and tested; nothing has run with a real key. Artwork is referenced by URL — there is no local image cache yet. |
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
 | 8 — DVR | Recording, timeshift, catch-up | **Recording done; timeshift not started.** Scheduling with padding, conflict detection against the connection limit, series rules, reminders, a quota, and a recordings library. The recorder writes MPEG-TS to disk and has never been pointed at a real provider. Timeshift (pause live TV) and catch-up playback are not built. |
 | 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
@@ -24,21 +24,25 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 
 | Claim | Evidence |
 |---|---|
-| Parsers handle hostile real-world input | 157 `aurora-core` tests, run on every commit |
-| Schema, migrations, reconciliation, search | 120 `aurora-db` tests |
+| Parsers handle hostile real-world input | 173 `aurora-core` tests, run on every commit |
+| Schema, migrations, reconciliation, search | 135 `aurora-db` tests |
 | Playback state machine and error taxonomy | 13 `aurora-player` tests |
-| Fetching, retry, gzip, credential redaction | 74 `aurora-ingest` tests, against a server that simulates 401/403/404/429/timeout/mid-stream disconnect |
+| Fetching, retry, gzip, credential redaction | 109 `aurora-ingest` tests, against a server that simulates 401/403/404/429/timeout/mid-stream disconnect |
 | A refresh never destroys user data | `aurora-ingest::sync` tests assert renames, numbers and hidden flags survive |
 | Skip markers: chapter parsing, learning, merge | 25 `aurora-core` + 13 `aurora-db` tests |
-| The Tauri host compiles and its URL resolution works | 18 `aurora-app` tests (Linux, with GTK dev packages) |
+| The Tauri host compiles and its URL resolution works | 21 `aurora-app` tests (Linux, with GTK dev packages) |
 | Recording scheduling: padding, conflicts, rule matching | 19 `aurora-core` + 32 `aurora-db` tests |
 | A stream is written to disk, and a cut stream keeps what it got | 7 `aurora-ingest` tests against the failure-simulating server |
 | The scheduler starts, stops and finalises recordings | 11 `aurora-app` tests driving `Dvr::tick` on a test clock |
 | A recording title that Windows would reject becomes a legal filename | 10 `aurora-core` tests (`CON`, `Ratched: Season 1`, trailing dots, MAX_PATH) |
 | The mpv/Win32 backend compiles for Windows | `cargo check --target x86_64-pc-windows-msvc` |
-| Every screen renders and the journeys work | 39 Playwright runs against the production bundle |
+| Metadata matching declines rather than guessing | 15 `aurora-core` tests: sequels, remakes, ambiguous titles, foreign originals |
+| TMDB responses are parsed, including the ones missing half their fields | 16 `aurora-ingest` tests |
+| Enrichment records every outcome and never asks twice | 15 `aurora-db` + 11 `aurora-ingest` tests |
+| Every screen renders and the journeys work | 44 Playwright runs against the production bundle |
 | Video actually decodes and composites | **Not verified anywhere yet** — Phase 0 |
 | A recording survives a real provider's stream | **Not verified** — the recorder has only met the test server |
+| TMDB's real responses match what the client expects | **Not verified** — parsed from the documented shape, never called with a key |
 
 ## The Phase 0 caveat
 
@@ -65,10 +69,12 @@ were built first.
 2. **Point it at a real subscription.** Ingestion is built and tested against a local
    server, but has never met an actual provider — the fork-tolerance in
    `aurora_core::xtream` is written from the spec, not from observed traffic.
-3. **TMDB enrichment**, so the catalog shows real artwork instead of generated
-   gradients.
-4. **Timeshift** — pause and rewind live TV, the half of Phase 8 that recording does
+3. **Timeshift** — pause and rewind live TV, the half of Phase 8 that recording does
    not cover. It needs a ring buffer on disk and a player that can seek inside a
    still-growing file, which is a different problem from scheduling.
-5. **Catch-up playback.** The schema and the UI already carry a provider's catch-up
+4. **Catch-up playback.** The schema and the UI already carry a provider's catch-up
    window; nothing builds the URL to play from it yet.
+5. **An artwork disk cache.** Enrichment stores absolute TMDB image URLs, so every
+   poster is fetched from the network on each paint. Caching them locally is what
+   README §12 means by "no layout shift" on a cold start, and what makes the library
+   usable offline.

@@ -98,10 +98,40 @@ soon as it exists, naming the recording that will lose.
 who finds out afterwards cannot. The scheduler still enforces the limit at record time as a
 backstop, but by then it is only reporting.
 
-## D10 — Deferred from this pass
+## D11 — The metadata matcher declines rather than guessing
+
+**Context.** A search for a title returns several plausible results. Something has to pick.
+
+**Decision.** `aurora_core::tmdb::pick_best` returns `None` below a confidence floor, and
+also when the top two candidates are too close to separate. Popularity breaks ties and
+does nothing else. The outcome — including "nothing matched" — is stored, so the same
+question is never asked twice.
+
+**Consequence.** A library with missing posters is obviously incomplete and prompts
+someone to look. A library where *The Matrix* wears *The Matrix Reloaded*'s poster looks
+finished and is wrong. Without a year to separate them, "The Office" is two shows and
+"Alone" is six films, and choosing the popular one is a guess wearing a confident face —
+so it declines instead. `metadata.rematch` is the escape hatch for the cases where it is
+confidently wrong anyway.
+
+## D12 — Enrichment and playlist import each own their own columns
+
+**Context.** Two writers touch `movies` and `series`: the provider refresh and the
+metadata pass. Either could clobber the other.
+
+**Decision.** The refresh's UPDATE list omits `overview`, `backdrop`, `logo_art`,
+`tmdb_id` and the rest; enrichment writes those through `COALESCE(?, existing)` and never
+touches `title`, `url` or `provider_key`.
+
+**Consequence.** The two can run in any order, as often as they like, without a refresh
+wiping fetched artwork or a TMDB result with a missing overview blanking the one the
+playlist supplied. It is a convention rather than something the schema enforces, so both
+sides say so in a comment where the columns are listed.
+
+## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in
 `docs/ROADMAP.md` against their phases: Stalker portals (§4.3, marked Optional), downloads (§8.6,
 Optional), timeshift and catch-up playback (§7.6, Phase 8 — recording itself is built), casting,
-voice search, gamepad (§14.3), and the metadata-enrichment network client (§4.5 — the model and
-cache layer exist, the TMDB HTTP calls do not).
+voice search, gamepad (§14.3), and a local artwork cache (§12 — enrichment stores absolute TMDB
+image URLs, so every poster is currently fetched from the network on each paint).
