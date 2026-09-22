@@ -66,3 +66,35 @@ cargo check -p aurora-player --target x86_64-pc-windows-msvc
 This type-checks the mpv/Win32 backend without an MSVC linker, which catches most
 mistakes in code you cannot run locally. It does **not** work for `aurora-app`: a
 transitive C dependency needs MSVC's `lib.exe`.
+
+## Checking a real subscription
+
+The parsers are written from the Xtream spec and tested against a local server. Every
+panel is a fork of a fork, so the first real subscription is where the assumptions get
+tested. `probe` runs the shipping code paths against a provider and prints what came
+back:
+
+```bash
+AURORA_BASE=http://your-panel.example \
+AURORA_USER=yourname \
+AURORA_PASS=yourpassword \
+  cargo run -p aurora-ingest --example probe
+```
+
+`AURORA_BASE` is the panel root — no `/get.php`, no query string. It only reads: nothing
+is written to a database and nothing is downloaded. The password comes from the
+environment, is never printed, and URLs go through `http::redact` before they reach the
+output.
+
+What to look at:
+
+- **Auth failed.** The two lines printed are exactly what the first-run wizard would
+  show. If they do not match reality, `aurora_core::neterr` needs another case.
+- **EPG id coverage below ~50%.** The guide will be mostly empty; the channels need
+  mapping (README §4.4).
+- **Year extracted below ~40%.** Metadata matching declines without a year to separate
+  candidates, so posters will be sparse.
+- **No connection limit reported.** The DVR falls back to allowing two simultaneous
+  recordings.
+- **An endpoint that FAILED.** Panels vary in what they implement; knowing which ones
+  this provider does not serve is half of supporting it.

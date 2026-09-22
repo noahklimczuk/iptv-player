@@ -197,24 +197,51 @@ impl HttpClient {
     }
 }
 
+/// Everything `e` blames, lowercased, without `e`'s own Display line.
+///
+/// That omission is the point. `reqwest`'s Display is
+/// `error sending request for url (<the whole URL>)`, and every Xtream URL contains
+/// `username=`. Matching the shared classifier's "name" against that string reported
+/// every refused connection as a DNS failure — and told the user to check their DNS
+/// when their provider was simply down. The cause chain says `connection refused`
+/// and carries no URL, so it is both more accurate and safer to read.
+fn cause_chain(e: &reqwest::Error) -> String {
+    let mut out = Vec::new();
+    let mut source: Option<&dyn std::error::Error> = std::error::Error::source(e);
+    while let Some(cause) = source {
+        out.push(cause.to_string().to_ascii_lowercase());
+        source = cause.source();
+    }
+    out.join("; ")
+}
+
 /// `reqwest`'s Display strings do not mention the words the shared classifier looks
-/// for, so map its typed predicates first and fall back to the text.
+/// for, so map its typed predicates first and fall back to the cause chain.
 fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
     if e.is_timeout() {
         return NetFailure::classify("connection timed out");
     }
+
+    let causes = cause_chain(e);
     if e.is_connect() {
-        // A refused or unresolvable host both land here; the message distinguishes them.
-        let text = e.to_string().to_ascii_lowercase();
-        if text.contains("dns") || text.contains("resolve") || text.contains("name") {
+        // Unresolvable, refused and unreachable all land here and mean different things
+        // to the person reading the message.
+        if causes.contains("dns")
+            || causes.contains("resolve")
+            || causes.contains("name or service")
+            || causes.contains("nodename")
+        {
             return NetFailure::classify("dns");
+        }
+        if causes.contains("refused") {
+            return NetFailure::classify("connection refused");
         }
         return NetFailure::classify("connection timed out");
     }
     if e.is_redirect() {
         return NetFailure::classify("too many redirects");
     }
-    NetFailure::classify(&e.to_string())
+    NetFailure::classify(&causes)
 }
 
 fn looks_gzipped(url: &str) -> bool {
@@ -576,6 +603,61 @@ mod tests {
         let got = redact("http://alice:hunter2@example.com/x");
         assert!(!got.contains("hunter2"), "{got}");
         assert!(got.contains("example.com"), "{got}");
+    }
+
+    #[test]
+    fn a_refused_connection_is_not_reported_as_a_dns_problem() {
+        // The trap this guards: reqwest's Display is "error sending request for url
+        // (<url>)", every Xtream URL contains `username=`, and the shared classifier
+        // looks for "name". Classifying on that string told everyone whose provider was
+        // simply down to go and check their DNS.
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        // Port 1 is reserved and nothing listens on it, so this is refused immediately.
+        let err = client
+            .get("http://127.0.0.1:1/player_api.php?username=someone&password=secret")
+            .send()
+            .unwrap_err();
+
+        assert!(err.is_connect(), "expected a connect failure, got {err}");
+        assert!(
+            err.to_string().contains("username"),
+            "the Display really does carry the URL — that is the trap: {err}"
+        );
+
+        let failure = classify_reqwest(&err);
+        assert!(
+            failure.cause.to_lowercase().contains("refused")
+                || failure.message.to_lowercase().contains("listening"),
+            "a refused connection must say so, got {:?} / {:?}",
+            failure.message,
+            failure.cause
+        );
+        assert!(
+            !failure.cause.to_lowercase().contains("dns"),
+            "the name in `username` is not a DNS failure: {:?}",
+            failure.cause
+        );
+    }
+
+    #[test]
+    fn the_cause_chain_carries_the_reason_and_not_the_url() {
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let err = client
+            .get("http://127.0.0.1:1/player_api.php?username=someone&password=secret")
+            .send()
+            .unwrap_err();
+
+        let causes = cause_chain(&err);
+        assert!(causes.contains("refused"), "{causes}");
+        // A password must not be reachable through the string we classify on.
+        assert!(!causes.contains("secret"), "{causes}");
+        assert!(!causes.contains("username"), "{causes}");
     }
 
     #[test]

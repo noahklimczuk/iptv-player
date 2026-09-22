@@ -84,6 +84,13 @@ impl NetFailure {
                 "You're already watching on another device",
                 "This subscription allows a limited number of simultaneous streams.",
             )
+        } else if l.contains("refused") {
+            (
+                ErrorCode::Dns,
+                "Nothing is listening at that address",
+                "The server refused the connection. The address or port may be wrong, \
+                 or the provider may be down.",
+            )
         } else if l.contains("timed out") || l.contains("timeout") {
             (
                 ErrorCode::Timeout,

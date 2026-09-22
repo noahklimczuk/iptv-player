@@ -85,7 +85,13 @@ were built first.
 ## Nearest useful next steps
 
 1. **Run the Phase 0 spike on Windows.** Everything else is downstream of that answer.
-2. **Point it at a real subscription.** Ingestion is built and tested against a local
+2. **Point it at a real subscription.** `cargo run -p aurora-ingest --example probe`
+   does this without writing anything — see docs/BUILDING.md. The first attempt already
+   found two bugs: a bare panel host could not be entered in the wizard at all, and
+   every refused connection was reported as a DNS failure because reqwest's error text
+   embeds the URL and every Xtream URL contains `username=`.
+
+   Previously: Ingestion is built and tested against a local
    server, but has never met an actual provider — the fork-tolerance in
    `aurora_core::xtream` is written from the spec, not from observed traffic.
 3. **Timeshift** — pause and rewind live TV, the half of Phase 8 that recording does
