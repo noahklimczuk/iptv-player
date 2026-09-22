@@ -18,6 +18,7 @@ pub mod pin;
 pub mod rules;
 pub mod series;
 pub mod title;
+pub mod tmdb;
 pub mod xmltv;
 pub mod xtream;
 
