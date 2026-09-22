@@ -103,9 +103,12 @@ jobs:
         working-directory: src-native
         run: cargo check --workspace --all-targets
 
-      - name: Tests (portable crates, on Windows)
+      - name: Tests (crates that link nothing external)
+        # aurora-player's test binary links against mpv.lib, which is not on the
+        # runner, so its tests run on Linux only (they cover the platform-independent
+        # NullBackend). Everything here still type-checks above.
         working-directory: src-native
-        run: cargo test
+        run: cargo test -p aurora-core -p aurora-db
 
   # The full link+bundle needs libmpv's import library and mpv-2.dll on the runner.
   # Enable this once the SDK is vendored or fetched — see docs/BUILDING.md. It is kept
