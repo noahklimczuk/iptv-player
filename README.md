@@ -17,7 +17,7 @@ This repository holds two things:
 | Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 132 tests |
 | Playback state machine + error taxonomy | ✅ built, 13 tests |
 | libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 66 E2E journeys |
+| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 67 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
 | Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 29 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |

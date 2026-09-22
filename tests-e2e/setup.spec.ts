@@ -107,6 +107,24 @@ test('deselecting every content type blocks the import', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Import library' })).toBeDisabled();
 });
 
+test('Add provider in settings opens the same wizard, and backing out returns', async ({
+  page,
+}) => {
+  await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add provider' }).click();
+
+  // The first-run wizard, reached from a library that already has a provider.
+  // Reached from a library that already has one, so it does not say "Welcome".
+  await expect(page.getByRole('heading', { name: 'Add another provider' })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/33-add-provider.png` });
+
+  // Backing out lands back in the app rather than trapping you in setup.
+  await page.getByRole('button', { name: 'Skip for now' }).click();
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+});
+
 test('the wizard can be skipped', async ({ page }) => {
   await openWizard(page);
   await page.getByRole('button', { name: 'Skip for now' }).click();

@@ -28,7 +28,14 @@ const PHASE_LABEL: Record<IngestPhase, string> = {
   done: 'Finished',
 };
 
-export function SetupWizard({ onFinished }: { onFinished: () => void }) {
+export function SetupWizard({
+  onFinished,
+  /** True when this is a second provider being added from settings, not first run. */
+  additional = false,
+}: {
+  onFinished: () => void;
+  additional?: boolean;
+}) {
   const [step, setStep] = useState<Step>('source');
   const [draft, setDraft] = useState<DraftProvider>({
     name: '', kind: 'm3u', url: '', username: '', password: '',
@@ -98,7 +105,7 @@ export function SetupWizard({ onFinished }: { onFinished: () => void }) {
       }}
     >
       <div style={{ width: 'min(620px, 100%)' }}>
-        <Header step={step} />
+        <Header step={step} additional={additional} />
 
         <AnimatePresence mode="wait">
           <motion.div
@@ -165,7 +172,7 @@ function hostOf(url: string): string {
   }
 }
 
-function Header({ step }: { step: Step }) {
+function Header({ step, additional }: { step: Step; additional: boolean }) {
   const steps: Step[] = ['source', 'content', 'importing', 'done'];
   const index = steps.indexOf(step);
   return (
@@ -180,10 +187,12 @@ function Header({ step }: { step: Step }) {
         A
       </div>
       <h1 style={{ margin: '0 0 var(--sp-2)', fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
-        Welcome to Aurora TV
+        {additional ? 'Add another provider' : 'Welcome to Aurora TV'}
       </h1>
       <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 'var(--fs-sm)' }}>
-        Aurora is a player. Bring your own subscription and it will do the rest.
+        {additional
+          ? 'Its channels and titles join the library you already have.'
+          : 'Aurora is a player. Bring your own subscription and it will do the rest.'}
       </p>
       <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 'var(--sp-4)' }}>
         {steps.map((s, i) => (
