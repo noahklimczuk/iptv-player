@@ -1,0 +1,31 @@
+[package]
+name = "aurora-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Fetching and importing provider content into the Aurora library"
+
+[dependencies]
+aurora-core.workspace = true
+aurora-db.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+# Blocking on purpose: ingestion is a background job, and rusqlite is synchronous.
+# An async client here would buy nothing but a Send/Sync fight across await points.
+reqwest = { version = "0.12", default-features = false, features = [
+  "blocking",
+  "rustls-tls",
+  "gzip",
+] }
+# reqwest's gzip feature only covers Content-Encoding. Providers also serve plain
+# `.xml.gz` *files*, which have to be inflated by hand.
+flate2 = "1"
+
+# Windows Credential Manager (README C10). Gated to Windows deliberately: on Linux
+# the same crate wants a D-Bus Secret Service, which a headless CI runner has no
+# business requiring just to run the parser tests.
+[target.'cfg(windows)'.dependencies]
+keyring = "3"

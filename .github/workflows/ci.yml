@@ -107,8 +107,12 @@ jobs:
         # aurora-player's test binary links against mpv.lib, which is not on the
         # runner, so its tests run on Linux only (they cover the platform-independent
         # NullBackend). Everything here still type-checks above.
+        #
+        # aurora-core and aurora-ingest matter here specifically: `fsname` exists
+        # because Windows rejects filenames Linux accepts, and only a Windows
+        # filesystem can prove a mangled recording name is actually creatable.
         working-directory: src-native
-        run: cargo test -p aurora-core -p aurora-db
+        run: cargo test -p aurora-core -p aurora-db -p aurora-ingest
 
   # The full link+bundle needs libmpv's import library and mpv-2.dll on the runner.
   # Enable this once the SDK is vendored or fetched — see docs/BUILDING.md. It is kept

@@ -16,17 +16,32 @@ src-native/                      Cargo workspace
     epg_match.rs                 tvg-id → EPG channel matching (exact → fuzzy → manual)
     rules.rs                     user rule engine (hide/group/rename/favorite)
     classify.rs                  live / movie / series classification
+    markers.rs                   skip intro/recap/credits: merge + learn
+    parental.rs, pin.rs          certification ceilings, Argon2 PIN hashing
+    dvr.rs                       padding, conflict detection, series-rule matching
+    tmdb.rs                      which search result is actually your title
+    fsname.rs                    programme title → a filename Windows accepts
   crates/aurora-db/              SQLite persistence (rusqlite, bundled)
     schema.rs                    versioned forward-only migrations
     repo/                        typed queries per aggregate
+  crates/aurora-ingest/          everything that talks to a provider
+    http.rs                      retry, gzip, per-provider headers, redaction
+    xtream.rs, playlist.rs, epg.rs   provider clients
+    credentials.rs               CredentialStore trait; Windows Credential Manager
+    sync.rs                      fetch → parse → reconcile → index
+    recorder.rs                  Recorder trait + StreamRecorder (stream → .ts)
+    tmdb.rs                      MetadataClient trait + TMDB client
+    enrich.rs                    search → choose → write, in bounded batches
+    artwork.rs                   content-addressed image cache, LRU eviction
   crates/aurora-player/          playback abstraction
     backend.rs                   PlayerBackend trait + NullBackend (all platforms)
     mpv.rs                       #[cfg(windows)] libmpv + child HWND
   crates/aurora-app/             Tauri 2 host: commands, events, service wiring
+    dvr.rs                       the scheduler: one `tick` drives every recording
 
 src-ui/                          React 18 + TS + Vite + Tailwind v4
   src/ipc/                       typed client; Tauri transport or mock transport
-  src/features/                  home, movies, series, live, guide, player, settings
+  src/features/                  home, movies, series, live, guide, player, dvr, settings
   src/components/                design-system primitives
   src/styles/tokens.css          §12 design tokens
 

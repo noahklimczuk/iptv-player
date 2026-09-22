@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { CatalogItem, Episode, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
 import { getProgress, invoke } from '@/ipc';
+import { useProfile } from '@/state/profile';
 import { duration, progressPct, runtime } from '@/lib/format';
 import { Badge, Button, IconButton, ProgressBar, Skeleton } from './Primitives';
 import { Icon } from './Icon';
@@ -174,7 +175,7 @@ function Body({
         </div>
 
         <div style={{ fontSize: 'var(--fs-sm)', display: 'grid', gap: 'var(--sp-3)', alignContent: 'start' }}>
-          <Meta label="Cast" value={item.cast.join(', ')} />
+          <CastAndCrew kind={item.kind} id={item.id} fallback={item.cast} />
           <Meta label="Genres" value={item.genres.join(', ')} />
           {item.rating != null && (
             <Meta label="Rating" value={`${item.rating.toFixed(1)} / 10`} />
@@ -223,6 +224,45 @@ function Body({
   );
 }
 
+/**
+ * Cast and crew from enrichment, falling back to whatever the playlist supplied.
+ *
+ * The fallback matters: a library that has never been enriched, or a title nothing
+ * matched, still has to show something rather than an empty gap where the cast was.
+ */
+function CastAndCrew({
+  kind, id, fallback,
+}: {
+  kind: 'movie' | 'series';
+  id: number;
+  fallback: string[];
+}) {
+  const { data } = useCommand('metadata.credits', { kind, id }, [kind, id]);
+  const credits = data ?? [];
+  const cast = credits.filter((c) => c.isCast);
+  const directors = credits.filter(
+    (c) => !c.isCast && c.role?.toLowerCase() === 'director',
+  );
+
+  if (cast.length === 0) {
+    return <Meta label="Cast" value={fallback.join(', ')} />;
+  }
+  return (
+    <>
+      <Meta
+        label="Cast"
+        value={cast.slice(0, 6).map((c) => c.name).join(', ')}
+      />
+      {directors.length > 0 && (
+        <Meta
+          label={directors.length === 1 ? 'Director' : 'Directors'}
+          value={directors.map((c) => c.name).join(', ')}
+        />
+      )}
+    </>
+  );
+}
+
 function Meta({ label, value }: { label: string; value: string }) {
   if (!value) return null;
   return (
@@ -239,7 +279,12 @@ function Meta({ label, value }: { label: string; value: string }) {
  * is the scope they apply at.
  */
 function PlaybackPrefs({ seriesId }: { seriesId: number }) {
-  const { data } = useCommand('library.seriesPrefs', { profileId: 1, seriesId }, [seriesId]);
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  const { data } = useCommand(
+    'library.seriesPrefs',
+    { profileId, seriesId },
+    [seriesId, profileId],
+  );
   const [local, setLocal] = useState<SeriesPrefs | null>(null);
   const prefs = local ?? data;
 
@@ -250,7 +295,7 @@ function PlaybackPrefs({ seriesId }: { seriesId: number }) {
   const update = (patch: Partial<SeriesPrefs>) => {
     const next = { ...prefs, ...patch };
     setLocal(next);
-    void invoke('library.setSeriesPrefs', { profileId: 1, seriesId, prefs: next });
+    void invoke('library.setSeriesPrefs', { profileId, seriesId, prefs: next });
   };
 
   const toggles: [keyof SeriesPrefs, string][] = [

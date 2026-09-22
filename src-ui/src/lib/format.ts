@@ -44,3 +44,28 @@ export function remaining(positionSecs: number, durationSecs: number): string {
 
 export const progressPct = (pos: number, dur: number) =>
   dur > 0 ? Math.min(100, Math.max(0, (pos / dur) * 100)) : 0;
+
+/** Disk sizes, as a recordings library reports them. */
+export function bytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 MB';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  // One decimal below 10 so "1.4 GB" does not round to "1 GB".
+  return `${v < 10 && i > 1 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+/** "in 3h 20m" / "in 4 min" — how long until a scheduled recording starts. */
+export function untilLabel(unix: number, now = Math.floor(Date.now() / 1000)): string {
+  const secs = unix - now;
+  if (secs <= 0) return 'now';
+  if (secs < 3600) return `in ${Math.max(1, Math.round(secs / 60))} min`;
+  const h = Math.floor(secs / 3600);
+  const m = Math.round((secs % 3600) / 60);
+  if (secs < 86400) return m ? `in ${h}h ${m}m` : `in ${h}h`;
+  return `${dayLabel(unix)} at ${clockTime(unix)}`;
+}

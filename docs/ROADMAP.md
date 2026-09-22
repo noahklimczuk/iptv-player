@@ -7,30 +7,61 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 |---|---|---|
 | 0 — Spike | libmpv behind transparent WebView2 | **Written, compiles for Windows, NOT run.** See the caveat below. |
 | 1 — Foundation | Workspace, typed IPC, SQLite + migrations, tokens, app shell, CI | **Done** |
-| 2 — Ingestion | M3U + Xtream + XMLTV parsing, classification, series grouping, rules | **Parsers done and tested. The provider HTTP client is not written** — nothing fetches a playlist over the network yet. |
+| 2 — Ingestion | M3U + Xtream + XMLTV fetching and parsing, classification, series grouping, rules | **Done.** aurora-ingest fetches, parses, reconciles and indexes; credentials go to the OS store. Stalker portals (§4.3, Optional) and per-series episode listings are not built. |
 | 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Real decoding unverified. |
 | 4 — Live TV | Channel list, zap, banner, number entry, favorites | **Done** |
 | 5 — EPG | XMLTV ingest, matching, guide grid, info pane | **Done** |
-| 6 — Movies | Rails, hero, hover preview, detail modal, browse | **Done** |
+| 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, but unverified against the real API.** TMDB matching, the client, credits storage, the artwork disk cache and the settings panel are built and tested; nothing has run with a real key. The cache downloads, evicts and reports — but the UI still renders from remote URLs, because *serving* from it needs Tauri's asset protocol confirmed on hardware (same gate as Phase 0). |
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
-| 8 — DVR | Recording, timeshift, catch-up | **Not started.** Catch-up is modelled in the schema and surfaced in the UI; nothing records. |
-| 9 — Personalization | Profiles, parental controls, search, palette | **Search + command palette done.** Profiles/PIN/parental controls: schema only. |
+| 8 — DVR | Recording, timeshift, catch-up | **Recording done; timeshift not started.** Scheduling with padding, conflict detection against the connection limit, series rules, reminders, a quota, and a recordings library. The recorder writes MPEG-TS to disk and has never been pointed at a real provider. Timeshift (pause live TV) and catch-up playback are not built. |
+| 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
+| 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
-| 11 — Hardening | Perf budgets, soak, diagnostics | **Not started.** No §16 budget is measured yet. |
+| 11 — Hardening | Perf budgets, soak, diagnostics | **Not started.** No §16 budget is measured yet. One known correctness issue is listed below. |
 | 12 — Release | Installers, signing, auto-update | **CI type-checks Windows; no installer is produced.** |
 
 ## What is actually verified
 
 | Claim | Evidence |
 |---|---|
-| Parsers handle hostile real-world input | 82 `aurora-core` tests, run on every commit |
-| Schema, migrations, reconciliation, search | 49 `aurora-db` tests |
-| Playback state machine and error taxonomy | 19 `aurora-player` tests |
+| Parsers handle hostile real-world input | 173 `aurora-core` tests, run on every commit |
+| Schema, migrations, reconciliation, search | 135 `aurora-db` tests |
+| Playback state machine and error taxonomy | 13 `aurora-player` tests |
+| Fetching, retry, gzip, credential redaction | 109 `aurora-ingest` tests, against a server that simulates 401/403/404/429/timeout/mid-stream disconnect |
+| A refresh never destroys user data | `aurora-ingest::sync` tests assert renames, numbers and hidden flags survive |
 | Skip markers: chapter parsing, learning, merge | 25 `aurora-core` + 13 `aurora-db` tests |
-| The Tauri host compiles and its URL resolution works | 4 `aurora-app` tests (Linux, with GTK dev packages) |
+| The Tauri host compiles and its URL resolution works | 21 `aurora-app` tests (Linux, with GTK dev packages) |
+| Recording scheduling: padding, conflicts, rule matching | 19 `aurora-core` + 32 `aurora-db` tests |
+| A stream is written to disk, and a cut stream keeps what it got | 7 `aurora-ingest` tests against the failure-simulating server |
+| The scheduler starts, stops and finalises recordings | 11 `aurora-app` tests driving `Dvr::tick` on a test clock |
+| A recording title that Windows would reject becomes a legal filename | 10 `aurora-core` tests (`CON`, `Ratched: Season 1`, trailing dots, MAX_PATH) |
 | The mpv/Win32 backend compiles for Windows | `cargo check --target x86_64-pc-windows-msvc` |
-| Every screen renders and the journeys work | 19 Playwright runs against the production bundle |
+| Metadata matching declines rather than guessing | 15 `aurora-core` tests: sequels, remakes, ambiguous titles, foreign originals |
+| TMDB responses are parsed, including the ones missing half their fields | 16 `aurora-ingest` tests |
+| Enrichment records every outcome and never asks twice | 15 `aurora-db` + 11 `aurora-ingest` tests |
+| Artwork is cached, evicted and survives a crashed download | 21 `aurora-ingest` tests |
+| Every screen renders and the journeys work | 45 Playwright runs against the production bundle |
 | Video actually decodes and composites | **Not verified anywhere yet** — Phase 0 |
+| A recording survives a real provider's stream | **Not verified** — the recorder has only met the test server |
+| TMDB's real responses match what the client expects | **Not verified** — parsed from the documented shape, never called with a key |
+| The WebView can load a cached image | **Not verified** — `artwork::asset_url` builds the URL from Tauri's documented format, and nothing has run the app to confirm the asset protocol serves it |
+
+## The known issue worth fixing before release
+
+`providers_refresh` holds the single writer connection across the whole of `sync::run`,
+which fetches the playlist and a potentially very large EPG over the network. Every other
+command blocks for the duration.
+
+That used to be a responsiveness problem and is now a correctness one, because the DVR
+scheduler takes the same lock every ten seconds to decide whether a recording is due. A
+recording that falls inside a long refresh does not start until the refresh finishes.
+
+`metadata::enrich_batch` shows the shape of the fix and has a test that fails if the lock
+is ever held across the network again: plan under the lock, fetch without it, write under
+it again. Applying the same to `sync::run` means splitting it into fetch and apply halves,
+which changes what partial state a failed import can leave behind — worth doing
+deliberately rather than in passing. The alternative is giving the DVR its own connection,
+which WAL supports but which is an architectural decision, not a patch.
 
 ## The Phase 0 caveat
 
@@ -54,8 +85,23 @@ were built first.
 ## Nearest useful next steps
 
 1. **Run the Phase 0 spike on Windows.** Everything else is downstream of that answer.
-2. **Provider HTTP client** — the parsers are ready and tested; nothing calls them over
-   the network yet, so the app cannot ingest a real subscription.
-3. **Profiles**, which most of §11 depends on — the per-show preferences already
-   written are keyed by profile, but everything currently runs as profile 1.
-4. **DVR** (Phase 8), the largest untouched block.
+2. **Point it at a real subscription.** `cargo run -p aurora-ingest --example probe`
+   does this without writing anything — see docs/BUILDING.md. The first attempt already
+   found two bugs: a bare panel host could not be entered in the wizard at all, and
+   every refused connection was reported as a DNS failure because reqwest's error text
+   embeds the URL and every Xtream URL contains `username=`.
+
+   Previously: Ingestion is built and tested against a local
+   server, but has never met an actual provider — the fork-tolerance in
+   `aurora_core::xtream` is written from the spec, not from observed traffic.
+3. **Timeshift** — pause and rewind live TV, the half of Phase 8 that recording does
+   not cover. It needs a ring buffer on disk and a player that can seek inside a
+   still-growing file, which is a different problem from scheduling.
+4. **Catch-up playback.** The schema and the UI already carry a provider's catch-up
+   window; nothing builds the URL to play from it yet.
+5. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
+   points at remote URLs. Closing that needs `assetProtocol` enabled in
+   `tauri.conf.json`, scoped to the cache folder, and the swap done with a fallback to
+   the remote URL so a misconfigured protocol degrades to today's behaviour rather than
+   breaking every image. It is one config flag and one component change, but neither is
+   verifiable without running the app.

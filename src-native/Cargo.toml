@@ -4,6 +4,7 @@ members = [
   "crates/aurora-core",
   "crates/aurora-db",
   "crates/aurora-player",
+  "crates/aurora-ingest",
   "crates/aurora-app",
 ]
 # aurora-app pulls in Tauri, whose Linux backend needs GTK and whose Windows build
@@ -13,6 +14,7 @@ default-members = [
   "crates/aurora-core",
   "crates/aurora-db",
   "crates/aurora-player",
+  "crates/aurora-ingest",
 ]
 
 [workspace.package]
@@ -29,10 +31,16 @@ tracing = "0.1"
 time = { version = "0.3", features = ["parsing", "formatting", "macros", "local-offset"] }
 quick-xml = "0.36"
 regex = "1"
+argon2 = "0.5"
+getrandom = "0.3"
+# Content-addressing for the artwork cache. Already in the tree via rustls, so this
+# costs nothing to build.
+sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }
 aurora-player = { path = "crates/aurora-player" }
+aurora-ingest = { path = "crates/aurora-ingest" }
 
 [profile.release]
 opt-level = 3

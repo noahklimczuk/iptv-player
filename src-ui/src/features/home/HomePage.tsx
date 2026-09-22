@@ -4,11 +4,17 @@ import { HeroBillboard } from '@/components/HeroBillboard';
 import { Rail } from '@/components/Rail';
 import { EmptyState, Skeleton } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
+import { useProfile } from '@/state/profile';
 
 export function HomePage({
   onOpen, onPlay,
 }: { onOpen: (i: CatalogItem) => void; onPlay: (i: CatalogItem) => void }) {
-  const { data: rails, loading, error } = useCommand('library.rails', { profileId: 1 }, []);
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  const { data: rails, loading, error } = useCommand(
+    'library.rails',
+    { profileId },
+    [profileId],
+  );
 
   const heroItems = useMemo(() => {
     if (!rails) return [];

@@ -26,9 +26,12 @@ export function Button({
     ...SIZES[size],
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     border: '1px solid transparent', borderRadius: 'var(--r-md)',
-    fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+    fontWeight: 600, whiteSpace: 'nowrap',
+    // A disabled control must not look clickable.
+    cursor: rest.disabled ? 'not-allowed' : 'pointer',
+    opacity: rest.disabled ? 0.45 : 1,
     transition: `background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease),
-                 border-color var(--t-fast) var(--ease)`,
+                 border-color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease)`,
   };
   const variants: Record<Variant, CSSProperties> = {
     primary: { background: 'var(--text)', color: 'var(--text-invert)' },

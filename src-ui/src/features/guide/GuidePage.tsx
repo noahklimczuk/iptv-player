@@ -11,6 +11,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, Programme } from '@shared/ipc';
+import { useDvrMarks } from '@/features/dvr/useDvrMarks';
 import { Badge, Button, EmptyState, Skeleton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
@@ -36,6 +37,7 @@ export function GuidePage({
   const [from, setFrom] = useState(() => floorToSlot(Math.floor(Date.now() / 1000)));
   const [group, setGroup] = useState<string | undefined>(undefined);
   const [selected, setSelected] = useState<{ ch: Channel; prog: Programme } | null>(null);
+  const dvr = useDvrMarks();
   const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -118,7 +120,7 @@ export function GuidePage({
           }}
         >
           <PreviewPane channel={previewChannel} onTune={onTune} />
-          <InfoPane selected={selected} onTune={onTune} />
+          <InfoPane selected={selected} onTune={onTune} dvr={dvr} />
         </aside>
 
         {/* The grid. */}
@@ -184,6 +186,7 @@ export function GuidePage({
                           to={to}
                           now={now}
                           selectedId={selected?.prog.id ?? null}
+                          recordingKeys={dvr.recordingKeys}
                           onSelect={(prog) => {
                             setSelected({ ch, prog });
                             setPreviewChannel(ch);
@@ -359,12 +362,13 @@ function genreTone(categories: string[]): string {
 }
 
 function ProgrammeRow({
-  channel, programmes, from, to, now, selectedId, onSelect, onTune,
+  channel, programmes, from, to, now, selectedId, recordingKeys, onSelect, onTune,
 }: {
   channel: Channel;
   programmes: Programme[];
   from: number; to: number; now: number;
   selectedId: number | null;
+  recordingKeys: Set<string>;
   onSelect: (p: Programme) => void;
   onTune: () => void;
 }) {
@@ -384,6 +388,7 @@ function ProgrammeRow({
         const width = Math.max(2, right - left);
         const airing = p.start <= now && p.stop > now;
         const isSelected = selectedId === p.id;
+        const recording = recordingKeys.has(`${channel.id}:${p.start}:${p.title}`);
 
         return (
           <button
@@ -410,6 +415,16 @@ function ProgrammeRow({
                 display: 'flex', alignItems: 'center', gap: 5,
               }}
             >
+              {recording && (
+                <span
+                  aria-label="Recording scheduled"
+                  title="Recording scheduled"
+                  style={{
+                    width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                    background: 'var(--live)',
+                  }}
+                />
+              )}
               {p.isNew && <Badge tone="new" style={{ padding: '0 4px' }}>New</Badge>}
               {p.isLive && <Badge tone="live" style={{ padding: '0 4px' }}>Live</Badge>}
               {p.title}
@@ -439,7 +454,6 @@ function ProgrammeRow({
           </button>
         );
       })}
-      <span style={{ display: 'none' }}>{channel.id}</span>
     </div>
   );
 }
@@ -507,10 +521,11 @@ function PreviewPane({
 }
 
 function InfoPane({
-  selected, onTune,
+  selected, onTune, dvr,
 }: {
   selected: { ch: Channel; prog: Programme } | null;
   onTune: (c: Channel) => void;
+  dvr: ReturnType<typeof useDvrMarks>;
 }) {
   if (!selected) {
     return (
@@ -528,6 +543,11 @@ function InfoPane({
   const { ch, prog } = selected;
   const now = Math.floor(Date.now() / 1000);
   const airing = prog.start <= now && prog.stop > now;
+  // Nothing to schedule for a programme that is over; catch-up is a different button.
+  const ended = prog.stop <= now;
+  const recording = dvr.recordingFor(ch, prog);
+  const reminder = dvr.reminderFor(ch, prog);
+  const rule = dvr.ruleFor(prog);
 
   return (
     <div style={{ padding: 'var(--sp-4)', overflowY: 'auto', flex: 1 }}>
@@ -573,10 +593,50 @@ function InfoPane({
         {airing && ch.hasCatchup && (
           <Button size="sm" icon="back10">Watch from start</Button>
         )}
-        <Button size="sm" icon="record">Record</Button>
-        <Button size="sm" icon="stack">Record series</Button>
-        {!airing && <Button size="sm" icon="bell">Remind me</Button>}
+
+        <Button
+          size="sm"
+          icon="record"
+          iconFilled={!!recording}
+          variant={recording ? 'danger' : 'secondary'}
+          disabled={dvr.busy || ended}
+          onClick={() => void dvr.toggleRecord(ch, prog)}
+        >
+          {recording
+            ? (recording.state === 'recording' ? 'Stop recording' : 'Cancel recording')
+            : 'Record'}
+        </Button>
+
+        <Button
+          size="sm"
+          icon="stack"
+          variant={rule ? 'primary' : 'secondary'}
+          disabled={dvr.busy}
+          onClick={() => void dvr.toggleSeries(ch, prog, false)}
+        >
+          {rule ? 'Stop recording series' : 'Record series'}
+        </Button>
+
+        {!airing && !ended && (
+          <Button
+            size="sm"
+            icon="bell"
+            iconFilled={reminder != null}
+            variant={reminder != null ? 'primary' : 'secondary'}
+            disabled={dvr.busy}
+            onClick={() => void dvr.toggleReminder(ch, prog)}
+          >
+            {reminder != null ? 'Reminder set' : 'Remind me'}
+          </Button>
+        )}
+
         <Button size="sm" variant="ghost" icon="search">Search this title</Button>
+
+        {dvr.error && (
+          <div role="alert" style={{ color: 'var(--danger)', fontSize: 'var(--fs-sm)' }}>
+            {dvr.error}
+          </div>
+        )}
       </div>
     </div>
   );

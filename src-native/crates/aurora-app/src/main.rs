@@ -1,7 +1,7 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aurora_app::{commands, services::Services};
+use aurora_app::{commands, dvr, metadata, profiles, providers, services::Services};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -31,8 +31,36 @@ fn main() {
             };
 
             let services = Services::new(data_dir)?;
+            let scheduler = std::sync::Arc::clone(&services.dvr);
             app.manage(services);
+
+            // The DVR has to keep its own time: nothing in the UI is guaranteed to be
+            // open when a recording is due, and a minimised window still records.
+            let handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("aurora-dvr".into())
+                .spawn(move || loop {
+                    std::thread::sleep(dvr::TICK_INTERVAL);
+                    match scheduler.tick(now_unix()) {
+                        Ok(report) if !report.is_empty() => {
+                            use tauri::Emitter;
+                            let _ = handle.emit("dvr.tick", &report);
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::error!("DVR tick failed: {e}"),
+                    }
+                })?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Closing the window must not orphan a recording in flight: finalise it so
+            // the file is flushed and the row says what actually happened.
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                use tauri::Manager;
+                if let Some(services) = window.try_state::<Services>() {
+                    services.dvr.shutdown(now_unix());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::channels_list,
@@ -60,7 +88,51 @@ fn main() {
             commands::player_set_aspect,
             commands::player_state,
             commands::progress_save,
+            dvr::dvr_list,
+            dvr::dvr_schedule,
+            dvr::dvr_cancel,
+            dvr::dvr_delete,
+            dvr::dvr_set_keep,
+            dvr::dvr_set_watched,
+            dvr::dvr_conflicts,
+            dvr::dvr_rules,
+            dvr::dvr_create_rule,
+            dvr::dvr_delete_rule,
+            dvr::dvr_set_rule_enabled,
+            dvr::dvr_reminders,
+            dvr::dvr_add_reminder,
+            dvr::dvr_remove_reminder,
+            dvr::dvr_storage,
+            metadata::metadata_status,
+            metadata::metadata_set_key,
+            metadata::metadata_run,
+            metadata::metadata_credits,
+            metadata::metadata_rematch,
+            metadata::artwork_status,
+            metadata::artwork_prefetch,
+            metadata::artwork_clear,
+            profiles::profiles_list,
+            profiles::profiles_create,
+            profiles::profiles_delete,
+            profiles::profiles_rename,
+            profiles::profiles_set_limits,
+            profiles::profiles_set_pin,
+            profiles::profiles_verify_pin,
+            profiles::profiles_parental,
+            profiles::profiles_set_parental,
+            profiles::profiles_watched_today,
+            providers::providers_detect,
+            providers::providers_validate,
+            providers::providers_save,
+            providers::providers_refresh,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }

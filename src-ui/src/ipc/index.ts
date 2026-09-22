@@ -3,8 +3,17 @@
  * present, an in-memory mock otherwise, so the UI is developable and screenshot-able
  * without Windows.
  */
-import type { CommandArgs, CommandName, CommandResult, PlayerState } from '@shared/ipc';
-import { invokeMock, onPlayerState as onMockPlayerState } from './mock';
+import type {
+  CommandArgs, CommandName, CommandResult, Events, IngestProgress, PlayerState,
+} from '@shared/ipc';
+import {
+  invokeMock,
+  onDvrTick as onMockDvrTick,
+  onArtworkProgress as onMockArtworkProgress,
+  onMetadataProgress as onMockMetadataProgress,
+  onIngestProgress as onMockIngestProgress,
+  onPlayerState as onMockPlayerState,
+} from './mock';
 
 interface TauriInternals {
   invoke: (cmd: string, args: unknown) => Promise<unknown>;
@@ -36,6 +45,83 @@ export function onPlayerState(fn: (s: PlayerState) => void): () => void {
   };
   let dispose: (() => void) | undefined;
   void w.__TAURI__?.event?.listen('player.state', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** Refresh progress, so a long import is never a frozen spinner (README C8). */
+export function onIngestProgress(fn: (p: IngestProgress) => void): () => void {
+  if (!isNativeHost()) return onMockIngestProgress(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (e: string, cb: (p: { payload: IngestProgress }) => void) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('ingest.progress', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** What one DVR tick changed, so the recordings page stays live without polling. */
+export function onDvrTick(fn: (t: Events['dvr.tick']) => void): () => void {
+  if (!isNativeHost()) return onMockDvrTick(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (
+          e: string,
+          cb: (p: { payload: Events['dvr.tick'] }) => void,
+        ) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('dvr.tick', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** Enrichment progress, so a long metadata pass is never a frozen spinner. */
+export function onMetadataProgress(fn: (p: Events['metadata.progress']) => void): () => void {
+  if (!isNativeHost()) return onMockMetadataProgress(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (
+          e: string,
+          cb: (p: { payload: Events['metadata.progress'] }) => void,
+        ) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('metadata.progress', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** Artwork download progress, for the cache panel in settings. */
+export function onArtworkProgress(fn: (p: Events['artwork.progress']) => void): () => void {
+  if (!isNativeHost()) return onMockArtworkProgress(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (
+          e: string,
+          cb: (p: { payload: Events['artwork.progress'] }) => void,
+        ) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('artwork.progress', (e) => fn(e.payload)).then((d) => {
     dispose = d;
   });
   return () => dispose?.();

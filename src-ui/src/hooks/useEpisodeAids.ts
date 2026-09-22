@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PlaybackAids, PlayerState, SkipMarker } from '@shared/ipc';
 import { invoke } from '@/ipc';
+import { activeProfileId } from '@/state/profile';
 
 export interface EpisodeAids {
   aids: PlaybackAids | null;
@@ -24,7 +25,7 @@ export interface EpisodeAids {
 export function useEpisodeAids(
   player: PlayerState | null,
   onPlayEpisode: (episodeId: number) => void,
-  profileId = 1,
+  profileId: number = activeProfileId(),
 ): EpisodeAids {
   const [aids, setAids] = useState<PlaybackAids | null>(null);
   const [dismissed, setDismissed] = useState<number | null>(null);

@@ -11,11 +11,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aurora-core.workspace = true
 aurora-db.workspace = true
+aurora-ingest.workspace = true
 aurora-player.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+time.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri = { version = "2", features = [] }
 parking_lot = "0.12"

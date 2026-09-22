@@ -3,9 +3,13 @@
  * Mirrors the real host's behaviour closely enough to develop and screenshot every screen.
  */
 import type {
-  CatalogItem, Channel, CommandArgs, CommandName, CommandResult, GuideSlice,
-  MarkerKind, Movie, PlaybackAids, PlayerState, Programme, Progress, Rail, SearchHit,
-  SearchResults, Series, SeriesPrefs, SkipMarker,
+  CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
+  ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
+  MetadataReport, MetadataStatus, ParentalSettings, PinOutcome, Profile,
+  Recording, RecordingConflict, RecordingRule, Reminder,
+  GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
+  Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
+  ValidationResult,
 } from '@shared/ipc';
 import * as fx from './fixtures';
 
@@ -105,6 +109,19 @@ function followingEpisode(episodeId: number) {
   );
 }
 
+/** Profile state, mirroring aurora-db's defaults. */
+const mockProfiles: Profile[] = [
+  {
+    id: 1, name: 'Me', avatar: 'default', isKids: false, hasPin: false,
+    maxAge: null, allowUnrated: true, dailyLimitMin: null,
+  },
+];
+const mockPins = new Map<number, string | null>();
+let mockMasterPin: string | null = null;
+let mockParental: ParentalSettings = {
+  hasMasterPin: false, hideAdult: true, lockSettings: false,
+};
+
 let player: PlayerState = {
   status: 'idle',
   title: null, subtitle: null, channelId: null, itemKind: null, itemId: null,
@@ -156,6 +173,15 @@ function setPlayer(patch: Partial<PlayerState>) {
 export function onPlayerState(fn: (s: PlayerState) => void) {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+const ingestListeners = new Set<(p: IngestProgress) => void>();
+function emitIngest(p: IngestProgress) {
+  ingestListeners.forEach((l) => l(p));
+}
+export function onIngestProgress(fn: (p: IngestProgress) => void) {
+  ingestListeners.add(fn);
+  return () => ingestListeners.delete(fn);
 }
 
 /* ── Rails (README §8.2) ───────────────────────────────────────────────────── */
@@ -298,9 +324,344 @@ function search(text: string): SearchResults {
   };
 }
 
+
+/* ── DVR ────────────────────────────────────────────────────────────────────
+   Mirrors aurora_core::dvr and aurora_db::repo::dvr: the same padding, the same
+   duplicate rule, the same conflict arithmetic. The recorder is simulated on a
+   timer so the recordings page is live in a browser too. ───────────────────── */
+
+const PRE_PADDING = 60;
+const POST_PADDING = 300;
+const MAX_CONCURRENT = 2;
+const DVR_QUOTA_BYTES = 200 * 1024 ** 3;
+/** A plausible 8 Mb/s transport stream, for the simulated recorder. */
+const BYTES_PER_SEC = 1024 * 1024;
+
+let nextRecordingId = 1;
+let nextRuleId = 1;
+let nextReminderId = 1;
+const recordings: Recording[] = [];
+const dvrRules: RecordingRule[] = [];
+const reminders: Reminder[] = [];
+
+const dvrListeners = new Set<(t: { started: number[]; completed: number[]; failed: [number, string][]; stalled: number[] }) => void>();
+
+export function onDvrTick(fn: (t: { started: number[]; completed: number[]; failed: [number, string][]; stalled: number[] }) => void) {
+  dvrListeners.add(fn);
+  return () => dvrListeners.delete(fn);
+}
+
+function withPadding(start: number, stop: number, pre: number, post: number): [number, number] {
+  const paddedStart = Math.max(0, start - Math.max(0, pre));
+  const paddedStop = stop + Math.max(0, post);
+  return paddedStop <= paddedStart ? [start, Math.max(stop, start + 1)] : [paddedStart, paddedStop];
+}
+
+function scheduleRecording(a: {
+  channelId: number;
+  title: string;
+  subTitle?: string | null;
+  season?: number | null;
+  episode?: number | null;
+  airStart: number;
+  airStop: number;
+  prePaddingSecs?: number;
+  postPaddingSecs?: number;
+  priority?: number;
+  ruleId?: number | null;
+}): number | null {
+  const [start, stop] = withPadding(
+    a.airStart, a.airStop,
+    a.prePaddingSecs ?? PRE_PADDING,
+    a.postPaddingSecs ?? POST_PADDING,
+  );
+  // Same unique index the schema carries: (channelId, start, title).
+  const clash = recordings.some(
+    (r) => r.channelId === a.channelId && r.start === start && r.title === a.title,
+  );
+  if (clash) return null;
+
+  const id = nextRecordingId++;
+  recordings.push({
+    id,
+    channelId: a.channelId,
+    ruleId: a.ruleId ?? null,
+    title: a.title,
+    subTitle: a.subTitle ?? null,
+    season: a.season ?? null,
+    episode: a.episode ?? null,
+    airStart: a.airStart,
+    airStop: a.airStop,
+    start,
+    stop,
+    state: 'scheduled',
+    reason: null,
+    priority: a.priority ?? 0,
+    filePath: null,
+    bytes: 0,
+    durationSecs: 0,
+    keep: false,
+    watched: false,
+  });
+  return id;
+}
+
+/** Seed a library that looks lived-in: things recorded, one in flight, some coming up. */
+function seedDvr() {
+  const now = Math.floor(Date.now() / 1000);
+  const day = 86400;
+  const finished: [string, number, number, number, boolean, string | null][] = [
+    ['The Gilded Circuit', -2 * day, 3600, 2, true, null],
+    ['Nightfall Sessions', -1 * day - 7200, 5400, 0, false, null],
+    ['Harbour Lights', -1 * day, 1800, 0, true, null],
+    ['Signal to Noise', -3 * day, 3600, 0, false, 'The provider closed the connection early'],
+  ];
+  for (const [title, offset, len, chIndex, watched, reason] of finished) {
+    const airStart = now + offset;
+    const id = scheduleRecording({
+      channelId: fx.channels[chIndex]?.id ?? 1, title, airStart, airStop: airStart + len,
+    });
+    const rec = recordings.find((r) => r.id === id);
+    if (!rec) continue;
+    rec.state = 'completed';
+    rec.reason = reason;
+    rec.durationSecs = len + PRE_PADDING + POST_PADDING;
+    rec.bytes = rec.durationSecs * BYTES_PER_SEC;
+    rec.watched = watched;
+    rec.filePath = `C:\\Users\\You\\Videos\\Aurora\\${title}.ts`;
+  }
+
+  // One failed, so the page has to say why rather than just showing nothing.
+  const failedStart = now - 4 * day;
+  const failedId = scheduleRecording({
+    channelId: fx.channels[1]?.id ?? 1, title: 'Cross Harbour Derby',
+    airStart: failedStart, airStop: failedStart + 7200,
+  });
+  const failed = recordings.find((r) => r.id === failedId);
+  if (failed) {
+    failed.state = 'failed';
+    failed.reason = 'Aurora was not running when this was due';
+  }
+
+  // One in flight right now.
+  const liveStart = now - 900;
+  const liveId = scheduleRecording({
+    channelId: fx.channels[0]?.id ?? 1, title: 'The Evening Report',
+    airStart: liveStart, airStop: liveStart + 3600,
+  });
+  const live = recordings.find((r) => r.id === liveId);
+  if (live) {
+    live.state = 'recording';
+    live.bytes = 900 * BYTES_PER_SEC;
+  }
+
+  // And a few upcoming, one of which is a conflict with two others.
+  const tonight = now + 3 * 3600;
+  scheduleRecording({
+    channelId: fx.channels[0]?.id ?? 1, title: 'Late Kickoff',
+    airStart: tonight, airStop: tonight + 7200, priority: 10,
+  });
+  scheduleRecording({
+    channelId: fx.channels[1]?.id ?? 2, title: 'The Gilded Circuit',
+    airStart: tonight + 600, airStop: tonight + 4200, season: 2, episode: 4,
+  });
+  scheduleRecording({
+    channelId: fx.channels[2]?.id ?? 3, title: 'Midnight Movie',
+    airStart: tonight + 1200, airStop: tonight + 8400,
+  });
+
+  dvrRules.push({
+    id: nextRuleId++, title: 'The Gilded Circuit', channelId: null, newOnly: true,
+    weekdays: null, aroundLocalMinute: null, prePaddingSecs: PRE_PADDING,
+    postPaddingSecs: POST_PADDING, keepEpisodes: 5, priority: 0, enabled: true, scheduled: 2,
+  });
+  dvrRules.push({
+    id: nextRuleId++, title: 'Nightfall Sessions', channelId: fx.channels[0]?.id ?? 1,
+    newOnly: false, weekdays: [0, 1, 2, 3, 4], aroundLocalMinute: 22 * 60,
+    prePaddingSecs: PRE_PADDING, postPaddingSecs: POST_PADDING, keepEpisodes: null,
+    priority: 0, enabled: true, scheduled: 1,
+  });
+
+  reminders.push({
+    id: nextReminderId++, channelId: fx.channels[3]?.id ?? 1,
+    title: 'The Championship Final', start: now + 5 * 3600, leadSecs: 300,
+  });
+}
+seedDvr();
+
+/** Advance the simulated recorder, exactly as `Dvr::tick` advances the real one. */
+function dvrTick() {
+  const now = Math.floor(Date.now() / 1000);
+  const started: number[] = [];
+  const completed: number[] = [];
+  const failed: [number, string][] = [];
+
+  for (const r of recordings) {
+    if (r.state === 'scheduled' && r.start <= now && r.stop > now) {
+      const busy = recordings.filter((o) => o.state === 'recording').length;
+      if (busy >= MAX_CONCURRENT) {
+        r.state = 'skipped';
+        r.reason = 'too many recordings at once for this subscription';
+        failed.push([r.id, r.reason]);
+        continue;
+      }
+      r.state = 'recording';
+      started.push(r.id);
+    } else if (r.state === 'scheduled' && r.stop <= now) {
+      r.state = 'failed';
+      r.reason = 'Aurora was not running when this was due';
+      failed.push([r.id, r.reason]);
+    } else if (r.state === 'recording') {
+      r.bytes = Math.max(0, now - r.start) * BYTES_PER_SEC;
+      if (r.stop <= now) {
+        r.state = 'completed';
+        r.durationSecs = r.stop - r.start;
+        r.filePath = `C:\\Users\\You\\Videos\\Aurora\\${r.title}.ts`;
+        completed.push(r.id);
+      }
+    }
+  }
+
+  if (started.length || completed.length || failed.length) {
+    const report = { started, completed, failed, stalled: [] as number[] };
+    for (const fn of dvrListeners) fn(report);
+  }
+}
+setInterval(dvrTick, 5000);
+
+function findConflicts(maxConcurrent: number): RecordingConflict[] {
+  const now = Math.floor(Date.now() / 1000);
+  const slots = recordings
+    .filter((r) => (r.state === 'scheduled' || r.state === 'recording') && r.stop > now)
+    .sort((a, b) => a.start - b.start);
+
+  // Sweep the boundaries, same as aurora_core::dvr::find_conflicts.
+  const edges = [...new Set(slots.flatMap((s) => [s.start, s.stop]))].sort((a, b) => a - b);
+  const out: RecordingConflict[] = [];
+  for (let i = 0; i < edges.length - 1; i += 1) {
+    const from = edges[i]!;
+    const to = edges[i + 1]!;
+    const overlapping = slots.filter((s) => s.start < to && from < s.stop);
+    if (overlapping.length <= maxConcurrent) continue;
+    const last = out[out.length - 1];
+    if (last && last.stop === from && last.overBy === overlapping.length - maxConcurrent) {
+      last.stop = to;
+      continue;
+    }
+    out.push({
+      start: from,
+      stop: to,
+      slotIds: [...overlapping]
+        .sort((a, b) => b.priority - a.priority || a.start - b.start)
+        .map((s) => s.id),
+      overBy: overlapping.length - maxConcurrent,
+    });
+  }
+  return out;
+}
+
+
+/* ── Metadata enrichment ────────────────────────────────────────────────────
+   Mirrors aurora_ingest::enrich: a bounded batch per call, a no-match recorded
+   so the same title is never asked about twice, and a stored key the UI can see
+   the presence of but never the value of. ─────────────────────────────────── */
+
+let metadataKey: string | null = 'demo-key-not-a-real-one';
+type EnrichState = 'matched' | 'nomatch' | 'failed';
+const enriched = new Map<string, EnrichState>();
+const mockCredits = new Map<string, CreditEntry[]>();
+
+const CAST_POOL = [
+  'Ines Lindqvist', 'Marcus Oyelaran', 'Priya Raghunathan', 'Tomas Berg',
+  'Adaeze Nwosu', 'Jonah Whitfield', 'Elif Demirci', 'Rafael Monteiro',
+];
+const CREW_POOL: [string, string][] = [
+  ['Dana Kovalenko', 'Director'],
+  ['Sam Okonkwo', 'Screenplay'],
+  ['Mira Haddad', 'Original Music Composer'],
+];
+
+/** Deterministic, so a screenshot of the same title is the same twice. */
+function creditsFor(kind: 'movie' | 'series', id: number): CreditEntry[] {
+  const key = `${kind}:${id}`;
+  const existing = mockCredits.get(key);
+  if (existing) return existing;
+
+  const cast: CreditEntry[] = Array.from({ length: 5 }, (_, i) => {
+    const name = CAST_POOL[(id + i) % CAST_POOL.length]!;
+    return {
+      personId: ((id + i) % CAST_POOL.length) + 1,
+      name,
+      profilePath: null,
+      role: `${name.split(' ')[0]}'s character`,
+      isCast: true,
+    };
+  });
+  const crew: CreditEntry[] = CREW_POOL.map(([name, job], i) => ({
+    personId: 100 + i,
+    name,
+    profilePath: null,
+    role: job,
+    isCast: false,
+  }));
+  const all = [...cast, ...crew];
+  mockCredits.set(key, all);
+  return all;
+}
+
+function enrichmentCoverage(kind: 'movie' | 'series') {
+  const total = kind === 'movie' ? fx.movies.length : fx.series.length;
+  let matched = 0;
+  let noMatch = 0;
+  let failed = 0;
+  for (const [key, state] of enriched) {
+    if (!key.startsWith(`${kind}:`)) continue;
+    if (state === 'matched') matched += 1;
+    else if (state === 'nomatch') noMatch += 1;
+    else failed += 1;
+  }
+  return { total, matched, noMatch, failed };
+}
+
+// Most of the demo library is already enriched, with a few left so the button does
+// something visible when pressed.
+for (const m of fx.movies.slice(0, Math.max(0, fx.movies.length - 6))) {
+  enriched.set(`movie:${m.id}`, 'matched');
+}
+for (const s of fx.series.slice(0, Math.max(0, fx.series.length - 3))) {
+  enriched.set(`series:${s.id}`, 'matched');
+}
+
+const metadataListeners = new Set<(p: { done: number; total: number }) => void>();
+export function onMetadataProgress(fn: (p: { done: number; total: number }) => void) {
+  metadataListeners.add(fn);
+  return () => metadataListeners.delete(fn);
+}
+
+
+/* ── Artwork cache ──────────────────────────────────────────────────────────
+   There is no disk in a browser, so this models the counts the panel shows and
+   nothing else. On the host the same commands drive a real content-addressed
+   store under the data directory. ─────────────────────────────────────────── */
+
+const ARTWORK_MAX_BYTES = 2 * 1024 ** 3;
+/** A plausible average across w342 posters and w1280 backdrops. */
+const ARTWORK_AVG_BYTES = 90 * 1024;
+let artworkFiles = Math.round((fx.movies.length + fx.series.length) * 1.4);
+
+const artworkListeners = new Set<(p: { done: number; total: number }) => void>();
+export function onArtworkProgress(fn: (p: { done: number; total: number }) => void) {
+  artworkListeners.add(fn);
+  return () => artworkListeners.delete(fn);
+}
+
 /* ── Command dispatch ──────────────────────────────────────────────────────── */
 
-const handlers: { [K in CommandName]: (a: CommandArgs<K>) => CommandResult<K> } = {
+type Handler<K extends CommandName> = (
+  a: CommandArgs<K>,
+) => CommandResult<K> | Promise<CommandResult<K>>;
+
+const handlers: { [K in CommandName]: Handler<K> } = {
   'library.rails': () => buildRails(),
   'library.movies': ({ sort, limit, offset, genre }) => {
     let list = genre ? fx.movies.filter((m) => m.genres.includes(genre)) : [...fx.movies];
@@ -466,7 +827,326 @@ const handlers: { [K in CommandName]: (a: CommandArgs<K>) => CommandResult<K> } 
     return true;
   },
 
+  /* ── Profiles (README §11) ────────────────────────────────────────────── */
+
+  'profiles.list': () => mockProfiles,
+  'profiles.create': ({ name, avatar, isKids, maxAge, dailyLimitMin }) => {
+    const id = Math.max(0, ...mockProfiles.map((p) => p.id)) + 1;
+    mockProfiles.push({
+      id, name, avatar: avatar ?? null, isKids, hasPin: false,
+      maxAge: maxAge ?? null,
+      // A kids profile blocks unrated content by default, as the host does.
+      allowUnrated: !isKids,
+      dailyLimitMin: dailyLimitMin ?? null,
+    });
+    return id;
+  },
+  'profiles.delete': ({ profileId }) => {
+    if (mockProfiles.length <= 1) return false;
+    const i = mockProfiles.findIndex((p) => p.id === profileId);
+    if (i < 0) return false;
+    mockProfiles.splice(i, 1);
+    return true;
+  },
+  'profiles.rename': ({ profileId, name }) => {
+    const p = mockProfiles.find((x) => x.id === profileId);
+    if (p) p.name = name;
+  },
+  'profiles.setLimits': ({ profileId, maxAge, allowUnrated, dailyLimitMin }) => {
+    const p = mockProfiles.find((x) => x.id === profileId);
+    if (p) Object.assign(p, { maxAge, allowUnrated, dailyLimitMin });
+  },
+  'profiles.setPin': ({ profileId, pin }) => {
+    const p = mockProfiles.find((x) => x.id === profileId);
+    if (p) { p.hasPin = pin !== null; mockPins.set(profileId, pin); }
+  },
+  'profiles.verifyPin': ({ profileId, pin }): PinOutcome => {
+    const stored = profileId == null ? mockMasterPin : mockPins.get(profileId) ?? null;
+    if (stored == null) return 'notRequired';
+    return stored === pin ? 'ok' : { wrong: { remaining: 4 } };
+  },
+  'profiles.parental': (): ParentalSettings => mockParental,
+  'profiles.setParental': ({ hideAdult, lockSettings, masterPin }) => {
+    mockParental = {
+      hideAdult, lockSettings,
+      hasMasterPin: masterPin !== undefined ? masterPin !== null : mockParental.hasMasterPin,
+    };
+    if (masterPin !== undefined) mockMasterPin = masterPin;
+  },
+  'profiles.watchedToday': () => 42,
+
+  /* ── DVR ────────────────────────────────────────────────────────────────── */
+
+  'dvr.schedule': (a) => scheduleRecording({ ...a, priority: 10 }),
+  'dvr.list': ({ state }) => {
+    const rows = state ? recordings.filter((r) => r.state === state) : [...recordings];
+    return rows
+      .sort((a, b) => a.start - b.start)
+      .map((r) => ({ ...r, liveBytes: r.state === 'recording' ? r.bytes : null }));
+  },
+  'dvr.cancel': ({ id }) => {
+    const i = recordings.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    if (recordings[i]!.state === 'completed') {
+      throw new Error('recording already finished — delete it instead');
+    }
+    recordings.splice(i, 1);
+    return true;
+  },
+  'dvr.delete': ({ id }) => {
+    const i = recordings.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    recordings.splice(i, 1);
+    return true;
+  },
+  'dvr.setKeep': ({ id, value }) => {
+    const r = recordings.find((x) => x.id === id);
+    if (r) r.keep = value;
+  },
+  'dvr.setWatched': ({ id, value }) => {
+    const r = recordings.find((x) => x.id === id);
+    if (r) r.watched = value;
+  },
+  'dvr.conflicts': () => findConflicts(MAX_CONCURRENT),
+  'dvr.rules': () => [...dvrRules].sort((a, b) => a.title.localeCompare(b.title)),
+  'dvr.createRule': (a) => {
+    const id = nextRuleId++;
+    dvrRules.push({
+      id,
+      title: a.title,
+      channelId: a.channelId ?? null,
+      newOnly: a.newOnly,
+      weekdays: a.weekdays && a.weekdays.length ? a.weekdays : null,
+      aroundLocalMinute: a.aroundLocalMinute ?? null,
+      prePaddingSecs: a.prePaddingSecs ?? PRE_PADDING,
+      postPaddingSecs: a.postPaddingSecs ?? POST_PADDING,
+      keepEpisodes: a.keepEpisodes ?? null,
+      priority: 0,
+      enabled: true,
+      scheduled: 0,
+    });
+    return id;
+  },
+  'dvr.deleteRule': ({ id }) => {
+    const i = dvrRules.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    dvrRules.splice(i, 1);
+    // Episodes the rule already scheduled stay, as they do on the host.
+    for (const r of recordings) if (r.ruleId === id) r.ruleId = null;
+    return true;
+  },
+  'dvr.setRuleEnabled': ({ id, value }) => {
+    const r = dvrRules.find((x) => x.id === id);
+    if (r) r.enabled = value;
+  },
+  'dvr.reminders': () => [...reminders].sort((a, b) => a.start - b.start),
+  'dvr.addReminder': ({ channelId, title, start, leadSecs }) => {
+    if (reminders.some((r) => r.channelId === channelId && r.start === start && r.title === title)) {
+      return null;
+    }
+    const id = nextReminderId++;
+    reminders.push({ id, channelId, title, start, leadSecs: leadSecs ?? 120 });
+    return id;
+  },
+  'dvr.removeReminder': ({ id }) => {
+    const i = reminders.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    reminders.splice(i, 1);
+    return true;
+  },
+  'dvr.storage': (): DvrStorage => {
+    const done = recordings.filter((r) => r.state === 'completed');
+    const used = done.reduce((n, r) => n + r.bytes, 0);
+    let over = used - DVR_QUOTA_BYTES;
+    const prunable: number[] = [];
+    // Watched first, then oldest: the same order the host prunes in.
+    for (const r of [...done].filter((r) => !r.keep)
+      .sort((a, b) => Number(b.watched) - Number(a.watched) || a.start - b.start)) {
+      if (over <= 0) break;
+      over -= r.bytes;
+      prunable.push(r.id);
+    }
+    return {
+      folder: 'C:\\Users\\You\\Videos\\Aurora',
+      usedBytes: used,
+      quotaBytes: DVR_QUOTA_BYTES,
+      prunable,
+      maxConcurrent: MAX_CONCURRENT,
+    };
+  },
+
+  /* ── Metadata enrichment ────────────────────────────────────────────────── */
+
+  'metadata.status': (): MetadataStatus => ({
+    hasKey: metadataKey !== null,
+    // The browser mock has nowhere durable to put a key, and says so rather than
+    // pretending, exactly as the in-memory credential store does on the host.
+    keyIsPersistent: false,
+    movies: enrichmentCoverage('movie'),
+    series: enrichmentCoverage('series'),
+  }),
+
+  'metadata.setKey': ({ key }) => {
+    metadataKey = key && key.trim() ? key.trim() : null;
+  },
+
+  'metadata.run': async ({ batch, movies = true, series = true }): Promise<MetadataReport> => {
+    if (!metadataKey) {
+      throw new Error('No metadata API key is set. Add one in Settings to fetch artwork and cast.');
+    }
+    const limit = batch ?? 50;
+    const work: [string, 'movie' | 'series'][] = [];
+    if (movies) {
+      for (const m of fx.movies) {
+        if (!enriched.has(`movie:${m.id}`)) work.push([`movie:${m.id}`, 'movie']);
+      }
+    }
+    if (series) {
+      for (const s of fx.series) {
+        if (!enriched.has(`series:${s.id}`)) work.push([`series:${s.id}`, 'series']);
+      }
+    }
+
+    const slice = work.slice(0, limit);
+    const report: MetadataReport = { matched: 0, noMatch: 0, failed: 0 };
+    for (let i = 0; i < slice.length; i += 1) {
+      for (const fn of metadataListeners) fn({ done: i, total: slice.length });
+      await new Promise((r) => setTimeout(r, 60));
+      const [key] = slice[i]!;
+      // Every fifth title has no match, so the "not everything is found" case is
+      // reachable in the demo rather than being a state nobody ever sees.
+      const outcome: EnrichState = i % 5 === 4 ? 'nomatch' : 'matched';
+      enriched.set(key, outcome);
+      if (outcome === 'matched') report.matched += 1;
+      else report.noMatch += 1;
+    }
+    for (const fn of metadataListeners) fn({ done: slice.length, total: slice.length });
+    return report;
+  },
+
+  'metadata.credits': ({ kind, id }) => creditsFor(kind, id),
+
+  'metadata.rematch': ({ kind, id }) => {
+    enriched.delete(`${kind}:${id}`);
+    mockCredits.delete(`${kind}:${id}`);
+  },
+
+  'artwork.status': (): ArtworkCacheStatus => ({
+    folder: 'C:\\Users\\You\\AppData\\Local\\Aurora TV\\artwork',
+    files: artworkFiles,
+    usedBytes: artworkFiles * ARTWORK_AVG_BYTES,
+    maxBytes: ARTWORK_MAX_BYTES,
+  }),
+
+  'artwork.prefetch': async ({ limit }): Promise<ArtworkPrefetchReport> => {
+    const wanted = Math.round((fx.movies.length + fx.series.length) * 2.6);
+    const missing = Math.max(0, Math.min(limit ?? 500, wanted - artworkFiles));
+    for (let i = 0; i < missing; i += 1) {
+      if (i % 10 === 0) {
+        for (const fn of artworkListeners) fn({ done: i, total: missing });
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    }
+    for (const fn of artworkListeners) fn({ done: missing, total: missing });
+    // One URL in twenty is dead, so the "not everything downloads" case is reachable.
+    const failed = Math.floor(missing / 20);
+    artworkFiles += missing - failed;
+    return { downloaded: missing - failed, cached: artworkFiles - missing, failed, evicted: 0 };
+  },
+
+  'artwork.clear': () => {
+    const removed = artworkFiles;
+    artworkFiles = 0;
+    return removed;
+  },
+
   'providers.list': () => fx.providers,
+
+  /* ── Provider setup. Mirrors aurora_ingest so the wizard behaves the same in a
+        browser as it does on Windows, minus the actual network. ────────────── */
+
+  'providers.detect': ({ text }): DetectedSource => {
+    const trimmed = text.trim();
+    const isHttp = /^https?:\/\//i.test(trimmed);
+    const [before, query] = trimmed.split('?');
+    if (isHttp && query) {
+      const params = new URLSearchParams(query);
+      const username = params.get('username') ?? params.get('user');
+      const password = params.get('password') ?? params.get('pass');
+      if (username && password) {
+        const base = (before ?? '').replace(/\/[^/]*$/, '').replace(/\/+$/, '');
+        return { kind: 'xtream', url: base, username, password };
+      }
+    }
+    // A bare host has no credentials to find, but its shape says it is a panel root —
+    // mirrors aurora_ingest::source::looks_like_panel_root.
+    const withoutSlash = trimmed.replace(/\/+$/, '');
+    const afterScheme = withoutSlash.split('://')[1] ?? '';
+    if (isHttp && !withoutSlash.includes('?') && afterScheme && !afterScheme.includes('/')) {
+      return { kind: 'xtream', url: withoutSlash, username: null, password: null };
+    }
+    return { kind: 'm3u', url: trimmed, username: null, password: null };
+  },
+
+  'providers.validate': ({ draft }): ValidationResult => {
+    const base: ValidationResult = {
+      ok: false, message: '', detail: null, expiresAt: null, daysUntilExpiry: null,
+      maxConnections: null, activeConnections: null, isTrial: false,
+      credentialsDetected: false,
+    };
+    if (!/^https?:\/\//i.test(draft.url.trim())) {
+      return { ...base, message: 'That does not look like a URL',
+        detail: 'A provider address starts with http:// or https://' };
+    }
+    // The mock accepts anything well-formed; the shape of the answer is what the
+    // wizard is being exercised against.
+    if (draft.kind === 'xtream') {
+      if (!draft.username || !draft.password) {
+        return { ...base, message: 'Username and password are required',
+          detail: 'An Xtream panel needs both.' };
+      }
+      return {
+        ...base, ok: true, message: 'Connected',
+        expiresAt: Math.floor(Date.now() / 1000) + 41 * 86400,
+        daysUntilExpiry: 41, maxConnections: 2, activeConnections: 1,
+      };
+    }
+    return { ...base, ok: true, message: `Found ${fx.channels.length} entries` };
+  },
+
+  'providers.save': () => ({ id: 1 }),
+
+  'providers.refresh': async (): Promise<SyncReport> => {
+    // Walk the same phases the host emits, and only resolve once they are done —
+    // so the wizard's progress UI is genuinely exercised rather than skipped past.
+    const phases: IngestProgress[] = [
+      { phase: 'fetchingPlaylist', done: 0, total: 0 },
+      { phase: 'importingChannels', done: fx.channels.length, total: fx.channels.length },
+      { phase: 'importingMovies', done: fx.movies.length, total: fx.movies.length },
+      { phase: 'importingSeries', done: fx.series.length, total: fx.series.length },
+      { phase: 'fetchingEpg', done: 0, total: 0 },
+      { phase: 'matchingEpg', done: 0, total: 0 },
+      { phase: 'indexing', done: 0, total: 0 },
+      { phase: 'done', done: 1, total: 1 },
+    ];
+    for (const p of phases) {
+      emitIngest(p);
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    return {
+      channels: fx.channels.length,
+      movies: fx.movies.length,
+      series: fx.series.length,
+      episodes: fx.episodes.length,
+      epgChannels: fx.channels.length,
+      epgProgrammes: fx.channels.length * 48,
+      channelsMissing: 0,
+      epgMatched: fx.channels.length - 2,
+      epgUnmatched: fx.channels.slice(-2).map((c) => c.name),
+      warnings: [],
+    };
+  },
 };
 
 export function isInMyList(kind: 'movie' | 'series', id: number) {
@@ -483,7 +1163,7 @@ export async function invokeMock<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
 ): Promise<CommandResult<K>> {
-  const fn = handlers[name] as (a: CommandArgs<K>) => CommandResult<K>;
+  const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
-  return fn(args);
+  return await fn(args);
 }
