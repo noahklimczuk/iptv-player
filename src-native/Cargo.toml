@@ -4,6 +4,7 @@ members = [
   "crates/aurora-core",
   "crates/aurora-db",
   "crates/aurora-player",
+  "crates/aurora-ingest",
   "crates/aurora-app",
 ]
 # aurora-app pulls in Tauri, whose Linux backend needs GTK and whose Windows build
@@ -13,6 +14,7 @@ default-members = [
   "crates/aurora-core",
   "crates/aurora-db",
   "crates/aurora-player",
+  "crates/aurora-ingest",
 ]
 
 [workspace.package]
@@ -33,6 +35,7 @@ rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }
 aurora-player = { path = "crates/aurora-player" }
+aurora-ingest = { path = "crates/aurora-ingest" }
 
 [profile.release]
 opt-level = 3
