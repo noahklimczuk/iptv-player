@@ -314,8 +314,11 @@ function search(text: string): SearchResults {
   for (const ch of fx.channels) {
     for (const p of programmes(ch, now - 3600, now + 86400)) {
       if (!p.title.toLowerCase().includes(q)) continue;
-      const target = p.start <= now && p.stop > now ? onNow : upcoming;
-      if (target.length < 8) target.push(hit('programme', p.id, p.title, ch.name));
+      if (p.stop <= now) continue;
+      const target = p.start <= now ? onNow : upcoming;
+      // refId is the channel, matching the host: a programme hit is only useful if it
+      // can be watched, and only the channel can be tuned.
+      if (target.length < 8) target.push(hit('programme', ch.id, p.title, ch.name));
     }
   }
   const people = new Set<string>();

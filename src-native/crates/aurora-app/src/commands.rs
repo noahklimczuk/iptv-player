@@ -204,13 +204,17 @@ pub struct SearchArgs {
     pub text: String,
 }
 
+/// Grouped so the palette can render its sections without re-sorting (README §10).
+///
+/// The flat `search::query` is the FTS half of this; the palette wants programmes and
+/// people beside it, and those are not in the index.
 #[tauri::command]
 pub fn search_query(
     services: State<'_, Services>,
     args: SearchArgs,
-) -> Result<Vec<search::SearchHit>> {
+) -> Result<search::SearchResults> {
     let db = services.db.lock();
-    Ok(search::query(&db, &args.text, 40)?)
+    Ok(search::grouped(&db, &args.text, now_unix(), 40)?)
 }
 
 /* ── Player ───────────────────────────────────────────────────────────────── */

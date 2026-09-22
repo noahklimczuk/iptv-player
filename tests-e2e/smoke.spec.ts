@@ -78,6 +78,27 @@ test('selecting a programme fills the info pane with actions', async ({ page }) 
   await page.screenshot({ path: `${SHOTS}/05-guide-info.png` });
 });
 
+test('Search this title opens the palette already looking for the programme', async ({
+  page,
+}) => {
+  await page.goto('/#/guide');
+  await settle(page, 700);
+
+  const cell = page.locator('button[title*="–"]').first();
+  const tooltip = (await cell.getAttribute('title')) ?? '';
+  const title = tooltip.split(' · ')[0]!;
+  await cell.click();
+
+  await page.getByRole('button', { name: 'Search this title' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Search' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('textbox')).toHaveValue(title);
+  // Seeded, not just focused: results are on screen without a keystroke.
+  await expect(dialog.getByText(/On Now|Upcoming/).first()).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/27-guide-search.png` });
+});
+
 test('live TV lists channels with now/next from the EPG', async ({ page }) => {
   await page.goto('/#/live');
   await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();

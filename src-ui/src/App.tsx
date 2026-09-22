@@ -92,9 +92,17 @@ export default function App() {
   const episode = useEpisodeAids(ui.player, (id) => void playEpisode(id));
 
   const onPick = useCallback((hit: SearchHit) => {
-    if (hit.kind === 'channel') {
+    // A programme hit carries the channel it is on, not the programme id: what the
+    // viewer wants from one is to watch it, and only the channel can do that.
+    if (hit.kind === 'channel' || hit.kind === 'programme') {
       const ch = (channels ?? []).find((c) => c.id === hit.refId);
-      if (ch) tune(ch);
+      if (ch) {
+        tune(ch);
+        return;
+      }
+      // An upcoming programme on a channel we cannot resolve: the guide is where it
+      // lives, which beats doing nothing.
+      navigate('/guide');
       return;
     }
     if (hit.kind === 'movie' || hit.kind === 'series') {
@@ -204,7 +212,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
-          <Route path="/guide" element={<GuidePage onTune={tune} onCatchup={playCatchup} />} />
+          <Route path="/guide" element={<GuidePage onTune={tune} onCatchup={playCatchup} onSearch={(q) => ui.setPalette(true, q)} />} />
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/recordings" element={<RecordingsPage />} />
@@ -258,6 +266,7 @@ export default function App() {
 
       <CommandPalette
         open={ui.paletteOpen}
+        initialQuery={ui.paletteQuery}
         onClose={() => ui.setPalette(false)}
         onPick={onPick}
       />

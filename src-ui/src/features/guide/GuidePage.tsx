@@ -31,9 +31,12 @@ const xFor = (t: number, from: number) => ((t - from) / 60) * PX_PER_MIN;
 export function GuidePage({
   onTune,
   onCatchup,
+  onSearch,
 }: {
   onTune: (channel: Channel) => void;
   onCatchup: (channelId: number, start: number, stop: number) => Promise<void>;
+  /** Open the command palette looking for this title. */
+  onSearch: (query: string) => void;
 }) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const [from, setFrom] = useState(() => floorToSlot(Math.floor(Date.now() / 1000)));
@@ -122,7 +125,13 @@ export function GuidePage({
           }}
         >
           <PreviewPane channel={previewChannel} onTune={onTune} />
-          <InfoPane selected={selected} onTune={onTune} onCatchup={onCatchup} dvr={dvr} />
+          <InfoPane
+            selected={selected}
+            onTune={onTune}
+            onCatchup={onCatchup}
+            onSearch={onSearch}
+            dvr={dvr}
+          />
         </aside>
 
         {/* The grid. */}
@@ -530,11 +539,12 @@ function PreviewPane({
 }
 
 function InfoPane({
-  selected, onTune, onCatchup, dvr,
+  selected, onTune, onCatchup, onSearch, dvr,
 }: {
   selected: { ch: Channel; prog: Programme } | null;
   onTune: (c: Channel) => void;
   onCatchup: (channelId: number, start: number, stop: number) => Promise<void>;
+  onSearch: (query: string) => void;
   dvr: ReturnType<typeof useDvrMarks>;
 }) {
   const [catchupError, setCatchupError] = useState<string | null>(null);
@@ -660,7 +670,14 @@ function InfoPane({
           </Button>
         )}
 
-        <Button size="sm" variant="ghost" icon="search">Search this title</Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="search"
+          onClick={() => onSearch(prog.title)}
+        >
+          Search this title
+        </Button>
 
         {dvr.error && (
           <div role="alert" style={{ color: 'var(--danger)', fontSize: 'var(--fs-sm)' }}>
