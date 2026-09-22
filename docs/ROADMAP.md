@@ -103,14 +103,25 @@ were built first.
    is only observable with a subscription. The refusals are deliberate: a channel that
    advertises catch-up without saying how to ask for it gets a message, not a guessed
    URL that fails silently at the player.
-5. **The filters against a real playlist.** `aurora_core::lang` is written from the
+5. **Six contract commands the host does not implement.** `shared/ipc.ts` declares
+   them, the mock answers them, and `main.rs` registers no handler, so they work in the
+   browser build and fail on Windows: `library.rails` (the whole home page),
+   `library.stats` (the settings Library panel), `mylist.toggle`, `favorites.toggle`,
+   `progress.get` and `player.setSpeed`. `library.series` and `library.genres` were in
+   the same state until the filtering work needed them and built them. The pattern is
+   worth fixing at the root: nothing makes the contract and the registration list agree,
+   and a missing command is invisible until someone runs the real host. A test that
+   walks `Commands` and asserts a registered handler for each would have caught all
+   eight.
+
+6. **The filters against a real playlist.** `aurora_core::lang` is written from the
    conventions playlists use and tested against names shaped like them, but the only way
    to know how much of a real 10,000-entry subscription it can classify is to point
    `examples/probe.rs` at one and read the language histogram. The failure mode to watch
    for is the opposite of the obvious one: not content wrongly hidden, but a provider
    whose tagging is so sparse that "English only" hides almost nothing.
 
-6. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
+7. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
    points at remote URLs. Closing that needs `assetProtocol` enabled in
    `tauri.conf.json`, scoped to the cache folder, and the swap done with a fallback to
    the remote URL so a misconfigured protocol degrades to today's behaviour rather than
