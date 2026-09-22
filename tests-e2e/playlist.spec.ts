@@ -186,6 +186,70 @@ test('settings says what each filter would hide before it is turned on', async (
   await page.screenshot({ path: `${SHOTS}/30-filter-settings.png` });
 });
 
+test('the copies collapsing hid are still reachable as other sources', async ({ page }) => {
+  await setFilter(page, 'Collapse duplicates', true);
+
+  // A channel the provider carries three times: the guide offers the other two.
+  await page.goto('/#/guide');
+  await page.waitForTimeout(700);
+  await page.locator('button[title*="–"]').first().click();
+  const aside = page.locator('aside');
+  await expect(aside.getByText('Also in')).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/31-channel-sources.png` });
+
+  await setFilter(page, 'Collapse duplicates', false);
+});
+
+test('a collapsed film keeps its other copy on the card', async ({ page }) => {
+  await setFilter(page, 'Collapse duplicates', true);
+
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  await page.waitForTimeout(600);
+
+  // The fixtures carry one film twice; find the card that has another source.
+  const cards = page.locator('[role="button"]');
+  const count = Math.min(await cards.count(), 12);
+  let found = false;
+  for (let i = 0; i < count; i += 1) {
+    await cards.nth(i).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    if (await dialog.getByText('Also available as').isVisible().catch(() => false)) {
+      found = true;
+      await page.screenshot({ path: `${SHOTS}/32-movie-sources.png` });
+      break;
+    }
+    await page.keyboard.press('Escape');
+  }
+  expect(found, 'no collapsed film offered its other copy').toBe(true);
+
+  await page.keyboard.press('Escape');
+  await setFilter(page, 'Collapse duplicates', false);
+});
+
+test('the home page and search follow the filters too', async ({ page }) => {
+  await setFilter(page, 'Show English content only', true);
+
+  await page.goto('/#/');
+  await page.waitForTimeout(800);
+  await expect(page.getByText('[SPANISH] La Casa del Lago')).toBeHidden();
+
+  await page.keyboard.press('Control+k');
+  const dialog = page.getByRole('dialog', { name: 'Search' });
+  await dialog.getByRole('textbox').fill('TF1');
+  // The palette says so rather than showing a channel the filter is hiding.
+  await expect(dialog.getByText(/Nothing matches/)).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await setFilter(page, 'Show English content only', false);
+
+  await page.keyboard.press('Control+k');
+  await dialog.getByRole('textbox').fill('TF1');
+  await expect(dialog.getByText(/Nothing matches/)).toBeHidden();
+  await expect(dialog.getByText('Live Channels')).toBeVisible();
+});
+
 test('films and shows are editable in the same screen as channels', async ({ page }) => {
   await openEditor(page, 'Movies');
   // No channel numbers on a film.

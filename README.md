@@ -17,7 +17,7 @@ This repository holds two things:
 | Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 132 tests |
 | Playback state machine + error taxonomy | ✅ built, 13 tests |
 | libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 63 E2E journeys |
+| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 66 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
 | Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 29 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
@@ -26,7 +26,7 @@ This repository holds two things:
 | Artwork disk cache: download, evict, manage | ✅ built and tested; the UI does not read from it yet |
 | Catch-up playback (§7.5) | ✅ built and tested; the URL builder has never met a real provider |
 | Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
-| Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across channels, movies and series |
+| Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
 | Timeshift / pause live TV (§7.6) | ❌ not started |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
@@ -447,8 +447,12 @@ that auto-hide, auto-group, auto-rename, or auto-favorite on every refresh. Ship
 > hide-everything-this-search-matched action, and a reset that puts a provider's own values back. It
 > is the only screen that shows hidden entries, because hiding has to be reversible. Two of the
 > presets ship as library-wide settings rather than as rules: **Show English content only** and
-> **Collapse duplicates** (see `docs/DECISIONS.md` D14 and D15). Still to build: drag-to-reorder,
-> custom logos, named favourite lists, and the user-defined rules engine itself.
+> **Collapse duplicates** (see `docs/DECISIONS.md` D14 and D15). Both apply everywhere a list is
+> read — live TV, the guide, movies, series, the home rails and search — while a lookup by id or by
+> channel number still resolves, so nothing the viewer can name becomes unplayable. A collapsed
+> entry keeps its other copies: the guide offers a channel's other qualities, and a film or show's
+> card offers its other sources. Still to build: drag-to-reorder, custom logos, named favourite
+> lists, and the user-defined rules engine itself.
 
 ### 7.4 Multi-view / mosaic
 

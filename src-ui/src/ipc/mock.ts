@@ -368,18 +368,21 @@ const asMovie = (m: Movie): CatalogItem => ({ kind: 'movie', ...m });
 const asSeries = (s: Series): CatalogItem => ({ kind: 'series', ...s });
 
 function buildRails(): Rail[] {
-  const byRating = [...fx.movies].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-  const byAdded = [...fx.movies].sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
+  // The home page is a view of the library, so it is the filtered library it views.
+  const shownMovies = visibleMovies();
+  const shownSeries = visibleSeries();
+  const byRating = [...shownMovies].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+  const byAdded = [...shownMovies].sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
   const continueItems = [...progress.values()]
     .filter((p) => !p.completed && p.positionSecs > 60)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map((p) => {
       if (p.itemKind === 'movie') {
-        const m = fx.movies.find((x) => x.id === p.itemId);
+        const m = shownMovies.find((x) => x.id === p.itemId);
         return m ? asMovie(m) : null;
       }
       const ep = fx.episodes.find((x) => x.id === p.itemId);
-      const s = ep && fx.series.find((x) => x.id === ep.seriesId);
+      const s = ep && shownSeries.find((x) => x.id === ep.seriesId);
       return s ? asSeries(s) : null;
     })
     .filter((x): x is CatalogItem => x !== null);
@@ -388,14 +391,14 @@ function buildRails(): Rail[] {
     id: `genre-${g}`,
     kind: 'genre',
     title: g,
-    items: fx.movies.filter((m) => m.genres.includes(g)).slice(0, 18).map(asMovie),
+    items: shownMovies.filter((m) => m.genres.includes(g)).slice(0, 18).map(asMovie),
   });
 
   const rails: Rail[] = [
     { id: 'continue', kind: 'continueWatching', title: 'Continue Watching', items: continueItems },
     {
       id: 'upnext', kind: 'upNext', title: 'Up Next',
-      items: fx.series.slice(6, 20).map(asSeries),
+      items: shownSeries.slice(6, 20).map(asSeries),
     },
     {
       id: 'top10', kind: 'top10', title: 'Top 10 Movies Today',
@@ -404,9 +407,9 @@ function buildRails(): Rail[] {
     { id: 'recent', kind: 'recentlyAdded', title: 'Recently Added', items: byAdded.slice(0, 20).map(asMovie) },
     {
       id: 'because', kind: 'becauseYouWatched',
-      title: `Because you watched ${fx.movies[3]!.title}`,
-      reason: fx.movies[3]!.title,
-      items: fx.movies.slice(60, 80).map(asMovie),
+      title: `Because you watched ${shownMovies[3]!.title}`,
+      reason: shownMovies[3]!.title,
+      items: shownMovies.slice(60, 80).map(asMovie),
     },
     {
       id: 'mylist', kind: 'myList', title: 'My List',
@@ -414,17 +417,17 @@ function buildRails(): Rail[] {
         const [kind, rawId] = key.split(':');
         const id = Number(rawId);
         if (kind === 'movie') {
-          const m = fx.movies.find((x) => x.id === id);
+          const m = shownMovies.find((x) => x.id === id);
           return m ? [asMovie(m)] : [];
         }
-        const s = fx.series.find((x) => x.id === id);
+        const s = shownSeries.find((x) => x.id === id);
         return s ? [asSeries(s)] : [];
       }),
     },
-    { id: 'series', kind: 'trending', title: 'Trending Series', items: fx.series.slice(0, 18).map(asSeries) },
+    { id: 'series', kind: 'trending', title: 'Trending Series', items: shownSeries.slice(0, 18).map(asSeries) },
     {
       id: '4k', kind: 'fourK', title: '4K & HDR',
-      items: fx.movies.filter((m) => m.quality === '4K').slice(0, 18).map(asMovie),
+      items: shownMovies.filter((m) => m.quality === '4K').slice(0, 18).map(asMovie),
     },
     {
       id: 'acclaimed', kind: 'acclaimed', title: 'Critically Acclaimed',
@@ -434,7 +437,7 @@ function buildRails(): Rail[] {
     genreRail('Thriller'),
     {
       id: 'short', kind: 'shortAndSweet', title: 'Short & Sweet',
-      items: fx.movies.filter((m) => (m.runtimeMins ?? 999) < 95).slice(0, 18).map(asMovie),
+      items: shownMovies.filter((m) => (m.runtimeMins ?? 999) < 95).slice(0, 18).map(asMovie),
     },
     genreRail('Documentary'),
   ];
@@ -489,7 +492,11 @@ function search(text: string): SearchResults {
 
   const onNow: SearchHit[] = [];
   const upcoming: SearchHit[] = [];
-  for (const ch of fx.channels) {
+  // Search is a way into the library, not a way around the filters.
+  const shownChannels = visibleChannels();
+  const shownMovies = visibleMovies();
+  const shownSeries = visibleSeries();
+  for (const ch of shownChannels) {
     for (const p of programmes(ch, now - 3600, now + 86400)) {
       if (!p.title.toLowerCase().includes(q)) continue;
       if (p.stop <= now) continue;
@@ -500,18 +507,18 @@ function search(text: string): SearchResults {
     }
   }
   const people = new Set<string>();
-  for (const m of fx.movies) {
+  for (const m of shownMovies) {
     for (const c of m.cast) if (c.toLowerCase().includes(q)) people.add(c);
   }
 
   return {
-    channels: fx.channels.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8)
+    channels: shownChannels.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8)
       .map((c) => hit('channel', c.id, c.name, c.group)),
     onNow,
     upcoming: upcoming.slice(0, 8),
-    movies: fx.movies.filter((m) => m.title.toLowerCase().includes(q)).slice(0, 12)
+    movies: shownMovies.filter((m) => m.title.toLowerCase().includes(q)).slice(0, 12)
       .map((m) => hit('movie', m.id, m.title, m.year ? String(m.year) : null)),
-    series: fx.series.filter((s) => s.title.toLowerCase().includes(q)).slice(0, 12)
+    series: shownSeries.filter((s) => s.title.toLowerCase().includes(q)).slice(0, 12)
       .map((s) => hit('series', s.id, s.title, s.year ? String(s.year) : null)),
     people: [...people].slice(0, 8).map((p, i) => hit('person', i, p, null)),
   };

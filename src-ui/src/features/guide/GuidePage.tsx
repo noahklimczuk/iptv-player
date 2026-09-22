@@ -368,6 +368,36 @@ function ChannelCell({
   );
 }
 
+/**
+ * The same channel at other qualities (README §7.3: "one entry with a quality
+ * selector"). Only appears when the provider actually carries more than one, which is
+ * also when collapsing duplicates has hidden the others from the list.
+ */
+function ChannelSources({
+  channel, onTune,
+}: { channel: Channel; onTune: (c: Channel) => void }) {
+  const { data } = useCommand('library.alternates', { kind: 'live', id: channel.id },
+    [channel.id]);
+  const alternates = (data ?? []).filter((a) => a.id !== channel.id);
+  if (alternates.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>Also in</span>
+      {alternates.map((a) => (
+        <Button
+          key={a.id}
+          size="sm"
+          variant="ghost"
+          onClick={() => onTune({ ...channel, id: a.id, name: a.name, quality: a.quality })}
+        >
+          {a.quality ?? 'Unknown'}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 /** Genre colour coding with a legend (README §7.1). */
 function genreTone(categories: string[]): string {
   const c = categories.map((x) => x.toLowerCase()).join(' ');
@@ -669,6 +699,8 @@ function InfoPane({
             {reminder != null ? 'Reminder set' : 'Remind me'}
           </Button>
         )}
+
+        <ChannelSources channel={ch} onTune={onTune} />
 
         <Button
           size="sm"
