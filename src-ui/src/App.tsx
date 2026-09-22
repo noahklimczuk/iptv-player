@@ -4,6 +4,7 @@ import type { CatalogItem, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { Icon, type IconName } from '@/components/Icon';
 import { BrowsePage } from '@/features/browse/BrowsePage';
+import { RecordingsPage } from '@/features/dvr/RecordingsPage';
 import { GuidePage } from '@/features/guide/GuidePage';
 import { HomePage } from '@/features/home/HomePage';
 import { LivePage } from '@/features/live/LivePage';
@@ -29,6 +30,7 @@ const NAV: { to: string; icon: IconName; label: string }[] = [
   { to: '/guide', icon: 'grid', label: 'Guide' },
   { to: '/movies', icon: 'film', label: 'Movies' },
   { to: '/series', icon: 'stack', label: 'Series' },
+  { to: '/recordings', icon: 'record', label: 'Recordings' },
   { to: '/settings', icon: 'settings', label: 'Settings' },
 ];
 
@@ -189,6 +191,7 @@ export default function App() {
           <Route path="/guide" element={<GuidePage onTune={tune} />} />
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
+          <Route path="/recordings" element={<RecordingsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>

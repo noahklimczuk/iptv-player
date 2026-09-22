@@ -490,7 +490,8 @@ pub struct CreateRuleArgs {
 #[tauri::command]
 pub fn dvr_create_rule(services: State<'_, Services>, args: CreateRuleArgs) -> Result<i64> {
     let db = services.db.lock();
-    Ok(repo::create_rule(
+    let now = now_unix();
+    let id = repo::create_rule(
         &db,
         &repo::NewRule {
             title: &args.title,
@@ -503,8 +504,39 @@ pub fn dvr_create_rule(services: State<'_, Services>, args: CreateRuleArgs) -> R
             keep_episodes: args.keep_episodes,
             ..Default::default()
         },
-        now_unix(),
+        now,
+    )?;
+    // Schedule from the guide we already have, rather than waiting for the next EPG
+    // refresh: "Record series" that leaves the schedule empty looks broken.
+    if let Err(e) = expand_rules_now(&db, now) {
+        tracing::warn!("new rule created but could not be expanded yet: {e}");
+    }
+    Ok(id)
+}
+
+/// How far ahead rule expansion looks. A fortnight covers every provider's guide, and
+/// scheduling further out than the guide is guesswork.
+const EXPANSION_HORIZON_SECS: i64 = 14 * 86_400;
+
+/// Run every enabled rule over the guide as it stands. Idempotent, so the EPG refresh
+/// and the rules screen can both call it.
+pub fn expand_rules_now(db: &Connection, now: i64) -> Result<Vec<i64>> {
+    let programmes = repo::upcoming_programmes(db, now, now + EXPANSION_HORIZON_SECS)?;
+    Ok(repo::expand_rules(
+        db,
+        &programmes,
+        local_utc_offset_secs(),
+        now,
     )?)
+}
+
+/// The viewer's UTC offset, which rules with a weekday or a time-of-day are matched in.
+/// Falls back to UTC when the platform will not say — a rule matching an hour off is
+/// better than one that matches nothing.
+fn local_utc_offset_secs() -> i32 {
+    time::UtcOffset::current_local_offset()
+        .map(|o| o.whole_seconds())
+        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -691,6 +723,27 @@ mod tests {
         repo::get(&db.lock(), id).unwrap().unwrap().state
     }
 
+    /// Wait until a condition holds, rather than sleeping a guessed interval.
+    ///
+    /// The recorder runs on its own thread, so a fixed sleep is a race: on a loaded
+    /// machine the next tick can cut the recording off before it has read a byte, and
+    /// the test then fails for a reason that has nothing to do with what it checks.
+    fn wait_until(mut cond: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("condition did not hold within 5s");
+    }
+
+    /// Wait until a recording in flight has captured something.
+    fn wait_for_bytes(dvr: &Dvr, id: i64, at_least: u64) {
+        wait_until(|| dvr.bytes_so_far(id).unwrap_or(0) >= at_least);
+    }
+
     #[test]
     fn a_due_recording_starts_and_completes_when_the_stream_ends() {
         let db = seeded_db();
@@ -710,7 +763,7 @@ mod tests {
         assert_eq!(state_of(&db, id), RecordingState::Recording);
 
         // The canned body ends on its own, so the next tick finds it finished.
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        wait_for_bytes(&dvr, id, 4_096);
         let report = dvr.tick(1_100).unwrap();
         assert_eq!(report.completed, vec![id]);
         assert!(report.failed.is_empty());
@@ -734,6 +787,7 @@ mod tests {
 
         dvr.tick(1_000).unwrap();
         assert_eq!(dvr.active_ids(), vec![id]);
+        wait_for_bytes(&dvr, id, 1);
 
         // Past the scheduled stop: the stream is still going, the DVR is not.
         let report = dvr.tick(3_000).unwrap();
@@ -755,12 +809,19 @@ mod tests {
         );
 
         dvr.tick(1_000).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let report = dvr.tick(1_010).unwrap();
+        // An empty body ends at once, but "at once" is still another thread: tick until
+        // the reap sees it, rather than sleeping a guessed interval.
+        let mut failed = Vec::new();
+        wait_until(|| {
+            failed = dvr.tick(1_005).unwrap().failed;
+            !failed.is_empty()
+        });
 
-        assert_eq!(report.failed.len(), 1);
-        assert_eq!(report.failed[0].0, id);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].0, id);
         assert_eq!(state_of(&db, id), RecordingState::Failed);
+        // Reported once: a later tick has nothing left to say about it.
+        assert!(dvr.tick(1_010).unwrap().is_empty());
         // An empty file in the recordings folder is worse than no file.
         assert!(std::fs::read_dir(&dir)
             .map(|mut d| d.next().is_none())
@@ -901,7 +962,7 @@ mod tests {
         let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
 
         dvr.tick(1_000).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        wait_for_bytes(&dvr, id, 1);
         dvr.shutdown(1_050);
 
         assert!(dvr.active_ids().is_empty());
@@ -920,7 +981,7 @@ mod tests {
         let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
 
         dvr.tick(1_000).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        wait_for_bytes(&dvr, id, 1);
         assert!(dvr.bytes_so_far(id).unwrap_or(0) > 0);
         assert_eq!(dvr.bytes_so_far(999), None);
 

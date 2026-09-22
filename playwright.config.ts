@@ -17,6 +17,10 @@ const preinstalled =
 
 export default defineConfig({
   testDir: './tests-e2e',
+  // `pnpm typecheck` emits a .js beside every spec. Without this, Playwright collects
+  // both and every journey runs twice — and a stale .js keeps running after its source
+  // has changed.
+  testMatch: /.*\.spec\.ts$/,
   timeout: 45_000,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,

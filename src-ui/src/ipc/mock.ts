@@ -4,7 +4,8 @@
  */
 import type {
   CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
-  ParentalSettings, PinOutcome, Profile,
+  DvrStorage, ParentalSettings, PinOutcome, Profile,
+  Recording, RecordingConflict, RecordingRule, Reminder,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
   ValidationResult,
@@ -322,6 +323,242 @@ function search(text: string): SearchResults {
   };
 }
 
+
+/* ── DVR ────────────────────────────────────────────────────────────────────
+   Mirrors aurora_core::dvr and aurora_db::repo::dvr: the same padding, the same
+   duplicate rule, the same conflict arithmetic. The recorder is simulated on a
+   timer so the recordings page is live in a browser too. ───────────────────── */
+
+const PRE_PADDING = 60;
+const POST_PADDING = 300;
+const MAX_CONCURRENT = 2;
+const DVR_QUOTA_BYTES = 200 * 1024 ** 3;
+/** A plausible 8 Mb/s transport stream, for the simulated recorder. */
+const BYTES_PER_SEC = 1024 * 1024;
+
+let nextRecordingId = 1;
+let nextRuleId = 1;
+let nextReminderId = 1;
+const recordings: Recording[] = [];
+const dvrRules: RecordingRule[] = [];
+const reminders: Reminder[] = [];
+
+const dvrListeners = new Set<(t: { started: number[]; completed: number[]; failed: [number, string][]; stalled: number[] }) => void>();
+
+export function onDvrTick(fn: (t: { started: number[]; completed: number[]; failed: [number, string][]; stalled: number[] }) => void) {
+  dvrListeners.add(fn);
+  return () => dvrListeners.delete(fn);
+}
+
+function withPadding(start: number, stop: number, pre: number, post: number): [number, number] {
+  const paddedStart = Math.max(0, start - Math.max(0, pre));
+  const paddedStop = stop + Math.max(0, post);
+  return paddedStop <= paddedStart ? [start, Math.max(stop, start + 1)] : [paddedStart, paddedStop];
+}
+
+function scheduleRecording(a: {
+  channelId: number;
+  title: string;
+  subTitle?: string | null;
+  season?: number | null;
+  episode?: number | null;
+  airStart: number;
+  airStop: number;
+  prePaddingSecs?: number;
+  postPaddingSecs?: number;
+  priority?: number;
+  ruleId?: number | null;
+}): number | null {
+  const [start, stop] = withPadding(
+    a.airStart, a.airStop,
+    a.prePaddingSecs ?? PRE_PADDING,
+    a.postPaddingSecs ?? POST_PADDING,
+  );
+  // Same unique index the schema carries: (channelId, start, title).
+  const clash = recordings.some(
+    (r) => r.channelId === a.channelId && r.start === start && r.title === a.title,
+  );
+  if (clash) return null;
+
+  const id = nextRecordingId++;
+  recordings.push({
+    id,
+    channelId: a.channelId,
+    ruleId: a.ruleId ?? null,
+    title: a.title,
+    subTitle: a.subTitle ?? null,
+    season: a.season ?? null,
+    episode: a.episode ?? null,
+    airStart: a.airStart,
+    airStop: a.airStop,
+    start,
+    stop,
+    state: 'scheduled',
+    reason: null,
+    priority: a.priority ?? 0,
+    filePath: null,
+    bytes: 0,
+    durationSecs: 0,
+    keep: false,
+    watched: false,
+  });
+  return id;
+}
+
+/** Seed a library that looks lived-in: things recorded, one in flight, some coming up. */
+function seedDvr() {
+  const now = Math.floor(Date.now() / 1000);
+  const day = 86400;
+  const finished: [string, number, number, number, boolean, string | null][] = [
+    ['The Gilded Circuit', -2 * day, 3600, 2, true, null],
+    ['Nightfall Sessions', -1 * day - 7200, 5400, 0, false, null],
+    ['Harbour Lights', -1 * day, 1800, 0, true, null],
+    ['Signal to Noise', -3 * day, 3600, 0, false, 'The provider closed the connection early'],
+  ];
+  for (const [title, offset, len, chIndex, watched, reason] of finished) {
+    const airStart = now + offset;
+    const id = scheduleRecording({
+      channelId: fx.channels[chIndex]?.id ?? 1, title, airStart, airStop: airStart + len,
+    });
+    const rec = recordings.find((r) => r.id === id);
+    if (!rec) continue;
+    rec.state = 'completed';
+    rec.reason = reason;
+    rec.durationSecs = len + PRE_PADDING + POST_PADDING;
+    rec.bytes = rec.durationSecs * BYTES_PER_SEC;
+    rec.watched = watched;
+    rec.filePath = `C:\\Users\\You\\Videos\\Aurora\\${title}.ts`;
+  }
+
+  // One failed, so the page has to say why rather than just showing nothing.
+  const failedStart = now - 4 * day;
+  const failedId = scheduleRecording({
+    channelId: fx.channels[1]?.id ?? 1, title: 'Cross Harbour Derby',
+    airStart: failedStart, airStop: failedStart + 7200,
+  });
+  const failed = recordings.find((r) => r.id === failedId);
+  if (failed) {
+    failed.state = 'failed';
+    failed.reason = 'Aurora was not running when this was due';
+  }
+
+  // One in flight right now.
+  const liveStart = now - 900;
+  const liveId = scheduleRecording({
+    channelId: fx.channels[0]?.id ?? 1, title: 'The Evening Report',
+    airStart: liveStart, airStop: liveStart + 3600,
+  });
+  const live = recordings.find((r) => r.id === liveId);
+  if (live) {
+    live.state = 'recording';
+    live.bytes = 900 * BYTES_PER_SEC;
+  }
+
+  // And a few upcoming, one of which is a conflict with two others.
+  const tonight = now + 3 * 3600;
+  scheduleRecording({
+    channelId: fx.channels[0]?.id ?? 1, title: 'Late Kickoff',
+    airStart: tonight, airStop: tonight + 7200, priority: 10,
+  });
+  scheduleRecording({
+    channelId: fx.channels[1]?.id ?? 2, title: 'The Gilded Circuit',
+    airStart: tonight + 600, airStop: tonight + 4200, season: 2, episode: 4,
+  });
+  scheduleRecording({
+    channelId: fx.channels[2]?.id ?? 3, title: 'Midnight Movie',
+    airStart: tonight + 1200, airStop: tonight + 8400,
+  });
+
+  dvrRules.push({
+    id: nextRuleId++, title: 'The Gilded Circuit', channelId: null, newOnly: true,
+    weekdays: null, aroundLocalMinute: null, prePaddingSecs: PRE_PADDING,
+    postPaddingSecs: POST_PADDING, keepEpisodes: 5, priority: 0, enabled: true, scheduled: 2,
+  });
+  dvrRules.push({
+    id: nextRuleId++, title: 'Nightfall Sessions', channelId: fx.channels[0]?.id ?? 1,
+    newOnly: false, weekdays: [0, 1, 2, 3, 4], aroundLocalMinute: 22 * 60,
+    prePaddingSecs: PRE_PADDING, postPaddingSecs: POST_PADDING, keepEpisodes: null,
+    priority: 0, enabled: true, scheduled: 1,
+  });
+
+  reminders.push({
+    id: nextReminderId++, channelId: fx.channels[3]?.id ?? 1,
+    title: 'The Championship Final', start: now + 5 * 3600, leadSecs: 300,
+  });
+}
+seedDvr();
+
+/** Advance the simulated recorder, exactly as `Dvr::tick` advances the real one. */
+function dvrTick() {
+  const now = Math.floor(Date.now() / 1000);
+  const started: number[] = [];
+  const completed: number[] = [];
+  const failed: [number, string][] = [];
+
+  for (const r of recordings) {
+    if (r.state === 'scheduled' && r.start <= now && r.stop > now) {
+      const busy = recordings.filter((o) => o.state === 'recording').length;
+      if (busy >= MAX_CONCURRENT) {
+        r.state = 'skipped';
+        r.reason = 'too many recordings at once for this subscription';
+        failed.push([r.id, r.reason]);
+        continue;
+      }
+      r.state = 'recording';
+      started.push(r.id);
+    } else if (r.state === 'scheduled' && r.stop <= now) {
+      r.state = 'failed';
+      r.reason = 'Aurora was not running when this was due';
+      failed.push([r.id, r.reason]);
+    } else if (r.state === 'recording') {
+      r.bytes = Math.max(0, now - r.start) * BYTES_PER_SEC;
+      if (r.stop <= now) {
+        r.state = 'completed';
+        r.durationSecs = r.stop - r.start;
+        r.filePath = `C:\\Users\\You\\Videos\\Aurora\\${r.title}.ts`;
+        completed.push(r.id);
+      }
+    }
+  }
+
+  if (started.length || completed.length || failed.length) {
+    const report = { started, completed, failed, stalled: [] as number[] };
+    for (const fn of dvrListeners) fn(report);
+  }
+}
+setInterval(dvrTick, 5000);
+
+function findConflicts(maxConcurrent: number): RecordingConflict[] {
+  const now = Math.floor(Date.now() / 1000);
+  const slots = recordings
+    .filter((r) => (r.state === 'scheduled' || r.state === 'recording') && r.stop > now)
+    .sort((a, b) => a.start - b.start);
+
+  // Sweep the boundaries, same as aurora_core::dvr::find_conflicts.
+  const edges = [...new Set(slots.flatMap((s) => [s.start, s.stop]))].sort((a, b) => a - b);
+  const out: RecordingConflict[] = [];
+  for (let i = 0; i < edges.length - 1; i += 1) {
+    const from = edges[i]!;
+    const to = edges[i + 1]!;
+    const overlapping = slots.filter((s) => s.start < to && from < s.stop);
+    if (overlapping.length <= maxConcurrent) continue;
+    const last = out[out.length - 1];
+    if (last && last.stop === from && last.overBy === overlapping.length - maxConcurrent) {
+      last.stop = to;
+      continue;
+    }
+    out.push({
+      start: from,
+      stop: to,
+      slotIds: [...overlapping]
+        .sort((a, b) => b.priority - a.priority || a.start - b.start)
+        .map((s) => s.id),
+      overBy: overlapping.length - maxConcurrent,
+    });
+  }
+  return out;
+}
+
 /* ── Command dispatch ──────────────────────────────────────────────────────── */
 
 type Handler<K extends CommandName> = (
@@ -541,6 +778,106 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (masterPin !== undefined) mockMasterPin = masterPin;
   },
   'profiles.watchedToday': () => 42,
+
+  /* ── DVR ────────────────────────────────────────────────────────────────── */
+
+  'dvr.schedule': (a) => scheduleRecording({ ...a, priority: 10 }),
+  'dvr.list': ({ state }) => {
+    const rows = state ? recordings.filter((r) => r.state === state) : [...recordings];
+    return rows
+      .sort((a, b) => a.start - b.start)
+      .map((r) => ({ ...r, liveBytes: r.state === 'recording' ? r.bytes : null }));
+  },
+  'dvr.cancel': ({ id }) => {
+    const i = recordings.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    if (recordings[i]!.state === 'completed') {
+      throw new Error('recording already finished — delete it instead');
+    }
+    recordings.splice(i, 1);
+    return true;
+  },
+  'dvr.delete': ({ id }) => {
+    const i = recordings.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    recordings.splice(i, 1);
+    return true;
+  },
+  'dvr.setKeep': ({ id, value }) => {
+    const r = recordings.find((x) => x.id === id);
+    if (r) r.keep = value;
+  },
+  'dvr.setWatched': ({ id, value }) => {
+    const r = recordings.find((x) => x.id === id);
+    if (r) r.watched = value;
+  },
+  'dvr.conflicts': () => findConflicts(MAX_CONCURRENT),
+  'dvr.rules': () => [...dvrRules].sort((a, b) => a.title.localeCompare(b.title)),
+  'dvr.createRule': (a) => {
+    const id = nextRuleId++;
+    dvrRules.push({
+      id,
+      title: a.title,
+      channelId: a.channelId ?? null,
+      newOnly: a.newOnly,
+      weekdays: a.weekdays && a.weekdays.length ? a.weekdays : null,
+      aroundLocalMinute: a.aroundLocalMinute ?? null,
+      prePaddingSecs: a.prePaddingSecs ?? PRE_PADDING,
+      postPaddingSecs: a.postPaddingSecs ?? POST_PADDING,
+      keepEpisodes: a.keepEpisodes ?? null,
+      priority: 0,
+      enabled: true,
+      scheduled: 0,
+    });
+    return id;
+  },
+  'dvr.deleteRule': ({ id }) => {
+    const i = dvrRules.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    dvrRules.splice(i, 1);
+    // Episodes the rule already scheduled stay, as they do on the host.
+    for (const r of recordings) if (r.ruleId === id) r.ruleId = null;
+    return true;
+  },
+  'dvr.setRuleEnabled': ({ id, value }) => {
+    const r = dvrRules.find((x) => x.id === id);
+    if (r) r.enabled = value;
+  },
+  'dvr.reminders': () => [...reminders].sort((a, b) => a.start - b.start),
+  'dvr.addReminder': ({ channelId, title, start, leadSecs }) => {
+    if (reminders.some((r) => r.channelId === channelId && r.start === start && r.title === title)) {
+      return null;
+    }
+    const id = nextReminderId++;
+    reminders.push({ id, channelId, title, start, leadSecs: leadSecs ?? 120 });
+    return id;
+  },
+  'dvr.removeReminder': ({ id }) => {
+    const i = reminders.findIndex((r) => r.id === id);
+    if (i < 0) return false;
+    reminders.splice(i, 1);
+    return true;
+  },
+  'dvr.storage': (): DvrStorage => {
+    const done = recordings.filter((r) => r.state === 'completed');
+    const used = done.reduce((n, r) => n + r.bytes, 0);
+    let over = used - DVR_QUOTA_BYTES;
+    const prunable: number[] = [];
+    // Watched first, then oldest: the same order the host prunes in.
+    for (const r of [...done].filter((r) => !r.keep)
+      .sort((a, b) => Number(b.watched) - Number(a.watched) || a.start - b.start)) {
+      if (over <= 0) break;
+      over -= r.bytes;
+      prunable.push(r.id);
+    }
+    return {
+      folder: 'C:\\Users\\You\\Videos\\Aurora',
+      usedBytes: used,
+      quotaBytes: DVR_QUOTA_BYTES,
+      prunable,
+      maxConcurrent: MAX_CONCURRENT,
+    };
+  },
 
   'providers.list': () => fx.providers,
 

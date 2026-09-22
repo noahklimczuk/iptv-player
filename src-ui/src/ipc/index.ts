@@ -4,10 +4,11 @@
  * without Windows.
  */
 import type {
-  CommandArgs, CommandName, CommandResult, IngestProgress, PlayerState,
+  CommandArgs, CommandName, CommandResult, Events, IngestProgress, PlayerState,
 } from '@shared/ipc';
 import {
   invokeMock,
+  onDvrTick as onMockDvrTick,
   onIngestProgress as onMockIngestProgress,
   onPlayerState as onMockPlayerState,
 } from './mock';
@@ -59,6 +60,26 @@ export function onIngestProgress(fn: (p: IngestProgress) => void): () => void {
   };
   let dispose: (() => void) | undefined;
   void w.__TAURI__?.event?.listen('ingest.progress', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** What one DVR tick changed, so the recordings page stays live without polling. */
+export function onDvrTick(fn: (t: Events['dvr.tick']) => void): () => void {
+  if (!isNativeHost()) return onMockDvrTick(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (
+          e: string,
+          cb: (p: { payload: Events['dvr.tick'] }) => void,
+        ) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('dvr.tick', (e) => fn(e.payload)).then((d) => {
     dispose = d;
   });
   return () => dispose?.();

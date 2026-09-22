@@ -481,6 +481,48 @@ fn rule_padding(conn: &Connection, rule_id: i64) -> Result<(i64, i64, i32)> {
     )?)
 }
 
+/// Guide entries starting inside `[from, to)`, paired with the numeric channel they air
+/// on — the input rule expansion runs over.
+///
+/// Joins through `channels.epg_channel_id` because the guide keys on the provider's EPG
+/// channel string while a recording has to name a channel Aurora can actually tune.
+pub fn upcoming_programmes(conn: &Connection, from: i64, to: i64) -> Result<Vec<(Programme, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.channel_id, p.start, p.stop, p.title, p.sub_title, p.description,
+                p.categories, p.season, p.episode, p.rating, p.flags, c.id
+         FROM epg_programmes p
+         JOIN channels c ON c.epg_channel_id = p.channel_id
+         WHERE p.start >= ?1 AND p.start < ?2 AND c.hidden = 0
+         ORDER BY p.start",
+    )?;
+    let rows = stmt.query_map(params![from, to], |r| {
+        let categories: String = r.get(6)?;
+        let flags: i64 = r.get(10)?;
+        Ok((
+            Programme {
+                channel_id: r.get(0)?,
+                start: r.get(1)?,
+                stop: r.get(2)?,
+                title: r.get(3)?,
+                sub_title: r.get(4)?,
+                description: r.get(5)?,
+                categories: serde_json::from_str(&categories).unwrap_or_default(),
+                season: r.get::<_, Option<i64>>(7)?.map(|v| v as u16),
+                episode: r.get::<_, Option<i64>>(8)?.map(|v| v as u16),
+                icon: None,
+                rating: r.get(9)?,
+                star_rating: None,
+                is_new: flags & 1 != 0,
+                is_live: flags & 2 != 0,
+                is_premiere: flags & 4 != 0,
+                credits: Vec::new(),
+            },
+            r.get(11)?,
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Run every enabled rule over a slice of guide entries and schedule what matches.
 ///
 /// Idempotent: called after every EPG refresh, and the unique index absorbs airings that
@@ -1130,6 +1172,76 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    /// Seed one guide entry on a channel that is mapped to an EPG id.
+    fn seed_guide(conn: &Connection, channel_id: i64, title: &str, start: i64, hidden: bool) {
+        let epg_id = format!("epg{channel_id}");
+        conn.execute(
+            "UPDATE channels SET epg_channel_id = ?2, hidden = ?3 WHERE id = ?1",
+            params![channel_id, epg_id, hidden as i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO epg_programmes (channel_id,start,stop,title,categories,flags)
+             VALUES (?1,?2,?3,?4,'[]',1)",
+            params![epg_id, start, start + 1800, title],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn upcoming_programmes_pairs_guide_entries_with_tunable_channels() {
+        let conn = db();
+        seed_guide(&conn, 1, "Tonight", 100_000, false);
+        seed_guide(&conn, 2, "Also Tonight", 110_000, false);
+
+        let rows = upcoming_programmes(&conn, 0, 200_000).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0.title, "Tonight");
+        assert_eq!(rows[0].1, 1, "the numeric channel, not the EPG string");
+        assert!(rows[0].0.is_new);
+
+        // Outside the window.
+        assert!(upcoming_programmes(&conn, 150_000, 200_000)
+            .unwrap()
+            .iter()
+            .all(|(p, _)| p.title != "Tonight"));
+    }
+
+    #[test]
+    fn upcoming_programmes_skips_hidden_channels_and_unmapped_guide_rows() {
+        let conn = db();
+        seed_guide(&conn, 1, "Hidden Channel Show", 100_000, true);
+        // A guide row whose EPG id matches no channel cannot be recorded.
+        conn.execute(
+            "INSERT INTO epg_programmes (channel_id,start,stop,title,categories,flags)
+             VALUES ('orphan',100_000,101_800,'Orphan','[]',0)",
+            [],
+        )
+        .unwrap();
+
+        assert!(upcoming_programmes(&conn, 0, 200_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_new_rule_schedules_from_the_guide_immediately() {
+        let conn = db();
+        seed_guide(&conn, 1, "The Late Show", 100_000, false);
+        create_rule(
+            &conn,
+            &NewRule {
+                title: "The Late Show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        let programmes = upcoming_programmes(&conn, 0, 200_000).unwrap();
+        let added = expand_rules(&conn, &programmes, 0, 0).unwrap();
+        assert_eq!(added.len(), 1);
+        assert_eq!(get(&conn, added[0]).unwrap().unwrap().channel_id, 1);
     }
 
     #[test]

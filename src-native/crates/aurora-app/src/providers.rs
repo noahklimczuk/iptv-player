@@ -253,6 +253,17 @@ pub fn providers_refresh(
     )
     .map_err(aurora_db::DbError::from)?;
 
+    // Fresh guide data is the moment a series rule can find new episodes. Doing it here
+    // rather than on a timer means the schedule is right as soon as the import is.
+    match crate::dvr::expand_rules_now(&db, now_unix()) {
+        Ok(added) if !added.is_empty() => {
+            tracing::info!("series rules scheduled {} new recordings", added.len());
+        }
+        Ok(_) => {}
+        // A rule that could not be expanded must not fail the import the user waited for.
+        Err(e) => tracing::warn!("could not expand series rules after refresh: {e}"),
+    }
+
     let _ = app.emit(
         "library.refreshed",
         &serde_json::json!({

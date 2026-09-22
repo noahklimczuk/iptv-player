@@ -344,6 +344,78 @@ export interface LibraryStats {
   epgCoverage: EpgCoverage;
 }
 
+
+/** README §7.7: what a scheduled or finished recording looks like to the UI. */
+export type RecordingState = 'scheduled' | 'recording' | 'completed' | 'failed' | 'skipped';
+
+export interface Recording {
+  id: number;
+  channelId: number;
+  ruleId: number | null;
+  title: string;
+  subTitle: string | null;
+  season: number | null;
+  episode: number | null;
+  /** Airtime as the guide gave it, without padding. */
+  airStart: number;
+  airStop: number;
+  /** What the recorder opens and closes on: airtime plus padding. */
+  start: number;
+  stop: number;
+  state: RecordingState;
+  /** Why it failed, or why a completed recording is short. */
+  reason: string | null;
+  priority: number;
+  filePath: string | null;
+  bytes: number;
+  durationSecs: number;
+  keep: boolean;
+  watched: boolean;
+  /** Bytes on disk right now, for a recording still in flight. */
+  liveBytes?: number | null;
+}
+
+/** A window where the schedule wants more streams than the subscription allows. */
+export interface RecordingConflict {
+  start: number;
+  stop: number;
+  slotIds: number[];
+  overBy: number;
+}
+
+export interface RecordingRule {
+  id: number;
+  title: string;
+  channelId: number | null;
+  newOnly: boolean;
+  /** 0 = Monday. Null means any day. */
+  weekdays: number[] | null;
+  aroundLocalMinute: number | null;
+  prePaddingSecs: number;
+  postPaddingSecs: number;
+  keepEpisodes: number | null;
+  priority: number;
+  enabled: boolean;
+  scheduled: number;
+}
+
+export interface Reminder {
+  id: number;
+  channelId: number;
+  title: string;
+  start: number;
+  leadSecs: number;
+}
+
+export interface DvrStorage {
+  folder: string;
+  usedBytes: number;
+  /** Zero means no limit. */
+  quotaBytes: number;
+  prunable: number[];
+  maxConcurrent: number;
+}
+
 /** The typed command surface. Every UI data need goes through exactly one of these. */
 export interface Commands {
   'library.rails': (args: { profileId: number }) => Rail[];
@@ -450,6 +522,47 @@ export interface Commands {
   }) => void;
   'profiles.watchedToday': (args: { profileId: number }) => number;
 
+  /** Returns null when this airing was already on the schedule. */
+  'dvr.schedule': (args: {
+    channelId: number;
+    title: string;
+    subTitle?: string | null;
+    season?: number | null;
+    episode?: number | null;
+    airStart: number;
+    airStop: number;
+    prePaddingSecs?: number;
+    postPaddingSecs?: number;
+  }) => number | null;
+  'dvr.list': (args: { state?: RecordingState }) => Recording[];
+  'dvr.cancel': (args: { id: number }) => boolean;
+  'dvr.delete': (args: { id: number }) => boolean;
+  'dvr.setKeep': (args: { id: number; value: boolean }) => void;
+  'dvr.setWatched': (args: { id: number; value: boolean }) => void;
+  'dvr.conflicts': () => RecordingConflict[];
+  'dvr.rules': () => RecordingRule[];
+  'dvr.createRule': (args: {
+    title: string;
+    channelId?: number | null;
+    newOnly: boolean;
+    weekdays?: number[] | null;
+    aroundLocalMinute?: number | null;
+    prePaddingSecs?: number | null;
+    postPaddingSecs?: number | null;
+    keepEpisodes?: number | null;
+  }) => number;
+  'dvr.deleteRule': (args: { id: number }) => boolean;
+  'dvr.setRuleEnabled': (args: { id: number; value: boolean }) => void;
+  'dvr.reminders': () => Reminder[];
+  'dvr.addReminder': (args: {
+    channelId: number;
+    title: string;
+    start: number;
+    leadSecs?: number;
+  }) => number | null;
+  'dvr.removeReminder': (args: { id: number }) => boolean;
+  'dvr.storage': () => DvrStorage;
+
   'providers.list': () => Provider[];
   'providers.detect': (args: { text: string }) => DetectedSource;
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
@@ -467,5 +580,12 @@ export interface Events {
   'ingest.progress': IngestProgress;
   'library.refreshed': { added: number; removed: number; updated: number };
   'toast': { level: 'info' | 'success' | 'warning' | 'error'; message: string };
+  /** What one DVR tick changed, so the recordings page stays live (README §7.7). */
+  'dvr.tick': {
+    started: number[];
+    completed: number[];
+    failed: [number, string][];
+    stalled: number[];
+  };
 }
 export type EventName = keyof Events;
