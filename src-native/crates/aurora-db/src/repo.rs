@@ -2,6 +2,7 @@
 
 pub mod channels;
 pub mod dvr;
+pub mod enrichment;
 pub mod epg;
 pub mod library;
 pub mod markers;

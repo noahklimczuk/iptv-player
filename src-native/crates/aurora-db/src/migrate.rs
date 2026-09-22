@@ -114,6 +114,9 @@ mod tests {
         "recordings",
         "recording_rules",
         "reminders",
+        "people",
+        "credits",
+        "enrichment",
     ];
 
     fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {

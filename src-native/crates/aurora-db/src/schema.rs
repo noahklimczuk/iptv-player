@@ -407,6 +407,53 @@ CREATE UNIQUE INDEX idx_reminders_unique ON reminders(channel_id, start, title);
 CREATE INDEX idx_reminders_due ON reminders(fired, start);
 "#,
     },
+    Migration {
+        version: 7,
+        name: "enrichment",
+        sql: r#"
+-- `people` and `credits` are the third pair of tables README §5 listed from the start
+-- and migration 1 never created — after `recordings`, `recording_rules` and `reminders`.
+-- The table list in migrate.rs's test now names every one of them, so a fourth cannot
+-- go unnoticed the same way.
+CREATE TABLE people (
+    tmdb_id      INTEGER PRIMARY KEY,
+    name         TEXT    NOT NULL,
+    profile_path TEXT
+);
+
+-- Polymorphic over movies and series, following `watch_progress`. That means no
+-- cascade, so deleting a title has to clear its credits — see repo::enrichment::forget.
+CREATE TABLE credits (
+    item_kind  TEXT    NOT NULL CHECK (item_kind IN ('movie','series')),
+    item_id    INTEGER NOT NULL,
+    person_id  INTEGER NOT NULL REFERENCES people(tmdb_id) ON DELETE CASCADE,
+    -- Character for cast, job for crew. NOT NULL because a NULL in a composite primary
+    -- key compares distinct from itself in SQLite, which would let duplicates through.
+    role       TEXT    NOT NULL DEFAULT '',
+    is_cast    INTEGER NOT NULL DEFAULT 1,
+    ord        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (item_kind, item_id, person_id, is_cast, role)
+);
+CREATE INDEX idx_credits_item   ON credits(item_kind, item_id, is_cast, ord);
+CREATE INDEX idx_credits_person ON credits(person_id);
+
+-- What enrichment has already tried.
+--
+-- Without this, a title that genuinely has no match is searched again on every refresh
+-- for ever: a few hundred unmatched titles would spend the whole rate-limit budget
+-- re-asking questions already answered.
+CREATE TABLE enrichment (
+    item_kind    TEXT    NOT NULL CHECK (item_kind IN ('movie','series')),
+    item_id      INTEGER NOT NULL,
+    state        TEXT    NOT NULL CHECK (state IN ('matched','nomatch','failed')),
+    tmdb_id      INTEGER,
+    confidence   REAL,
+    attempted_at INTEGER NOT NULL,
+    PRIMARY KEY (item_kind, item_id)
+);
+CREATE INDEX idx_enrichment_state ON enrichment(state, attempted_at);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 6;
+pub const LATEST_VERSION: u32 = 7;
