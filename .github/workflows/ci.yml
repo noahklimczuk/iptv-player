@@ -130,6 +130,15 @@ jobs:
     permissions:
       # To publish the installer to Releases at the end of the job.
       contents: write
+    env:
+      # `[profile.release]` is set for shipping — fat LTO and codegen-units = 1 — which
+      # is the slowest possible way to build and cost 8½ minutes of mostly
+      # single-threaded linking. These override it for CI only, so the committed
+      # profile stays right for a real release. opt-level stays at 3: this build exists
+      # to be run and judged, and the difference LTO makes to that is not worth the
+      # minutes.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
 
@@ -139,6 +148,9 @@ jobs:
           workspaces: src-native
           # The bundle's own key, so it does not evict the check job's cache.
           key: windows-app
+          # Without this a failed run saves nothing, so every build after a red one
+          # starts from zero — which is why none of these has ever been warm.
+          cache-on-failure: true
 
       - uses: pnpm/action-setup@v4
         with:
@@ -254,6 +266,14 @@ jobs:
           path: aurora-tv-portable.zip
           if-no-files-found: error
 
+      - name: Cache the bundler's toolchains
+        # Tauri fetches NSIS and WiX on first use and keeps them here; without this
+        # they are downloaded again on every run.
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-bundler-tools-${{ runner.os }}
+
       - name: Build the installers
         # Re-runs cargo, but the release build above is already warm, so this is the
         # bundler's work only. `--config` adds the DLL as a bundled resource without
@@ -323,6 +343,9 @@ jobs:
             ''
             'This is a development build, not a finished product. docs/TESTING_A_BUILD.md'
             'says what to look at first and where the log is.'
+            ''
+            'Built without link-time optimisation to keep CI quick, so do not use it to'
+            'benchmark playback performance.'
           ) -join "`n"
 
           # gh exits non-zero when the release does not exist, which is information
