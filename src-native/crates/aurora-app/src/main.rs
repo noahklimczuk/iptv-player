@@ -3,14 +3,37 @@
 
 use aurora_app::{commands, dvr, metadata, playlist, profiles, providers, services::Services};
 
-fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("AURORA_LOG")
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+/// Send the log somewhere a person can read it.
+///
+/// A release build sets `windows_subsystem = "windows"`, so it has no console and
+/// anything written to stdout goes nowhere — including the one line that distinguishes
+/// "libmpv would not load" from "the video is behind the window". So release builds log
+/// to a file beside their data, and debug builds keep the console they already have.
+///
+/// Truncated per run: the question being asked of a log is almost always about the
+/// launch that just failed, not the twenty before it.
+fn init_logging(data_dir: &std::path::Path) {
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_env("AURORA_LOG").unwrap_or_else(|_| "info".into());
 
+    if cfg!(debug_assertions) {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+        return;
+    }
+
+    let _ = std::fs::create_dir_all(data_dir);
+    match std::fs::File::create(data_dir.join("aurora.log")) {
+        Ok(file) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .init(),
+        // Nowhere to write and nowhere to say so; the app still runs.
+        Err(_) => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
+}
+
+fn main() {
     tauri::Builder::default()
         .setup(|app| {
             use tauri::Manager;
@@ -29,6 +52,13 @@ fn main() {
                     .app_local_data_dir()
                     .map_err(|e| format!("no data dir: {e}"))?,
             };
+
+            init_logging(&data_dir);
+            tracing::info!(
+                "Aurora TV {} starting, data in {}",
+                env!("CARGO_PKG_VERSION"),
+                data_dir.display()
+            );
 
             let services = Services::new(data_dir)?;
             let scheduler = std::sync::Arc::clone(&services.dvr);
