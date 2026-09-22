@@ -596,7 +596,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO profiles (id,name,created_at) VALUES (1,'Me',0)",
+            "INSERT OR IGNORE INTO profiles (id,name,created_at) VALUES (1,'Me',0)",
             [],
         )
         .unwrap();

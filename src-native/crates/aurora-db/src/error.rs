@@ -18,6 +18,11 @@ pub enum DbError {
     )]
     SchemaTooNew { found: u32, supported: u32 },
 
+    /// A domain rule said no — too many profiles, a malformed PIN. Not a storage
+    /// failure, and shouldn't be disguised as one.
+    #[error("{0}")]
+    Rejected(String),
+
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }

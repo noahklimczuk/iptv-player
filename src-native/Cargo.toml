@@ -31,6 +31,8 @@ tracing = "0.1"
 time = { version = "0.3", features = ["parsing", "formatting", "macros", "local-offset"] }
 quick-xml = "0.36"
 regex = "1"
+argon2 = "0.5"
+getrandom = "0.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }

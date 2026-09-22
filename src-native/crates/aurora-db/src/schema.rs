@@ -290,6 +290,50 @@ CREATE TABLE series_prefs (
 ALTER TABLE providers ADD COLUMN username TEXT;
 "#,
     },
+    Migration {
+        version: 5,
+        name: "default_profile_and_parental_controls",
+        sql: r#"
+-- Every per-profile table has a foreign key onto `profiles`, and nothing ever
+-- created a row. On a real install the first attempt to save watch progress failed
+-- with a FOREIGN KEY violation; the tests all created their own profile and so
+-- never saw it.
+INSERT INTO profiles (id, name, avatar, is_kids, created_at)
+SELECT 1, 'Me', 'default', 0, 0
+WHERE NOT EXISTS (SELECT 1 FROM profiles);
+
+-- README §11: kids profiles, certification ceilings, and daily limits.
+ALTER TABLE profiles ADD COLUMN allow_unrated   INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE profiles ADD COLUMN daily_limit_min INTEGER;
+ALTER TABLE profiles ADD COLUMN sort_order      INTEGER NOT NULL DEFAULT 0;
+
+-- The master PIN guarding Settings and adult content, distinct from any individual
+-- profile's own PIN. Single row.
+CREATE TABLE parental (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    master_pin     TEXT,
+    hide_adult     INTEGER NOT NULL DEFAULT 1,
+    lock_settings  INTEGER NOT NULL DEFAULT 0,
+    updated_at     INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO parental (id) VALUES (1);
+
+-- Per-channel and per-category locks.
+CREATE TABLE parental_locks (
+    kind   TEXT NOT NULL CHECK (kind IN ('channel','category')),
+    value  TEXT NOT NULL,
+    PRIMARY KEY (kind, value)
+);
+
+-- Failed PIN attempts, so guessing can be throttled. A 4-digit PIN is only ten
+-- thousand possibilities; the throttle is what makes that impractical, not the hash.
+CREATE TABLE pin_attempts (
+    scope        TEXT PRIMARY KEY,
+    failures     INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0
+);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 4;
+pub const LATEST_VERSION: u32 = 5;

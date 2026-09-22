@@ -191,7 +191,7 @@ mod tests {
     fn db() -> Connection {
         let conn = crate::open_memory().unwrap();
         conn.execute(
-            "INSERT INTO profiles (id, name, created_at) VALUES (1,'Me',0)",
+            "INSERT OR IGNORE INTO profiles (id, name, created_at) VALUES (1,'Me',0)",
             [],
         )
         .unwrap();
