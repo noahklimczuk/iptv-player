@@ -46,22 +46,28 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | TMDB's real responses match what the client expects | **Not verified** — parsed from the documented shape, never called with a key |
 | The WebView can load a cached image | **Not verified** — `artwork::asset_url` builds the URL from Tauri's documented format, and nothing has run the app to confirm the asset protocol serves it |
 
-## The known issue worth fixing before release
+## The refresh lock — fixed
 
-`providers_refresh` holds the single writer connection across the whole of `sync::run`,
-which fetches the playlist and a potentially very large EPG over the network. Every other
-command blocks for the duration.
+`providers_refresh` used to hold the single writer connection across the whole of
+`sync::run`, which downloads a playlist and a potentially very large guide. Every other
+command blocked for the duration, and because the DVR scheduler takes the same lock
+every ten seconds to ask whether a recording is due, a recording falling inside a long
+refresh did not start until the refresh ended. A responsiveness problem that had become
+a correctness one.
 
-That used to be a responsiveness problem and is now a correctness one, because the DVR
-scheduler takes the same lock every ten seconds to decide whether a recording is due. A
-recording that falls inside a long refresh does not start until the refresh finishes.
+`sync::run` is now `sync::fetch` followed by `sync::apply`. The split is in the types
+rather than in a convention: `fetch` is handed no `Connection` and `apply` is handed no
+`HttpClient`, so putting a download back under the lock means changing a signature and
+reading why. The host calls the halves separately and takes the lock only for `apply`.
 
-`metadata::enrich_batch` shows the shape of the fix and has a test that fails if the lock
-is ever held across the network again: plan under the lock, fetch without it, write under
-it again. Applying the same to `sync::run` means splitting it into fetch and apply halves,
-which changes what partial state a failed import can leave behind — worth doing
-deliberately rather than in passing. The alternative is giving the DVR its own connection,
-which WAL supports but which is an architectural decision, not a patch.
+Two tests hold it: one applies an import with the test server already shut down, and one
+runs a contender thread standing in for the DVR and fails if it is locked out. Reverting
+to the old shape takes that thread from dozens of acquisitions to zero.
+
+What it did not change: `apply` still runs under the lock, which is bounded local work
+rather than a network wait. And a failed import leaves *less* behind than before — a
+download that fails now writes nothing at all, where previously it could abort partway
+through writing.
 
 ## The Phase 0 caveat
 

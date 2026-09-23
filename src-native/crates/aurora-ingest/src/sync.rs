@@ -92,14 +92,48 @@ impl SyncOptions {
 }
 
 /// Run a full refresh. `on_progress` is called often enough to drive a progress bar.
-pub fn run(
-    db: &mut Connection,
+/// Everything the network gave us, before a single row is written.
+///
+/// The point of this type is the boundary it draws. A refresh downloads a playlist and
+/// a guide that can run to tens of megabytes, and it used to do that while holding the
+/// one database connection — which froze every other command, and, because the DVR
+/// scheduler takes the same lock every ten seconds to decide whether a recording is
+/// due, meant a recording falling inside a long refresh simply did not start.
+///
+/// Splitting the phases makes that impossible to reintroduce by accident: [`fetch`]
+/// cannot touch the database because it is never handed one, and [`apply`] cannot touch
+/// the network for the same reason.
+#[derive(Debug, Default)]
+pub struct Fetched {
+    live: Vec<PlaylistEntry>,
+    movies: Vec<PlaylistEntry>,
+    episodes: Vec<PlaylistEntry>,
+    epg: Vec<FetchedEpg>,
+    warnings: Vec<String>,
+}
+
+/// One guide source, parsed and waiting to be written.
+#[derive(Debug, Default)]
+struct FetchedEpg {
+    channels: Vec<EpgChannel>,
+    /// Kept batched exactly as they will be inserted, so `apply` does no regrouping.
+    programmes: Vec<Vec<Programme>>,
+    counted_channels: usize,
+    counted_programmes: usize,
+}
+
+/// Download and parse everything, touching no database.
+///
+/// Rules are applied here rather than in [`apply`]: an entry the user has hidden should
+/// never reach the library at all, and deciding that before the write means there is no
+/// window in which it exists.
+pub fn fetch(
     http: &HttpClient,
     options: &SyncOptions,
     rules: &RuleSet,
     mut on_progress: impl FnMut(Progress),
-) -> Result<SyncReport, NetFailure> {
-    let mut report = SyncReport::default();
+) -> Result<Fetched, NetFailure> {
+    let mut out = Fetched::default();
     let mut epg_urls: Vec<String> = options.extra_epg_urls.clone();
 
     let entries = match &options.source {
@@ -112,9 +146,7 @@ pub fn run(
             let parsed = playlist::fetch(http, url)?;
             epg_urls.extend(parsed.header.epg_urls.clone());
             for w in parsed.result.warnings.iter().take(20) {
-                report
-                    .warnings
-                    .push(format!("line {}: {}", w.line, w.message));
+                out.warnings.push(format!("line {}: {}", w.line, w.message));
             }
             parsed.result.entries
         }
@@ -134,35 +166,71 @@ pub fn run(
                 done: 0,
                 total: 0,
             });
-            xtream_entries(&client, options, &mut report)?
+            xtream_entries(&client, options, &mut out.warnings)?
         }
     };
 
-    // Apply the user's rules before anything is written, so hidden entries never
-    // reach the library in the first place.
-    let mut live = Vec::new();
-    let mut movies = Vec::new();
-    let mut episodes = Vec::new();
     for mut entry in entries {
         let outcome = rules.apply(&mut entry);
         if outcome.hidden {
             continue;
         }
         match entry.kind {
-            MediaKind::Live if options.import_live => live.push(entry),
-            MediaKind::Movie if options.import_vod => movies.push(entry),
-            MediaKind::Episode if options.import_series => episodes.push(entry),
+            MediaKind::Live if options.import_live => out.live.push(entry),
+            MediaKind::Movie if options.import_vod => out.movies.push(entry),
+            MediaKind::Episode if options.import_series => out.episodes.push(entry),
             _ => {}
         }
     }
+
+    epg_urls.sort();
+    epg_urls.dedup();
+    for url in &epg_urls {
+        on_progress(Progress {
+            phase: Phase::FetchingEpg,
+            done: 0,
+            total: 0,
+        });
+        match fetch_epg(http, url) {
+            Ok(epg) => out.epg.push(epg),
+            // A missing guide must not fail the whole refresh — the library is still
+            // usable without it.
+            Err(e) => out.warnings.push(format!(
+                "EPG source failed: {} ({})",
+                e.message,
+                crate::http::redact(url)
+            )),
+        }
+    }
+
+    Ok(out)
+}
+
+/// Write what [`fetch`] downloaded, touching no network.
+///
+/// The caller holds the database for the whole of this, which is deliberate: these
+/// writes are local and bounded, and an import that let other commands see it halfway
+/// through would show a library missing its search index.
+pub fn apply(
+    db: &mut Connection,
+    fetched: Fetched,
+    options: &SyncOptions,
+    mut on_progress: impl FnMut(Progress),
+) -> Result<SyncReport, NetFailure> {
+    // Warnings from the download carry through; everything else is counted here.
+    let mut report = SyncReport {
+        warnings: fetched.warnings,
+        ..Default::default()
+    };
 
     // ── Channels ────────────────────────────────────────────────────────────────
     on_progress(Progress {
         phase: Phase::ImportingChannels,
         done: 0,
-        total: live.len(),
+        total: fetched.live.len(),
     });
-    let keyed: Vec<(String, &PlaylistEntry)> = live.iter().map(|e| (provider_key(e), e)).collect();
+    let keyed: Vec<(String, &PlaylistEntry)> =
+        fetched.live.iter().map(|e| (provider_key(e), e)).collect();
     report.channels = channels::upsert_batch(db, options.provider_id, &keyed, options.now_unix)
         .map_err(db_failure)?;
     report.channels_missing = channels::stale(db, options.provider_id, options.now_unix)
@@ -173,17 +241,18 @@ pub fn run(
     write_channel_sources(db, options.provider_id, &keyed).map_err(db_failure)?;
     on_progress(Progress {
         phase: Phase::ImportingChannels,
-        done: live.len(),
-        total: live.len(),
+        done: fetched.live.len(),
+        total: fetched.live.len(),
     });
 
     // ── Movies ──────────────────────────────────────────────────────────────────
     on_progress(Progress {
         phase: Phase::ImportingMovies,
         done: 0,
-        total: movies.len(),
+        total: fetched.movies.len(),
     });
-    let new_movies: Vec<library::NewMovie> = movies
+    let new_movies: Vec<library::NewMovie> = fetched
+        .movies
         .iter()
         .map(|e| {
             let cleaned = title::clean_movie_title(&e.name);
@@ -207,9 +276,9 @@ pub fn run(
     on_progress(Progress {
         phase: Phase::ImportingSeries,
         done: 0,
-        total: episodes.len(),
+        total: fetched.episodes.len(),
     });
-    let (groups, ungrouped) = series::group_series(&episodes);
+    let (groups, ungrouped) = series::group_series(&fetched.episodes);
     if !ungrouped.is_empty() {
         report.warnings.push(format!(
             "{} episode entries had no recognisable season/episode marker and were skipped",
@@ -253,31 +322,15 @@ pub fn run(
     report.series = groups.len();
 
     // ── EPG ─────────────────────────────────────────────────────────────────────
-    epg_urls.sort();
-    epg_urls.dedup();
     let mut epg_channels: Vec<EpgChannel> = Vec::new();
-
-    for url in &epg_urls {
-        on_progress(Progress {
-            phase: Phase::FetchingEpg,
-            done: 0,
-            total: 0,
-        });
-        match import_epg(db, http, url, &mut epg_channels) {
-            Ok((chans, progs)) => {
-                report.epg_channels += chans;
-                report.epg_programmes += progs;
-            }
-            Err(e) => {
-                // A missing guide must not fail the whole refresh — the library is
-                // still usable without it.
-                report.warnings.push(format!(
-                    "EPG source failed: {} ({})",
-                    e.message,
-                    crate::http::redact(url)
-                ));
-            }
+    for source in fetched.epg {
+        epg_repo::upsert_channels(db, &source.channels).map_err(db_failure)?;
+        for batch in &source.programmes {
+            epg_repo::insert_batch(db, batch).map_err(db_failure)?;
         }
+        report.epg_channels += source.counted_channels;
+        report.epg_programmes += source.counted_programmes;
+        epg_channels.extend(source.channels);
     }
 
     // ── Matching ────────────────────────────────────────────────────────────────
@@ -354,10 +407,25 @@ pub fn run(
     Ok(report)
 }
 
+/// Fetch then apply, holding the database only for the second half.
+///
+/// Kept as one call for tests and for any caller that has no lock to release; the host
+/// calls the halves separately so a refresh never blocks the DVR (README §23).
+pub fn run(
+    db: &mut Connection,
+    http: &HttpClient,
+    options: &SyncOptions,
+    rules: &RuleSet,
+    mut on_progress: impl FnMut(Progress),
+) -> Result<SyncReport, NetFailure> {
+    let fetched = fetch(http, options, rules, &mut on_progress)?;
+    apply(db, fetched, options, on_progress)
+}
+
 fn xtream_entries(
     client: &XtreamClient<'_>,
     options: &SyncOptions,
-    report: &mut SyncReport,
+    warnings: &mut Vec<String>,
 ) -> Result<Vec<PlaylistEntry>, NetFailure> {
     let mut out = Vec::new();
 
@@ -412,7 +480,7 @@ fn xtream_entries(
         // the first refresh.
         let listings = client.series()?;
         if !listings.is_empty() {
-            report.warnings.push(format!(
+            warnings.push(format!(
                 "{} series found; episode listings are fetched on demand",
                 listings.len()
             ));
@@ -422,12 +490,8 @@ fn xtream_entries(
     Ok(out)
 }
 
-fn import_epg(
-    db: &mut Connection,
-    http: &HttpClient,
-    url: &str,
-    collected: &mut Vec<EpgChannel>,
-) -> Result<(usize, usize), NetFailure> {
+/// Download and parse one guide source. Writes nothing.
+fn fetch_epg(http: &HttpClient, url: &str) -> Result<FetchedEpg, NetFailure> {
     // Two passes would mean two downloads, so channels are collected in memory (a few
     // thousand small rows) while programmes stream straight through to SQLite.
     let mut channel_buf: Vec<EpgChannel> = Vec::new();
@@ -452,13 +516,12 @@ fn import_epg(
     }
     drop(sink);
 
-    epg_repo::upsert_channels(db, &channel_buf).map_err(db_failure)?;
-    for batch in &programme_batches {
-        epg_repo::insert_batch(db, batch).map_err(db_failure)?;
-    }
-    collected.extend(channel_buf);
-
-    Ok((stats.channels, stats.programmes))
+    Ok(FetchedEpg {
+        channels: channel_buf,
+        programmes: programme_batches,
+        counted_channels: stats.channels,
+        counted_programmes: stats.programmes,
+    })
 }
 
 fn write_channel_sources(
@@ -671,6 +734,87 @@ mod tests {
 
     fn no_rules() -> RuleSet {
         RuleSet::compile(&[]).unwrap()
+    }
+
+    #[test]
+    fn fetching_is_not_given_a_database_and_applying_is_not_given_a_network() {
+        // The guarantee is structural, not a habit: `fetch` never receives a Connection
+        // and `apply` never receives an HttpClient, so a future edit cannot put a
+        // download back under the lock without changing a signature and reading why.
+        let server = combined_server();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let fetched = fetch(&http(), &opts, &no_rules(), |_| {}).expect("fetch");
+        assert!(!fetched.live.is_empty(), "the playlist was downloaded");
+        assert!(!fetched.epg.is_empty(), "the guide was downloaded");
+
+        // Everything below happens with the server already shut down, which is the
+        // proof that applying needs no network at all.
+        drop(server);
+
+        let mut conn = db();
+        let report = apply(&mut conn, fetched, &opts, |_| {}).expect("apply");
+        assert!(report.channels > 0);
+        assert!(report.epg_programmes > 0, "the guide reached the database");
+    }
+
+    #[test]
+    fn a_refresh_leaves_the_database_alone_while_it_downloads() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // A guide that takes its time, so there is a window to compete for.
+        let server = TestServer::start(|_, req| {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if req.path.starts_with("/epg") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(PLAYLIST)
+            }
+        });
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        // Stand in for the DVR thread, which takes this lock every ten seconds to ask
+        // whether a recording is due.
+        let conn = Arc::new(std::sync::Mutex::new(db()));
+        let acquired = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let contender = std::thread::spawn({
+            let conn = Arc::clone(&conn);
+            let acquired = Arc::clone(&acquired);
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if let Ok(guard) = conn.try_lock() {
+                        drop(guard);
+                        acquired.fetch_add(1, Ordering::Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+        });
+
+        // The shape the host uses: download with nothing held, then write.
+        let fetched = fetch(&http(), &opts, &no_rules(), |_| {}).expect("fetch");
+        {
+            let mut guard = conn.lock().expect("lock");
+            apply(&mut guard, fetched, &opts, |_| {}).expect("apply");
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        contender.join().unwrap();
+
+        // Several requests at 30ms each is a long window; a contender polling every few
+        // milliseconds must have got in repeatedly. Holding the lock for the download
+        // would have shut it out almost entirely.
+        assert!(
+            acquired.load(Ordering::Relaxed) > 3,
+            "the DVR would have been locked out: only {} acquisitions",
+            acquired.load(Ordering::Relaxed)
+        );
     }
 
     #[test]

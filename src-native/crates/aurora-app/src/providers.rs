@@ -407,23 +407,23 @@ pub fn providers_refresh(
 
     let rules = load_rules(&services)?;
 
-    // KNOWN ISSUE: this holds the single writer connection across `sync::run`, which
-    // fetches the playlist and a potentially very large EPG over the network. Every
-    // other command blocks for the duration — including the DVR scheduler thread, which
-    // takes this lock to decide whether a recording is due, so a recording that falls
-    // inside a long refresh does not start until the refresh ends.
+    // The download happens with no lock held. It used to run inside one, which froze
+    // every other command for the length of a playlist and a guide — and because the
+    // DVR scheduler takes the same lock every ten seconds to ask whether a recording is
+    // due, a recording falling inside a long refresh simply did not start.
     //
-    // `metadata::enrich_batch` shows the shape of the fix: plan under the lock, fetch
-    // without it, write under it again. Doing the same here means splitting `sync::run`
-    // into fetch and apply halves, which changes what partial state a failed import can
-    // leave behind — a bigger call than it looks, so it is tracked in docs/ROADMAP.md
-    // rather than made here.
-    let mut db = services.db.lock();
-    let report = sync::run(&mut db, &services.http, &options, &rules, |p: Progress| {
+    // `sync::fetch` is handed no database, so it cannot reintroduce that by accident.
+    let emit = |p: Progress| {
         // Best-effort: a dropped progress event must never fail an import.
         let _ = app.emit("ingest.progress", &p);
-    })
-    .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
+    };
+    let fetched = sync::fetch(&services.http, &options, &rules, emit)
+        .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
+
+    // Only the writes hold it, and they are local and bounded.
+    let mut db = services.db.lock();
+    let report = sync::apply(&mut db, fetched, &options, emit)
+        .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
 
     db.execute(
         "UPDATE providers SET last_refresh_at = ?2 WHERE id = ?1",

@@ -260,6 +260,32 @@ is that the key is absent from the source, rotatable by changing one secret, and
 never typed by a viewer. What it does not buy is secrecy from anyone holding the
 installer.
 
+## D20 — A refresh downloads before it takes the database
+
+`sync::run` is two halves that cannot be confused: `fetch` takes an `HttpClient` and no
+`Connection`, `apply` takes a `Connection` and no `HttpClient`.
+
+The problem it solves was a correctness one. A refresh downloads a playlist and a guide
+that can run to tens of megabytes, and it used to do that holding the single writer
+connection. The DVR scheduler takes the same lock every ten seconds to decide whether a
+recording is due, so a recording that fell inside a long refresh did not start until the
+refresh ended — and on a slow provider that is minutes.
+
+The fix could have been a comment and a habit. Making it a type means a future edit that
+reintroduces it has to change a signature first, which is the only kind of rule that
+survives.
+
+Two consequences worth stating. The whole guide is held in memory between the halves,
+which is what `import_epg` already did for one source at a time and is now true of all
+of them at once — acceptable for the one or two guide URLs a provider publishes, and the
+thing to revisit if that ever stops being true. And a failed download now writes nothing
+at all, where before it could abort partway through the writes; that is strictly better,
+but it is a change in what a failure leaves behind rather than a neutral refactor.
+
+`apply` still holds the lock for its duration. That is deliberate: it is local, bounded
+work, and an import visible halfway through would show a library whose search index had
+been cleared and not yet rebuilt.
+
 ## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in
