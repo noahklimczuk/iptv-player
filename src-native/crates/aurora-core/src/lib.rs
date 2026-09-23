@@ -22,6 +22,7 @@ pub mod series;
 pub mod sources;
 pub mod title;
 pub mod tmdb;
+pub mod version;
 pub mod xmltv;
 pub mod xtream;
 

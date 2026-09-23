@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, metadata, now_unix, playlist, profiles, providers, services::Services,
+    commands, dvr, metadata, now_unix, playlist, profiles, providers, services::Services, updates,
 };
 
 /// Send the log somewhere a person can read it.
@@ -38,6 +38,11 @@ fn init_logging(data_dir: &std::path::Path) {
 /// How often the player's state is read. Fast enough that the OSD's clock and buffer
 /// readout look live, slow enough to be free.
 const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long after launch the update check runs. Far enough back to be out of the way
+/// of the first frame, near enough that Settings has an answer by the time anyone
+/// opens it.
+const UPDATE_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(8);
 
 fn main() {
     tauri::Builder::default()
@@ -104,6 +109,39 @@ fn main() {
                         Err(e) => tracing::error!("DVR tick failed: {e}"),
                     }
                 })?;
+
+            // Ask GitHub whether there is a newer build. On its own thread and after a
+            // pause, because nothing about this is urgent and the first seconds after
+            // launch belong to getting a picture on screen.
+            let updates_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("aurora-updates".into())
+                .spawn(move || {
+                    std::thread::sleep(UPDATE_CHECK_DELAY);
+                    use tauri::Manager;
+                    let services = updates_handle.state::<Services>();
+
+                    let (automatic, last) = {
+                        let db = services.db.lock();
+                        (updates::automatic(&db), updates::last_checked(&db))
+                    };
+                    if !automatic || !aurora_ingest::updates::due(last, now_unix()) {
+                        return;
+                    }
+
+                    match updates::run(&services, now_unix(), false) {
+                        Ok(check) if check.available => {
+                            tracing::info!(current = %check.current, "a newer build is published");
+                            let _ = updates_handle.emit("update.available", &check);
+                        }
+                        Ok(_) => tracing::debug!("this is the newest published build"),
+                        // Never a dialog: failing to reach GitHub is not the viewer's
+                        // problem and must not interrupt whatever they are watching.
+                        Err(e) => tracing::info!("update check failed: {e}"),
+                    }
+                })
+                .expect("spawning the update thread");
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -192,6 +230,9 @@ fn main() {
             providers::providers_validate,
             providers::providers_save,
             providers::providers_refresh,
+            updates::updates_check,
+            updates::updates_set_automatic,
+            updates::updates_open_releases,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");

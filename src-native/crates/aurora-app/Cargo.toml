@@ -22,6 +22,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri = { version = "2", features = [] }
 parking_lot = "0.12"
 
+# ShellExecuteW, to open the releases page in the viewer's browser. Same version the
+# player crate already pulls in, so this adds one feature rather than a dependency.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
 [features]
 # Tauri decides dev-versus-production by this feature, not by the cargo profile:
 # `tauri::is_dev()` is `!cfg!(feature = "custom-protocol")`. With it absent from the

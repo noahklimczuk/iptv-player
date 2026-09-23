@@ -79,6 +79,12 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc -p tsconfig.json --noEmit
 
+      - name: Release tooling
+        # The version arithmetic decides what every build is called, and it is wrong in
+        # ways nothing else would notice — a lexicographic compare, or reading the word
+        # "feature" in prose as a feature commit.
+        run: node --test scripts/version.test.mjs
+
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
       - name: End-to-end journeys
@@ -166,6 +172,11 @@ jobs:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The version is derived from the commits since the last release tag, and a
+          # depth-1 clone cannot answer `git log v0.1.0..HEAD` at all. Without this the
+          # range comes back empty and every build would quietly be a patch.
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -259,6 +270,18 @@ jobs:
           # happens to compose LIB from its own MSVC detection.
           "RUSTFLAGS=-L native=$mpv"     | Out-File -Append $env:GITHUB_ENV -Encoding utf8
 
+      - name: Work out this build's version
+        # Before anything compiles: `env!("CARGO_PKG_VERSION")` is how the running app
+        # knows what it is, so the number has to be in the manifest at compile time or
+        # the binary and its release disagree. Nothing is committed — the manifests hold
+        # the last released version in git, and the build stamps the next one on top.
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node scripts/version.mjs apply)"
+          echo "AURORA_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Building $version"
+
       - name: Build the UI
         run: pnpm exec vite build
 
@@ -346,7 +369,8 @@ jobs:
         # a build is never replaced by the one after it and an older installer stays
         # downloadable — which matters the first time something that worked last week
         # stops working. The newest is marked as GitHub's latest release, so
-        # /releases/latest remains one link that always points at the current build.
+        # /releases/latest remains one link that always points at the current build, and
+        # the app's updater has something stable to ask about.
         #
         # The NSIS installer is a single self-contained .exe — it carries libmpv with
         # it, which is why the portable build cannot be one file.
@@ -359,34 +383,53 @@ jobs:
             Select-Object -First 1
           if (-not $exe) { throw 'No NSIS installer was produced.' }
 
-          $build = $env:GITHUB_RUN_NUMBER
-          $full  = $env:GITHUB_SHA
-          $sha   = $full.Substring(0, 7)
-          $tag   = "build-$build"
+          $version = $env:AURORA_VERSION
+          if (-not $version) { throw 'The version step did not run.' }
+          $full = $env:GITHUB_SHA
+          $tag  = "v$version"
 
-          # Renamed before upload: the bundler gives every build the same filename, and
-          # several of these have to be able to sit in one Downloads folder and still be
-          # told apart.
-          $asset = Join-Path $env:RUNNER_TEMP "Aurora-TV-build-$build-x64-setup.exe"
+          # Renamed before upload: the bundler names the file after the version it was
+          # built with, but the tag is what people will be matching it against, and
+          # several of these have to share a Downloads folder and stay tellable apart.
+          $asset = Join-Path $env:RUNNER_TEMP "Aurora-TV-$version-x64-setup.exe"
           Copy-Item $exe.FullName $asset
           $mb = [math]::Round($exe.Length / 1MB)
           Write-Host "Publishing $(Split-Path $asset -Leaf) ($mb MB) as $tag"
 
-          # The subject line is what tells two builds apart at a glance in the list.
-          $subject = (git log -1 --pretty=%s).Trim()
+          # GitHub writes the changelog itself from the pull requests since the previous
+          # release — better than anything assembled here, and it links each one. The
+          # previous tag is passed explicitly so the range is the last *release* rather
+          # than whatever GitHub infers.
+          $previous = git tag --list 'v*' --sort=-v:refname |
+            Where-Object { $_ -ne $tag } |
+            Select-Object -First 1
+
+          $PSNativeCommandUseErrorActionPreference = $false
+          # Not $args: that is a PowerShell automatic variable.
+          $noteArgs = @('repos/{owner}/{repo}/releases/generate-notes',
+                        '-f', "tag_name=$tag", '--jq', '.body')
+          if ($previous) { $noteArgs += @('-f', "previous_tag_name=$previous") }
+          $changelog = (gh api @noteArgs) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or -not $changelog) {
+            # A first release has nothing to diff against, and a rate limit is not a
+            # reason to fail a build that already produced an installer.
+            Write-Host 'Could not generate notes; falling back to the commit subject.'
+            $changelog = "* $(git log -1 --pretty=%s)"
+          }
+          $PSNativeCommandUseErrorActionPreference = $true
 
           # Built as an array rather than a here-string: a here-string terminator must
           # sit at column zero, which depends on how YAML strips this block's indent.
           $notes = @(
-            "Windows build of $sha, published when it merged to main."
+            $changelog
             ''
-            "* $subject"
-            "* Commit: $full"
-            "* Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            '---'
+            ''
+            "Built from ``$full`` on $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC."
             ''
             'Every merge publishes its own release and nothing replaces an older one, so'
-            'a build you were happy with stays downloadable. The newest is always at'
-            '/releases/latest.'
+            'a build you were happy with stays downloadable. Aurora checks this page for'
+            'itself and will say in Settings when there is something newer.'
             ''
             'This is a development build, not a finished product. docs/TESTING_A_BUILD.md'
             'says what to look at first and where the log is.'
@@ -403,13 +446,13 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
 
           if ($exists) {
-            # Only reachable by re-running this same workflow run — the run number is
-            # what names the tag. So this is the build refreshing its own release, not
-            # one build overwriting another.
+            # Only reachable by re-running this same workflow run: a later merge always
+            # computes a higher version. So this is a build refreshing its own release,
+            # never one build overwriting another.
             gh release edit $tag --notes $notes --latest
           } else {
             gh release create $tag --target $full --latest `
-              --title "Build $build - $sha" --notes $notes
+              --title "Aurora TV $version" --notes $notes
           }
           gh release upload $tag $asset --clobber
           Write-Host "Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"

@@ -10,9 +10,33 @@ import type {
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
+  UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
 import * as fx from './fixtures';
+
+/**
+ * A pretend published build, one patch ahead of whatever this bundle was built from.
+ *
+ * Mutable so `updates.setAutomatic` actually takes effect in a browser session; the
+ * host keeps the real thing in its settings table.
+ */
+const mockUpdates: UpdateStatus = {
+  current: '0.1.0',
+  latest: {
+    version: '0.1.1',
+    tag: 'v0.1.1',
+    notes: 'Live TV rolls to the next source when a stream dies.\nAdd provider in Settings opens the wizard.',
+    pageUrl: 'https://github.com/noahklimczuk/iptv-player/releases/tag/v0.1.1',
+    installerUrl: 'https://github.com/noahklimczuk/iptv-player/releases/download/v0.1.1/Aurora-TV-0.1.1-x64-setup.exe',
+    installerBytes: 38_767_916,
+    publishedAt: '2026-09-23T03:13:28Z',
+  },
+  available: true,
+  automatic: true,
+  lastCheckedAt: null,
+  releasesUrl: 'https://github.com/noahklimczuk/iptv-player/releases/latest',
+};
 
 const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'movie:14']);
 const favorites = new Set<number>(
@@ -1342,6 +1366,25 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     const removed = artworkFiles;
     artworkFiles = 0;
     return removed;
+  },
+
+  /* ── Updates. The mock is deliberately "an update is available": the interesting
+        state is the one with something in it, and a browser session is where that
+        gets designed and screenshotted. ──────────────────────────────────────── */
+
+  'updates.check': (args): UpdateStatus => {
+    if (args?.force) mockUpdates.lastCheckedAt = Math.floor(Date.now() / 1000);
+    return { ...mockUpdates };
+  },
+
+  'updates.setAutomatic': ({ enabled }) => {
+    mockUpdates.automatic = enabled;
+    return enabled;
+  },
+
+  'updates.openReleases': () => {
+    // No host to ask, and a browser tab opening itself during a Playwright run would
+    // be a nuisance rather than a feature.
   },
 
   'providers.list': () => fx.providers,

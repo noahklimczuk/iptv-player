@@ -233,6 +233,38 @@ export interface GuideSlice {
   to: number;
 }
 
+/**
+ * A published build, as the host understood it.
+ *
+ * `version` is a `major.minor.patch` string: the host parses and compares, so nothing
+ * here should try to order two of these itself — comparing the strings decides 0.9.0
+ * beats 0.10.0.
+ */
+export interface UpdateRelease {
+  version: string;
+  tag: string;
+  /** Release notes as published. Plain text; nothing renders it as markup. */
+  notes: string;
+  pageUrl: string;
+  installerUrl: string | null;
+  installerBytes: number | null;
+  publishedAt: string | null;
+}
+
+export interface UpdateStatus {
+  /** The running build. */
+  current: string;
+  /** The newest published build, or null when none is published or tagged readably. */
+  latest: UpdateRelease | null;
+  /** Whether `latest` is actually newer. Decided by the host, never re-derived here. */
+  available: boolean;
+  /** Whether the check runs by itself on launch. */
+  automatic: boolean;
+  lastCheckedAt: number | null;
+  /** Where "Get the update" goes. Fixed by the host, not chosen by the UI. */
+  releasesUrl: string;
+}
+
 export interface Provider {
   id: number;
   name: string;
@@ -747,6 +779,23 @@ export interface Commands {
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
   'providers.save': (args: { draft: DraftProvider }) => { id: number };
   'providers.refresh': (args: { providerId: number }) => SyncReport;
+
+  /**
+   * What the newest published build is.
+   *
+   * Answers from the last check unless `force` is set, so opening Settings costs no
+   * network; "Check now" forces it.
+   */
+  'updates.check': (args?: { force?: boolean }) => UpdateStatus;
+  /** Turn the launch-time check on or off. */
+  'updates.setAutomatic': (args: { enabled: boolean }) => boolean;
+  /**
+   * Open the releases page in the viewer's browser.
+   *
+   * Takes no URL on purpose: the host holds a constant, so there is no way for
+   * anything here to make the app open something else.
+   */
+  'updates.openReleases': () => void;
 }
 
 export type CommandName = keyof Commands;
@@ -756,6 +805,12 @@ export type CommandResult<K extends CommandName> = ReturnType<Commands[K]>;
 /** Push events from the host. */
 export interface Events {
   'player.state': PlayerState;
+  /** Emitted shortly after launch when a newer build turns out to be published. */
+  'update.available': {
+    current: string;
+    latest: UpdateRelease | null;
+    available: boolean;
+  };
   'ingest.progress': IngestProgress;
   'library.refreshed': { added: number; removed: number; updated: number };
   'toast': { level: 'info' | 'success' | 'warning' | 'error'; message: string };

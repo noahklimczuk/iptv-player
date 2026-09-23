@@ -78,14 +78,38 @@ pnpm exec playwright test     # 12 journeys + screenshot capture
 
 Every merge to main builds the app on a Windows runner. Two ways to get the result:
 
-- **Releases** — every merge publishes its own release, tagged `build-N` after the
-  CI run that made it, holding one `.exe` installer. Nothing replaces an older one, so
-  a build you were happy with stays downloadable. `/releases/latest` always points at
-  the newest. Build numbers are monotonic but not contiguous: they come from the CI
-  run number, which pull requests also consume.
+- **Releases** — every merge publishes its own release, tagged `v0.2.0` after the
+  version it carries, holding one `.exe` installer. Nothing replaces an older one, so a
+  build you were happy with stays downloadable, and `/releases/latest` always points at
+  the newest. The notes are GitHub's own generated changelog for the pull requests since
+  the previous release.
 - **Actions → the merge's run → Artifacts** — `aurora-tv-portable` (a zip that runs
   in place and keeps its state beside itself) and `aurora-tv-installers` (the NSIS
   `.exe` and the MSI).
+
+### What a build is called
+
+The third number moves for a bug fix, the middle one for a feature. Nobody bumps a file
+to make that happen: the release job reads the conventional-commit subjects since the
+last `v*` tag and works it out (`docs/DECISIONS.md` D18).
+
+```
+node scripts/version.mjs current   # what the manifests say today
+node scripts/version.mjs next      # what the next release would be, and why
+node scripts/version.mjs apply     # write it into the three manifests
+```
+
+`apply` is what CI runs, immediately before anything compiles — `env!("CARGO_PKG_VERSION")`
+is how the running app knows what it is, so the number has to be in the manifest at
+compile time or the binary and its release disagree. Nothing is committed: git holds the
+last released version, the tags hold the truth, and a local build says `0.1.0` until you
+stamp one yourself.
+
+The logic has tests, because it is wrong in ways nothing else would notice:
+
+```
+node --test scripts/version.test.mjs
+```
 
 The portable build cannot be a single file: libmpv ships as a DLL and has to sit next
 to the exe. The installer is a single file because it carries the DLL inside itself and
