@@ -464,8 +464,13 @@ export interface EnrichmentCoverage {
 }
 
 export interface MetadataStatus {
-  /** Whether a key is stored. Never the key itself. */
+  /** Whether a key is available at all, stored or built in. Never the key itself. */
   hasKey: boolean;
+  /**
+   * True when the only key is the one compiled into this build, so Settings can say
+   * there is nothing to do rather than showing an empty field that looks unfinished.
+   */
+  keyIsBuiltIn: boolean;
   /** False when the key would be lost on restart, so the UI can say so. */
   keyIsPersistent: boolean;
   movies: EnrichmentCoverage;

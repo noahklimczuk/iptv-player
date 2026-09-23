@@ -1287,6 +1287,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
 
   'metadata.status': (): MetadataStatus => ({
     hasKey: metadataKey !== null,
+    keyIsBuiltIn: false,
     // The browser mock has nowhere durable to put a key, and says so rather than
     // pretending, exactly as the in-memory credential store does on the host.
     keyIsPersistent: false,

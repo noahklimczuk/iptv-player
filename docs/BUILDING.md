@@ -87,6 +87,33 @@ Every merge to main builds the app on a Windows runner. Two ways to get the resu
   in place and keeps its state beside itself) and `aurora-tv-installers` (the NSIS
   `.exe` and the MSI).
 
+### The metadata key
+
+Artwork, overviews and cast come from TMDB, which needs a key. Release builds bake one
+in so nobody has to paste one into the app (`docs/DECISIONS.md` D19).
+
+To give the builds a key, once:
+
+1. Make an account at <https://www.themoviedb.org/signup>.
+2. **Settings → API → Create → Developer**, accept the terms, and fill the short form.
+   Personal, non-commercial use is a valid answer to every question on it; the
+   application URL can be this repository.
+3. Copy the **API Key (v3 auth)** — 32 hexadecimal characters. Not the "API Read Access
+   Token", which is a much longer JWT this client does not use.
+4. In the repository: **Settings → Secrets and variables → Actions → New repository
+   secret**, named `TMDB_API_KEY`.
+
+The next merge picks it up. Nothing is committed, and the key never appears in the
+source or in git history.
+
+Without the secret the variable is empty, the build treats that as no key, and the app
+asks for one in Settings exactly as it did before — so this is optional, and a fork
+builds fine without it.
+
+The key does end up inside the shipped `.exe`, where `strings` will find it. That is
+true of every application that ships with a key. TMDB keys are free and revocable, so
+rotating one means changing the secret and merging anything.
+
 ### What a build is called
 
 The third number moves for a bug fix, the middle one for a feature. Nobody bumps a file

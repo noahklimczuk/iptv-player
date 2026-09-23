@@ -83,7 +83,13 @@ export function MetadataPanel() {
           type="password"
           value={key}
           onChange={(e) => setKey(e.target.value)}
-          placeholder={status?.hasKey ? '•••••••• (a key is saved)' : 'Paste your TMDB API key'}
+          placeholder={
+            status?.keyIsBuiltIn
+              ? 'Built in — nothing to enter'
+              : status?.hasKey
+                ? '•••••••• (a key is saved)'
+                : 'Paste your TMDB API key'
+          }
           autoComplete="off"
           spellCheck={false}
           style={inputStyle}
@@ -96,14 +102,23 @@ export function MetadataPanel() {
         >
           Save
         </Button>
-        {status?.hasKey && (
+        {status?.hasKey && !status.keyIsBuiltIn && (
           <Button size="sm" variant="ghost" disabled={saving} onClick={() => void saveKey(null)}>
             Remove
           </Button>
         )}
       </div>
 
-      {status && !status.keyIsPersistent && status.hasKey && (
+      {status?.keyIsBuiltIn && (
+        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
+          This build ships with a metadata key, so artwork and cast work without any
+          setup. Entering your own replaces it — worth doing only if you would rather the
+          requests counted against your own rate limit than one shared with every copy of
+          this build.
+        </div>
+      )}
+
+      {status && !status.keyIsPersistent && status.hasKey && !status.keyIsBuiltIn && (
         <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--warning)' }}>
           This key is only kept for as long as Aurora is running — there is no OS
           credential store on this platform, so it will need re-entering after a restart.

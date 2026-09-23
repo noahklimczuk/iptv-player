@@ -230,6 +230,36 @@ every release would be a patch and no feature would ever move the middle number,
 but invisibly. So the tooling fails loudly instead, and the release job checks out full
 history.
 
+## D19 — The metadata key is built in, not asked for
+
+Artwork, overviews and cast come from TMDB, which needs a key. Asking each person to
+go and get one is a wall in front of the feature that makes the library look like a
+library, and most people will simply not have posters.
+
+So the release build bakes one in: CI passes a repository secret through
+`AURORA_TMDB_KEY`, and `option_env!` puts it in the binary. Nothing is committed — the
+key is not in a source file, not in git history, and not in the repository, which
+matters here because the repository is public and a key in a public file is scraped
+within minutes and revoked.
+
+Three things follow from it.
+
+A key a person supplies themselves wins over the built-in one. Someone who went and
+got a key wants it used, and it carries their own rate limit rather than sharing the
+built-in one with every copy of this build.
+
+An unset secret has to behave as no key at all. CI sets the variable unconditionally,
+so an absent secret arrives as an empty string; compiling that to `Some("")` would
+send keyless requests that fail with a 401 nobody could explain. Blank is treated as
+absent, and the app asks for a key exactly as it did before.
+
+And the limit is worth stating plainly rather than implying: the key is inside the
+shipped executable, and `strings` will find it. That is true of every application that
+ships with a key, and no amount of obfuscation changes it. What the arrangement buys
+is that the key is absent from the source, rotatable by changing one secret, and
+never typed by a viewer. What it does not buy is secrecy from anyone holding the
+installer.
+
 ## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in
