@@ -7,7 +7,21 @@ use aurora_core::markers::Chapter;
 use aurora_core::timeshift::{Budget, Reading, Window};
 
 use crate::error::PlayerError;
-use crate::state::{Aspect, PlayerState, PlayerStatus};
+use crate::state::{Aspect, MediaKind, PlayerState, PlayerStatus};
+
+/// What is being played, so the state can say so.
+///
+/// One value rather than three loose fields: the kind, the row and the channel have to
+/// agree, and the UI reads all three to decide whether this is an episode it can offer
+/// Skip Intro for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Playing {
+    pub kind: MediaKind,
+    /// The library row — a movie, an episode, or the channel itself for live TV.
+    pub id: i64,
+    /// The channel, where one is involved: live and catch-up.
+    pub channel_id: Option<i64>,
+}
 
 /// How much of a live stream mpv keeps on disk so it can be rewound (README §7.6).
 ///
@@ -42,6 +56,8 @@ pub struct LoadOptions {
     /// Keep history for rewinding, when this is a live stream and the viewer asked for
     /// it (README §7.6). `None` buffers nothing.
     pub timeshift: Option<TimeshiftCache>,
+    /// What the library calls this, when it is something the library knows about.
+    pub playing: Option<Playing>,
     pub title: Option<String>,
 }
 
@@ -191,6 +207,9 @@ impl PlayerBackend for NullBackend {
             status: PlayerStatus::Playing,
             title: options.title.clone(),
             is_live: options.is_live,
+            channel_id: options.playing.and_then(|p| p.channel_id),
+            item_kind: options.playing.map(|p| p.kind),
+            item_id: options.playing.map(|p| p.id),
             position_secs: position,
             duration_secs: if options.is_live { 0.0 } else { 5400.0 },
             volume: self.state.volume,

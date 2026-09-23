@@ -290,7 +290,7 @@ impl Playback {
 mod tests {
     use super::*;
     use aurora_core::markers::Chapter;
-    use aurora_player::state::Aspect;
+    use aurora_player::state::{Aspect, MediaKind};
     use aurora_player::PlayerError;
 
     /// A backend that can be told which URLs refuse to load, and made to die
@@ -807,6 +807,75 @@ mod tests {
         // The VOD path is untouched by the clamp: 90 minutes in is 90 minutes in.
         let state = playback.seek(5400.0, false).unwrap();
         assert_eq!(state.position_secs, 5400.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_state_says_what_is_playing_so_skip_and_up_next_can_ask_about_it() {
+        // README §9's Skip Intro, Skip Credits and Up Next all begin with
+        // `player.itemKind === 'episode'` in the UI. A state that does not say what is
+        // on cannot answer that, and the features silently never appear.
+        let (playback, _backend, dir) = buffered_harness("identity");
+        {
+            let db = playback.db.lock();
+            db.execute(
+                "INSERT INTO series (id, provider_id, provider_key, title, match_key,
+                                     last_seen_at)
+                 VALUES (1,1,'s1','A Show','ashow',0)",
+                [],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO episodes (id, series_id, season, episode, title, url)
+                 VALUES (7, 1, 2, 4, 'An Episode', 'http://example.com/e.mkv')",
+                [],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (3,1,'m1','A Film','afilm','http://example.com/film.mkv',0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let state = playback.play_item("episode", 7, None).unwrap();
+        assert_eq!(state.item_kind, Some(MediaKind::Episode));
+        assert_eq!(state.item_id, Some(7));
+        assert_eq!(state.channel_id, None, "an episode is not on a channel");
+
+        let state = playback.play_item("movie", 3, None).unwrap();
+        assert_eq!(state.item_kind, Some(MediaKind::Movie));
+        assert_eq!(state.item_id, Some(3));
+
+        // Live is the channel, in all three fields — which is what the UI's mock has
+        // always modelled and the host never sent.
+        let state = playback.play_live(1, NOW).unwrap();
+        assert_eq!(state.item_kind, Some(MediaKind::Live));
+        assert_eq!(state.item_id, Some(1));
+        assert_eq!(state.channel_id, Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_past_programme_is_still_the_channel_it_aired_on() {
+        let (playback, _backend, dir) = buffered_harness("catchup-identity");
+        playback
+            .db
+            .lock()
+            .execute(
+                "UPDATE channels SET catchup_mode = 'shift', catchup_days = 7 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+
+        let state = playback
+            .play_catchup(1, NOW - 3600, NOW - 1800, NOW)
+            .unwrap();
+        assert_eq!(state.item_kind, Some(MediaKind::Live));
+        assert_eq!(state.channel_id, Some(1));
+        assert!(!state.is_live, "a replay is seekable, not a live edge");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -15,6 +15,16 @@ pub enum PlayerStatus {
     Error,
 }
 
+/// What is playing, in the terms the library uses. Mirrors `MediaKind` in
+/// `shared/ipc.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaKind {
+    Live,
+    Movie,
+    Episode,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Aspect {
@@ -89,6 +99,9 @@ pub struct PlayerState {
     pub title: Option<String>,
     pub subtitle: Option<String>,
     pub channel_id: Option<i64>,
+    /// Which library row is on, and of what kind. The UI needs both to drive Skip
+    /// Intro and Up Next (README §9): without them it cannot ask what episode this is.
+    pub item_kind: Option<MediaKind>,
     pub item_id: Option<i64>,
     pub position_secs: f64,
     pub duration_secs: f64,
@@ -115,6 +128,7 @@ impl Default for PlayerState {
             title: None,
             subtitle: None,
             channel_id: None,
+            item_kind: None,
             item_id: None,
             position_secs: 0.0,
             duration_secs: 0.0,

@@ -31,6 +31,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | A refresh never destroys user data | `aurora-ingest::sync` tests assert renames, numbers and hidden flags survive |
 | Skip markers: chapter parsing, learning, merge | 25 `aurora-core` + 13 `aurora-db` tests |
 | The Tauri host compiles and its URL resolution works | 21 `aurora-app` tests (Linux, with GTK dev packages) |
+| The host answers every command the UI declares, and sends every `PlayerState` field it declares | `aurora-app/tests/contract.rs`, which reads `shared/ipc.ts` and diffs it against the handler list and against the serialized struct |
 | Recording scheduling: padding, conflicts, rule matching | 19 `aurora-core` + 32 `aurora-db` tests |
 | A stream is written to disk, and a cut stream keeps what it got | 7 `aurora-ingest` tests against the failure-simulating server |
 | The scheduler starts, stops and finalises recordings | 11 `aurora-app` tests driving `Dvr::tick` on a test clock |
@@ -88,6 +89,18 @@ way: it reads the `Commands` interface out of `shared/ipc.ts`, reads the
 and the host cannot answer. The two sides are in different languages and the only thing
 worth pinning is that the names line up — so that is all it pins, and a command added
 without a handler now fails on Linux in a second instead of on Windows in a month.
+
+The same drift had happened one layer down, in the payload rather than the name.
+`PlayerState` declared `itemKind`, the mock filled it in, and the host's struct had no
+such field — nor did it ever set `channelId` or `itemId`, which were declared, defaulted
+to `None` and never written. The UI gates Skip Intro, Skip Recap, Skip Credits, the Next
+Episode button and Up Next autoplay on `player.itemKind === 'episode'`
+(`useEpisodeAids`), so every one of them worked in every browser journey and not one of
+them could ever have appeared in the shipped app. What is playing now travels with the
+load — one `Playing { kind, id, channel_id }` on `LoadOptions`, so the three cannot
+disagree — and the contract test serializes the real `PlayerState` and diffs its keys
+against the interface in both directions, which fails on a field the UI believes in and
+on a field the host sends that nothing declares.
 
 ## The Phase 0 caveat
 
