@@ -8,6 +8,7 @@ pub mod recorder;
 pub mod source;
 pub mod sync;
 pub mod tmdb;
+pub mod updates;
 pub mod xtream;
 
 #[cfg(test)]

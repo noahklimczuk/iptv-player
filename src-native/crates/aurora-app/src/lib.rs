@@ -12,6 +12,7 @@ pub mod playlist;
 pub mod profiles;
 pub mod providers;
 pub mod services;
+pub mod updates;
 pub mod window;
 
 pub use error::AppError;

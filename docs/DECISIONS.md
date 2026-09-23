@@ -183,6 +183,53 @@ Rollovers within a single tune are bounded. A provider in a total outage would o
 spin through every URL it owns for ever, and a stopped picture with an error on it is
 more honest than an endless reconnect.
 
+## D17 — The updater checks; it does not install
+
+Aurora installs from a GitHub release rather than a store, so nothing would otherwise
+tell a viewer that the bug they hit was fixed a week ago. The app asks GitHub for the
+newest published release, compares it against `env!("CARGO_PKG_VERSION")`, and says so
+in Settings.
+
+It stops there. Tauri's updater plugin would download, verify and install — and it
+refuses to run without a signing keypair, whose private half has to be a repository
+secret. Until that key exists, an "auto-updater" would be downloading an executable on
+the strength of an HTTP response and running it, which is a materially different thing
+to offer than a link to a page someone can read first.
+
+Two consequences shape the code. The comparison uses `aurora_core::version` rather than
+string ordering, because `"0.9.0" > "0.10.0"` is true of strings and would stop the
+updater offering anything ever again past `.9`. And the page it opens is a compile-time
+constant, not the `html_url` the API returned: a command that opens whatever URL it is
+handed is a way to make the app launch something else.
+
+The check is cached for six hours and stored, so opening Settings costs no network and a
+machine that is offline does not retry in a loop. A failed check leaves the last good
+answer in place rather than blanking the panel.
+
+## D18 — The version is derived from the commits, not declared
+
+The third number moves for a fix, the middle one for a feature (README §23). Nobody is
+asked to remember that: the release build reads the conventional-commit subjects since
+the last `v*` tag and works it out. One `feat` makes the release a minor; everything
+else, including a batch with nothing conventional in it, is a patch — a build that ships
+still needs a number of its own.
+
+A breaking marker counts as a minor rather than a major. Below 1.0 that is what semver
+prescribes, and above it the decision is a person's, not a script's, so nothing here ever
+moves the first number.
+
+The number is stamped into the manifests at build time and never committed. That keeps
+CI out of the business of pushing to `main`, and it means the running binary's
+`CARGO_PKG_VERSION` and the release it came from are the same by construction rather than
+by anyone remembering to bump a file. The committed manifests therefore lag; `git` holds
+the last released version, the tags hold the truth.
+
+The one sharp edge is that `git log <lasttag>..HEAD` cannot be answered by a shallow
+clone, and a swallowed failure there would report "no commits", which reads as a patch —
+every release would be a patch and no feature would ever move the middle number, wrongly
+but invisibly. So the tooling fails loudly instead, and the release job checks out full
+history.
+
 ## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in

@@ -5,6 +5,7 @@ import { useCommand } from '@/hooks/useCommand';
 import { isNativeHost } from '@/ipc';
 import { FilterPanel } from '@/features/settings/FilterPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
+import { UpdatePanel } from '@/features/settings/UpdatePanel';
 import { useUi } from '@/state/ui';
 
 export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
@@ -142,6 +143,10 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             </dd>
           </dl>
         )}
+      </Section>
+
+      <Section title="Updates">
+        <UpdatePanel />
       </Section>
 
       <Section title="Keyboard">

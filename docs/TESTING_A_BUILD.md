@@ -1,12 +1,16 @@
 # Trying a Windows build
 
 The quickest route is **[Releases → latest](../../releases/latest)**: a single `.exe`
-installer. Every merge to main publishes its own release, tagged `build-N` and named
-after the commit that produced it, and none of them is ever overwritten — so if a build
-worked and the next one does not, the one that worked is still sitting there.
+installer. Every merge to main publishes its own release, tagged with the version it
+carries (`v0.2.0`), and none of them is ever overwritten — so if a build worked and the
+next one does not, the one that worked is still sitting there.
 
-The installer is named for its build (`Aurora-TV-build-53-x64-setup.exe`), so several
-can share a Downloads folder without becoming `(1)` and `(2)`.
+The installer is named for its version (`Aurora-TV-0.2.0-x64-setup.exe`), so several can
+share a Downloads folder without becoming `(1)` and `(2)`.
+
+Once it is running, **Settings → Updates** says which build you have and whether there is
+a newer one. It checks by itself a few seconds after launch and then at most every six
+hours. It will not install anything for you — see `docs/DECISIONS.md` D17 for why.
 
 That run also attaches the raw builds under **Actions → the merge's run →
 Artifacts**, though these expire and the releases do not:
