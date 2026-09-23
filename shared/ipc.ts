@@ -278,7 +278,26 @@ export interface UpdateRelease {
   pageUrl: string;
   installerUrl: string | null;
   installerBytes: number | null;
+  /**
+   * The installer's SHA-256, as GitHub published it beside the asset. The host will
+   * not download an installer without one, and checks the file against it before
+   * anything is allowed to run it.
+   */
+  installerSha256: string | null;
   publishedAt: string | null;
+}
+
+export type UpdateDownloadStatus = 'idle' | 'downloading' | 'ready' | 'failed';
+
+/** The installer download (docs/DECISIONS.md D17). */
+export interface UpdateDownload {
+  status: UpdateDownloadStatus;
+  /** What is being fetched, or what is waiting to be installed. */
+  version: string | null;
+  receivedBytes: number;
+  totalBytes: number | null;
+  /** Why it failed, in words worth showing. */
+  message: string | null;
 }
 
 export interface UpdateStatus {
@@ -293,6 +312,12 @@ export interface UpdateStatus {
   lastCheckedAt: number | null;
   /** Where "Get the update" goes. Fixed by the host, not chosen by the UI. */
   releasesUrl: string;
+  download: UpdateDownload;
+  /**
+   * Whether this build can install an update over itself: false for a portable copy,
+   * which an installer would not replace, and false off Windows.
+   */
+  canInstall: boolean;
 }
 
 /**
@@ -884,6 +909,19 @@ export interface Commands {
    * anything here to make the app open something else.
    */
   'updates.openReleases': () => void;
+  /**
+   * Fetch the published installer and verify it against the digest GitHub published
+   * beside it. Takes no URL — the host uses the one from the release it just checked,
+   * for the same reason `openReleases` takes none.
+   *
+   * Returns as soon as the download starts; `update.download` reports the rest.
+   */
+  'updates.download': () => UpdateDownload;
+  /**
+   * Run the downloaded installer and quit so it can replace the files. Refuses unless
+   * a verified download is waiting, and refuses while a recording is in progress.
+   */
+  'updates.install': () => void;
 }
 
 export type CommandName = keyof Commands;
@@ -899,6 +937,8 @@ export interface Events {
     latest: UpdateRelease | null;
     available: boolean;
   };
+  /** How far the update installer has got, so the bar moves without polling. */
+  'update.download': UpdateDownload;
   'ingest.progress': IngestProgress;
   'library.refreshed': { added: number; removed: number; updated: number };
   'toast': { level: 'info' | 'success' | 'warning' | 'error'; message: string };

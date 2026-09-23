@@ -1,22 +1,27 @@
 /**
- * Whether there is a newer build than this one (README §23).
+ * Whether there is a newer build than this one, and installing it (README §23).
  *
  * Aurora installs from a GitHub release rather than a store, so nothing else would
- * ever tell someone the bug they hit was fixed a week ago. What this does not do is
- * install: the host has no signing key to verify a download against, so the honest
- * offer is the release page and its notes, not a silent replacement of the running
- * binary (docs/DECISIONS.md D17).
+ * ever tell someone the bug they hit was fixed a week ago. It now fetches and runs the
+ * installer too — never silently, and never without checking the file against the
+ * SHA-256 GitHub published beside it (docs/DECISIONS.md D17). A portable copy is the
+ * exception: an installer would not replace it, so that build keeps the release page.
  */
-import { useCallback, useState } from 'react';
-import type { UpdateStatus } from '@shared/ipc';
-import { Badge, Button } from '@/components/Primitives';
+import { useCallback, useEffect, useState } from 'react';
+import type { UpdateDownload, UpdateStatus } from '@shared/ipc';
+import { Badge, Button, ProgressBar } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
-import { invoke } from '@/ipc';
+import { invoke, onUpdateDownload } from '@/ipc';
+import { bytes as formatBytes } from '@/lib/format';
 
 export function UpdatePanel() {
   const status = useCommand('updates.check', undefined, []);
-  const [busy, setBusy] = useState<'checking' | 'opening' | null>(null);
+  const [busy, setBusy] = useState<'checking' | 'opening' | 'starting' | 'installing' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Seeded from the check and then driven by the host's events, so the bar moves
+  // without this panel polling anything.
+  const [live, setLive] = useState<UpdateDownload | null>(null);
+  useEffect(() => onUpdateDownload(setLive), []);
 
   const check = useCallback(async () => {
     setBusy('checking');
@@ -58,6 +63,32 @@ export function UpdatePanel() {
   );
 
   const data: UpdateStatus | null = status.data;
+  const download = live ?? data?.download ?? null;
+
+  const startDownload = useCallback(async () => {
+    setBusy('starting');
+    setError(null);
+    try {
+      setLive(await invoke('updates.download'));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const install = useCallback(async () => {
+    setBusy('installing');
+    setError(null);
+    try {
+      // On success the app exits and the installer takes over, so nothing after this
+      // line runs in the ordinary case.
+      await invoke('updates.install');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  }, []);
 
   return (
     <div>
@@ -119,12 +150,30 @@ export function UpdatePanel() {
             </pre>
           )}
           <div style={{ marginTop: 'var(--sp-3)' }}>
-            <Button size="sm" variant="primary" onClick={() => void open()} disabled={busy === 'opening'}>
-              Get the update
-            </Button>
-            <span style={{ marginLeft: 10, fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
-              Opens the release page. Aurora does not install it for you.
-            </span>
+            {data.canInstall ? (
+              <InstallControls
+                download={download}
+                busy={busy}
+                onDownload={() => void startDownload()}
+                onInstall={() => void install()}
+                onOpen={() => void open()}
+              />
+            ) : (
+              <>
+                <Button
+                  size="sm" variant="primary"
+                  onClick={() => void open()} disabled={busy === 'opening'}
+                >
+                  Get the update
+                </Button>
+                <span
+                  style={{ marginLeft: 10, fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}
+                >
+                  This copy is portable, so the installer would not replace it. The
+                  release page has the new zip.
+                </span>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -165,6 +214,74 @@ export function UpdatePanel() {
         <div role="alert" style={{ color: 'var(--danger)', fontSize: 'var(--fs-sm)', marginTop: 10 }}>
           {error ?? status.error}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Download, then install. Four states and one button, because at any moment there is
+ * exactly one thing worth pressing.
+ */
+function InstallControls({
+  download, busy, onDownload, onInstall, onOpen,
+}: {
+  download: UpdateDownload | null;
+  busy: string | null;
+  onDownload: () => void;
+  onInstall: () => void;
+  onOpen: () => void;
+}) {
+  const status = download?.status ?? 'idle';
+
+  if (status === 'downloading') {
+    const total = download?.totalBytes ?? 0;
+    const received = download?.receivedBytes ?? 0;
+    const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+    return (
+      <div style={{ maxWidth: 420 }}>
+        <div
+          style={{
+            display: 'flex', justifyContent: 'space-between',
+            fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', marginBottom: 6,
+          }}
+        >
+          <span>Downloading {download?.version}…</span>
+          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {formatBytes(received)}{total > 0 && ` of ${formatBytes(total)}`}
+          </span>
+        </div>
+        <ProgressBar percent={pct} height={6} />
+      </div>
+    );
+  }
+
+  if (status === 'ready') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Button size="sm" variant="primary" onClick={onInstall} disabled={busy === 'installing'}>
+          {busy === 'installing' ? 'Starting the installer…' : 'Install and restart'}
+        </Button>
+        <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)', maxWidth: 420 }}>
+          Checked against the checksum GitHub published for it. Aurora will close so the
+          installer can replace it; these builds are not signed, so Windows will ask.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <Button size="sm" variant="primary" onClick={onDownload} disabled={busy === 'starting'}>
+        {status === 'failed' ? 'Try again' : 'Download update'}
+      </Button>
+      <Button size="sm" onClick={onOpen} disabled={busy === 'opening'}>
+        Open release page
+      </Button>
+      {status === 'failed' && download?.message && (
+        <span role="alert" style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)' }}>
+          {download.message}
+        </span>
       )}
     </div>
   );

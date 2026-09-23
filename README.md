@@ -31,7 +31,7 @@ This repository holds two things:
 | Stream failover: demote a dead source, roll to the next (§7.14) | ✅ built and tested; never seen a real stream drop |
 | Windows installer + portable build from CI | ✅ built on every merge to main; the app itself has still never been run |
 | Versioned releases: patch for a fix, minor for a feature (§23) | ✅ derived from the commit subjects at build time; never seen a real release yet |
-| Update check against GitHub releases (§23) | ✅ built and tested; checks and tells you, does not install — see D17 |
+| Update check and install from GitHub releases (§23) | ✅ built and tested; downloads the installer and verifies it against the SHA-256 GitHub publishes, then runs it. Not signature-verified — §18 wants a signing key that does not exist yet (D17) |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
 from what merely compiles. In particular the Phase 0 compositing spike — video behind a

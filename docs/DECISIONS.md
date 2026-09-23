@@ -183,27 +183,61 @@ Rollovers within a single tune are bounded. A provider in a total outage would o
 spin through every URL it owns for ever, and a stopped picture with an error on it is
 more honest than an endless reconnect.
 
-## D17 — The updater checks; it does not install
+## D17 — The updater installs, and checks the file against a published digest first
 
 Aurora installs from a GitHub release rather than a store, so nothing would otherwise
 tell a viewer that the bug they hit was fixed a week ago. The app asks GitHub for the
 newest published release, compares it against `env!("CARGO_PKG_VERSION")`, and says so
 in Settings.
 
-It stops there. Tauri's updater plugin would download, verify and install — and it
-refuses to run without a signing keypair, whose private half has to be a repository
-secret. Until that key exists, an "auto-updater" would be downloading an executable on
-the strength of an HTTP response and running it, which is a materially different thing
-to offer than a link to a page someone can read first.
+It used to stop there, and the reason it stopped was specific: an updater that downloads
+an executable and runs it "on the strength of an HTTP response" is a materially
+different offer from a link to a page someone can read first. That argument was right
+about the risk and wrong about the options, because it assumed the only way to verify a
+download is a code-signing key this project does not have.
 
-Two consequences shape the code. The comparison uses `aurora_core::version` rather than
-string ordering, because `"0.9.0" > "0.10.0"` is true of strings and would stop the
-updater offering anything ever again past `.9`. And the page it opens is a compile-time
-constant, not the `html_url` the API returned: a command that opens whatever URL it is
-handed is a way to make the app launch something else.
+GitHub publishes a SHA-256 for every release asset, in the same authenticated API
+response that names the version and the download URL. So the installer is fetched to
+`<data>/updates/`, hashed as it is written, and only renamed into place if the length
+and the digest both match what that response said. A mismatch deletes the file rather
+than keeping it, because the thing being described is about to be executed. A release
+that publishes no digest is not downloaded at all — "no checksum" is a refusal, not a
+step to skip.
 
-The check is cached for six hours and stored, so opening Settings costs no network and a
-machine that is offline does not retry in a loop. A failed check leaves the last good
+Three more rules, each of which is a thing that could otherwise go wrong:
+
+- **The URL is never handed in.** `updates.download` takes no arguments; the host uses
+  the URL from the release it just checked, and that URL has to start with
+  `https://github.com/noahklimczuk/iptv-player/releases/download/`. The trailing slash
+  is load-bearing — without it, `github.com.example.invalid` and
+  `github.com@example.invalid` both pass. Same reasoning as `updates.openReleases`
+  taking no URL, one step further along.
+- **The filename is built from the version**, which is parsed as `major.minor.patch`,
+  so nothing the network said reaches the filesystem as a name.
+- **Nothing is silent.** The viewer presses Download, watches a bar, and presses
+  Install and restart. The installer runs visibly rather than with `/S`, because these
+  builds are unsigned and Windows is going to say something about that — which the
+  person doing the installing should see.
+
+Two refusals worth naming. A **portable** copy is not offered the button at all: the
+NSIS installer would install into Program Files and leave the folder actually running
+untouched, which is how someone ends up with two copies and updates neither. And an
+install **while a recording is in progress** is postponed with a message saying so: a
+recording cannot be taken again later, and an update can.
+
+What this still is not: **signature verification**, which README §18 asks for. The
+digest and the file both come from GitHub, so this defends against a corrupted or
+substituted download, not against whoever can publish a release. Closing that properly
+means a minisign keypair — the private half a repository secret the release workflow
+signs with, the public half compiled into the app — which is a key somebody has to
+create and keep, and so is a decision rather than a commit. Until then the app says
+plainly, on the button, that what it checked was a checksum.
+
+Two consequences shape the rest of the code. The version comparison uses
+`aurora_core::version` rather than string ordering, because `"0.9.0" > "0.10.0"` is true
+of strings and would stop the updater offering anything ever again past `.9`. And the
+check is cached for six hours and stored, so opening Settings costs no network and a
+machine that is offline does not retry in a loop; a failed check leaves the last good
 answer in place rather than blanking the panel.
 
 ## D18 — The version is derived from the commits, not declared

@@ -26,6 +26,8 @@ pub struct Services {
     /// Downloaded posters and backdrops. Deletable at any time — the library stores
     /// remote URLs, so this is only an accelerator.
     pub artwork: Arc<artwork::Cache>,
+    /// The update installer being fetched, if any (docs/DECISIONS.md D17).
+    pub updates: Arc<crate::updates::Downloads>,
     pub data_dir: PathBuf,
 }
 
@@ -74,6 +76,7 @@ impl Services {
                 data_dir.clone(),
             )),
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
+            updates: Arc::new(crate::updates::Downloads::default()),
             dvr: Arc::new(
                 crate::dvr::Dvr::new(Arc::clone(&db), Arc::new(StreamRecorder), folder)
                     .with_max_concurrent(max_concurrent),

@@ -19,6 +19,19 @@ pub mod window;
 
 pub use error::AppError;
 
+/// Where a portable copy keeps its data, or `None` for an installed one (README §13).
+///
+/// A `portable.txt` beside the exe is the marker. One definition, because two places
+/// now need the answer: where the database goes, and whether an installer could
+/// replace this copy at all (docs/DECISIONS.md D17).
+pub fn portable_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+        .filter(|dir| dir.join("portable.txt").exists())
+        .map(|dir| dir.join("data"))
+}
+
 /// Wall-clock seconds. One definition, because four copies of it drifting apart is a
 /// class of bug nobody finds.
 pub fn now_unix() -> i64 {

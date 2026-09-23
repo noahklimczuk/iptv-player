@@ -51,13 +51,7 @@ fn main() {
             use tauri::Manager;
             // Portable mode (README §13): a marker file next to the exe keeps all data
             // local, with no %LOCALAPPDATA% and no registry.
-            let portable = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("portable.txt")))
-                .filter(|p| p.exists())
-                .and_then(|p| p.parent().map(|d| d.join("data")));
-
-            let data_dir = match portable {
+            let data_dir = match aurora_app::portable_dir() {
                 Some(dir) => dir,
                 None => app
                     .path()
@@ -248,6 +242,8 @@ fn main() {
             updates::updates_check,
             updates::updates_set_automatic,
             updates::updates_open_releases,
+            updates::updates_download,
+            updates::updates_install,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");

@@ -10,7 +10,7 @@ import type {
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
-  ProviderCredentials, TimeshiftSettings, TimeshiftWindow,
+  ProviderCredentials, TimeshiftSettings, TimeshiftWindow, UpdateDownload,
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
@@ -25,6 +25,21 @@ import * as fx from './fixtures';
 /** Edits made in a browser session, so the form round-trips without a host. */
 const mockProviderEdits = new Map<number, { url: string; username: string }>();
 
+/** The installer download, modelled so the panel can be driven without a host. */
+let mockDownload: UpdateDownload = {
+  status: 'idle', version: null, receivedBytes: 0, totalBytes: null, message: null,
+};
+const downloadListeners = new Set<(d: UpdateDownload) => void>();
+export function onUpdateDownload(fn: (d: UpdateDownload) => void) {
+  downloadListeners.add(fn);
+  return () => downloadListeners.delete(fn);
+}
+function setDownload(patch: Partial<UpdateDownload>): UpdateDownload {
+  mockDownload = { ...mockDownload, ...patch };
+  downloadListeners.forEach((l) => l(mockDownload));
+  return mockDownload;
+}
+
 const mockUpdates: UpdateStatus = {
   current: '0.1.0',
   latest: {
@@ -34,12 +49,20 @@ const mockUpdates: UpdateStatus = {
     pageUrl: 'https://github.com/noahklimczuk/iptv-player/releases/tag/v0.1.1',
     installerUrl: 'https://github.com/noahklimczuk/iptv-player/releases/download/v0.1.1/Aurora-TV-0.1.1-x64-setup.exe',
     installerBytes: 38_767_916,
+    installerSha256: 'fc27bb794fb5584255a4f18d06fa1fcc09dd483d4c334e2f071970de3ece99bb',
     publishedAt: '2026-09-23T03:13:28Z',
   },
   available: true,
   automatic: true,
   lastCheckedAt: null,
   releasesUrl: 'https://github.com/noahklimczuk/iptv-player/releases/latest',
+  get download() { return mockDownload; },
+  // The browser preview is not Windows, but the panel's install path is the
+  // interesting one to be able to see and to test. `?portable` stands in for the
+  // build that cannot install over itself, the way `?setup` forces the wizard.
+  get canInstall() {
+    return !new URLSearchParams(window.location.search).has('portable');
+  },
 };
 
 const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'movie:14']);
@@ -1487,6 +1510,37 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'updates.openReleases': () => {
     // No host to ask, and a browser tab opening itself during a Playwright run would
     // be a nuisance rather than a feature.
+  },
+
+  'updates.download': (): UpdateDownload => {
+    if (mockDownload.status === 'downloading') return mockDownload;
+    const total = mockUpdates.latest?.installerBytes ?? 38_767_916;
+    const version = mockUpdates.latest?.version ?? null;
+    setDownload({ status: 'downloading', version, receivedBytes: 0, totalBytes: total, message: null });
+
+    // A real download reports itself as it goes; this fills the same bar in about a
+    // second so the panel can be seen and tested without forty megabytes.
+    const step = Math.ceil(total / 8);
+    const timer = setInterval(() => {
+      const received = Math.min(total, mockDownload.receivedBytes + step);
+      if (received >= total) {
+        clearInterval(timer);
+        setDownload({ status: 'ready', receivedBytes: total, totalBytes: total });
+        return;
+      }
+      setDownload({ receivedBytes: received });
+    }, 120);
+    return mockDownload;
+  },
+
+  'updates.install': () => {
+    if (mockDownload.status !== 'ready') {
+      throw new Error('There is no verified update downloaded yet');
+    }
+    // On Windows the app exits here and the installer takes over. A browser has no
+    // host to hand it to, and saying so through the panel's error path is more honest
+    // than pretending the download state changed.
+    throw new Error('The installer would run here, and Aurora would close for it.');
   },
 
   'providers.list': () => fx.providers,
