@@ -1,10 +1,15 @@
 # Trying a Windows build
 
-The quickest route is **Releases → `latest-windows`**: a single `.exe` installer,
-rebuilt on every merge to main, so the link never changes.
+The quickest route is **[Releases → latest](../../releases/latest)**: a single `.exe`
+installer. Every merge to main publishes its own release, tagged `build-N` and named
+after the commit that produced it, and none of them is ever overwritten — so if a build
+worked and the next one does not, the one that worked is still sitting there.
+
+The installer is named for its build (`Aurora-TV-build-53-x64-setup.exe`), so several
+can share a Downloads folder without becoming `(1)` and `(2)`.
 
 That run also attaches the raw builds under **Actions → the merge's run →
-Artifacts**:
+Artifacts**, though these expire and the releases do not:
 
 | Artifact | What it is |
 |---|---|

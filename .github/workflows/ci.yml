@@ -5,10 +5,10 @@ name: CI
 # a Linux runner cannot see at all. Nothing links and nothing is bundled, so a PR costs
 # about three and a half minutes of wall clock.
 #
-# A merge builds the thing: link against libmpv, bundle the installer, replace what
-# `latest-windows` points at. That is the only place the nine-minute job runs now. It
-# used to run on every push to every branch — twice over while a PR was open, since
-# `push` and `pull_request` both fired.
+# A merge builds the thing: link against libmpv, bundle the installer, publish it as
+# its own release. That is the only place the nine-minute job runs now. It used to run
+# on every push to every branch — twice over while a PR was open, since `push` and
+# `pull_request` both fired.
 #
 # What this trades away, stated plainly: `cargo check` proves the Windows code
 # compiles, not that it links, and linking against libmpv is where the awkward parts
@@ -341,10 +341,15 @@ jobs:
             src-native/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
-      - name: Publish the installer to Releases
-        # Actions artifacts expire and are awkward to find; a release is one link that
-        # never changes. The NSIS installer is a single self-contained .exe — it
-        # carries libmpv with it, which is why the portable build cannot be one file.
+      - name: Publish this build to its own release
+        # Actions artifacts expire; a release does not. Every merge gets its own tag, so
+        # a build is never replaced by the one after it and an older installer stays
+        # downloadable — which matters the first time something that worked last week
+        # stops working. The newest is marked as GitHub's latest release, so
+        # /releases/latest remains one link that always points at the current build.
+        #
+        # The NSIS installer is a single self-contained .exe — it carries libmpv with
+        # it, which is why the portable build cannot be one file.
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -353,18 +358,35 @@ jobs:
           $exe = Get-ChildItem 'src-native\target\release\bundle\nsis' -Filter '*.exe' |
             Select-Object -First 1
           if (-not $exe) { throw 'No NSIS installer was produced.' }
-          Write-Host "Publishing $($exe.Name) ($([math]::Round($exe.Length / 1MB)) MB)"
 
-          $tag = 'latest-windows'
+          $build = $env:GITHUB_RUN_NUMBER
+          $full  = $env:GITHUB_SHA
+          $sha   = $full.Substring(0, 7)
+          $tag   = "build-$build"
+
+          # Renamed before upload: the bundler gives every build the same filename, and
+          # several of these have to be able to sit in one Downloads folder and still be
+          # told apart.
+          $asset = Join-Path $env:RUNNER_TEMP "Aurora-TV-build-$build-x64-setup.exe"
+          Copy-Item $exe.FullName $asset
+          $mb = [math]::Round($exe.Length / 1MB)
+          Write-Host "Publishing $(Split-Path $asset -Leaf) ($mb MB) as $tag"
+
+          # The subject line is what tells two builds apart at a glance in the list.
+          $subject = (git log -1 --pretty=%s).Trim()
+
           # Built as an array rather than a here-string: a here-string terminator must
           # sit at column zero, which depends on how YAML strips this block's indent.
           $notes = @(
-            'Newest Windows build, rebuilt on every merge to main. Download the .exe'
-            'below and run it.'
+            "Windows build of $sha, published when it merged to main."
             ''
-            "* Commit: $env:GITHUB_SHA"
-            "* Branch: $env:GITHUB_REF_NAME"
+            "* $subject"
+            "* Commit: $full"
             "* Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            ''
+            'Every merge publishes its own release and nothing replaces an older one, so'
+            'a build you were happy with stays downloadable. The newest is always at'
+            '/releases/latest.'
             ''
             'This is a development build, not a finished product. docs/TESTING_A_BUILD.md'
             'says what to look at first and where the log is.'
@@ -381,9 +403,13 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
 
           if ($exists) {
-            gh release edit $tag --notes $notes --prerelease
+            # Only reachable by re-running this same workflow run — the run number is
+            # what names the tag. So this is the build refreshing its own release, not
+            # one build overwriting another.
+            gh release edit $tag --notes $notes --latest
           } else {
-            gh release create $tag --prerelease --title 'Aurora TV — latest build' --notes $notes
+            gh release create $tag --target $full --latest `
+              --title "Build $build - $sha" --notes $notes
           }
-          gh release upload $tag $exe.FullName --clobber
+          gh release upload $tag $asset --clobber
           Write-Host "Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"
