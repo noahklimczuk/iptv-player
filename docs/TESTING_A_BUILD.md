@@ -1,9 +1,9 @@
 # Trying a Windows build
 
 The quickest route is **Releases → `latest-windows`**: a single `.exe` installer,
-replaced on every push, so the link never changes.
+rebuilt on every merge to main, so the link never changes.
 
-Every push also attaches the raw builds to the run under **Actions → the run →
+That run also attaches the raw builds under **Actions → the merge's run →
 Artifacts**:
 
 | Artifact | What it is |

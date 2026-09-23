@@ -76,13 +76,13 @@ pnpm exec playwright test     # 12 journeys + screenshot capture
 
 ## Getting a build without a Windows machine
 
-Every push builds the app on a Windows runner. Two ways to get the result:
+Every merge to main builds the app on a Windows runner. Two ways to get the result:
 
-- **Releases → `latest-windows`** — one `.exe` installer, replaced on every push, so the
-  link never changes.
-- **Actions → the run → Artifacts** — `aurora-tv-portable` (a zip that runs in place and
-  keeps its state beside itself) and `aurora-tv-installers` (the NSIS `.exe` and the
-  MSI).
+- **Releases → `latest-windows`** — one `.exe` installer, replaced by every merge, so
+  the link never changes.
+- **Actions → the merge's run → Artifacts** — `aurora-tv-portable` (a zip that runs
+  in place and keeps its state beside itself) and `aurora-tv-installers` (the NSIS
+  `.exe` and the MSI).
 
 The portable build cannot be a single file: libmpv ships as a DLL and has to sit next
 to the exe. The installer is a single file because it carries the DLL inside itself and
