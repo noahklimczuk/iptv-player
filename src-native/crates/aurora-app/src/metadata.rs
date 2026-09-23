@@ -23,8 +23,11 @@ use crate::AppError;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataStatus {
-    /// Whether a key is stored. Never the key.
+    /// Whether a key is available at all. Never the key.
     pub has_key: bool,
+    /// True when the only key is the one compiled into this build, so Settings can say
+    /// "nothing to do here" rather than showing an empty field that looks unfinished.
+    pub key_is_built_in: bool,
     /// False when the key would be lost on restart, so the UI can say so.
     pub key_is_persistent: bool,
     pub movies: Coverage,
@@ -35,7 +38,8 @@ pub struct MetadataStatus {
 pub fn metadata_status(services: State<'_, Services>) -> Result<MetadataStatus> {
     let db = services.db.lock();
     Ok(MetadataStatus {
-        has_key: services.credentials.get(CREDENTIAL_KEY).is_ok(),
+        has_key: key_available(&services),
+        key_is_built_in: services.credentials.get(CREDENTIAL_KEY).is_err() && built_in().is_some(),
         key_is_persistent: services.credentials.is_persistent(),
         movies: enrichment::coverage(&db, ItemKind::Movie)?,
         series: enrichment::coverage(&db, ItemKind::Series)?,
@@ -68,8 +72,50 @@ pub fn metadata_set_key(services: State<'_, Services>, args: SetKeyArgs) -> Resu
     Ok(())
 }
 
+/// A key baked in at build time, if the release build was given one.
+///
+/// `option_env!` reads the environment the *compiler* ran in, so the value ends up in
+/// the binary and never in the repository — the CI job passes it from a GitHub secret.
+/// Absent, this is `None` and everything behaves exactly as it did before: the app asks
+/// for a key rather than pretending it has one.
+///
+/// It is worth being plain about what this does and does not protect. The key is inside
+/// the shipped executable, and `strings` will find it. That is true of every app that
+/// ships with a key; what it buys is that the key is not in git history, not in a public
+/// source file, and can be rotated by changing one secret and rebuilding.
+pub const BUILT_IN_KEY: Option<&str> = option_env!("AURORA_TMDB_KEY");
+
+/// Whether a usable key exists at all, from either source.
+pub fn key_available(services: &Services) -> bool {
+    services.credentials.get(CREDENTIAL_KEY).is_ok() || built_in().is_some()
+}
+
+/// The compiled-in key, ignoring a blank one.
+///
+/// CI sets the variable unconditionally, so an unset secret arrives as an empty string
+/// rather than as an absent variable — which would otherwise compile to `Some("")` and
+/// send keyless requests that fail with a puzzling 401.
+fn built_in() -> Option<&'static str> {
+    BUILT_IN_KEY.map(str::trim).filter(|k| !k.is_empty())
+}
+
+/// The key to use, preferring one the viewer supplied.
+///
+/// Their own key comes first deliberately: someone who went and got one wants it used,
+/// and it carries their own rate limit rather than sharing the built-in one with every
+/// other copy of this build.
+fn resolve_key(services: &Services) -> Option<String> {
+    services
+        .credentials
+        .get(CREDENTIAL_KEY)
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .or_else(|| built_in().map(str::to_string))
+}
+
 fn client(services: &Services) -> Result<TmdbClient> {
-    let key = services.credentials.get(CREDENTIAL_KEY).map_err(|_| {
+    let key = resolve_key(services).ok_or_else(|| {
         AppError::Other(
             "No metadata API key is set. Add one in Settings to fetch artwork and cast.".into(),
         )
@@ -256,6 +302,30 @@ fn now_unix() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_blank_built_in_key_is_no_key() {
+        // CI sets the variable unconditionally, so an unset secret arrives as "" rather
+        // than absent. Compiling that to Some("") would send keyless requests and fail
+        // with a 401 nobody could explain.
+        for raw in ["", "   ", "\n"] {
+            assert!(
+                raw.trim().is_empty(),
+                "{raw:?} should be treated as no key at all"
+            );
+        }
+    }
+
+    #[test]
+    fn this_build_reports_its_key_honestly() {
+        // Whatever this build was compiled with, `built_in()` must agree with it: a
+        // build with no secret must not claim a key, and one with a secret must use it.
+        match BUILT_IN_KEY {
+            None => assert!(built_in().is_none()),
+            Some(k) if k.trim().is_empty() => assert!(built_in().is_none()),
+            Some(k) => assert_eq!(built_in(), Some(k.trim())),
+        }
+    }
+
     use super::*;
     use aurora_ingest::credentials::{CredentialStore, MemoryStore};
 

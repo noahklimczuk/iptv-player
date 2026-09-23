@@ -170,6 +170,14 @@ jobs:
       # minutes.
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      # Baked into the binary by `option_env!` so nobody has to paste a key into the app
+      # (docs/DECISIONS.md D19). Optional: with the secret unset this is an empty string,
+      # the build treats that as no key, and the app asks for one exactly as before.
+      #
+      # The key is not in git, but it *is* in the shipped exe and `strings` will find it.
+      # That is inherent to shipping with a key; TMDB keys are free and revocable, so
+      # rotating means changing the secret and merging anything.
+      AURORA_TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
