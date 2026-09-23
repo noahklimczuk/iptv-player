@@ -54,11 +54,48 @@ impl<'a> XtreamClient<'a> {
         url
     }
 
-    fn get<T: serde::de::DeserializeOwned>(&self, action: Option<&str>) -> Result<T, NetFailure> {
+    /// The name an error should use for a request, since the URL carries credentials.
+    fn label(action: Option<&str>) -> &str {
+        action.unwrap_or("the account check")
+    }
+
+    /// Fetch the body of one API call. Transport failures only — parsing is the
+    /// caller's, because how much a bad payload matters depends on what was asked for.
+    fn fetch(&self, action: Option<&str>) -> Result<String, NetFailure> {
         let url = self.api_url(action);
-        tracing::debug!(url = %redact(&url), "xtream request");
-        let body = self.http.fetch_string(&url)?;
-        parse_json(&body).map_err(|e| provider_failure(&e.to_string()))
+        // Info, not debug: when an import fails against a real panel, the sequence of
+        // requests is the whole diagnosis, and nobody hits a problem with the log level
+        // already turned up. Redacted — the URL carries the password.
+        tracing::info!(url = %redact(&url), "xtream request");
+        self.http.fetch_string(&url)
+    }
+
+    fn get<T: serde::de::DeserializeOwned>(&self, action: Option<&str>) -> Result<T, NetFailure> {
+        let body = self.fetch(action)?;
+        parse_json(&body).map_err(|e| provider_failure(Self::label(action), &e.to_string()))
+    }
+
+    /// A list whose absence is not worth failing the import over.
+    ///
+    /// Categories are group *labels* and nothing else — a channel with no category is
+    /// a channel in no group, not a channel that cannot be imported. Panels really do
+    /// answer these with an empty body, and aborting a forty-thousand-entry import
+    /// because the group names did not arrive is the wrong trade.
+    ///
+    /// A transport failure still propagates: a panel that has stopped answering is a
+    /// different thing from one that answered with nothing.
+    fn get_optional_list<T: serde::de::DeserializeOwned>(
+        &self,
+        action: &str,
+    ) -> Result<Vec<T>, NetFailure> {
+        let body = self.fetch(Some(action))?;
+        match parse_json::<Vec<T>>(&body) {
+            Ok(list) => Ok(list),
+            Err(e) => {
+                tracing::warn!(action, cause = %e, "no usable categories; importing without groups");
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// Authenticate and read the account's own view of itself.
@@ -109,15 +146,15 @@ impl<'a> XtreamClient<'a> {
     }
 
     pub fn live_categories(&self) -> Result<Vec<Category>, NetFailure> {
-        self.get(Some("get_live_categories"))
+        self.get_optional_list("get_live_categories")
     }
 
     pub fn vod_categories(&self) -> Result<Vec<Category>, NetFailure> {
-        self.get(Some("get_vod_categories"))
+        self.get_optional_list("get_vod_categories")
     }
 
     pub fn series_categories(&self) -> Result<Vec<Category>, NetFailure> {
-        self.get(Some("get_series_categories"))
+        self.get_optional_list("get_series_categories")
     }
 
     pub fn live_streams(&self) -> Result<Vec<LiveStream>, NetFailure> {
@@ -161,7 +198,7 @@ impl<'a> XtreamClient<'a> {
     }
 }
 
-fn provider_failure(detail: &str) -> NetFailure {
+fn provider_failure(request: &str, detail: &str) -> NetFailure {
     let lower = detail.to_ascii_lowercase();
     // The classic fork behaviour: an error page served with HTTP 200.
     if lower.contains("html") {
@@ -178,7 +215,10 @@ fn provider_failure(detail: &str) -> NetFailure {
     NetFailure {
         code: ErrorCode::Unknown,
         message: "Your provider sent something Aurora could not read".into(),
-        cause: format!("The response was not valid JSON. {detail}"),
+        // Naming the request matters more than it looks: six different calls can fail
+        // this way, and without the name the message says nothing about which panel
+        // feature is broken or whether the import got anywhere at all.
+        cause: format!("The response to {request} was not valid JSON. {detail}"),
         actions: vec![ErrorAction::Retry, ErrorAction::ReportBroken],
         retryable: true,
     }
@@ -199,6 +239,85 @@ fn urlencode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_empty_categories_response_does_not_stop_the_import() {
+        // A real panel did this: the account check answered, and one of the category
+        // calls came back with nothing at all, which aborted the whole first import.
+        // Group names are decoration; the channels behind them are not.
+        let server = TestServer::start(|_, req| {
+            if req.path.contains("action=get_live_categories") {
+                Reply::ok("")
+            } else {
+                Reply::ok(r#"[{"stream_id":1,"name":"CNN","num":101}]"#)
+            }
+        });
+        let http = client();
+        let xtream = XtreamClient::new(&http, &server.url(""), "u", "p");
+
+        assert!(xtream.live_categories().expect("categories").is_empty());
+        assert_eq!(xtream.live_streams().expect("streams").len(), 1);
+    }
+
+    #[test]
+    fn categories_that_are_an_error_page_are_also_survivable() {
+        let server = TestServer::start(|_, req| {
+            if req.path.contains("categories") {
+                Reply::ok("<html><body>nope</body></html>")
+            } else {
+                Reply::ok("[]")
+            }
+        });
+        let http = client();
+        let xtream = XtreamClient::new(&http, &server.url(""), "u", "p");
+        assert!(xtream.vod_categories().expect("categories").is_empty());
+    }
+
+    #[test]
+    fn a_panel_that_stops_answering_still_fails_the_import() {
+        // The distinction that makes the tolerance safe: nothing-in-the-body is
+        // survivable, a panel that has gone away is not.
+        let server = TestServer::always(Reply::status(500));
+        let http = client();
+        let xtream = XtreamClient::new(&http, &server.url(""), "u", "p");
+        assert!(xtream.live_categories().is_err());
+    }
+
+    #[test]
+    fn an_empty_stream_list_names_the_request_that_failed() {
+        // Six calls can fail this way. A message that does not say which one leaves
+        // nobody able to tell whether the import got anywhere.
+        let server = TestServer::start(|_, req| {
+            if req.path.contains("action=get_live_streams") {
+                Reply::ok("")
+            } else {
+                Reply::ok("[]")
+            }
+        });
+        let http = client();
+        let xtream = XtreamClient::new(&http, &server.url(""), "u", "p");
+
+        let failure = xtream.live_streams().expect_err("should fail");
+        assert!(
+            failure.cause.contains("get_live_streams"),
+            "the cause must name the request, got {:?}",
+            failure.cause
+        );
+    }
+
+    #[test]
+    fn the_account_check_is_named_too() {
+        let server = TestServer::always(Reply::ok(""));
+        let http = client();
+        let xtream = XtreamClient::new(&http, &server.url(""), "u", "p");
+
+        let failure = xtream.authenticate(0).expect_err("should fail");
+        assert!(
+            failure.cause.contains("the account check"),
+            "got {:?}",
+            failure.cause
+        );
+    }
+
     use super::*;
     use crate::http::{HttpClient, HttpConfig};
     use crate::testserver::{Reply, TestServer};
