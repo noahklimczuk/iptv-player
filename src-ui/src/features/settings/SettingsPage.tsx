@@ -7,7 +7,7 @@ import { FilterPanel } from '@/features/settings/FilterPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { useUi } from '@/state/ui';
 
-export function SettingsPage() {
+export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
   const ui = useUi();
   const { data: providers } = useCommand('providers.list', undefined, []);
   const { data: stats } = useCommand('library.stats', undefined, []);
@@ -62,7 +62,14 @@ export function SettingsPage() {
             </div>
           );
         })}
-        <Button size="sm" icon="plus" style={{ marginTop: 'var(--sp-3)' }}>Add provider</Button>
+        <Button
+          size="sm"
+          icon="plus"
+          style={{ marginTop: 'var(--sp-3)' }}
+          onClick={onAddProvider}
+        >
+          Add provider
+        </Button>
       </Section>
 
       <Section title="Appearance">

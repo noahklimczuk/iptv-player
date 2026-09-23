@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::Result;
+use crate::now_unix;
 use crate::services::Services;
 
 #[derive(Debug, Deserialize)]
@@ -276,13 +277,14 @@ pub struct PlayArgs {
 
 #[tauri::command]
 pub fn player_play(services: State<'_, Services>, args: PlayArgs) -> Result<PlayerState> {
-    let (url, options) = {
-        let db = services.db.lock();
-        crate::window::resolve_playback(&db, &args.kind, args.id, args.position_secs)?
-    };
-    let mut player = services.player.lock();
-    player.load(&url, &options)?;
-    Ok(player.state())
+    // Live goes through the failover path: a channel has several URLs and the first is
+    // only a guess. Everything else has exactly one.
+    if args.kind == "live" {
+        return services.playback.play_live(args.id, now_unix());
+    }
+    services
+        .playback
+        .play_item(&args.kind, args.id, args.position_secs)
 }
 
 #[derive(Debug, Deserialize)]
@@ -303,13 +305,9 @@ pub fn player_play_catchup(
     services: State<'_, Services>,
     args: CatchupArgs,
 ) -> Result<PlayerState> {
-    let (url, options) = {
-        let db = services.db.lock();
-        crate::window::resolve_catchup(&db, args.channel_id, args.start, args.stop, now_unix())?
-    };
-    let mut player = services.player.lock();
-    player.load(&url, &options)?;
-    Ok(player.state())
+    services
+        .playback
+        .play_catchup(args.channel_id, args.start, args.stop, now_unix())
 }
 
 #[tauri::command]
@@ -328,9 +326,9 @@ pub fn player_resume(services: State<'_, Services>) -> Result<PlayerState> {
 
 #[tauri::command]
 pub fn player_stop(services: State<'_, Services>) -> Result<PlayerState> {
-    let mut p = services.player.lock();
-    p.stop()?;
-    Ok(p.state())
+    // Through the service, so stopping also ends the failover session — otherwise the
+    // next dead-stream tick would reconnect a channel the viewer had closed.
+    services.playback.stop()
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,11 +582,4 @@ pub fn library_set_series_prefs(
         now_unix(),
     )?;
     Ok(())
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }

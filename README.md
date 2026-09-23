@@ -17,7 +17,7 @@ This repository holds two things:
 | Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 132 tests |
 | Playback state machine + error taxonomy | ✅ built, 13 tests |
 | libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 66 E2E journeys |
+| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 67 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
 | Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 29 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
@@ -28,6 +28,8 @@ This repository holds two things:
 | Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
 | Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
 | Timeshift / pause live TV (§7.6) | ❌ not started |
+| Stream failover: demote a dead source, roll to the next (§7.14) | ✅ built and tested; never seen a real stream drop |
+| Windows installer + portable build from CI | ✅ built on every push; the app itself has still never been run |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
 from what merely compiles. In particular the Phase 0 compositing spike — video behind a

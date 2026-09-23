@@ -1,16 +1,45 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use aurora_app::{commands, dvr, metadata, playlist, profiles, providers, services::Services};
+use aurora_app::{
+    commands, dvr, metadata, now_unix, playlist, profiles, providers, services::Services,
+};
+
+/// Send the log somewhere a person can read it.
+///
+/// A release build sets `windows_subsystem = "windows"`, so it has no console and
+/// anything written to stdout goes nowhere — including the one line that distinguishes
+/// "libmpv would not load" from "the video is behind the window". So release builds log
+/// to a file beside their data, and debug builds keep the console they already have.
+///
+/// Truncated per run: the question being asked of a log is almost always about the
+/// launch that just failed, not the twenty before it.
+fn init_logging(data_dir: &std::path::Path) {
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_env("AURORA_LOG").unwrap_or_else(|_| "info".into());
+
+    if cfg!(debug_assertions) {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+        return;
+    }
+
+    let _ = std::fs::create_dir_all(data_dir);
+    match std::fs::File::create(data_dir.join("aurora.log")) {
+        Ok(file) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .init(),
+        // Nowhere to write and nowhere to say so; the app still runs.
+        Err(_) => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
+}
+
+/// How often the player's state is read. Fast enough that the OSD's clock and buffer
+/// readout look live, slow enough to be free.
+const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("AURORA_LOG")
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
     tauri::Builder::default()
         .setup(|app| {
             use tauri::Manager;
@@ -30,9 +59,34 @@ fn main() {
                     .map_err(|e| format!("no data dir: {e}"))?,
             };
 
+            init_logging(&data_dir);
+            tracing::info!(
+                "Aurora TV {} starting, data in {}",
+                env!("CARGO_PKG_VERSION"),
+                data_dir.display()
+            );
+
             let services = Services::new(data_dir)?;
             let scheduler = std::sync::Arc::clone(&services.dvr);
+            let playback_handle = std::sync::Arc::clone(&services.playback);
             app.manage(services);
+
+            // The player's heartbeat. The backend only knows its state when asked, and
+            // the UI's OSD is driven by a `player.state` event, so without this a
+            // stream that died leaves the interface showing it playing — and nothing
+            // would ever notice a live channel needs rolling to its next source.
+            use tauri::Emitter;
+            let playback = std::sync::Arc::clone(&playback_handle);
+            let player_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("aurora-player".into())
+                .spawn(move || loop {
+                    std::thread::sleep(PLAYER_TICK);
+                    if let Some(state) = playback.tick(now_unix()) {
+                        let _ = player_handle.emit("player.state", &state);
+                    }
+                })
+                .expect("spawning the player thread");
 
             // The DVR has to keep its own time: nothing in the UI is guaranteed to be
             // open when a recording is due, and a minimised window still records.
@@ -141,11 +195,4 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }

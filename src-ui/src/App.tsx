@@ -46,7 +46,9 @@ export default function App() {
     () => !new URLSearchParams(window.location.search).has('setup'),
   );
 
-  const { data: providers } = useCommand('providers.list', undefined, []);
+  const { data: providers, reload: reloadProviders } = useCommand('providers.list', undefined, []);
+  // Settings can open the same wizard first run uses, to add a second provider.
+  const [addingProvider, setAddingProvider] = useState(false);
   const { data: channels } = useCommand('channels.list', {}, []);
   // Every tune path funnels through here, so digit entry and Ch+/Ch- surface the
   // player exactly like clicking a channel does.
@@ -150,8 +152,18 @@ export default function App() {
   }, [ui.banner, ui]);
 
   const needsSetup = !setupDone || providers?.length === 0;
-  if (needsSetup) {
-    return <SetupWizard onFinished={() => setSetupDone(true)} />;
+  if (needsSetup || addingProvider) {
+    return (
+      <SetupWizard
+        additional={addingProvider}
+        onFinished={() => {
+          setSetupDone(true);
+          setAddingProvider(false);
+          // The settings list is stale the moment a provider is added.
+          reloadProviders();
+        }}
+      />
+    );
   }
 
   // "Who's watching?" comes after setup — there is no point choosing a profile for
@@ -219,7 +231,10 @@ export default function App() {
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/recordings" element={<RecordingsPage />} />
           <Route path="/playlist" element={<PlaylistPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route
+            path="/settings"
+            element={<SettingsPage onAddProvider={() => setAddingProvider(true)} />}
+          />
         </Routes>
       </main>
 

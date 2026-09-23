@@ -23,4 +23,12 @@ tauri = { version = "2", features = [] }
 parking_lot = "0.12"
 
 [features]
-default = []
+# Tauri decides dev-versus-production by this feature, not by the cargo profile:
+# `tauri::is_dev()` is `!cfg!(feature = "custom-protocol")`. With it absent from the
+# default set, `cargo build --release` produces a binary that loads `devUrl` — a
+# shipped app pointing at a dev server that is not running. That is exactly what the
+# first portable build did. It belongs in `default` so the safe thing is what a plain
+# build gives you; `tauri dev` turns it off with --no-default-features to get hot
+# reload back (docs/BUILDING.md).
+custom-protocol = ["tauri/custom-protocol"]
+default = ["custom-protocol"]

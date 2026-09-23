@@ -33,6 +33,20 @@ jobs:
         with:
           workspaces: src-native
 
+      # Before anything cargo, deliberately. In production mode
+      # `tauri::generate_context!` embeds the frontend at compile time and panics if
+      # `frontendDist` is missing, so aurora-app does not compile without a built UI.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build UI
+        run: pnpm exec vite build
+
       - name: Rust formatting
         working-directory: src-native
         run: cargo fmt --all --check
@@ -45,19 +59,8 @@ jobs:
         working-directory: src-native
         run: cargo test --workspace
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm exec tsc -p tsconfig.json --noEmit
-      - name: Build UI
-        run: pnpm exec vite build
 
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
@@ -114,20 +117,41 @@ jobs:
         working-directory: src-native
         run: cargo test -p aurora-core -p aurora-db -p aurora-ingest
 
-  # The full link+bundle needs libmpv's import library and mpv-2.dll on the runner.
-  # Enable this once the SDK is vendored or fetched — see docs/BUILDING.md. It is kept
-  # separate and non-blocking so a missing dependency does not mask real breakage in
-  # the jobs above.
-  windows-bundle:
-    name: Windows installer (requires libmpv)
+  # The half nothing else covers: actually linking against libmpv and producing
+  # something a person can run. `cargo check` on the job above proves the Windows code
+  # compiles; it does not prove it links, and it produces no artifact. README §23 items
+  # 1, 3, 4, 5, 12 and 17 are all unanswerable until this job hands someone a binary.
+  #
+  # libmpv is fetched here rather than vendored: the SDK is ~30 MB of binaries that
+  # would otherwise live in git forever, and the archive is only needed at build time.
+  windows-app:
+    name: Windows app (portable + installer)
     runs-on: windows-latest
-    if: ${{ vars.AURORA_HAVE_LIBMPV == 'true' }}
+    permissions:
+      # To publish the installer to Releases at the end of the job.
+      contents: write
+    env:
+      # `[profile.release]` is set for shipping — fat LTO and codegen-units = 1 — which
+      # is the slowest possible way to build and cost 8½ minutes of mostly
+      # single-threaded linking. These override it for CI only, so the committed
+      # profile stays right for a real release. opt-level stays at 3: this build exists
+      # to be run and judged, and the difference LTO makes to that is not worth the
+      # minutes.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-native
+          # The bundle's own key, so it does not evict the check job's cache.
+          key: windows-app
+          # Without this a failed run saves nothing, so every build after a red one
+          # starts from zero — which is why none of these has ever been warm.
+          cache-on-failure: true
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -136,14 +160,205 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vite build
-      - name: Build release binaries
-        working-directory: src-native
-        run: cargo build --workspace --release
+
+      - name: Fetch libmpv and build its MSVC import library
+        shell: pwsh
         env:
-          MPV_SOURCE: ${{ github.workspace }}\third-party\mpv
-      - uses: actions/upload-artifact@v4
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # shinchiro's mpv-winbuild-cmake is where the official Windows libmpv builds
+          # are published. The asset name carries a build date, so it is discovered
+          # rather than hardcoded — and a miss fails loudly with what was on offer.
+          $headers = @{ 'User-Agent' = 'aurora-ci' }
+          if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
+          $release = Invoke-RestMethod -Headers $headers -Uri `
+            'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest'
+
+          # `-v3-` builds require AVX2; the plain x86_64 one runs anywhere.
+          $asset = $release.assets |
+            Where-Object { $_.name -match '^mpv-dev-x86_64-\d' } |
+            Select-Object -First 1
+          if (-not $asset) {
+            Write-Host "Assets published in $($release.tag_name):"
+            $release.assets | ForEach-Object { Write-Host "  $($_.name)" }
+            throw 'No mpv-dev-x86_64 archive in the latest release of mpv-winbuild-cmake.'
+          }
+          Write-Host "Using $($asset.name) from $($release.tag_name)"
+
+          $mpv = Join-Path $env:GITHUB_WORKSPACE 'third-party\mpv'
+          New-Item -ItemType Directory -Force -Path $mpv | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP $asset.name
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
+          & 7z x $archive "-o$mpv" -y | Out-Null
+
+          $dll = Get-ChildItem $mpv -Recurse -Filter '*mpv*.dll' | Select-Object -First 1
+          if (-not $dll) {
+            Get-ChildItem $mpv -Recurse | ForEach-Object { Write-Host $_.FullName }
+            throw 'The libmpv archive contained no DLL.'
+          }
+          Write-Host "Runtime library: $($dll.Name)"
+
+          # libmpv2-sys emits `cargo:rustc-link-lib=mpv`, so the MSVC linker needs an
+          # mpv.lib. The archive ships only a GNU-style .dll.a, which link.exe cannot
+          # read, and no .def — so the import library is built from the DLL's own
+          # export table. /name: must match the DLL that is loaded at runtime.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          Import-Module (Join-Path $vsPath 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation `
+            -DevCmdArguments '-arch=x64 -host_arch=x64'
+
+          Push-Location $mpv
+          $def = Join-Path $mpv 'mpv.def'
+          # dumpbin's export table is four columns — ordinal, hint, RVA, name — and
+          # nothing else in its output has that shape.
+          $names = & dumpbin /exports $dll.FullName |
+            Select-String -Pattern '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if (-not $names -or $names.Count -lt 10) {
+            & dumpbin /exports $dll.FullName | Select-Object -First 40
+            throw "Only $($names.Count) exports found in $($dll.Name); expected libmpv's full API."
+          }
+          Write-Host "Generating an import library from $($names.Count) exports"
+          @('EXPORTS') + $names | Out-File $def -Encoding ascii
+
+          & lib /def:$def /name:$($dll.Name) /out:mpv.lib /MACHINE:X64
+          if ($LASTEXITCODE -ne 0) { throw "lib.exe failed with $LASTEXITCODE" }
+          Pop-Location
+
+          "AURORA_MPV_DIR=$mpv"          | Out-File -Append $env:GITHUB_ENV -Encoding utf8
+          "AURORA_MPV_DLL=$($dll.FullName)" | Out-File -Append $env:GITHUB_ENV -Encoding utf8
+          # Explicit search path for the linker, rather than relying on how rustc
+          # happens to compose LIB from its own MSVC detection.
+          "RUSTFLAGS=-L native=$mpv"     | Out-File -Append $env:GITHUB_ENV -Encoding utf8
+
+      - name: Build the UI
+        run: pnpm exec vite build
+
+      - name: Link the app against libmpv
+        # The step this whole job exists for. Everything before it is setup; if this
+        # passes, the Windows code links for the first time.
+        working-directory: src-native
+        run: cargo build --release -p aurora-app
+
+      - name: Assemble the portable build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'portable\Aurora TV'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item 'src-native\target\release\aurora-app.exe' $out
+          Copy-Item $env:AURORA_MPV_DLL $out
+          # README §13: this marker keeps every byte of state beside the exe, which is
+          # what you want from a build you are only trying out.
+          '' | Out-File (Join-Path $out 'portable.txt') -Encoding utf8
+          Copy-Item 'docs\TESTING_A_BUILD.md' (Join-Path $out 'HOW-TO-TEST.md')
+          Compress-Archive -Path $out -DestinationPath 'aurora-tv-portable.zip' -Force
+
+      - name: Upload the portable build
+        # Before the installer step, deliberately: bundling has more ways to fail than
+        # linking does, and a red installer step should still leave something runnable.
+        uses: actions/upload-artifact@v4
         with:
-          name: aurora-tv-windows
-          path: src-native/target/release/aurora-app.exe
+          name: aurora-tv-portable
+          path: aurora-tv-portable.zip
           if-no-files-found: error
+
+      - name: Cache the bundler's toolchains
+        # Tauri fetches NSIS and WiX on first use and keeps them here; without this
+        # they are downloaded again on every run.
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-bundler-tools-${{ runner.os }}
+
+      - name: Build the installers
+        # Re-runs cargo, but the release build above is already warm, so this is the
+        # bundler's work only. `--config` adds the DLL as a bundled resource without
+        # committing a tauri.conf.json that refuses to build wherever it is absent.
+        shell: pwsh
+        working-directory: src-native/crates/aurora-app
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # An explicit target filename, not a directory: the DLL has to land beside
+          # aurora-app.exe, which on Windows is what the resource directory is.
+          $name = Split-Path $env:AURORA_MPV_DLL -Leaf
+          $cfg = @{
+            build  = @{ beforeBuildCommand = '' }
+            bundle = @{ resources = @{ "$env:AURORA_MPV_DLL" = $name } }
+          } | ConvertTo-Json -Depth 5
+          $path = Join-Path $env:RUNNER_TEMP 'bundle.conf.json'
+          $cfg | Out-File $path -Encoding utf8
+          Get-Content $path
+
+          # Run from the directory holding tauri.conf.json so the CLI finds the app
+          # without guessing, and call the shim by its full path: `pnpm exec` resolves
+          # against the nearest package, and this directory is not one.
+          $bin = Join-Path $env:GITHUB_WORKSPACE 'node_modules\.bin'
+          $cli = Get-ChildItem $bin -Filter 'tauri*' |
+            Where-Object { $_.Extension -in '.CMD', '.cmd', '.exe' } |
+            Select-Object -First 1
+          if (-not $cli) {
+            Get-ChildItem $bin -Filter 'tauri*' | ForEach-Object { Write-Host $_.FullName }
+            throw "No runnable Tauri CLI shim in $bin."
+          }
+          & $cli.FullName build --config $path
+          if ($LASTEXITCODE -ne 0) { throw "tauri build failed with $LASTEXITCODE" }
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurora-tv-installers
+          path: |
+            src-native/target/release/bundle/nsis/*.exe
+            src-native/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      - name: Publish the installer to Releases
+        # Actions artifacts expire and are awkward to find; a release is one link that
+        # never changes. The NSIS installer is a single self-contained .exe — it
+        # carries libmpv with it, which is why the portable build cannot be one file.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem 'src-native\target\release\bundle\nsis' -Filter '*.exe' |
+            Select-Object -First 1
+          if (-not $exe) { throw 'No NSIS installer was produced.' }
+          Write-Host "Publishing $($exe.Name) ($([math]::Round($exe.Length / 1MB)) MB)"
+
+          $tag = 'latest-windows'
+          # Built as an array rather than a here-string: a here-string terminator must
+          # sit at column zero, which depends on how YAML strips this block's indent.
+          $notes = @(
+            'Newest Windows build, replaced automatically on every push. Download the'
+            '.exe below and run it.'
+            ''
+            "* Commit: $env:GITHUB_SHA"
+            "* Branch: $env:GITHUB_REF_NAME"
+            "* Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            ''
+            'This is a development build, not a finished product. docs/TESTING_A_BUILD.md'
+            'says what to look at first and where the log is.'
+            ''
+            'Built without link-time optimisation to keep CI quick, so do not use it to'
+            'benchmark playback performance.'
+          ) -join "`n"
+
+          # gh exits non-zero when the release does not exist, which is information
+          # rather than an error, so the native-command trap is off around the probe.
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view $tag *> $null
+          $exists = ($LASTEXITCODE -eq 0)
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          if ($exists) {
+            gh release edit $tag --notes $notes --prerelease
+          } else {
+            gh release create $tag --prerelease --title 'Aurora TV — latest build' --notes $notes
+          }
+          gh release upload $tag $exe.FullName --clobber
+          Write-Host "Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"
