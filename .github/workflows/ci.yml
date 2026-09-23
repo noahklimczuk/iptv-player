@@ -1,8 +1,22 @@
 name: CI
 
+# A pull request gets the checks that can fail fast: formatting, clippy, the type
+# checks, the tests, and a `cargo check` on Windows for the `#[cfg(windows)]` code that
+# a Linux runner cannot see at all. Nothing links and nothing is bundled, so a PR costs
+# about three and a half minutes of wall clock.
+#
+# A merge builds the thing: link against libmpv, bundle the installer, replace what
+# `latest-windows` points at. That is the only place the nine-minute job runs now. It
+# used to run on every push to every branch — twice over while a PR was open, since
+# `push` and `pull_request` both fired.
+#
+# What this trades away, stated plainly: `cargo check` proves the Windows code
+# compiles, not that it links, and linking against libmpv is where the awkward parts
+# live. A break there now surfaces on main instead of on the PR. A red merge leaves the
+# previous release in place, so the cost is a stale installer rather than a broken one.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
 env:
@@ -15,6 +29,9 @@ jobs:
   core:
     name: Core tests + UI
     runs-on: ubuntu-latest
+    # PR-only. This is the bulk of "does it compile and does it work"; a merge commit's
+    # contents have already been through it on the PR head.
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
@@ -78,8 +95,12 @@ jobs:
   # This is the only runner that can compile aurora-app, so a green core job alone
   # does NOT mean the app builds.
   windows:
-    name: Windows build
+    name: Windows checks
     runs-on: windows-latest
+    # PR-only, and the reason a PR needs a Windows runner at all: the mpv/Win32 backend
+    # is behind `#[cfg(windows)]`, so the Linux job above does not compile a line of it.
+    # Without this, a syntax or type error in that code would reach main unchallenged.
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
@@ -127,6 +148,10 @@ jobs:
   windows-app:
     name: Windows app (portable + installer)
     runs-on: windows-latest
+    # Merge-only. This job exists to produce a release asset, which is only meaningful
+    # for a commit that is actually on main. The ref test is belt and braces: `push` is
+    # already limited to main above, and this keeps it true if that ever widens.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       # To publish the installer to Releases at the end of the job.
       contents: write
@@ -334,8 +359,8 @@ jobs:
           # Built as an array rather than a here-string: a here-string terminator must
           # sit at column zero, which depends on how YAML strips this block's indent.
           $notes = @(
-            'Newest Windows build, replaced automatically on every push. Download the'
-            '.exe below and run it.'
+            'Newest Windows build, rebuilt on every merge to main. Download the .exe'
+            'below and run it.'
             ''
             "* Commit: $env:GITHUB_SHA"
             "* Branch: $env:GITHUB_REF_NAME"
