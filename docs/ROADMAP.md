@@ -102,6 +102,49 @@ disagree — and the contract test serializes the real `PlayerState` and diffs i
 against the interface in both directions, which fails on a field the UI believes in and
 on a field the host sends that nothing declares.
 
+## What a real subscription showed
+
+Pointed at an actual Xtream panel for the first time: 22,305 live channels, 122,274
+films, 28,670 series, one connection, and a server clock in Europe/Paris. Read-only —
+`examples/probe`, plus a few seconds of two streams. What it found, because none of it
+was guessable from the spec:
+
+- **The country prefix is separated by a star.** 18,460 channel names are `US ★ QVC HD`,
+  and U+2605 was not a separator, so the prefix was recognised on 2.1% of the playlist
+  and the country went into the match key. Fixed; unclassified went from 98% to 15%.
+- **VOD and series carry the same prefix**, and it survives cleaning: `AR ★ …` becomes
+  `AR …`, which is the title enrichment sends to TMDB. Not fixed — stripping it changes
+  what is displayed, not only what is matched, so it wants a decision rather than a
+  guess.
+- **`get.php` returns 404.** This panel serves `player_api.php` only, so there is no M3U
+  and no `catchup=` attribute anywhere; the Xtream path's `mode: "xc"` is the only mode a
+  channel here can get.
+- **Catch-up does not work on this panel, by any convention Aurora can build.** 20 of 188
+  sampled channels advertise `tv_archive=1` with a two-day window.
+  `/streaming/timeshift.php?…` (what `mode: "xc"` builds) returns 404, and so does the
+  `/timeshift/{user}/{pass}/{dur}/{start}/{id}.ts` path form. The `?utc=&lutc=` form
+  returns 200 — and serves **live**: it answers the same way for a timestamp ten days old
+  (outside the advertised window) and for one an hour in the future, redirecting to the
+  live path each time. So the refusal Aurora currently gives is the honest outcome, and
+  the convention that would have looked like it worked is the one that lies.
+- **A latent timezone bug in `catchup::xtream_url`.** It formats `start` in UTC. This
+  panel reports `time_now` in Europe/Paris and `server_info.timezone` says so, and Xtream
+  panels read that parameter in their own local time — two hours out here. Nothing reads
+  `server_info.timezone` at all. Unverifiable against this provider, since the endpoint
+  404s, so it is named rather than changed.
+- **Real bitrates, for the timeshift budget.** A shopping channel runs at 5.9 Mb/s and an
+  HD network at 11.5. One gigabyte therefore holds about 24 minutes of the first and 12
+  of the second, so the default 1 GB / 30 min budget binds on bytes here, not on minutes
+  — which is exactly what `aurora_core::timeshift` is for, and the scrub bar will offer
+  the twelve minutes that exist rather than the thirty the setting names.
+- **Streams are plain MPEG-TS over HTTP**, 188-byte aligned, reached by a 302 from the
+  Cloudflare front to a bare-IP origin carrying a time-bound token. No range support
+  implied, which is the case `force-seekable=yes` exists for. One first request answered
+  HTTP 555 from Cloudflare before subsequent ones succeeded.
+- **One connection.** `max_connections: 1`. A timeshift buffer of our own would not have
+  been merely wasteful on this account; it would have made pausing live TV impossible
+  while watching it (docs/DECISIONS.md D21).
+
 ## The Phase 0 caveat
 
 README §21 requires the compositing spike to be proven before anything else is built.
@@ -143,15 +186,16 @@ were built first.
 1. **Wire and run the Phase 0 spike on Windows.** Everything else is downstream of that
    answer, and the caveat above lists the three calls that are missing before it can be
    asked.
-2. **Point it at a real subscription.** `cargo run -p aurora-ingest --example probe`
-   does this without writing anything — see docs/BUILDING.md. The first attempt already
-   found two bugs: a bare panel host could not be entered in the wizard at all, and
-   every refused connection was reported as a DNS failure because reqwest's error text
-   embeds the URL and every Xtream URL contains `username=`.
+2. **Import a real subscription and read the library.** The probe has now been run
+   against one — see "What a real subscription showed" above for what it found, and for
+   the two things left undecided: the country prefix on VOD titles, and the catch-up
+   timezone. What has still not happened is a full `sync::run` into a database: 22,305
+   channels, 122,274 films and a 29%-covered guide is where import time, memory and the
+   reconciliation logic get their first honest measurement.
 
-   Previously: Ingestion is built and tested against a local
-   server, but has never met an actual provider — the fork-tolerance in
-   `aurora_core::xtream` is written from the spec, not from observed traffic.
+   Earlier attempts found: a bare panel host could not be entered in the wizard at all,
+   and every refused connection was reported as a DNS failure because reqwest's error
+   text embeds the URL and every Xtream URL contains `username=`.
 3. **Catch-up against a real provider.** `aurora_core::catchup` builds the four
    conventions panels use (Xtream `timeshift.php`, append, shift, flussonic) and
    "Watch from start" plays them, but which convention a given panel actually honours

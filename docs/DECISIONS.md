@@ -300,6 +300,11 @@ buffer writer of our own would spend a second connection on the channel already 
 so watching one channel with pause available could cost what a two-tuner subscription
 sells as its whole capacity.
 
+That turned out to understate it. The first real subscription this was run against
+reports `max_connections: 1` (docs/ROADMAP.md, "What a real subscription showed"), so a
+second connection would not have been expensive — it would have made pausing live TV
+mutually exclusive with watching it.
+
 mpv has the same buffer already, on the connection it is playing: `--cache-on-disk` with
 `--demuxer-max-back-bytes` keeps the past on disk, and `--force-seekable` lets it be
 seeked into. One connection, no second copy of the bytes, and nothing to keep in step.
