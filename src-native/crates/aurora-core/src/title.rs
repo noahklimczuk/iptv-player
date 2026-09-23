@@ -108,9 +108,18 @@ fn re_country_prefix() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     // Two shapes: a bracketed code needs no separator ("[DE] RTL"), a bare code does
     // ("US| CNN", "FR - TF1") — otherwise "BBC One" would lose its "BBC".
+    //
+    // The star is not decoration. A real 22,305-channel subscription writes every
+    // channel as "US ★ QVC HD": 18,460 of them carry a country code separated by
+    // U+2605, and without it here the prefix was recognised on 2.1% of the playlist,
+    // so the country went into the match key and "English only" had almost nothing to
+    // go on. It costs what the other separators already cost — a channel actually
+    // named "NBC ★ Sports" loses its "NBC", the same way "HBO - Max" already does.
     R.get_or_init(|| {
-        Regex::new(r"^\s*(?:[\(\[]([A-Za-z]{2,4})[\)\]]|([A-Za-z]{2,4})\s*[:|\-\u{2013}])\s*")
-            .unwrap()
+        Regex::new(
+            r"^\s*(?:[\(\[]([A-Za-z]{2,4})[\)\]]|([A-Za-z]{2,4})\s*[:|\-\u{2013}\u{2605}])\s*",
+        )
+        .unwrap()
     })
 }
 
@@ -403,6 +412,36 @@ mod tests {
             split_country_prefix("[DE] RTL"),
             ("RTL".into(), Some("DE".into()))
         );
+    }
+
+    #[test]
+    fn splits_the_star_prefix_a_real_panel_writes_every_channel_with() {
+        // Shapes taken from a 22,305-channel subscription, where 18,460 names are
+        // exactly this. Two, three and four letter codes all appear.
+        assert_eq!(
+            split_country_prefix("US \u{2605} QVC HD"),
+            ("QVC HD".into(), Some("US".into()))
+        );
+        assert_eq!(
+            split_country_prefix("ALB \u{2605} Klan HD"),
+            ("Klan HD".into(), Some("ALB".into()))
+        );
+        assert_eq!(
+            split_country_prefix("EXYU \u{2605} RTS 1"),
+            ("RTS 1".into(), Some("EXYU".into()))
+        );
+        // A star with no code in front of it is decoration, not a prefix.
+        let (name, code) = split_country_prefix("\u{2605} Sports HD");
+        assert_eq!(name, "\u{2605} Sports HD");
+        assert_eq!(code, None);
+    }
+
+    #[test]
+    fn a_star_prefixed_channel_matches_the_same_channel_without_one() {
+        // The point of the previous test: the guide and duplicate detection key on
+        // this, so a country prefix left in the key is an EPG match that never happens.
+        assert_eq!(match_key("US \u{2605} CNN HD"), match_key("CNN"));
+        assert_eq!(match_key("FR \u{2605} TF1"), match_key("TF1 FHD"));
     }
 
     #[test]
