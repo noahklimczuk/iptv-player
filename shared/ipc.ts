@@ -265,6 +265,26 @@ export interface UpdateStatus {
   releasesUrl: string;
 }
 
+/**
+ * A provider's settings including its password, for the edit form.
+ *
+ * The one place a stored secret comes back to the UI. It is the viewer's own
+ * subscription password on their own machine, and an account they cannot re-read is one
+ * they cannot correct after a typo or a provider rotation. Never fetched to render a
+ * list — only the edit form asks for it, and only when opened.
+ */
+export interface ProviderCredentials {
+  id: number;
+  name: string;
+  kind: 'xtream' | 'm3u' | 'stalker';
+  url: string;
+  username: string;
+  /** Absent when there never was one, or the store has lost it. */
+  password: string | null;
+  /** False when the store cannot keep secrets across a restart. */
+  passwordIsPersistent: boolean;
+}
+
 export interface Provider {
   id: number;
   name: string;
@@ -784,6 +804,15 @@ export interface Commands {
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
   'providers.save': (args: { draft: DraftProvider }) => { id: number };
   'providers.refresh': (args: { providerId: number }) => SyncReport;
+  /** A provider's settings, password included, for editing. */
+  'providers.credentials': (args: { providerId: number }) => ProviderCredentials;
+  /**
+   * Save edits. A `password` of `undefined` leaves the stored one alone, `''` clears
+   * it — without that distinction, changing only the name would wipe the password.
+   */
+  'providers.update': (args: { providerId: number; draft: DraftProvider }) => boolean;
+  /** Remove a provider, its credential, and everything it imported. */
+  'providers.delete': (args: { providerId: number }) => boolean;
 
   /**
    * What the newest published build is.

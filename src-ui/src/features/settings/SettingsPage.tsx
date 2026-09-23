@@ -1,20 +1,31 @@
 /** A working slice of README §15 — enough to prove the settings architecture. */
+import { useState } from 'react';
 import type { Theme } from '@/state/ui';
 import { Badge, Button } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { isNativeHost } from '@/ipc';
 import { FilterPanel } from '@/features/settings/FilterPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
+import { ProviderEditor } from '@/features/settings/ProviderEditor';
 import { UpdatePanel } from '@/features/settings/UpdatePanel';
 import { useUi } from '@/state/ui';
 
 export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
   const ui = useUi();
-  const { data: providers } = useCommand('providers.list', undefined, []);
+  const { data: providers, reload: reloadProviders } = useCommand('providers.list', undefined, []);
+  const [editing, setEditing] = useState<number | null>(null);
   const { data: stats } = useCommand('library.stats', undefined, []);
 
   return (
-    <div style={{ padding: 'var(--sp-5) var(--sp-6)', maxWidth: 860 }}>
+    <div
+      style={{
+        padding: 'var(--sp-5) var(--sp-6)',
+        maxWidth: 860,
+        // `maxWidth` alone pins the column to the left of a wide window; the auto
+        // margins are what actually centre it.
+        margin: '0 auto',
+      }}
+    >
       <h1 style={{ margin: '0 0 var(--sp-5)', fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
         Settings
       </h1>
@@ -40,7 +51,8 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             ? Math.round((p.expiresAt - Date.now() / 1000) / 86400)
             : null;
           return (
-            <div key={p.id} style={rowStyle}>
+            <div key={p.id}>
+            <div style={rowStyle}>
               <div>
                 <div style={{ fontWeight: 650 }}>{p.name}</div>
                 <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
@@ -59,7 +71,22 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
                     {days < 0 ? 'Expired' : `${days} days left`}
                   </Badge>
                 )}
+                <Button
+                  size="sm"
+                  aria-expanded={editing === p.id}
+                  onClick={() => setEditing(editing === p.id ? null : p.id)}
+                >
+                  {editing === p.id ? 'Close' : 'Edit'}
+                </Button>
               </div>
+            </div>
+            {editing === p.id && (
+              <ProviderEditor
+                provider={p}
+                onClose={() => setEditing(null)}
+                onChanged={reloadProviders}
+              />
+            )}
             </div>
           );
         })}

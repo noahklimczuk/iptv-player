@@ -205,6 +205,162 @@ pub fn providers_save(services: State<'_, Services>, args: ValidateArgs) -> Resu
     Ok(SavedProvider { id })
 }
 
+/* ── Editing an existing provider ─────────────────────────────────────────── */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderIdArgs {
+    pub provider_id: i64,
+}
+
+/// A provider's settings, password included, for the edit form.
+///
+/// This is the one command that hands a stored secret back to the UI, and it is
+/// deliberate: it is the viewer's own subscription password, on their own machine, and
+/// an account they cannot re-read is one they cannot correct after a typo or a provider
+/// rotation. README C10 says a credential must never appear in a log, an export or an
+/// error — none of which is this. It is never fetched to render a list; only the edit
+/// form asks for it, and only when opened.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCredentials {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub url: String,
+    pub username: String,
+    /// Absent when the provider never had one, or when the store has lost it — an M3U
+    /// URL carries no password, and a credential store can be cleared underneath us.
+    pub password: Option<String>,
+    /// False when the store cannot keep secrets across a restart, so the form can warn
+    /// before someone retypes a password that will not survive.
+    pub password_is_persistent: bool,
+}
+
+#[tauri::command]
+pub fn providers_credentials(
+    services: State<'_, Services>,
+    args: ProviderIdArgs,
+) -> Result<ProviderCredentials> {
+    let (name, kind, url, username, credential): (String, String, String, String, Option<String>) = {
+        let db = services.db.lock();
+        db.query_row(
+            "SELECT name, kind, base_url, COALESCE(username, ''), credential_ref
+             FROM providers WHERE id = ?1",
+            params![args.provider_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()
+        .map_err(aurora_db::DbError::from)?
+        .ok_or_else(|| AppError::Other(format!("no provider {}", args.provider_id)))?
+    };
+
+    Ok(ProviderCredentials {
+        id: args.provider_id,
+        name,
+        kind,
+        url,
+        username,
+        // A missing secret is not an error: the provider may simply not have one.
+        password: credential.and_then(|key| services.credentials.get(&key).ok()),
+        password_is_persistent: services.credentials.is_persistent(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateArgs {
+    pub provider_id: i64,
+    pub draft: DraftProvider,
+}
+
+/// Save edits to an existing provider.
+///
+/// The password follows the same convention as everywhere else in this app: `None`
+/// leaves the stored one alone, `Some("")` clears it, and anything else replaces it.
+/// Without that distinction, an edit form that shows a masked placeholder would wipe
+/// the password every time someone changed only the name.
+#[tauri::command]
+pub fn providers_update(services: State<'_, Services>, args: UpdateArgs) -> Result<bool> {
+    let id = args.provider_id;
+    let draft = args.draft;
+    let db = services.db.lock();
+
+    let changed = db
+        .execute(
+            "UPDATE providers SET name = ?2, kind = ?3, base_url = ?4, username = ?5
+             WHERE id = ?1",
+            params![id, draft.name, draft.kind, draft.url, draft.username],
+        )
+        .map_err(aurora_db::DbError::from)?;
+    if changed == 0 {
+        return Err(AppError::Other(format!("no provider {id}")));
+    }
+
+    let key = credential_ref(id);
+    match draft.password {
+        None => {}
+        Some(p) if p.is_empty() => {
+            let _ = services.credentials.delete(&key);
+            db.execute(
+                "UPDATE providers SET credential_ref = NULL WHERE id = ?1",
+                params![id],
+            )
+            .map_err(aurora_db::DbError::from)?;
+        }
+        Some(password) => {
+            services
+                .credentials
+                .set(&key, &password)
+                .map_err(|e| AppError::Other(e.to_string()))?;
+            db.execute(
+                "UPDATE providers SET credential_ref = ?2 WHERE id = ?1",
+                params![id, key],
+            )
+            .map_err(aurora_db::DbError::from)?;
+        }
+    }
+    Ok(true)
+}
+
+/// Remove a provider, its credential, and everything it imported.
+///
+/// The library rows go with it through `ON DELETE CASCADE`, which is what someone
+/// removing a provider means — leaving forty thousand orphaned channels behind would
+/// be the surprising outcome. The credential is deleted explicitly, because the
+/// credential store is not in the database and nothing cascades into Windows
+/// Credential Manager; skipping it would leave the password on the machine after the
+/// account it belongs to is gone.
+#[tauri::command]
+pub fn providers_delete(services: State<'_, Services>, args: ProviderIdArgs) -> Result<bool> {
+    let id = args.provider_id;
+    let db = services.db.lock();
+
+    let credential: Option<String> = db
+        .query_row(
+            "SELECT credential_ref FROM providers WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(aurora_db::DbError::from)?
+        .flatten();
+
+    let removed = db
+        .execute("DELETE FROM providers WHERE id = ?1", params![id])
+        .map_err(aurora_db::DbError::from)?;
+    if removed == 0 {
+        return Ok(false);
+    }
+
+    if let Some(key) = credential {
+        // A store that has already forgotten it is fine; the point is that nothing is
+        // left behind, not that a delete succeeded.
+        let _ = services.credentials.delete(&key);
+    }
+    Ok(true)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshArgs {

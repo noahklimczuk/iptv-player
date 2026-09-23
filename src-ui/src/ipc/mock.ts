@@ -10,6 +10,7 @@ import type {
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
+  ProviderCredentials,
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
@@ -21,6 +22,9 @@ import * as fx from './fixtures';
  * Mutable so `updates.setAutomatic` actually takes effect in a browser session; the
  * host keeps the real thing in its settings table.
  */
+/** Edits made in a browser session, so the form round-trips without a host. */
+const mockProviderEdits = new Map<number, { url: string; username: string }>();
+
 const mockUpdates: UpdateStatus = {
   current: '0.1.0',
   latest: {
@@ -1443,6 +1447,34 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
 
   'providers.save': () => ({ id: 1 }),
+
+  'providers.credentials': ({ providerId }): ProviderCredentials => {
+    const p = fx.providers.find((x) => x.id === providerId) ?? fx.providers[0]!;
+    return {
+      id: p.id,
+      name: p.name,
+      kind: p.kind,
+      url: mockProviderEdits.get(p.id)?.url ?? 'http://panel.example.com',
+      username: mockProviderEdits.get(p.id)?.username ?? 'example-user',
+      // Invented, like everything else in the fixtures (README §24).
+      password: 'example-password',
+      passwordIsPersistent: true,
+    };
+  },
+
+  'providers.update': ({ providerId, draft }) => {
+    mockProviderEdits.set(providerId, { url: draft.url, username: draft.username ?? '' });
+    const p = fx.providers.find((x) => x.id === providerId);
+    if (p) p.name = draft.name;
+    return true;
+  },
+
+  'providers.delete': ({ providerId }) => {
+    const at = fx.providers.findIndex((x) => x.id === providerId);
+    if (at < 0) return false;
+    fx.providers.splice(at, 1);
+    return true;
+  },
 
   'providers.refresh': async (): Promise<SyncReport> => {
     // Walk the same phases the host emits, and only resolve once they are done —
