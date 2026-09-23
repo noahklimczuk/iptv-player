@@ -13,6 +13,8 @@ export interface HotkeyHandlers {
   onPalette: () => void;
   onBack: () => void;
   onPlayPause: () => void;
+  /** README §14.1: `T` — pause live TV into the buffer, or rejoin the live edge. */
+  onTimeshift: () => void;
   onSeek: (secs: number) => void;
   onVolume: (delta: number) => void;
   onMute: () => void;
@@ -64,6 +66,7 @@ export function useHotkeys(h: HotkeyHandlers, enabled = true) {
         case 'j': h.onSeek(-10); break;
         case 'l': h.onSeek(10); break;
         case 'm': h.onMute(); break;
+        case 't': h.onTimeshift(); break;
         case 'f': h.onFullscreen(); break;
         case 'i': h.onInfo(); break;
         case 'g': h.onGuide(); break;

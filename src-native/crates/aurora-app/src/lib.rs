@@ -13,6 +13,7 @@ pub mod playlist;
 pub mod profiles;
 pub mod providers;
 pub mod services;
+pub mod timeshift;
 pub mod updates;
 pub mod window;
 

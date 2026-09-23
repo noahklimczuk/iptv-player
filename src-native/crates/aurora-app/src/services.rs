@@ -71,6 +71,7 @@ impl Services {
             playback: Arc::new(crate::playback::Playback::new(
                 Arc::clone(&db),
                 Arc::clone(&player),
+                data_dir.clone(),
             )),
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
             dvr: Arc::new(

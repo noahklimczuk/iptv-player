@@ -3,7 +3,7 @@
 
 use aurora_app::{
     commands, dvr, library, metadata, now_unix, playlist, profiles, providers, services::Services,
-    updates,
+    timeshift, updates,
 };
 
 /// Send the log somewhere a person can read it.
@@ -177,6 +177,7 @@ fn main() {
             commands::player_resume,
             commands::player_stop,
             commands::player_seek,
+            commands::player_back_to_live,
             commands::player_set_volume,
             commands::player_set_muted,
             commands::player_set_audio_track,
@@ -241,6 +242,9 @@ fn main() {
             library::mylist_toggle,
             library::favorites_toggle,
             library::progress_get,
+            timeshift::timeshift_settings,
+            timeshift::timeshift_set_settings,
+            timeshift::timeshift_clear,
             updates::updates_check,
             updates::updates_set_automatic,
             updates::updates_open_releases,

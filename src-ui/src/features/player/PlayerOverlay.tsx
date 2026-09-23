@@ -6,13 +6,28 @@
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Episode, PlayerState } from '@shared/ipc';
+import type { Episode, PlayerState, TimeshiftWindow } from '@shared/ipc';
 import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { invoke } from '@/ipc';
-import { clockTime, duration, progressPct } from '@/lib/format';
+import { clockTime, duration } from '@/lib/format';
 
 const HIDE_AFTER_MS = 3200;
+
+/**
+ * How close to the live edge still counts as live.
+ *
+ * Mirrors `aurora_core::timeshift::LIVE_EDGE_SECS`: a live stream is always a few
+ * seconds behind its own edge, so "Live" has to mean near enough rather than exactly.
+ */
+const LIVE_EDGE_SECS = 5;
+
+/** Seconds behind the live edge, or 0 when there is no buffer to be behind in. */
+export function behindLive(player: PlayerState): number {
+  if (!player.timeshift) return 0;
+  const delay = player.timeshift.liveSecs - player.timeshift.positionSecs;
+  return delay > LIVE_EDGE_SECS ? delay : 0;
+}
 
 export function PlayerOverlay({
   player, onClose, onGuide, nextEpisode, onPlayNext,
@@ -44,7 +59,7 @@ export function PlayerOverlay({
   }, [bump]);
 
   const playing = player.status === 'playing';
-  const pct = player.isLive ? 100 : progressPct(player.positionSecs, player.durationSecs);
+  const behind = behindLive(player);
 
   return (
     <div
@@ -115,7 +130,11 @@ export function PlayerOverlay({
                   </div>
                 )}
               </div>
-              {player.isLive && <Badge tone="live">● Live</Badge>}
+              {player.isLive && (
+                behind > 0
+                  ? <Badge tone="accent">↺ {duration(behind)} behind live</Badge>
+                  : <Badge tone="live">● Live</Badge>
+              )}
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                 <IconButton
                   icon="info" label="Playback stats"
@@ -138,7 +157,7 @@ export function PlayerOverlay({
                 background: 'linear-gradient(to top, rgb(0 0 0 / 0.9), transparent)',
               }}
             >
-              <Scrubber player={player} pct={pct} />
+              <Scrubber player={player} />
 
               <div
                 style={{
@@ -151,7 +170,7 @@ export function PlayerOverlay({
                   label={playing ? 'Pause' : 'Play'}
                   onClick={() => void invoke(playing ? 'player.pause' : 'player.resume')}
                 />
-                {!player.isLive && (
+                {(!player.isLive || player.timeshift) && (
                   <>
                     <IconButton
                       icon="back10" label="Back 10 seconds"
@@ -231,7 +250,12 @@ export function PlayerOverlay({
   );
 }
 
-function Scrubber({ player, pct }: { player: PlayerState; pct: number }) {
+function Scrubber({ player }: { player: PlayerState }) {
+  // A buffered live stream has a real span to scrub through; an unbuffered one has
+  // nothing behind the live edge, and a bar that cannot move is not offered.
+  if (player.isLive && player.timeshift) {
+    return <TimeshiftBar window={player.timeshift} />;
+  }
   if (player.isLive) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
@@ -272,7 +296,82 @@ function Scrubber({ player, pct }: { player: PlayerState; pct: number }) {
       >
         {duration(player.durationSecs)}
       </span>
-      <span style={{ display: 'none' }}>{pct}</span>
+    </div>
+  );
+}
+
+/**
+ * The live-edge scrub bar (README §7.6).
+ *
+ * The track is the buffer: its left end is the oldest moment still held and its right
+ * end is live, so the handle's distance from the right *is* the delay. Both ends move —
+ * the right because time passes, the left because the buffer forgets — which is why the
+ * readouts come from the host's window rather than from anything kept here.
+ */
+function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
+  const delay = Math.max(0, w.liveSecs - w.positionSecs);
+  const atLive = delay <= LIVE_EDGE_SECS;
+  const span = Math.max(0, w.liveSecs - w.startSecs);
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+      <span
+        aria-label="Position relative to live"
+        style={{
+          fontSize: 'var(--fs-sm)', width: 74,
+          fontVariantNumeric: 'tabular-nums',
+          color: atLive ? 'var(--live)' : 'var(--text)',
+          fontWeight: atLive ? 700 : 600,
+        }}
+      >
+        {atLive ? 'Live' : `−${duration(delay)}`}
+      </span>
+
+      <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <input
+          type="range"
+          min={Math.floor(w.startSecs)} max={Math.ceil(w.liveSecs)} value={w.positionSecs}
+          aria-label="Timeshift"
+          onChange={(e) =>
+            void invoke('player.seek', { positionSecs: Number(e.target.value) })}
+          style={{ flex: 1, accentColor: atLive ? 'var(--live)' : 'var(--accent)' }}
+        />
+        {/* The live edge itself, so the end of the track reads as "now" rather than as
+            the end of a recording. */}
+        <span
+          aria-hidden
+          title="Live edge"
+          style={{
+            position: 'absolute', right: -1, top: '50%', transform: 'translateY(-50%)',
+            width: 3, height: 14, borderRadius: 2, background: 'var(--live)',
+            pointerEvents: 'none',
+          }}
+        />
+      </div>
+
+      <span
+        style={{
+          fontSize: 'var(--fs-xs)', color: 'var(--text-faint)',
+          fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+        }}
+      >
+        {span > 0 ? `${duration(span)} buffered` : 'buffering…'}
+      </span>
+
+      {!atLive && (
+        <button
+          onClick={() => void invoke('player.backToLive')}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px',
+            borderRadius: 'var(--r-full)', cursor: 'pointer', whiteSpace: 'nowrap',
+            border: '1px solid var(--live)', background: 'transparent',
+            color: 'var(--live)', fontWeight: 700, fontSize: 'var(--fs-xs)',
+          }}
+        >
+          <Icon name="skip" size={13} />
+          Back to live
+        </button>
+      )}
     </div>
   );
 }

@@ -286,10 +286,48 @@ but it is a change in what a failure leaves behind rather than a neutral refacto
 work, and an import visible halfway through would show a library whose search index had
 been cleared and not yet rebuilt.
 
+## D21 — Timeshift is mpv's own cache, not a buffer of our own
+
+**Pause live TV keeps the stream in mpv's on-disk demuxer cache. Aurora writes no ring
+buffer and opens no second connection.**
+
+The obvious build is the one README §7.6 describes literally: a ring buffer on disk that
+something fills from the provider while the player reads from behind it. That something
+would need its own HTTP connection to the stream — and a connection is exactly what an
+IPTV subscription rations. The DVR already refuses to start a recording that would exceed
+`max_connections` (§7.7), because exceeding it does not queue, it gets the line cut. A
+buffer writer of our own would spend a second connection on the channel already playing,
+so watching one channel with pause available could cost what a two-tuner subscription
+sells as its whole capacity.
+
+mpv has the same buffer already, on the connection it is playing: `--cache-on-disk` with
+`--demuxer-max-back-bytes` keeps the past on disk, and `--force-seekable` lets it be
+seeked into. One connection, no second copy of the bytes, and nothing to keep in step.
+
+What Aurora owns is the arithmetic. mpv enforces a cap in *bytes*, and a person thinks in
+*minutes* — a gigabyte is hours of a radio stream, eighteen minutes of an 8 Mb/s feed and
+seven of a 20 Mb/s one. So the budget carries both, `aurora_core::timeshift` decides which
+one binds at the observed bitrate, and the window it reports is bounded by a third thing
+that neither cap describes: how long the channel has actually been on. Ten seconds after a
+zap there is ten seconds of rewind, whatever the settings say. That arithmetic is pure and
+has tests; the OSD's scrub bar is drawn from it, and a bar that offered half an hour of
+rewind into a seven-minute buffer would be worse than no bar at all.
+
+Consequences worth stating plainly. The buffer is per playing stream, so a zap starts it
+over — nothing of the previous channel is reachable, which is what a single-connection
+buffer means. The options are properties of one long-lived mpv handle rather than
+arguments to one file, so turning the buffer off has to be *said* on the next load
+(`demuxer-max-back-bytes=0`) and not merely left unsaid, or a channel tuned afterwards
+would inherit it. Changing the size applies at the next tune, because re-loading to resize
+a cache would black out whatever is on. And none of it has been run: like everything
+downstream of the Phase 0 spike, the mpv side compiles for Windows and has never met a
+real stream, so `aurora_core::timeshift`'s bound on the window is the honest one and
+mpv's own `demuxer-cache-state` is read only as a refinement where it answers.
+
 ## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in
 `docs/ROADMAP.md` against their phases: Stalker portals (§4.3, marked Optional), downloads (§8.6,
-Optional), timeshift (§7.6, Phase 8 — recording and catch-up are built), casting,
-voice search, gamepad (§14.3), and a local artwork cache (§12 — enrichment stores absolute TMDB
-image URLs, so every poster is currently fetched from the network on each paint).
+Optional), casting, voice search, gamepad (§14.3), and a local artwork cache (§12 —
+enrichment stores absolute TMDB image URLs, so every poster is currently fetched from the
+network on each paint).

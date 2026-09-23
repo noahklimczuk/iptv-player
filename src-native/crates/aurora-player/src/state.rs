@@ -1,3 +1,4 @@
+use aurora_core::timeshift::Window;
 use serde::{Deserialize, Serialize};
 
 use crate::error::PlaybackError;
@@ -100,6 +101,9 @@ pub struct PlayerState {
     pub active_audio_track: Option<i64>,
     pub active_subtitle_track: Option<i64>,
     pub aspect: Aspect,
+    /// The reachable window of a buffered live stream (README §7.6), or `None` when
+    /// this stream is not being buffered. What the OSD draws its live edge from.
+    pub timeshift: Option<Window>,
     pub error: Option<PlaybackError>,
     pub stats: Option<PlaybackStats>,
 }
@@ -123,6 +127,7 @@ impl Default for PlayerState {
             active_audio_track: None,
             active_subtitle_track: None,
             aspect: Aspect::Auto,
+            timeshift: None,
             error: None,
             stats: None,
         }

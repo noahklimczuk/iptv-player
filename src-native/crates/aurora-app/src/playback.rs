@@ -12,7 +12,13 @@
 //! that died left the interface showing it merrily playing. `tick` is the heartbeat
 //! that fixes both: it notices the change, reports it, and — for live TV — quietly
 //! moves to the next source instead of leaving a dead picture up.
+//!
+//! Timeshift (README §7.6) rides along on the first job: a live tune is handed the
+//! buffer settings, and every seek afterwards is held inside what the buffer actually
+//! holds. Rolling over to another source ends the rewind — a different URL is a
+//! different cache — which is why the two live here together rather than apart.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use aurora_db::repo::sources;
@@ -48,15 +54,22 @@ pub struct Playback {
     session: Mutex<Option<LiveSession>>,
     /// The last state reported, so `tick` can tell a change from a repeat.
     last: Mutex<Option<PlayerState>>,
+    /// Where the timeshift buffer goes when the setting does not name a folder.
+    data_dir: PathBuf,
 }
 
 impl Playback {
-    pub fn new(db: Arc<Mutex<Connection>>, player: Arc<Mutex<Box<dyn PlayerBackend>>>) -> Self {
+    pub fn new(
+        db: Arc<Mutex<Connection>>,
+        player: Arc<Mutex<Box<dyn PlayerBackend>>>,
+        data_dir: PathBuf,
+    ) -> Self {
         Self {
             db,
             player,
             session: Mutex::new(None),
             last: Mutex::new(None),
+            data_dir,
         }
     }
 
@@ -68,7 +81,12 @@ impl Playback {
     pub fn play_live(&self, channel_id: i64, now: i64) -> Result<PlayerState> {
         let (sources, options) = {
             let db = self.db.lock();
-            crate::window::live_sources(&db, channel_id, now)?
+            let mut resolved = crate::window::live_sources(&db, channel_id, now)?;
+            // Read per tune rather than once at startup, so turning the buffer on or
+            // changing its size takes effect at the next channel change instead of at
+            // the next launch.
+            resolved.1.timeshift = crate::timeshift::cache_for(&db, &self.data_dir)?;
+            resolved
         };
         if sources.is_empty() {
             *self.session.lock() = None;
@@ -139,6 +157,34 @@ impl Playback {
         *self.session.lock() = None;
         let mut player = self.player.lock();
         player.load(&url, &options)?;
+        Ok(player.state())
+    }
+
+    /// Seek, held inside the timeshift buffer when there is one.
+    ///
+    /// The clamp is here rather than only in the backend because the OSD's scrub bar is
+    /// drawn from this state: a seek five minutes past the live edge would otherwise be
+    /// answered with a position that does not exist yet, and the bar would jump to it.
+    pub fn seek(&self, position_secs: f64, relative: bool) -> Result<PlayerState> {
+        let mut player = self.player.lock();
+        match player.state().timeshift {
+            Some(window) if relative => player.seek(window.clamp_relative(position_secs), true)?,
+            Some(window) => player.seek(window.clamp(position_secs), false)?,
+            None => player.seek(position_secs, relative)?,
+        }
+        Ok(player.state())
+    }
+
+    /// Return to the live edge (README §7.6).
+    ///
+    /// Also un-pauses: "Back to live" is pressed by someone who has been away, and
+    /// leaving them paused on the newest frame would be a strange answer to it.
+    pub fn back_to_live(&self) -> Result<PlayerState> {
+        let mut player = self.player.lock();
+        if let Some(window) = player.state().timeshift {
+            player.seek(window.live_secs, false)?;
+        }
+        player.set_paused(false)?;
         Ok(player.state())
     }
 
@@ -337,6 +383,19 @@ mod tests {
 
     const NOW: i64 = 1_760_000_000;
 
+    /// A scratch folder for a test that tunes a channel. `play_live` creates the
+    /// timeshift folder when the buffer is on, and a test should not write into the
+    /// repository to find that out.
+    fn tempdir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aurora-playback-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
     fn harness(source_count: usize) -> (Playback, Fake, Arc<Mutex<Connection>>) {
         let conn = aurora_db::open_memory().unwrap();
         conn.execute(
@@ -358,10 +417,118 @@ mod tests {
             )
             .unwrap();
         }
+        // These tests are about rolling over to another source, not about buffering, and
+        // `Fake` models no window. Off, so nothing here depends on the default.
+        aurora_db::repo::settings::set(&conn, crate::timeshift::ENABLED_KEY, &false).unwrap();
+
         let db = Arc::new(Mutex::new(conn));
         let fake = Fake::new();
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(fake.backend()));
-        (Playback::new(Arc::clone(&db), player), fake, db)
+        (
+            Playback::new(Arc::clone(&db), player, tempdir("failover")),
+            fake,
+            db,
+        )
+    }
+
+    /// A `NullBackend` the test can still reach after the service has taken it, so wall
+    /// clock can be made to pass on a modelled live stream.
+    ///
+    /// `Fake` above answers every command with `Ok(())` and models nothing, which is
+    /// what the failover tests want. Timeshift needs the opposite: a backend that keeps
+    /// a real window and clamps against it, which `NullBackend` already does.
+    #[derive(Clone)]
+    struct Shared(Arc<Mutex<aurora_player::NullBackend>>);
+
+    impl Shared {
+        fn new() -> Self {
+            Self(Arc::new(Mutex::new(aurora_player::NullBackend::default())))
+        }
+        fn advance_live(&self, secs: f64) {
+            self.0.lock().advance_live(secs);
+        }
+        fn backend(&self) -> Box<dyn PlayerBackend> {
+            Box::new(Self(Arc::clone(&self.0)))
+        }
+    }
+
+    impl PlayerBackend for Shared {
+        fn load(
+            &mut self,
+            url: &str,
+            options: &LoadOptions,
+        ) -> std::result::Result<(), PlayerError> {
+            self.0.lock().load(url, options)
+        }
+        fn stop(&mut self) -> std::result::Result<(), PlayerError> {
+            self.0.lock().stop()
+        }
+        fn set_paused(&mut self, paused: bool) -> std::result::Result<(), PlayerError> {
+            self.0.lock().set_paused(paused)
+        }
+        fn seek(&mut self, position: f64, relative: bool) -> std::result::Result<(), PlayerError> {
+            self.0.lock().seek(position, relative)
+        }
+        fn set_volume(&mut self, volume: u32) -> std::result::Result<(), PlayerError> {
+            self.0.lock().set_volume(volume)
+        }
+        fn set_muted(&mut self, muted: bool) -> std::result::Result<(), PlayerError> {
+            self.0.lock().set_muted(muted)
+        }
+        fn set_speed(&mut self, speed: f64) -> std::result::Result<(), PlayerError> {
+            self.0.lock().set_speed(speed)
+        }
+        fn set_audio_track(&mut self, id: Option<i64>) -> std::result::Result<(), PlayerError> {
+            self.0.lock().set_audio_track(id)
+        }
+        fn set_subtitle_track(&mut self, id: Option<i64>) -> std::result::Result<(), PlayerError> {
+            self.0.lock().set_subtitle_track(id)
+        }
+        fn set_aspect(&mut self, aspect: Aspect) -> std::result::Result<(), PlayerError> {
+            self.0.lock().set_aspect(aspect)
+        }
+        fn state(&self) -> PlayerState {
+            self.0.lock().state()
+        }
+        fn chapters(&self) -> Vec<Chapter> {
+            self.0.lock().chapters()
+        }
+        fn resize(&mut self, width: u32, height: u32) -> std::result::Result<(), PlayerError> {
+            self.0.lock().resize(width, height)
+        }
+    }
+
+    /// One channel, one source, a real modelled backend, and the buffer on unless the
+    /// test says otherwise.
+    fn buffered_harness(tag: &str) -> (Playback, Shared, std::path::PathBuf) {
+        let conn = aurora_db::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO channels (id, provider_id, provider_key, name, match_key, last_seen_at)
+             VALUES (1, 1, 'c1', 'BBC One', 'bbcone', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO channel_sources (channel_id, url, priority) VALUES (1, ?1, 0)",
+            [url(0)],
+        )
+        .unwrap();
+
+        let dir = tempdir(tag);
+        let db = Arc::new(Mutex::new(conn));
+        let shared = Shared::new();
+        let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(shared.backend()));
+        (
+            Playback::new(Arc::clone(&db), player, dir.clone()),
+            shared,
+            dir,
+        )
     }
 
     fn url(i: usize) -> String {
@@ -538,6 +705,109 @@ mod tests {
             vec![url(0)],
             "a closed channel does not reconnect"
         );
+    }
+
+    #[test]
+    fn tuning_a_live_channel_hands_the_player_a_buffer_to_rewind_into() {
+        let (playback, backend, dir) = buffered_harness("tune");
+        let state = playback.play_live(1, NOW).unwrap();
+
+        let window = state.timeshift.expect("a live tune gets a buffer");
+        assert_eq!(window.span_secs(), 0.0, "nothing is buffered at the zap");
+        assert!(
+            dir.join("timeshift").exists(),
+            "mpv needs somewhere to write"
+        );
+
+        // Two minutes on, there are two minutes to go back through.
+        backend.advance_live(120.0);
+        assert_eq!(playback.state().timeshift.unwrap().rewindable_secs(), 120.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_seek_is_held_inside_the_buffer_at_both_ends() {
+        let (playback, backend, dir) = buffered_harness("seek");
+        playback.play_live(1, NOW).unwrap();
+        backend.advance_live(600.0);
+
+        // Ten minutes of rewind exists; an hour of it does not.
+        let state = playback.seek(-3600.0, true).unwrap();
+        assert_eq!(state.position_secs, 0.0, "stops at the oldest moment held");
+
+        // And nothing past the live edge exists yet, however far forward it is asked
+        // for: a position in the future would leave the scrub bar pointing at nothing.
+        let state = playback.seek(9_999.0, true).unwrap();
+        assert_eq!(state.position_secs, 600.0);
+        assert!(state.timeshift.unwrap().is_at_live());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pausing_live_tv_and_coming_back_to_it_is_the_whole_feature() {
+        let (playback, backend, dir) = buffered_harness("pause");
+        playback.play_live(1, NOW).unwrap();
+        backend.advance_live(60.0);
+
+        // Answer the door.
+        playback.player.lock().set_paused(true).unwrap();
+        backend.advance_live(240.0);
+        let behind = playback.state();
+        assert_eq!(behind.status, PlayerStatus::Paused);
+        assert_eq!(behind.timeshift.unwrap().delay_secs(), 240.0);
+
+        // Come back to it: the picture resumes four minutes behind, still in the buffer.
+        playback.player.lock().set_paused(false).unwrap();
+        backend.advance_live(30.0);
+        assert_eq!(playback.state().timeshift.unwrap().delay_secs(), 240.0);
+
+        // …and "Back to live" gives up the delay and plays.
+        let live = playback.back_to_live().unwrap();
+        assert_eq!(live.status, PlayerStatus::Playing);
+        assert!(live.timeshift.unwrap().is_at_live());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn back_to_live_on_a_channel_with_no_buffer_simply_plays_again() {
+        let (playback, _backend, dir) = buffered_harness("nobuffer");
+        {
+            let db = playback.db.lock();
+            aurora_db::repo::settings::set(&db, crate::timeshift::ENABLED_KEY, &false).unwrap();
+        }
+        let state = playback.play_live(1, NOW).unwrap();
+        assert!(state.timeshift.is_none(), "nothing was asked to be kept");
+
+        playback.player.lock().set_paused(true).unwrap();
+        let state = playback.back_to_live().unwrap();
+        assert_eq!(
+            state.status,
+            PlayerStatus::Playing,
+            "there is nowhere to come back from, but resuming is still the answer"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_film_is_seekable_by_its_duration_not_by_a_buffer() {
+        let (playback, _backend, dir) = buffered_harness("film");
+        playback
+            .db
+            .lock()
+            .execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (1,1,'m1','A Film','afilm','http://example.com/film.mkv',0)",
+                [],
+            )
+            .unwrap();
+
+        let state = playback.play_item("movie", 1, None).unwrap();
+        assert!(state.timeshift.is_none());
+        // The VOD path is untouched by the clamp: 90 minutes in is 90 minutes in.
+        let state = playback.seek(5400.0, false).unwrap();
+        assert_eq!(state.position_secs, 5400.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

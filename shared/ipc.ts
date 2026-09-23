@@ -186,8 +186,38 @@ export interface PlayerState {
   activeAudioTrack: number | null;
   activeSubtitleTrack: number | null;
   aspect: 'auto' | '16:9' | '4:3' | '21:9' | 'stretch' | 'zoom';
+  /**
+   * The rewindable window of a live stream being buffered (README §7.6), or null when
+   * nothing is being kept — which is also how the OSD decides between a live-edge
+   * scrubber and a plain live badge.
+   */
+  timeshift: TimeshiftWindow | null;
   error: PlaybackError | null;
   stats: PlaybackStats | null;
+}
+
+/**
+ * What the viewer can reach while timeshifting, in the stream's own timebase.
+ *
+ * Three timestamps and nothing derived: the delay behind live, the rewind left and the
+ * scrub position are arithmetic, and one copy of that arithmetic is enough.
+ */
+export interface TimeshiftWindow {
+  /** The oldest moment still held. */
+  startSecs: number;
+  positionSecs: number;
+  /** The newest moment held — the live edge. */
+  liveSecs: number;
+}
+
+/** The buffer's configuration, and what it is costing on disk (README §7.6, §15). */
+export interface TimeshiftSettings {
+  enabled: boolean;
+  /** Rewind budget. Both caps are real and the tighter one decides the window. */
+  bytes: number;
+  secs: number;
+  folder: string;
+  bytesOnDisk: number;
 }
 
 export interface Track {
@@ -685,6 +715,11 @@ export interface Commands {
   'player.resume': () => PlayerState;
   'player.stop': () => PlayerState;
   'player.seek': (args: { positionSecs: number; relative?: boolean }) => PlayerState;
+  /**
+   * Give up the timeshift delay and rejoin the live edge (README §7.6). Resumes if the
+   * viewer had paused, and is harmless on a stream that was never buffered.
+   */
+  'player.backToLive': () => PlayerState;
   'player.setVolume': (args: { volume: number }) => PlayerState;
   'player.setMuted': (args: { muted: boolean }) => PlayerState;
   'player.setSpeed': (args: { speed: number }) => PlayerState;
@@ -779,6 +814,25 @@ export interface Commands {
   }) => number | null;
   'dvr.removeReminder': (args: { id: number }) => boolean;
   'dvr.storage': () => DvrStorage;
+
+  'timeshift.settings': () => TimeshiftSettings;
+  /**
+   * Change the buffer. Returns what was actually stored, which is not always what was
+   * asked for: a budget outside the documented range is clamped into it.
+   *
+   * Applies to the next channel tuned, not to the stream already playing — the cache is
+   * sized when a stream is loaded, and re-loading to apply a setting would black out
+   * whatever is on.
+   */
+  'timeshift.setSettings': (args: {
+    enabled?: boolean;
+    bytes?: number;
+    secs?: number;
+    /** An empty string restores the default folder beside the library. */
+    folder?: string;
+  }) => TimeshiftSettings;
+  /** Empty the buffer, returning the bytes reclaimed. */
+  'timeshift.clear': () => number;
 
   'metadata.status': () => MetadataStatus;
   /** Null clears the stored key. The key is never read back. */

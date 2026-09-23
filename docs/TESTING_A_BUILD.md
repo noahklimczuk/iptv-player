@@ -100,3 +100,10 @@ In rough order of value:
    not, content hidden that should not have been, a guide that is empty where it should
    not be.
 4. Zap time — pressing a channel to the first frame.
+5. Whether pausing live TV works. Press `T` or Space on a live channel, leave it a minute,
+   and press it again: the picture should carry on from where it stopped, with a scrub bar
+   showing how far behind live you are and a **Back to live** button to give that up. The
+   buffer is mpv's own on-disk cache (`docs/DECISIONS.md` D21), configured from
+   documentation and never actually filled, so after compositing this is the likeliest
+   thing to be wrong. **Settings → Pause live TV** reports what it is using on disk; if
+   that stays at zero, nothing is being kept and the scrub bar is lying.
