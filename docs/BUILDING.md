@@ -78,8 +78,11 @@ pnpm exec playwright test     # 12 journeys + screenshot capture
 
 Every merge to main builds the app on a Windows runner. Two ways to get the result:
 
-- **Releases → `latest-windows`** — one `.exe` installer, replaced by every merge, so
-  the link never changes.
+- **Releases** — every merge publishes its own release, tagged `build-N` after the
+  CI run that made it, holding one `.exe` installer. Nothing replaces an older one, so
+  a build you were happy with stays downloadable. `/releases/latest` always points at
+  the newest. Build numbers are monotonic but not contiguous: they come from the CI
+  run number, which pull requests also consume.
 - **Actions → the merge's run → Artifacts** — `aurora-tv-portable` (a zip that runs
   in place and keeps its state beside itself) and `aurora-tv-installers` (the NSIS
   `.exe` and the MSI).
