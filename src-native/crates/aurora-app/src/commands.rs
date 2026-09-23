@@ -410,6 +410,21 @@ pub fn player_set_aspect(services: State<'_, Services>, args: AspectArgs) -> Res
     Ok(p.state())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeedArgs {
+    pub speed: f64,
+}
+
+/// Playback speed. The backend clamps to 0.25x–4x; past that mpv drops audio entirely
+/// and the result is indistinguishable from a broken stream.
+#[tauri::command]
+pub fn player_set_speed(services: State<'_, Services>, args: SpeedArgs) -> Result<PlayerState> {
+    let mut p = services.player.lock();
+    p.set_speed(args.speed)?;
+    Ok(p.state())
+}
+
 #[tauri::command]
 pub fn player_state(services: State<'_, Services>) -> Result<PlayerState> {
     Ok(services.player.lock().state())

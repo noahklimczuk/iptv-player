@@ -283,6 +283,82 @@ pub fn list_series(conn: &Connection, q: &BrowseQuery) -> Result<Vec<SeriesRow>>
     Ok(rows)
 }
 
+/// One title by id, for a list of ids somebody curated rather than a browse page.
+///
+/// Deliberately not filtered by `hidden`: My List holds what a person put there, and
+/// a title vanishing from it because a bulk edit hid it would look like data loss.
+pub fn movie(conn: &Connection, id: i64) -> Result<Option<MovieRow>> {
+    let sql = format!("{MOVIE_SELECT} WHERE movies.id = ?1");
+    Ok(conn.query_row(&sql, params![id], map_movie).optional()?)
+}
+
+pub fn series(conn: &Connection, id: i64) -> Result<Option<SeriesRow>> {
+    let sql = format!("{SERIES_SELECT} WHERE series.id = ?1");
+    Ok(conn.query_row(&sql, params![id], map_series).optional()?)
+}
+
+/// What the library holds, for the Settings screen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStats {
+    pub channels: i64,
+    pub movies: i64,
+    pub series: i64,
+    pub episodes: i64,
+    pub programmes: i64,
+    pub epg_coverage: EpgCoverage,
+}
+
+/// How much of the guide actually reaches the channels it is for.
+///
+/// The number that matters is not how many programmes were imported but how many
+/// channels ended up with any — an EPG that parsed perfectly and matched nothing looks
+/// identical to a missing one from the sofa.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpgCoverage {
+    pub total: i64,
+    pub matched: i64,
+    /// A few names, to make "what is missing" answerable without a query tool. Capped:
+    /// a playlist with nine thousand unmatched channels should not ship all nine
+    /// thousand to the renderer to be printed in one line.
+    pub unmatched: Vec<String>,
+}
+
+const UNMATCHED_SAMPLE: usize = 12;
+
+pub fn stats(conn: &Connection) -> Result<LibraryStats> {
+    let count = |sql: &str| -> Result<i64> { Ok(conn.query_row(sql, [], |r| r.get(0))?) };
+
+    let total = count("SELECT COUNT(*) FROM channels WHERE hidden = 0")?;
+    let matched = count(
+        "SELECT COUNT(*) FROM channels
+         WHERE hidden = 0 AND epg_channel_id IS NOT NULL AND epg_channel_id <> ''",
+    )?;
+
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(custom_name, name) FROM channels
+         WHERE hidden = 0 AND (epg_channel_id IS NULL OR epg_channel_id = '')
+         ORDER BY COALESCE(custom_number, number), id
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([UNMATCHED_SAMPLE as i64], |r| r.get(0))?;
+    let unmatched = rows.collect::<std::result::Result<Vec<String>, _>>()?;
+
+    Ok(LibraryStats {
+        channels: total,
+        movies: count("SELECT COUNT(*) FROM movies WHERE hidden = 0")?,
+        series: count("SELECT COUNT(*) FROM series WHERE hidden = 0")?,
+        episodes: count("SELECT COUNT(*) FROM episodes")?,
+        programmes: count("SELECT COUNT(*) FROM epg_programmes")?,
+        epg_coverage: EpgCoverage {
+            total,
+            matched,
+            unmatched,
+        },
+    })
+}
+
 /// Every genre present in the library, for the browse filters.
 pub fn genres(conn: &Connection) -> Result<Vec<String>> {
     let mut out = std::collections::BTreeSet::new();
@@ -515,6 +591,65 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stats_on_an_empty_library_are_all_zero() {
+        let conn = crate::open_memory().unwrap();
+        let s = stats(&conn).unwrap();
+        assert_eq!((s.channels, s.movies, s.series, s.episodes), (0, 0, 0, 0));
+        assert_eq!(s.epg_coverage.matched, 0);
+        assert!(s.epg_coverage.unmatched.is_empty());
+    }
+
+    #[test]
+    fn coverage_counts_channels_with_a_guide_not_programmes() {
+        // A guide that imported ten thousand programmes and matched nothing looks
+        // exactly like a missing one from the sofa, so this counts the channels.
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id, name, kind, base_url, created_at)
+             VALUES (1, 'P', 'm3u', 'http://e.com', 0)",
+            [],
+        )
+        .unwrap();
+        for (key, epg) in [("a", Some("one")), ("b", None), ("c", None)] {
+            conn.execute(
+                "INSERT INTO channels (provider_id, provider_key, name, match_key,
+                                       epg_channel_id, last_seen_at)
+                 VALUES (1, ?1, ?1, ?1, ?2, 0)",
+                rusqlite::params![key, epg],
+            )
+            .unwrap();
+        }
+
+        let s = stats(&conn).unwrap();
+        assert_eq!(s.channels, 3);
+        assert_eq!(s.epg_coverage.total, 3);
+        assert_eq!(s.epg_coverage.matched, 1);
+        assert_eq!(s.epg_coverage.unmatched, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn an_empty_string_is_not_a_match() {
+        // Some providers write tvg-id="" rather than omitting it, and counting that as
+        // matched would report full coverage for a guide that never arrived.
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id, name, kind, base_url, created_at)
+             VALUES (1, 'P', 'm3u', 'http://e.com', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO channels (provider_id, provider_key, name, match_key,
+                                   epg_channel_id, last_seen_at)
+             VALUES (1, 'a', 'A', 'a', '', 0)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(stats(&conn).unwrap().epg_coverage.matched, 0);
+    }
+
     use super::*;
 
     fn provider(conn: &Connection) -> i64 {

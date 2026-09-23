@@ -35,7 +35,13 @@ export async function invoke<K extends CommandName>(
   if (!host) return invokeMock(name, args);
   // Command names cross the bridge as snake_case module_action pairs.
   const cmd = name.replace(/\./g, '_').replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-  return host.invoke(cmd, args ?? {}) as Promise<CommandResult<K>>;
+  // Arguments go *under* `args`, not spread across the payload. Every host command
+  // takes them as one `args: SomeArgs` parameter, and Tauri keys the payload by the
+  // parameter's name — `tauri::ipc::command` errors outright when the key is missing,
+  // with no fallback to the payload as a whole. Spreading them made all sixty-one
+  // commands that take arguments fail to deserialize on Windows, which the mock
+  // transport could never show because it reads the flat object.
+  return host.invoke(cmd, args === undefined ? {} : { args }) as Promise<CommandResult<K>>;
 }
 
 export function onPlayerState(fn: (s: PlayerState) => void): () => void {

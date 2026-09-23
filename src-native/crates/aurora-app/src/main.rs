@@ -2,7 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, metadata, now_unix, playlist, profiles, providers, services::Services, updates,
+    commands, dvr, library, metadata, now_unix, playlist, profiles, providers, services::Services,
+    updates,
 };
 
 /// Send the log somewhere a person can read it.
@@ -230,6 +231,13 @@ fn main() {
             providers::providers_validate,
             providers::providers_save,
             providers::providers_refresh,
+            commands::player_set_speed,
+            library::providers_list,
+            library::library_stats,
+            library::library_rails,
+            library::mylist_toggle,
+            library::favorites_toggle,
+            library::progress_get,
             updates::updates_check,
             updates::updates_set_automatic,
             updates::updates_open_releases,
