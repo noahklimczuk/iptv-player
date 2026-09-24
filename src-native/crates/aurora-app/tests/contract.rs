@@ -115,6 +115,65 @@ fn the_host_registers_every_command_the_contract_declares() {
     );
 }
 
+/// The field names of one `export interface` in the contract.
+///
+/// Field lines end in a semicolon; the doc comments around them do not, which is enough
+/// to tell them apart without parsing TypeScript.
+fn declared_fields(contract: &str, interface: &str) -> Vec<String> {
+    let start = contract
+        .find(&format!("export interface {interface} {{"))
+        .unwrap_or_else(|| panic!("the contract declares {interface}"));
+    let rest = &contract[start..];
+    let end = rest.find("\n}").expect("the interface is closed");
+
+    rest[..end]
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let line = line.trim();
+            if !line.ends_with(';') || line.starts_with('*') || line.starts_with('/') {
+                return None;
+            }
+            let (name, _) = line.split_once(':')?;
+            Some(name.trim_end_matches('?').to_string())
+        })
+        .filter(|name| name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .collect()
+}
+
+/// The UI reads `PlayerState` on every frame, and the host has to send all of it.
+///
+/// `itemKind` was declared here, answered by the mock, and never sent by the host. The
+/// UI gates Skip Intro, Skip Credits and Up Next on `player.itemKind === 'episode'`
+/// (`useEpisodeAids`), so all three worked in every browser journey and none of them
+/// could ever appear on Windows. Exactly the failure the command test above exists for,
+/// one layer down: the mock is generous and the host is the one that ships.
+#[test]
+fn the_player_state_the_host_sends_is_the_one_the_contract_declares() {
+    let contract = std::fs::read_to_string(repo_root().join("shared/ipc.ts")).expect("ipc.ts");
+    let declared = declared_fields(&contract, "PlayerState");
+    assert!(
+        declared.len() > 15,
+        "only parsed {} fields — the scan is broken",
+        declared.len()
+    );
+
+    let sent = serde_json::to_value(aurora_player::PlayerState::default()).expect("serializes");
+    let sent = sent.as_object().expect("a JSON object");
+
+    let missing: Vec<&String> = declared.iter().filter(|f| !sent.contains_key(*f)).collect();
+    assert!(
+        missing.is_empty(),
+        "the UI reads these and the host never sends them: {missing:?}"
+    );
+
+    let extra: Vec<&String> = sent.keys().filter(|k| !declared.contains(k)).collect();
+    assert!(
+        extra.is_empty(),
+        "the host sends these and the contract does not declare them: {extra:?}"
+    );
+}
+
 #[test]
 fn the_name_mapping_matches_the_transport() {
     // The same transformation `src-ui/src/ipc/index.ts` applies before calling invoke.
@@ -122,4 +181,21 @@ fn the_name_mapping_matches_the_transport() {
     assert_eq!(to_command_name("providers.list"), "providers_list");
     assert_eq!(to_command_name("player.playCatchup"), "player_play_catchup");
     assert_eq!(to_command_name("dvr.list"), "dvr_list");
+}
+
+#[test]
+fn the_field_scan_reads_names_and_not_the_prose_around_them() {
+    let sample = "export interface PlayerState {\n\
+                  \x20 /** What is loaded, for the OSD title. */\n\
+                  \x20 title: string | null;\n\
+                  \x20 /**\n\
+                  \x20  * Several lines: status: not a field.\n\
+                  \x20  */\n\
+                  \x20 match?: number;\n\
+                  \x20 stats: PlaybackStats | null;\n\
+                  }\n";
+    assert_eq!(
+        declared_fields(sample, "PlayerState"),
+        ["title", "match", "stats"]
+    );
 }

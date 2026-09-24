@@ -338,11 +338,19 @@ pub struct SeekArgs {
     pub relative: Option<bool>,
 }
 
+/// Through the service, not the backend: a seek on a buffered live stream has to be
+/// held inside what the buffer holds, and that bound belongs in one place (README §7.6).
 #[tauri::command]
 pub fn player_seek(services: State<'_, Services>, args: SeekArgs) -> Result<PlayerState> {
-    let mut p = services.player.lock();
-    p.seek(args.position_secs, args.relative.unwrap_or(false))?;
-    Ok(p.state())
+    services
+        .playback
+        .seek(args.position_secs, args.relative.unwrap_or(false))
+}
+
+/// Jump back to the live edge after pausing or rewinding live TV (README §7.6).
+#[tauri::command]
+pub fn player_back_to_live(services: State<'_, Services>) -> Result<PlayerState> {
+    services.playback.back_to_live()
 }
 
 #[derive(Debug, Deserialize)]

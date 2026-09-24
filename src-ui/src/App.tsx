@@ -12,7 +12,7 @@ import { LivePage } from '@/features/live/LivePage';
 import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
 import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
-import { PlayerOverlay } from '@/features/player/PlayerOverlay';
+import { PlayerOverlay, behindLive } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { ProfilePicker } from '@/features/profiles/ProfilePicker';
 import { SetupWizard } from '@/features/setup/SetupWizard';
@@ -128,6 +128,24 @@ export default function App() {
     onPlayPause: () => {
       const s = ui.player?.status;
       if (s) void invoke(s === 'playing' ? 'player.pause' : 'player.resume');
+    },
+    /**
+     * `T` on live TV: pausing is what puts the viewer behind live, so this pauses when
+     * at the edge — and when already behind it, the useful thing is the way back
+     * (README §7.6, §14.1). On anything else it is play-pause.
+     */
+    onTimeshift: () => {
+      const p = ui.player;
+      if (!p || p.status === 'idle') return;
+      if (!p.isLive) {
+        void invoke(p.status === 'playing' ? 'player.pause' : 'player.resume');
+        return;
+      }
+      if (behindLive(p) > 0) {
+        void invoke('player.backToLive');
+        return;
+      }
+      void invoke(p.status === 'playing' ? 'player.pause' : 'player.resume');
     },
     onSeek: (secs: number) => void invoke('player.seek', { positionSecs: secs, relative: true }),
     onVolume: (delta: number) =>

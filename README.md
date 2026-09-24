@@ -12,14 +12,14 @@ This repository holds two things:
 
 | | |
 |---|---|
-| Core domain logic (parsers, matching, rules, skip markers, parental, DVR, metadata matching) | ✅ built, 173 tests |
-| Persistence (SQLite, migrations, FTS5 search, profiles, recordings, credits) | ✅ built, 135 tests |
-| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 132 tests |
-| Playback state machine + error taxonomy | ✅ built, 13 tests |
-| libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet run** |
-| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 67 E2E journeys |
+| Core domain logic (parsers, matching, rules, skip markers, parental, DVR, metadata matching, timeshift window) | ✅ built, 246 tests |
+| Persistence (SQLite, migrations, FTS5 search, profiles, recordings, credits) | ✅ built, 196 tests |
+| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 161 tests |
+| Playback state machine + error taxonomy | ✅ built, 21 tests |
+| libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet wired into the window or run** — see the Phase 0 caveat in `docs/ROADMAP.md` |
+| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 82 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
-| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 29 tests |
+| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 61 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
 | DVR: scheduling, series rules, conflicts, reminders, recordings library | ✅ built and tested; never pointed at a real provider |
 | TMDB enrichment: matching, artwork, cast and crew | ✅ built and tested; never called against the real API |
@@ -27,11 +27,11 @@ This repository holds two things:
 | Catch-up playback (§7.5) | ✅ built and tested; the URL builder has never met a real provider |
 | Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
 | Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
-| Timeshift / pause live TV (§7.6) | ❌ not started |
+| Timeshift / pause live TV (§7.6) | ✅ built and tested; rides mpv's own on-disk cache rather than a buffer of ours (D21), so it has never met a real stream |
 | Stream failover: demote a dead source, roll to the next (§7.14) | ✅ built and tested; never seen a real stream drop |
 | Windows installer + portable build from CI | ✅ built on every merge to main; the app itself has still never been run |
 | Versioned releases: patch for a fix, minor for a feature (§23) | ✅ derived from the commit subjects at build time; never seen a real release yet |
-| Update check against GitHub releases (§23) | ✅ built and tested; checks and tells you, does not install — see D17 |
+| Update check and install from GitHub releases (§23) | ✅ built and tested; downloads the installer and verifies it against the SHA-256 GitHub publishes, then runs it. Not signature-verified — §18 wants a signing key that does not exist yet (D17) |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
 from what merely compiles. In particular the Phase 0 compositing spike — video behind a

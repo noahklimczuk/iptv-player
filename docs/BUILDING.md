@@ -7,6 +7,7 @@
 | `aurora-core`, `aurora-db` | ✅ builds and tests | ✅ |
 | `aurora-player` (trait + NullBackend) | ✅ builds and tests | ✅ |
 | `aurora-player::mpv` (Win32 + libmpv) | ⚠️ `cargo check --target x86_64-pc-windows-msvc` only | ✅ |
+| `aurora-app` Win32 code (installer launch, video surface) | ⚠️ `cargo check --target x86_64-pc-windows-gnu` only | ✅ |
 | `aurora-app` (Tauri host) | ✅ with GTK dev packages (below) | ✅ |
 | `src-ui` (React) | ✅ | ✅ |
 
@@ -155,6 +156,21 @@ cargo check -p aurora-player --target x86_64-pc-windows-msvc
 This type-checks the mpv/Win32 backend without an MSVC linker, which catches most
 mistakes in code you cannot run locally. It does **not** work for `aurora-app`: a
 transitive C dependency needs MSVC's `lib.exe`.
+
+For the host crate — the `#[cfg(windows)]` code in `updates.rs` and `window.rs` — use
+the GNU target instead, which cross-compiles from Linux:
+
+```
+sudo apt-get install -y mingw-w64
+rustup target add x86_64-pc-windows-gnu
+cargo check -p aurora-app --target x86_64-pc-windows-gnu --all-targets
+```
+
+Same `cfg`, so every Win32 call is compiled and type-checked; a different ABI and
+linker, so it proves nothing about linking against libmpv or about the MSVC build CI
+produces. It is the difference between "this code does not exist as far as the compiler
+is concerned" and "this code compiles" — worth having before pushing something only a
+Windows runner will ever look at.
 
 ## Match CI's toolchain before trusting a local clippy run
 

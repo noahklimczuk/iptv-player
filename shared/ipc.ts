@@ -186,8 +186,38 @@ export interface PlayerState {
   activeAudioTrack: number | null;
   activeSubtitleTrack: number | null;
   aspect: 'auto' | '16:9' | '4:3' | '21:9' | 'stretch' | 'zoom';
+  /**
+   * The rewindable window of a live stream being buffered (README §7.6), or null when
+   * nothing is being kept — which is also how the OSD decides between a live-edge
+   * scrubber and a plain live badge.
+   */
+  timeshift: TimeshiftWindow | null;
   error: PlaybackError | null;
   stats: PlaybackStats | null;
+}
+
+/**
+ * What the viewer can reach while timeshifting, in the stream's own timebase.
+ *
+ * Three timestamps and nothing derived: the delay behind live, the rewind left and the
+ * scrub position are arithmetic, and one copy of that arithmetic is enough.
+ */
+export interface TimeshiftWindow {
+  /** The oldest moment still held. */
+  startSecs: number;
+  positionSecs: number;
+  /** The newest moment held — the live edge. */
+  liveSecs: number;
+}
+
+/** The buffer's configuration, and what it is costing on disk (README §7.6, §15). */
+export interface TimeshiftSettings {
+  enabled: boolean;
+  /** Rewind budget. Both caps are real and the tighter one decides the window. */
+  bytes: number;
+  secs: number;
+  folder: string;
+  bytesOnDisk: number;
 }
 
 export interface Track {
@@ -248,7 +278,26 @@ export interface UpdateRelease {
   pageUrl: string;
   installerUrl: string | null;
   installerBytes: number | null;
+  /**
+   * The installer's SHA-256, as GitHub published it beside the asset. The host will
+   * not download an installer without one, and checks the file against it before
+   * anything is allowed to run it.
+   */
+  installerSha256: string | null;
   publishedAt: string | null;
+}
+
+export type UpdateDownloadStatus = 'idle' | 'downloading' | 'ready' | 'failed';
+
+/** The installer download (docs/DECISIONS.md D17). */
+export interface UpdateDownload {
+  status: UpdateDownloadStatus;
+  /** What is being fetched, or what is waiting to be installed. */
+  version: string | null;
+  receivedBytes: number;
+  totalBytes: number | null;
+  /** Why it failed, in words worth showing. */
+  message: string | null;
 }
 
 export interface UpdateStatus {
@@ -263,6 +312,12 @@ export interface UpdateStatus {
   lastCheckedAt: number | null;
   /** Where "Get the update" goes. Fixed by the host, not chosen by the UI. */
   releasesUrl: string;
+  download: UpdateDownload;
+  /**
+   * Whether this build can install an update over itself: false for a portable copy,
+   * which an installer would not replace, and false off Windows.
+   */
+  canInstall: boolean;
 }
 
 /**
@@ -685,6 +740,11 @@ export interface Commands {
   'player.resume': () => PlayerState;
   'player.stop': () => PlayerState;
   'player.seek': (args: { positionSecs: number; relative?: boolean }) => PlayerState;
+  /**
+   * Give up the timeshift delay and rejoin the live edge (README §7.6). Resumes if the
+   * viewer had paused, and is harmless on a stream that was never buffered.
+   */
+  'player.backToLive': () => PlayerState;
   'player.setVolume': (args: { volume: number }) => PlayerState;
   'player.setMuted': (args: { muted: boolean }) => PlayerState;
   'player.setSpeed': (args: { speed: number }) => PlayerState;
@@ -780,6 +840,25 @@ export interface Commands {
   'dvr.removeReminder': (args: { id: number }) => boolean;
   'dvr.storage': () => DvrStorage;
 
+  'timeshift.settings': () => TimeshiftSettings;
+  /**
+   * Change the buffer. Returns what was actually stored, which is not always what was
+   * asked for: a budget outside the documented range is clamped into it.
+   *
+   * Applies to the next channel tuned, not to the stream already playing — the cache is
+   * sized when a stream is loaded, and re-loading to apply a setting would black out
+   * whatever is on.
+   */
+  'timeshift.setSettings': (args: {
+    enabled?: boolean;
+    bytes?: number;
+    secs?: number;
+    /** An empty string restores the default folder beside the library. */
+    folder?: string;
+  }) => TimeshiftSettings;
+  /** Empty the buffer, returning the bytes reclaimed. */
+  'timeshift.clear': () => number;
+
   'metadata.status': () => MetadataStatus;
   /** Null clears the stored key. The key is never read back. */
   'metadata.setKey': (args: { key: string | null }) => void;
@@ -830,6 +909,19 @@ export interface Commands {
    * anything here to make the app open something else.
    */
   'updates.openReleases': () => void;
+  /**
+   * Fetch the published installer and verify it against the digest GitHub published
+   * beside it. Takes no URL — the host uses the one from the release it just checked,
+   * for the same reason `openReleases` takes none.
+   *
+   * Returns as soon as the download starts; `update.download` reports the rest.
+   */
+  'updates.download': () => UpdateDownload;
+  /**
+   * Run the downloaded installer and quit so it can replace the files. Refuses unless
+   * a verified download is waiting, and refuses while a recording is in progress.
+   */
+  'updates.install': () => void;
 }
 
 export type CommandName = keyof Commands;
@@ -845,6 +937,8 @@ export interface Events {
     latest: UpdateRelease | null;
     available: boolean;
   };
+  /** How far the update installer has got, so the bar moves without polling. */
+  'update.download': UpdateDownload;
   'ingest.progress': IngestProgress;
   'library.refreshed': { added: number; removed: number; updated: number };
   'toast': { level: 'info' | 'success' | 'warning' | 'error'; message: string };

@@ -3,7 +3,7 @@
 
 use aurora_app::{
     commands, dvr, library, metadata, now_unix, playlist, profiles, providers, services::Services,
-    updates,
+    timeshift, updates,
 };
 
 /// Send the log somewhere a person can read it.
@@ -51,13 +51,7 @@ fn main() {
             use tauri::Manager;
             // Portable mode (README §13): a marker file next to the exe keeps all data
             // local, with no %LOCALAPPDATA% and no registry.
-            let portable = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("portable.txt")))
-                .filter(|p| p.exists())
-                .and_then(|p| p.parent().map(|d| d.join("data")));
-
-            let data_dir = match portable {
+            let data_dir = match aurora_app::portable_dir() {
                 Some(dir) => dir,
                 None => app
                     .path()
@@ -177,6 +171,7 @@ fn main() {
             commands::player_resume,
             commands::player_stop,
             commands::player_seek,
+            commands::player_back_to_live,
             commands::player_set_volume,
             commands::player_set_muted,
             commands::player_set_audio_track,
@@ -241,9 +236,14 @@ fn main() {
             library::mylist_toggle,
             library::favorites_toggle,
             library::progress_get,
+            timeshift::timeshift_settings,
+            timeshift::timeshift_set_settings,
+            timeshift::timeshift_clear,
             updates::updates_check,
             updates::updates_set_automatic,
             updates::updates_open_releases,
+            updates::updates_download,
+            updates::updates_install,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");

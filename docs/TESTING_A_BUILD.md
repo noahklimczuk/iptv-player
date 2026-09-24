@@ -10,7 +10,12 @@ share a Downloads folder without becoming `(1)` and `(2)`.
 
 Once it is running, **Settings → Updates** says which build you have and whether there is
 a newer one. It checks by itself a few seconds after launch and then at most every six
-hours. It will not install anything for you — see `docs/DECISIONS.md` D17 for why.
+hours, and it will fetch and run the installer when you ask it to: **Download update**,
+then **Install and restart**. The file is checked against the SHA-256 GitHub published
+for it before anything runs, and Aurora closes so the installer can replace it. These
+builds are not code-signed, so Windows will warn — see `docs/DECISIONS.md` D17 for what
+that check does and does not prove. A *portable* copy is not offered the button, because
+the installer would install beside it rather than replacing it.
 
 That run also attaches the raw builds under **Actions → the merge's run →
 Artifacts**, though these expire and the releases do not:
@@ -100,3 +105,14 @@ In rough order of value:
    not, content hidden that should not have been, a guide that is empty where it should
    not be.
 4. Zap time — pressing a channel to the first frame.
+5. Whether updating from inside the app works: **Settings → Updates → Download update**,
+   then **Install and restart**. Nothing about that path has ever been run — not the
+   download, not the checksum, not handing the installer to Windows — and the failure
+   that matters is the quiet one, where the app closes and nothing replaces it.
+6. Whether pausing live TV works. Press `T` or Space on a live channel, leave it a minute,
+   and press it again: the picture should carry on from where it stopped, with a scrub bar
+   showing how far behind live you are and a **Back to live** button to give that up. The
+   buffer is mpv's own on-disk cache (`docs/DECISIONS.md` D21), configured from
+   documentation and never actually filled, so after compositing this is the likeliest
+   thing to be wrong. **Settings → Pause live TV** reports what it is using on disk; if
+   that stays at zero, nothing is being kept and the scrub bar is lying.

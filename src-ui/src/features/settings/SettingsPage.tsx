@@ -7,6 +7,7 @@ import { isNativeHost } from '@/ipc';
 import { FilterPanel } from '@/features/settings/FilterPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
+import { TimeshiftPanel } from '@/features/settings/TimeshiftPanel';
 import { UpdatePanel } from '@/features/settings/UpdatePanel';
 import { useUi } from '@/state/ui';
 
@@ -151,6 +152,10 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
         <FilterPanel />
       </Section>
 
+      <Section title="Pause live TV">
+        <TimeshiftPanel />
+      </Section>
+
       <Section title="Library">
         {stats && (
           <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '220px 1fr', gap: 8 }}>
@@ -186,6 +191,7 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             ['G', 'TV guide'],
             ['Space / K', 'Play-pause'],
             ['← / →', 'Seek ±10s (Shift: ±30s)'],
+            ['T', 'Pause live TV · press again for the live edge'],
             ['↑ / ↓', 'Volume · M mute'],
             ['Alt+1…5', 'Home, Live, Guide, Movies, Series'],
           ].map(([k, v]) => (

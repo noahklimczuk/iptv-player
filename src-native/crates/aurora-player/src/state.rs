@@ -1,3 +1,4 @@
+use aurora_core::timeshift::Window;
 use serde::{Deserialize, Serialize};
 
 use crate::error::PlaybackError;
@@ -12,6 +13,16 @@ pub enum PlayerStatus {
     Playing,
     Paused,
     Error,
+}
+
+/// What is playing, in the terms the library uses. Mirrors `MediaKind` in
+/// `shared/ipc.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaKind {
+    Live,
+    Movie,
+    Episode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -88,6 +99,9 @@ pub struct PlayerState {
     pub title: Option<String>,
     pub subtitle: Option<String>,
     pub channel_id: Option<i64>,
+    /// Which library row is on, and of what kind. The UI needs both to drive Skip
+    /// Intro and Up Next (README §9): without them it cannot ask what episode this is.
+    pub item_kind: Option<MediaKind>,
     pub item_id: Option<i64>,
     pub position_secs: f64,
     pub duration_secs: f64,
@@ -100,6 +114,9 @@ pub struct PlayerState {
     pub active_audio_track: Option<i64>,
     pub active_subtitle_track: Option<i64>,
     pub aspect: Aspect,
+    /// The reachable window of a buffered live stream (README §7.6), or `None` when
+    /// this stream is not being buffered. What the OSD draws its live edge from.
+    pub timeshift: Option<Window>,
     pub error: Option<PlaybackError>,
     pub stats: Option<PlaybackStats>,
 }
@@ -111,6 +128,7 @@ impl Default for PlayerState {
             title: None,
             subtitle: None,
             channel_id: None,
+            item_kind: None,
             item_id: None,
             position_secs: 0.0,
             duration_secs: 0.0,
@@ -123,6 +141,7 @@ impl Default for PlayerState {
             active_audio_track: None,
             active_subtitle_track: None,
             aspect: Aspect::Auto,
+            timeshift: None,
             error: None,
             stats: None,
         }

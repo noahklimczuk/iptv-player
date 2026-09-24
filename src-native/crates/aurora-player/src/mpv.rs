@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 
 use aurora_core::markers::Chapter;
+use aurora_core::timeshift::{Budget, Reading};
+use libmpv2::mpv_node::MpvNode;
 use libmpv2::{events::Event, Mpv};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -37,11 +39,22 @@ enum Drained {
     Property(String),
 }
 
+/// A live stream being kept on disk so it can be rewound (README §7.6).
+struct Timeshift {
+    budget: Budget,
+    /// The first playhead reading after the tune. A live transport stream carries
+    /// whatever timestamp the provider is up to, so this is not zero and is not known
+    /// until playback reports it.
+    tuned_at: Option<f64>,
+}
+
 pub struct MpvBackend {
     mpv: Mpv,
     /// The child window mpv draws into. Owned by us, parented to the Tauri window.
     video_hwnd: Option<HWND>,
     state: PlayerState,
+    /// The buffer this load was given, or `None` when nothing is being kept.
+    timeshift: Option<Timeshift>,
 }
 
 // SAFETY: Mpv is internally synchronized and the HWND is only touched from the thread
@@ -94,6 +107,7 @@ impl MpvBackend {
             mpv,
             video_hwnd: None,
             state: PlayerState::default(),
+            timeshift: None,
         })
     }
 
@@ -204,6 +218,76 @@ impl MpvBackend {
             }
         }
         self.refresh_stats();
+        self.refresh_timeshift();
+    }
+
+    /// Work out what the viewer can currently rewind into.
+    ///
+    /// mpv is asked for the two things it knows — where the playhead is and how far the
+    /// cache runs — and `aurora_core::timeshift` bounds the answer by the budget, since
+    /// mpv enforces bytes and the setting is also written in minutes.
+    fn refresh_timeshift(&mut self) {
+        let Some(ts) = self.timeshift.as_mut() else {
+            self.state.timeshift = None;
+            return;
+        };
+        let position = self.state.position_secs;
+        let tuned_at = *ts.tuned_at.get_or_insert(position);
+        let budget = ts.budget;
+
+        // `demuxer-cache-time` is the newest buffered moment. Before the first read it
+        // is absent, and the playhead is then the only moment there is.
+        let live = self
+            .mpv
+            .get_property::<f64>("demuxer-cache-time")
+            .unwrap_or(position)
+            .max(position);
+
+        let mut window = budget.window(&Reading {
+            position_secs: position,
+            live_secs: live,
+            tuned_at_secs: tuned_at,
+            bitrate_bps: self.observed_bitrate(),
+        });
+        // mpv knows exactly where its retained data starts, and it is the authority when
+        // it answers: the budget can only ever over-estimate, never under.
+        if let Some(start) = self.cache_start() {
+            window.start_secs = window.start_secs.max(start).min(window.position_secs);
+        }
+        self.state.timeshift = Some(window);
+    }
+
+    /// The oldest moment still held, from `demuxer-cache-state`.
+    ///
+    /// Read out of the property's documented shape — a map with a `seekable-ranges`
+    /// array of `{start, end}` — and, like everything else in this file, never yet run
+    /// against a real stream. `None` when mpv does not answer, which is why the caller
+    /// has a bound of its own.
+    fn cache_start(&self) -> Option<f64> {
+        let state: MpvNode = self.mpv.get_property("demuxer-cache-state").ok()?;
+        for (key, value) in state.map()? {
+            if key != "seekable-ranges" {
+                continue;
+            }
+            // The first range is the oldest. A live stream that has not been seeked has
+            // exactly one.
+            let first = value.array()?.next()?;
+            for (field, number) in first.map()? {
+                if field == "start" {
+                    return number.f64();
+                }
+            }
+        }
+        None
+    }
+
+    /// Bits per second of everything being read, or 0 when mpv has not said yet.
+    ///
+    /// Both tracks, because the byte budget is spent on the whole stream and a 256 kb/s
+    /// audio track is a fifth of a radio channel's bitrate.
+    fn observed_bitrate(&self) -> u64 {
+        let of = |name: &str| self.mpv.get_property::<i64>(name).unwrap_or(0).max(0) as u64;
+        of("video-bitrate") + of("audio-bitrate")
     }
 
     fn refresh_tracks(&mut self) {
@@ -302,17 +386,30 @@ impl PlayerBackend for MpvBackend {
             status: PlayerStatus::Loading,
             title: options.title.clone(),
             is_live: options.is_live,
+            channel_id: options.playing.and_then(|p| p.channel_id),
+            item_kind: options.playing.map(|p| p.kind),
+            item_id: options.playing.map(|p| p.id),
             volume: self.state.volume,
             muted: self.state.muted,
             aspect: self.state.aspect,
             ..Default::default()
         };
+        self.timeshift = options
+            .timeshift
+            .as_ref()
+            .filter(|_| options.is_live)
+            .map(|ts| Timeshift {
+                budget: ts.budget,
+                tuned_at: None,
+            });
         self.cmd(&["loadfile", url, "replace"])
     }
 
     fn stop(&mut self) -> Result<(), PlayerError> {
         let r = self.cmd(&["stop"]);
         self.state.status = PlayerStatus::Idle;
+        self.timeshift = None;
+        self.state.timeshift = None;
         r
     }
 

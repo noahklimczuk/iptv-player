@@ -1,11 +1,45 @@
 //! The playback seam.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use aurora_core::markers::Chapter;
+use aurora_core::timeshift::{Budget, Reading, Window};
 
 use crate::error::PlayerError;
-use crate::state::{Aspect, PlayerState, PlayerStatus};
+use crate::state::{Aspect, MediaKind, PlayerState, PlayerStatus};
+
+/// What is being played, so the state can say so.
+///
+/// One value rather than three loose fields: the kind, the row and the channel have to
+/// agree, and the UI reads all three to decide whether this is an episode it can offer
+/// Skip Intro for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Playing {
+    pub kind: MediaKind,
+    /// The library row — a movie, an episode, or the channel itself for live TV.
+    pub id: i64,
+    /// The channel, where one is involved: live and catch-up.
+    pub channel_id: Option<i64>,
+}
+
+/// How much of a live stream mpv keeps on disk so it can be rewound (README §7.6).
+///
+/// Aurora does not fetch the stream twice. The buffer is the demuxer cache of the
+/// connection already playing, written to `dir` — docs/DECISIONS.md D21.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeshiftCache {
+    pub budget: Budget,
+    /// Where mpv writes the cache file.
+    pub dir: PathBuf,
+}
+
+/// Forward cache for a buffered live stream.
+///
+/// Small on purpose, and unrelated to the rewind budget: this is data ahead of the
+/// playhead, which costs latency at the live edge. 64 MiB is half a minute of a 20 Mb/s
+/// feed, well past the eight seconds `cache_secs` asks to keep smooth.
+const FORWARD_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Options that must travel with a stream URL. IPTV providers routinely require a
 /// specific User-Agent or Referer, and live streams want a different cache profile
@@ -19,6 +53,11 @@ pub struct LoadOptions {
     pub is_live: bool,
     /// Network buffer in seconds — README §6.1's Low latency / Balanced / Unstable presets.
     pub cache_secs: u32,
+    /// Keep history for rewinding, when this is a live stream and the viewer asked for
+    /// it (README §7.6). `None` buffers nothing.
+    pub timeshift: Option<TimeshiftCache>,
+    /// What the library calls this, when it is something the library knows about.
+    pub playing: Option<Playing>,
     pub title: Option<String>,
 }
 
@@ -43,6 +82,30 @@ impl LoadOptions {
             o.push(("http-header-fields".into(), joined));
         }
         o.push(("cache-secs".into(), self.cache_secs.max(1).to_string()));
+
+        // The timeshift buffer, in both states. Emitted even when off because these are
+        // properties of a long-lived mpv handle rather than arguments to one file: left
+        // alone, a channel tuned after the buffer was switched off would go on filling
+        // the disk until the app restarted.
+        match self.timeshift.as_ref().filter(|_| self.is_live) {
+            Some(ts) => {
+                o.push(("cache".into(), "yes".into()));
+                o.push(("cache-on-disk".into(), "yes".into()));
+                o.push(("cache-dir".into(), ts.dir.to_string_lossy().into_owned()));
+                o.push(("demuxer-max-back-bytes".into(), ts.budget.bytes.to_string()));
+                o.push(("demuxer-max-bytes".into(), FORWARD_CACHE_BYTES.to_string()));
+                // An HTTP live stream announces itself unseekable, and mpv believes it.
+                // The cache is what makes rewinding possible; this is what lets mpv
+                // seek into it.
+                o.push(("force-seekable".into(), "yes".into()));
+            }
+            None => {
+                o.push(("cache-on-disk".into(), "no".into()));
+                o.push(("demuxer-max-back-bytes".into(), "0".into()));
+                o.push(("force-seekable".into(), "no".into()));
+            }
+        }
+
         if self.is_live {
             o.push(("demuxer-lavf-probesize".into(), "524288".into()));
             o.push(("demuxer-lavf-analyzeduration".into(), "0.6".into()));
@@ -84,6 +147,14 @@ pub trait PlayerBackend: Send {
 pub struct NullBackend {
     state: PlayerState,
     chapters: Vec<Chapter>,
+    /// The budget the current load was given, so the window can be recomputed after a
+    /// seek. `None` when this stream is not being buffered.
+    timeshift: Option<Budget>,
+    /// The newest buffered moment. On a real backend the stream moves this; here
+    /// [`NullBackend::advance_live`] does.
+    live_secs: f64,
+    /// The playhead when the stream was loaded. Nothing older than this was buffered.
+    tuned_at_secs: f64,
 }
 
 impl NullBackend {
@@ -91,6 +162,37 @@ impl NullBackend {
     /// without a decoder.
     pub fn set_chapters(&mut self, chapters: Vec<Chapter>) {
         self.chapters = chapters;
+    }
+
+    /// Let time pass on a modelled live stream.
+    ///
+    /// The live edge moves on; the playhead follows it only while something is playing,
+    /// which is the whole of timeshift in one line — pausing is what puts the viewer
+    /// behind, and staying paused is what keeps them there.
+    pub fn advance_live(&mut self, secs: f64) {
+        self.live_secs += secs;
+        if self.state.status == PlayerStatus::Playing {
+            self.state.position_secs = (self.state.position_secs + secs).min(self.live_secs);
+        }
+        self.refresh_window();
+    }
+
+    fn refresh_window(&mut self) {
+        // Bitrate is left unknown: inventing one here would make the modelled window
+        // disagree with the real one for no gain, so the minutes cap governs.
+        self.state.timeshift = self.timeshift.map(|budget| {
+            budget.window(&Reading {
+                position_secs: self.state.position_secs,
+                live_secs: self.live_secs,
+                tuned_at_secs: self.tuned_at_secs,
+                bitrate_bps: 0,
+            })
+        });
+    }
+
+    /// The window the viewer can reach, when this stream is being buffered.
+    pub fn window(&self) -> Option<Window> {
+        self.state.timeshift
     }
 }
 
@@ -100,16 +202,28 @@ impl PlayerBackend for NullBackend {
             return Err(PlayerError::Command("empty URL".into()));
         }
         self.chapters.clear();
+        let position = options.start_at_secs.unwrap_or(0.0);
         self.state = PlayerState {
             status: PlayerStatus::Playing,
             title: options.title.clone(),
             is_live: options.is_live,
-            position_secs: options.start_at_secs.unwrap_or(0.0),
+            channel_id: options.playing.and_then(|p| p.channel_id),
+            item_kind: options.playing.map(|p| p.kind),
+            item_id: options.playing.map(|p| p.id),
+            position_secs: position,
             duration_secs: if options.is_live { 0.0 } else { 5400.0 },
             volume: self.state.volume,
             muted: self.state.muted,
             ..Default::default()
         };
+        self.timeshift = options
+            .timeshift
+            .as_ref()
+            .filter(|_| options.is_live)
+            .map(|ts| ts.budget);
+        self.live_secs = position;
+        self.tuned_at_secs = position;
+        self.refresh_window();
         Ok(())
     }
 
@@ -120,6 +234,9 @@ impl PlayerBackend for NullBackend {
             muted,
             ..Default::default()
         };
+        self.timeshift = None;
+        self.live_secs = 0.0;
+        self.tuned_at_secs = 0.0;
         Ok(())
     }
 
@@ -144,6 +261,14 @@ impl PlayerBackend for NullBackend {
         } else {
             position_secs
         };
+        // A buffered live stream is bounded by what is held, not by a duration: there
+        // is nothing past the live edge to seek to, and nothing before the oldest
+        // retained moment either.
+        if let Some(window) = self.state.timeshift {
+            self.state.position_secs = window.clamp(target);
+            self.refresh_window();
+            return Ok(());
+        }
         let max = if self.state.duration_secs > 0.0 {
             self.state.duration_secs
         } else {
@@ -334,6 +459,143 @@ mod tests {
         b.load("https://example.com/s.ts", &live()).unwrap();
         b.seek(30.0, true).unwrap();
         assert_eq!(b.state().position_secs, 30.0);
+    }
+
+    fn buffered_live() -> LoadOptions {
+        LoadOptions {
+            timeshift: Some(TimeshiftCache {
+                budget: Budget::default(),
+                dir: PathBuf::from("/tmp/aurora-timeshift"),
+            }),
+            ..live()
+        }
+    }
+
+    fn option<'a>(opts: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        opts.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn a_buffered_live_stream_asks_mpv_to_keep_history_on_disk() {
+        let opts = buffered_live().mpv_options();
+        assert_eq!(option(&opts, "cache-on-disk"), Some("yes"));
+        assert_eq!(
+            option(&opts, "demuxer-max-back-bytes"),
+            Some(Budget::default().bytes.to_string().as_str())
+        );
+        assert_eq!(
+            option(&opts, "force-seekable"),
+            Some("yes"),
+            "an HTTP live stream calls itself unseekable; the cache is what makes \
+             rewinding possible"
+        );
+        assert!(option(&opts, "cache-dir").is_some_and(|d| d.contains("aurora-timeshift")));
+    }
+
+    #[test]
+    fn turning_the_buffer_off_is_said_out_loud_rather_than_left_unsaid() {
+        // These are properties of one long-lived mpv handle. If the off state emitted
+        // nothing, a channel tuned after the buffer was switched off would inherit it
+        // and go on filling the disk until the app restarted.
+        let opts = live().mpv_options();
+        assert_eq!(option(&opts, "cache-on-disk"), Some("no"));
+        assert_eq!(option(&opts, "demuxer-max-back-bytes"), Some("0"));
+        assert_eq!(option(&opts, "force-seekable"), Some("no"));
+    }
+
+    #[test]
+    fn a_film_is_never_given_a_timeshift_buffer() {
+        // Nothing needs buffering to rewind a file, and a 10 GB back-buffer on a movie
+        // would be 10 GB of disk for a seek the server already supports.
+        let vod = LoadOptions {
+            is_live: false,
+            ..buffered_live()
+        };
+        assert_eq!(option(&vod.mpv_options(), "cache-on-disk"), Some("no"));
+    }
+
+    #[test]
+    fn pausing_a_buffered_live_stream_is_what_puts_the_viewer_behind_live() {
+        let mut b = NullBackend::default();
+        b.load("https://example.com/s.ts", &buffered_live())
+            .unwrap();
+
+        // Two minutes of watching: still live, with two minutes to rewind into.
+        b.advance_live(120.0);
+        let w = b.window().expect("a buffered stream has a window");
+        assert!(w.is_at_live());
+        assert_eq!(w.rewindable_secs(), 120.0);
+
+        // Answer the door for five minutes.
+        b.set_paused(true).unwrap();
+        b.advance_live(300.0);
+        let w = b.window().unwrap();
+        assert_eq!(
+            w.delay_secs(),
+            300.0,
+            "five minutes behind, where we left off"
+        );
+        assert_eq!(b.state().position_secs, 120.0, "the playhead stayed put");
+        assert!(!w.is_at_live());
+
+        // Resuming keeps that delay: this is watching from the buffer now.
+        b.set_paused(false).unwrap();
+        b.advance_live(60.0);
+        assert_eq!(b.window().unwrap().delay_secs(), 300.0);
+    }
+
+    #[test]
+    fn rewinding_stops_at_the_oldest_buffered_moment_and_never_past_live() {
+        let mut b = NullBackend::default();
+        b.load("https://example.com/s.ts", &buffered_live())
+            .unwrap();
+        b.advance_live(600.0);
+
+        b.seek(-9_999.0, true).unwrap();
+        let w = b.window().unwrap();
+        assert_eq!(b.state().position_secs, w.start_secs);
+        assert_eq!(w.start_secs, 0.0, "the tune is the oldest thing there is");
+
+        b.seek(9_999.0, true).unwrap();
+        assert_eq!(
+            b.state().position_secs,
+            600.0,
+            "fast-forwarding lands on live, not beyond it"
+        );
+        assert!(b.window().unwrap().is_at_live());
+    }
+
+    #[test]
+    fn the_window_never_offers_more_rewind_than_the_channel_has_been_on() {
+        let mut b = NullBackend::default();
+        b.load("https://example.com/s.ts", &buffered_live())
+            .unwrap();
+        b.advance_live(20.0);
+        // The budget allows half an hour. Twenty seconds in, twenty seconds exist.
+        assert_eq!(b.window().unwrap().span_secs(), 20.0);
+    }
+
+    #[test]
+    fn a_live_stream_nobody_asked_to_buffer_has_no_window() {
+        let mut b = NullBackend::default();
+        b.load("https://example.com/s.ts", &live()).unwrap();
+        assert!(b.window().is_none());
+        assert!(b.state().timeshift.is_none());
+    }
+
+    #[test]
+    fn stopping_forgets_the_buffer() {
+        let mut b = NullBackend::default();
+        b.load("https://example.com/s.ts", &buffered_live())
+            .unwrap();
+        b.advance_live(60.0);
+        b.stop().unwrap();
+        assert!(b.window().is_none());
+
+        // …and a film loaded next does not inherit one.
+        b.load("https://example.com/m.mkv", &LoadOptions::default())
+            .unwrap();
+        assert!(b.state().timeshift.is_none());
     }
 
     #[test]

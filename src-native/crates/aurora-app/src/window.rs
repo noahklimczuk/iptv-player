@@ -3,7 +3,8 @@
 use aurora_core::catchup;
 use aurora_db::repo::channels;
 use aurora_db::rusqlite::Connection;
-use aurora_player::backend::LoadOptions;
+use aurora_player::backend::{LoadOptions, Playing};
+use aurora_player::state::MediaKind;
 
 use crate::error::{AppError, Result};
 
@@ -100,6 +101,11 @@ pub fn resolve_catchup(
             is_live: false,
             cache_secs: cache_secs_for(false),
             title: Some(ch.name),
+            playing: Some(Playing {
+                kind: MediaKind::Live,
+                id: channel_id,
+                channel_id: Some(channel_id),
+            }),
             ..Default::default()
         },
     ))
@@ -127,6 +133,11 @@ pub fn live_sources(
             is_live: true,
             cache_secs: cache_secs_for(true),
             title: Some(ch.name),
+            playing: Some(Playing {
+                kind: MediaKind::Live,
+                id: channel_id,
+                channel_id: Some(channel_id),
+            }),
             ..Default::default()
         },
     ))
@@ -164,6 +175,11 @@ pub fn resolve_playback(
                     cache_secs: cache_secs_for(false),
                     start_at_secs: position_secs,
                     title: Some(title),
+                    playing: Some(Playing {
+                        kind: MediaKind::Movie,
+                        id,
+                        channel_id: None,
+                    }),
                     ..Default::default()
                 },
             ))
@@ -181,6 +197,11 @@ pub fn resolve_playback(
                     cache_secs: cache_secs_for(false),
                     start_at_secs: position_secs,
                     title,
+                    playing: Some(Playing {
+                        kind: MediaKind::Episode,
+                        id,
+                        channel_id: None,
+                    }),
                     ..Default::default()
                 },
             ))

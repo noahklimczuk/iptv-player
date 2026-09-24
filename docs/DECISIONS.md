@@ -183,27 +183,61 @@ Rollovers within a single tune are bounded. A provider in a total outage would o
 spin through every URL it owns for ever, and a stopped picture with an error on it is
 more honest than an endless reconnect.
 
-## D17 — The updater checks; it does not install
+## D17 — The updater installs, and checks the file against a published digest first
 
 Aurora installs from a GitHub release rather than a store, so nothing would otherwise
 tell a viewer that the bug they hit was fixed a week ago. The app asks GitHub for the
 newest published release, compares it against `env!("CARGO_PKG_VERSION")`, and says so
 in Settings.
 
-It stops there. Tauri's updater plugin would download, verify and install — and it
-refuses to run without a signing keypair, whose private half has to be a repository
-secret. Until that key exists, an "auto-updater" would be downloading an executable on
-the strength of an HTTP response and running it, which is a materially different thing
-to offer than a link to a page someone can read first.
+It used to stop there, and the reason it stopped was specific: an updater that downloads
+an executable and runs it "on the strength of an HTTP response" is a materially
+different offer from a link to a page someone can read first. That argument was right
+about the risk and wrong about the options, because it assumed the only way to verify a
+download is a code-signing key this project does not have.
 
-Two consequences shape the code. The comparison uses `aurora_core::version` rather than
-string ordering, because `"0.9.0" > "0.10.0"` is true of strings and would stop the
-updater offering anything ever again past `.9`. And the page it opens is a compile-time
-constant, not the `html_url` the API returned: a command that opens whatever URL it is
-handed is a way to make the app launch something else.
+GitHub publishes a SHA-256 for every release asset, in the same authenticated API
+response that names the version and the download URL. So the installer is fetched to
+`<data>/updates/`, hashed as it is written, and only renamed into place if the length
+and the digest both match what that response said. A mismatch deletes the file rather
+than keeping it, because the thing being described is about to be executed. A release
+that publishes no digest is not downloaded at all — "no checksum" is a refusal, not a
+step to skip.
 
-The check is cached for six hours and stored, so opening Settings costs no network and a
-machine that is offline does not retry in a loop. A failed check leaves the last good
+Three more rules, each of which is a thing that could otherwise go wrong:
+
+- **The URL is never handed in.** `updates.download` takes no arguments; the host uses
+  the URL from the release it just checked, and that URL has to start with
+  `https://github.com/noahklimczuk/iptv-player/releases/download/`. The trailing slash
+  is load-bearing — without it, `github.com.example.invalid` and
+  `github.com@example.invalid` both pass. Same reasoning as `updates.openReleases`
+  taking no URL, one step further along.
+- **The filename is built from the version**, which is parsed as `major.minor.patch`,
+  so nothing the network said reaches the filesystem as a name.
+- **Nothing is silent.** The viewer presses Download, watches a bar, and presses
+  Install and restart. The installer runs visibly rather than with `/S`, because these
+  builds are unsigned and Windows is going to say something about that — which the
+  person doing the installing should see.
+
+Two refusals worth naming. A **portable** copy is not offered the button at all: the
+NSIS installer would install into Program Files and leave the folder actually running
+untouched, which is how someone ends up with two copies and updates neither. And an
+install **while a recording is in progress** is postponed with a message saying so: a
+recording cannot be taken again later, and an update can.
+
+What this still is not: **signature verification**, which README §18 asks for. The
+digest and the file both come from GitHub, so this defends against a corrupted or
+substituted download, not against whoever can publish a release. Closing that properly
+means a minisign keypair — the private half a repository secret the release workflow
+signs with, the public half compiled into the app — which is a key somebody has to
+create and keep, and so is a decision rather than a commit. Until then the app says
+plainly, on the button, that what it checked was a checksum.
+
+Two consequences shape the rest of the code. The version comparison uses
+`aurora_core::version` rather than string ordering, because `"0.9.0" > "0.10.0"` is true
+of strings and would stop the updater offering anything ever again past `.9`. And the
+check is cached for six hours and stored, so opening Settings costs no network and a
+machine that is offline does not retry in a loop; a failed check leaves the last good
 answer in place rather than blanking the panel.
 
 ## D18 — The version is derived from the commits, not declared
@@ -260,10 +294,79 @@ is that the key is absent from the source, rotatable by changing one secret, and
 never typed by a viewer. What it does not buy is secrecy from anyone holding the
 installer.
 
+## D20 — A refresh downloads before it takes the database
+
+`sync::run` is two halves that cannot be confused: `fetch` takes an `HttpClient` and no
+`Connection`, `apply` takes a `Connection` and no `HttpClient`.
+
+The problem it solves was a correctness one. A refresh downloads a playlist and a guide
+that can run to tens of megabytes, and it used to do that holding the single writer
+connection. The DVR scheduler takes the same lock every ten seconds to decide whether a
+recording is due, so a recording that fell inside a long refresh did not start until the
+refresh ended — and on a slow provider that is minutes.
+
+The fix could have been a comment and a habit. Making it a type means a future edit that
+reintroduces it has to change a signature first, which is the only kind of rule that
+survives.
+
+Two consequences worth stating. The whole guide is held in memory between the halves,
+which is what `import_epg` already did for one source at a time and is now true of all
+of them at once — acceptable for the one or two guide URLs a provider publishes, and the
+thing to revisit if that ever stops being true. And a failed download now writes nothing
+at all, where before it could abort partway through the writes; that is strictly better,
+but it is a change in what a failure leaves behind rather than a neutral refactor.
+
+`apply` still holds the lock for its duration. That is deliberate: it is local, bounded
+work, and an import visible halfway through would show a library whose search index had
+been cleared and not yet rebuilt.
+
+## D21 — Timeshift is mpv's own cache, not a buffer of our own
+
+**Pause live TV keeps the stream in mpv's on-disk demuxer cache. Aurora writes no ring
+buffer and opens no second connection.**
+
+The obvious build is the one README §7.6 describes literally: a ring buffer on disk that
+something fills from the provider while the player reads from behind it. That something
+would need its own HTTP connection to the stream — and a connection is exactly what an
+IPTV subscription rations. The DVR already refuses to start a recording that would exceed
+`max_connections` (§7.7), because exceeding it does not queue, it gets the line cut. A
+buffer writer of our own would spend a second connection on the channel already playing,
+so watching one channel with pause available could cost what a two-tuner subscription
+sells as its whole capacity.
+
+That turned out to understate it. The first real subscription this was run against
+reports `max_connections: 1` (docs/ROADMAP.md, "What a real subscription showed"), so a
+second connection would not have been expensive — it would have made pausing live TV
+mutually exclusive with watching it.
+
+mpv has the same buffer already, on the connection it is playing: `--cache-on-disk` with
+`--demuxer-max-back-bytes` keeps the past on disk, and `--force-seekable` lets it be
+seeked into. One connection, no second copy of the bytes, and nothing to keep in step.
+
+What Aurora owns is the arithmetic. mpv enforces a cap in *bytes*, and a person thinks in
+*minutes* — a gigabyte is hours of a radio stream, eighteen minutes of an 8 Mb/s feed and
+seven of a 20 Mb/s one. So the budget carries both, `aurora_core::timeshift` decides which
+one binds at the observed bitrate, and the window it reports is bounded by a third thing
+that neither cap describes: how long the channel has actually been on. Ten seconds after a
+zap there is ten seconds of rewind, whatever the settings say. That arithmetic is pure and
+has tests; the OSD's scrub bar is drawn from it, and a bar that offered half an hour of
+rewind into a seven-minute buffer would be worse than no bar at all.
+
+Consequences worth stating plainly. The buffer is per playing stream, so a zap starts it
+over — nothing of the previous channel is reachable, which is what a single-connection
+buffer means. The options are properties of one long-lived mpv handle rather than
+arguments to one file, so turning the buffer off has to be *said* on the next load
+(`demuxer-max-back-bytes=0`) and not merely left unsaid, or a channel tuned afterwards
+would inherit it. Changing the size applies at the next tune, because re-loading to resize
+a cache would black out whatever is on. And none of it has been run: like everything
+downstream of the Phase 0 spike, the mpv side compiles for Windows and has never met a
+real stream, so `aurora_core::timeshift`'s bound on the window is the honest one and
+mpv's own `demuxer-cache-state` is read only as a refinement where it answers.
+
 ## D13 — Deferred from this pass
 
 Not yet built, and not silently dropped (README working-agreement rule 4). Tracked in
 `docs/ROADMAP.md` against their phases: Stalker portals (§4.3, marked Optional), downloads (§8.6,
-Optional), timeshift (§7.6, Phase 8 — recording and catch-up are built), casting,
-voice search, gamepad (§14.3), and a local artwork cache (§12 — enrichment stores absolute TMDB
-image URLs, so every poster is currently fetched from the network on each paint).
+Optional), casting, voice search, gamepad (§14.3), and a local artwork cache (§12 —
+enrichment stores absolute TMDB image URLs, so every poster is currently fetched from the
+network on each paint).

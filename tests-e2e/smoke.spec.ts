@@ -175,7 +175,7 @@ test('theme and TV density switch at runtime', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/13-light-theme.png` });
 
   await page.getByRole('button', { name: 'dark' }).click();
-  await page.getByRole('button', { name: 'TV' }).click();
+  await page.getByRole('button', { name: 'TV', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-density', 'tv');
   await page.goto('/#/live');
   await settle(page, 600);

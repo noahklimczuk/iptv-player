@@ -10,7 +10,7 @@ import type {
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
-  ProviderCredentials,
+  ProviderCredentials, TimeshiftSettings, TimeshiftWindow, UpdateDownload,
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
@@ -25,6 +25,21 @@ import * as fx from './fixtures';
 /** Edits made in a browser session, so the form round-trips without a host. */
 const mockProviderEdits = new Map<number, { url: string; username: string }>();
 
+/** The installer download, modelled so the panel can be driven without a host. */
+let mockDownload: UpdateDownload = {
+  status: 'idle', version: null, receivedBytes: 0, totalBytes: null, message: null,
+};
+const downloadListeners = new Set<(d: UpdateDownload) => void>();
+export function onUpdateDownload(fn: (d: UpdateDownload) => void) {
+  downloadListeners.add(fn);
+  return () => downloadListeners.delete(fn);
+}
+function setDownload(patch: Partial<UpdateDownload>): UpdateDownload {
+  mockDownload = { ...mockDownload, ...patch };
+  downloadListeners.forEach((l) => l(mockDownload));
+  return mockDownload;
+}
+
 const mockUpdates: UpdateStatus = {
   current: '0.1.0',
   latest: {
@@ -34,12 +49,20 @@ const mockUpdates: UpdateStatus = {
     pageUrl: 'https://github.com/noahklimczuk/iptv-player/releases/tag/v0.1.1',
     installerUrl: 'https://github.com/noahklimczuk/iptv-player/releases/download/v0.1.1/Aurora-TV-0.1.1-x64-setup.exe',
     installerBytes: 38_767_916,
+    installerSha256: 'fc27bb794fb5584255a4f18d06fa1fcc09dd483d4c334e2f071970de3ece99bb',
     publishedAt: '2026-09-23T03:13:28Z',
   },
   available: true,
   automatic: true,
   lastCheckedAt: null,
   releasesUrl: 'https://github.com/noahklimczuk/iptv-player/releases/latest',
+  get download() { return mockDownload; },
+  // The browser preview is not Windows, but the panel's install path is the
+  // interesting one to be able to see and to test. `?portable` stands in for the
+  // build that cannot install over itself, the way `?setup` forces the wizard.
+  get canInstall() {
+    return !new URLSearchParams(window.location.search).has('portable');
+  },
 };
 
 const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'movie:14']);
@@ -166,12 +189,57 @@ let player: PlayerState = {
     { id: 2, kind: 'subtitle', title: 'English SDH', language: 'eng', codec: 'ass', channels: null, default: false },
   ],
   activeAudioTrack: 1, activeSubtitleTrack: null,
-  aspect: 'auto', error: null,
+  aspect: 'auto', timeshift: null, error: null,
   stats: {
     resolution: '1920x1080', videoCodec: 'h264', audioCodec: 'eac3', fps: 50,
     bitrateKbps: 6200, droppedFrames: 0, bufferSecs: 8.4, hwDecoder: 'd3d11va',
   },
 };
+
+const DEFAULT_TIMESHIFT_FOLDER = 'C:\\Users\\Me\\AppData\\Local\\Aurora TV\\timeshift';
+
+/** The timeshift buffer, with the host's own defaults (README §7.6). */
+const mockTimeshift: TimeshiftSettings = {
+  enabled: true,
+  bytes: 1024 * 1024 * 1024,
+  secs: 30 * 60,
+  folder: DEFAULT_TIMESHIFT_FOLDER,
+  bytesOnDisk: 0,
+};
+
+/**
+ * The settings plus what the buffer would be costing, so the panel shows a number that
+ * moves rather than a constant zero.
+ */
+function mockTimeshiftSettings(): TimeshiftSettings {
+  const held = Math.max(0, liveEdgeSecs - tunedAtSecs);
+  return {
+    ...mockTimeshift,
+    bytesOnDisk: mockTimeshift.enabled
+      ? Math.min(mockTimeshift.bytes, Math.round(held * MOCK_BYTES_PER_SEC))
+      : 0,
+  };
+}
+
+/** Roughly what an HD stream costs per second, for a plausible buffer size on screen. */
+const MOCK_BYTES_PER_SEC = 1024 * 1024;
+
+/** The live edge of the modelled stream, and the moment the channel was tuned. */
+let liveEdgeSecs = 0;
+let tunedAtSecs = 0;
+
+/**
+ * The window the viewer can reach, or null when nothing is being kept.
+ *
+ * The minutes cap and the tune are the bounds; the byte cap needs a bitrate, and the
+ * host treats an unknown one as a reason not to second-guess the player rather than as
+ * an empty buffer — so this does the same.
+ */
+function windowFor(positionSecs: number): TimeshiftWindow | null {
+  if (!mockTimeshift.enabled) return null;
+  const start = Math.max(tunedAtSecs, liveEdgeSecs - mockTimeshift.secs);
+  return { startSecs: Math.min(start, positionSecs), positionSecs, liveSecs: liveEdgeSecs };
+}
 
 const listeners = new Set<(s: PlayerState) => void>();
 
@@ -184,6 +252,16 @@ let ticker: ReturnType<typeof setInterval> | undefined;
 function ensureTicker() {
   if (ticker) return;
   ticker = setInterval(() => {
+    // A buffered live stream advances its live edge even while paused — that is what
+    // being able to pause live TV means, and what puts the viewer behind it.
+    if (player.isLive && player.timeshift) {
+      liveEdgeSecs += 1;
+      const next = player.status === 'playing'
+        ? Math.min(player.positionSecs + 1, liveEdgeSecs)
+        : player.positionSecs;
+      setPlayer({ positionSecs: next, timeshift: windowFor(next) });
+      return;
+    }
     if (player.status !== 'playing') return;
     const next = player.positionSecs + 1;
     if (!player.isLive && player.durationSecs > 0 && next >= player.durationSecs) {
@@ -1061,6 +1139,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     const programme = programmes(ch, start - 1, stop + 1).find((p) => p.start === start);
     return setPlayer({
       status: 'playing',
+      // Catch-up is a recording served back, so there is nothing to buffer.
+      timeshift: null,
       // Catch-up is a recording served back: seekable, with a real duration, so the
       // OSD shows a scrubber rather than a live edge.
       isLive: false,
@@ -1079,10 +1159,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (kind === 'live') {
       const ch = fx.channels.find((c) => c.id === id);
       const nn = ch ? nowNext(ch, Math.floor(Date.now() / 1000)) : { now: null, next: null };
+      // A zap starts the buffer over: nothing of the previous channel is reachable.
+      liveEdgeSecs = 0;
+      tunedAtSecs = 0;
       return setPlayer({
         status: 'playing', isLive: true, channelId: id, itemKind: 'live', itemId: id,
         title: ch?.name ?? null, subtitle: nn.now?.title ?? null,
-        positionSecs: 0, durationSecs: 0, error: null,
+        positionSecs: 0, durationSecs: 0, error: null, timeshift: windowFor(0),
       });
     }
     const item = kind === 'movie'
@@ -1092,23 +1175,36 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     const name = item && 'title' in item ? (item.title ?? 'Untitled') : 'Untitled';
     return setPlayer({
       status: 'playing', isLive: false, channelId: null, itemKind: kind, itemId: id,
-      title: name, subtitle: null,
+      title: name, subtitle: null, timeshift: null,
       positionSecs: positionSecs ?? 0, durationSecs: duration, error: null,
     });
   },
   'player.pause': () => setPlayer({ status: 'paused' }),
   'player.resume': () => setPlayer({ status: 'playing' }),
-  'player.stop': () => setPlayer({ status: 'idle', title: null, itemId: null, channelId: null }),
-  'player.seek': ({ positionSecs, relative }) =>
-    setPlayer({
-      positionSecs: Math.max(
-        0,
-        Math.min(
-          player.durationSecs || Infinity,
-          relative ? player.positionSecs + positionSecs : positionSecs,
-        ),
-      ),
-    }),
+  'player.stop': () => setPlayer({
+    status: 'idle', title: null, itemId: null, channelId: null, timeshift: null,
+  }),
+  'player.seek': ({ positionSecs, relative }) => {
+    const target = relative ? player.positionSecs + positionSecs : positionSecs;
+    // A buffered live stream is bounded by what is held, not by a duration: nothing
+    // past the live edge exists yet, and nothing before the oldest moment kept.
+    if (player.timeshift) {
+      const { startSecs, liveSecs } = player.timeshift;
+      const next = Math.max(startSecs, Math.min(liveSecs, target));
+      return setPlayer({ positionSecs: next, timeshift: windowFor(next) });
+    }
+    return setPlayer({
+      positionSecs: Math.max(0, Math.min(player.durationSecs || Infinity, target)),
+    });
+  },
+  'player.backToLive': () => {
+    if (!player.timeshift) return setPlayer({ status: 'playing' });
+    return setPlayer({
+      status: 'playing',
+      positionSecs: liveEdgeSecs,
+      timeshift: windowFor(liveEdgeSecs),
+    });
+  },
   'player.setVolume': ({ volume }) => setPlayer({ volume: Math.max(0, Math.min(200, volume)) }),
   'player.setMuted': ({ muted }) => setPlayer({ muted }),
   'player.setSpeed': ({ speed }) => setPlayer({ speed }),
@@ -1289,6 +1385,30 @@ const handlers: { [K in CommandName]: Handler<K> } = {
 
   /* ── Metadata enrichment ────────────────────────────────────────────────── */
 
+  'timeshift.settings': (): TimeshiftSettings => mockTimeshiftSettings(),
+  'timeshift.setSettings': ({ enabled, bytes, secs, folder }): TimeshiftSettings => {
+    if (enabled !== undefined) mockTimeshift.enabled = enabled;
+    // The same range the host holds these to, so the panel behaves identically here.
+    if (bytes !== undefined) {
+      mockTimeshift.bytes = Math.max(64 * 1024 * 1024, Math.min(10 * 1024 * 1024 * 1024, bytes));
+    }
+    if (secs !== undefined) mockTimeshift.secs = Math.max(60, Math.min(6 * 60 * 60, secs));
+    if (folder !== undefined) {
+      mockTimeshift.folder = folder.trim() === '' ? DEFAULT_TIMESHIFT_FOLDER : folder;
+    }
+    // Turning it off takes effect on what is playing, or the OSD would go on offering a
+    // scrub bar over a buffer nobody is filling.
+    setPlayer({ timeshift: player.isLive ? windowFor(player.positionSecs) : null });
+    return mockTimeshiftSettings();
+  },
+  /** Nothing real is deleted; forgetting the tune is what empties a modelled buffer. */
+  'timeshift.clear': (): number => {
+    const freed = Math.round((liveEdgeSecs - tunedAtSecs) * MOCK_BYTES_PER_SEC);
+    tunedAtSecs = liveEdgeSecs;
+    setPlayer({ timeshift: player.isLive ? windowFor(player.positionSecs) : null });
+    return freed;
+  },
+
   'metadata.status': (): MetadataStatus => ({
     hasKey: metadataKey !== null,
     keyIsBuiltIn: false,
@@ -1390,6 +1510,37 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'updates.openReleases': () => {
     // No host to ask, and a browser tab opening itself during a Playwright run would
     // be a nuisance rather than a feature.
+  },
+
+  'updates.download': (): UpdateDownload => {
+    if (mockDownload.status === 'downloading') return mockDownload;
+    const total = mockUpdates.latest?.installerBytes ?? 38_767_916;
+    const version = mockUpdates.latest?.version ?? null;
+    setDownload({ status: 'downloading', version, receivedBytes: 0, totalBytes: total, message: null });
+
+    // A real download reports itself as it goes; this fills the same bar in about a
+    // second so the panel can be seen and tested without forty megabytes.
+    const step = Math.ceil(total / 8);
+    const timer = setInterval(() => {
+      const received = Math.min(total, mockDownload.receivedBytes + step);
+      if (received >= total) {
+        clearInterval(timer);
+        setDownload({ status: 'ready', receivedBytes: total, totalBytes: total });
+        return;
+      }
+      setDownload({ receivedBytes: received });
+    }, 120);
+    return mockDownload;
+  },
+
+  'updates.install': () => {
+    if (mockDownload.status !== 'ready') {
+      throw new Error('There is no verified update downloaded yet');
+    }
+    // On Windows the app exits here and the installer takes over. A browser has no
+    // host to hand it to, and saying so through the panel's error path is more honest
+    // than pretending the download state changed.
+    throw new Error('The installer would run here, and Aurora would close for it.');
   },
 
   'providers.list': () => fx.providers,

@@ -8,6 +8,7 @@ import type {
 } from '@shared/ipc';
 import {
   invokeMock,
+  onUpdateDownload as onMockUpdateDownload,
   onDvrTick as onMockDvrTick,
   onArtworkProgress as onMockArtworkProgress,
   onMetadataProgress as onMockMetadataProgress,
@@ -51,6 +52,26 @@ export function onPlayerState(fn: (s: PlayerState) => void): () => void {
   };
   let dispose: (() => void) | undefined;
   void w.__TAURI__?.event?.listen('player.state', (e) => fn(e.payload)).then((d) => {
+    dispose = d;
+  });
+  return () => dispose?.();
+}
+
+/** How far the update installer has got (docs/DECISIONS.md D17). */
+export function onUpdateDownload(fn: (d: Events['update.download']) => void): () => void {
+  if (!isNativeHost()) return onMockUpdateDownload(fn);
+  const w = window as unknown as {
+    __TAURI__?: {
+      event?: {
+        listen: (
+          e: string,
+          cb: (p: { payload: Events['update.download'] }) => void,
+        ) => Promise<() => void>;
+      };
+    };
+  };
+  let dispose: (() => void) | undefined;
+  void w.__TAURI__?.event?.listen('update.download', (e) => fn(e.payload)).then((d) => {
     dispose = d;
   });
   return () => dispose?.();

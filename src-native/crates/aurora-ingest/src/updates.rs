@@ -1,19 +1,23 @@
-//! Asking GitHub whether there is a newer build than the one running.
+//! Asking GitHub whether there is a newer build than the one running, and fetching it.
 //!
 //! The app ships as an installer from a release, not a store, so nothing tells a
-//! viewer that a fix exists — this does. It only *checks*: it reports what is
-//! published and leaves installing to the person, because downloading and executing
-//! an installer on the strength of an HTTP response is a different kind of decision
-//! and wants signature verification behind it (docs/DECISIONS.md D17).
+//! viewer that a fix exists — this does, and then downloads it. What makes the second
+//! half defensible is that GitHub publishes a SHA-256 for every release asset in the
+//! same authenticated API response that names the version: the installer is checked
+//! against that digest before anything is allowed to run it (docs/DECISIONS.md D17).
 //!
 //! The comparison is `aurora_core::version`, deliberately: a string compare would
 //! decide 0.9.0 is newer than 0.10.0 and then never offer another update.
 
+use std::fs::{self, File};
+use std::io::{BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aurora_core::neterr::{ErrorAction, ErrorCode, NetFailure};
 use aurora_core::version::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::http::HttpClient;
 
@@ -56,6 +60,10 @@ pub struct Release {
     /// The Windows installer, when the release carries one.
     pub installer_url: Option<String>,
     pub installer_bytes: Option<u64>,
+    /// The installer's SHA-256, lowercase hex, as GitHub published it beside the
+    /// asset. `None` on a release old enough to predate the API field — which is a
+    /// reason to refuse to install it, not a reason to skip the check.
+    pub installer_sha256: Option<String>,
     pub published_at: Option<String>,
 }
 
@@ -93,6 +101,10 @@ struct ApiAsset {
     browser_download_url: String,
     #[serde(default)]
     size: Option<u64>,
+    /// `"sha256:<hex>"`. GitHub added this to the assets API; an older release will
+    /// not have it.
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +182,9 @@ impl Updates {
             notes: release.body.unwrap_or_default(),
             installer_url: installer.map(|a| a.browser_download_url.clone()),
             installer_bytes: installer.and_then(|a| a.size),
+            installer_sha256: installer
+                .and_then(|a| a.digest.as_deref())
+                .and_then(parse_sha256),
             published_at: release.published_at,
         }))
     }
@@ -183,6 +198,191 @@ impl Updates {
             latest,
             available,
         })
+    }
+}
+
+/// Read GitHub's `"sha256:<hex>"` asset digest.
+///
+/// Anything else — another algorithm, a truncated hex string — reads as absent rather
+/// than as something to compare against, because a digest that is not a SHA-256 cannot
+/// be checked and pretending otherwise is worse than admitting it.
+fn parse_sha256(digest: &str) -> Option<String> {
+    let hex = digest.strip_prefix("sha256:")?;
+    let ok = hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit());
+    ok.then(|| hex.to_ascii_lowercase())
+}
+
+/// A ceiling on an installer, so a wrong URL cannot fill the disk.
+///
+/// The real one is around 40 MB; this is an order of magnitude of headroom and still
+/// far below anything that would be a problem.
+pub const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Whether a URL is an asset of this repository's own releases.
+///
+/// The URL comes from GitHub's API rather than from the UI, but it is about to be
+/// written to disk and executed, so it is checked against the one shape it may have.
+/// The trailing slash in the prefix is load-bearing: without it
+/// `https://github.com.example.invalid/...` and `https://github.com@example.invalid/...`
+/// both pass.
+pub fn is_release_asset_url(url: &str, repo: &str) -> bool {
+    let prefix = format!("https://github.com/{repo}/releases/download/");
+    url.starts_with(&prefix) && !url.contains("..")
+}
+
+/// What the release said the installer should be.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Expected {
+    pub bytes: Option<u64>,
+    /// Lowercase hex SHA-256. Without one, [`download_installer`] refuses.
+    pub sha256: Option<String>,
+}
+
+/// A verified installer on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Downloaded {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// Fetch an installer and prove it is the one the release describes.
+///
+/// Written to a `.part` file and only renamed into place once the length and the digest
+/// both match, so a half-finished or wrong download is never a file something else
+/// could decide to run. A failed check leaves nothing behind at all.
+///
+/// `progress` is called on every chunk with the bytes so far and the expected total;
+/// throttling that into something a progress bar can use is the caller's job.
+pub fn download_installer(
+    http: &HttpClient,
+    url: &str,
+    dest: &Path,
+    expected: &Expected,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<Downloaded, NetFailure> {
+    let Some(want_sha) = expected.sha256.as_ref() else {
+        return Err(refuse(
+            "This release does not publish a checksum",
+            "Aurora will not download and run an installer it cannot verify. The \
+             release page in a browser is the way to install this one.",
+        ));
+    };
+    if !is_release_asset_url(url, DEFAULT_REPO) {
+        return Err(refuse(
+            "That download is not from Aurora's releases",
+            "The update would have come from somewhere other than this project's own \
+             GitHub releases, so it was not fetched.",
+        ));
+    }
+    fetch_verified(http, url, dest, expected, want_sha, progress)
+}
+
+/// Fetch, hash and verify, with no opinion about where the URL came from.
+///
+/// Split out so the two refusals above are in one place and cannot be forgotten, and so
+/// the tests can drive this against a local server rather than against GitHub.
+fn fetch_verified(
+    http: &HttpClient,
+    url: &str,
+    dest: &Path,
+    expected: &Expected,
+    want_sha: &str,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<Downloaded, NetFailure> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| io_failure("create the download folder", &e))?;
+    }
+    let part = dest.with_extension("part");
+    let mut reader = http.fetch_reader(url)?;
+    let mut file =
+        BufWriter::new(File::create(&part).map_err(|e| io_failure("open the download file", &e))?);
+
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut total: u64 = 0;
+
+    loop {
+        let read = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                let _ = fs::remove_file(&part);
+                return Err(NetFailure::classify(&e.to_string()));
+            }
+        };
+        total += read as u64;
+        if total > MAX_INSTALLER_BYTES {
+            let _ = fs::remove_file(&part);
+            return Err(refuse(
+                "That download is implausibly large",
+                "It passed the size an Aurora installer could be, so it was stopped.",
+            ));
+        }
+        hasher.update(&buf[..read]);
+        if let Err(e) = file.write_all(&buf[..read]) {
+            let _ = fs::remove_file(&part);
+            return Err(io_failure("write the download", &e));
+        }
+        progress(total, expected.bytes);
+    }
+
+    if let Err(e) = file.flush() {
+        let _ = fs::remove_file(&part);
+        return Err(io_failure("finish writing the download", &e));
+    }
+    drop(file);
+
+    let sha: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
+    if let Some(want) = expected.bytes {
+        if want != total {
+            let _ = fs::remove_file(&part);
+            return Err(refuse(
+                "The update did not download completely",
+                &format!("Expected {want} bytes and got {total}."),
+            ));
+        }
+    }
+    if !sha.eq_ignore_ascii_case(want_sha) {
+        let _ = fs::remove_file(&part);
+        return Err(refuse(
+            "The update failed its checksum",
+            "What arrived is not the file GitHub published for this release, so it was \
+             deleted rather than kept.",
+        ));
+    }
+
+    fs::rename(&part, dest).map_err(|e| io_failure("store the download", &e))?;
+    Ok(Downloaded {
+        path: dest.to_path_buf(),
+        bytes: total,
+        sha256: sha,
+    })
+}
+
+/// A refusal that retrying will not change.
+fn refuse(message: &str, cause: &str) -> NetFailure {
+    NetFailure {
+        code: ErrorCode::Unknown,
+        message: message.into(),
+        cause: cause.into(),
+        actions: vec![ErrorAction::ReportBroken],
+        retryable: false,
+    }
+}
+
+fn io_failure(what: &str, e: &std::io::Error) -> NetFailure {
+    NetFailure {
+        code: ErrorCode::Unknown,
+        message: format!("Couldn't {what}"),
+        cause: e.to_string(),
+        actions: vec![ErrorAction::Retry],
+        retryable: true,
     }
 }
 
@@ -260,6 +460,239 @@ mod tests {
       "browser_download_url": "https://github.com/owner/repo/releases/download/v0.2.0/setup.exe",
       "size": 38767916
     }"#;
+
+    fn tempdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aurora-upd-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// The installer URL of a real release, which is the only shape that may be fetched.
+    fn real_url() -> String {
+        format!("https://github.com/{DEFAULT_REPO}/releases/download/v0.5.0/Aurora-TV-0.5.0-x64-setup.exe")
+    }
+
+    #[test]
+    fn a_published_digest_is_carried_through_the_release() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let asset = format!(
+            r#"{{"name":"setup.exe",
+                 "browser_download_url":"https://github.com/owner/repo/releases/download/v1/s.exe",
+                 "size":42, "digest":"{digest}"}}"#
+        );
+        let server = TestServer::always(Reply::ok(release_json("v0.2.0", &asset).into_bytes()));
+        let release = updates(&server).latest().unwrap().unwrap();
+        assert_eq!(
+            release.installer_sha256.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+    }
+
+    #[test]
+    fn a_digest_that_is_not_a_sha256_reads_as_absent() {
+        // Better to say "no checksum" — which refuses the download — than to compare
+        // against something that cannot be a SHA-256.
+        assert_eq!(parse_sha256("sha256:abc"), None);
+        assert_eq!(parse_sha256("md5:{}"), None);
+        assert_eq!(
+            parse_sha256(&format!("sha256:{}", "A".repeat(64))),
+            Some("a".repeat(64))
+        );
+        assert_eq!(parse_sha256(&format!("sha256:{}", "z".repeat(64))), None);
+    }
+
+    #[test]
+    fn only_this_projects_release_assets_may_be_downloaded() {
+        assert!(is_release_asset_url(&real_url(), DEFAULT_REPO));
+
+        // A different repository, a different host, and the two lookalikes the
+        // trailing slash exists to stop.
+        for url in [
+            "https://github.com/someone/else/releases/download/v1/setup.exe",
+            "https://example.invalid/noahklimczuk/iptv-player/releases/download/v1/s.exe",
+            "https://github.com.example.invalid/noahklimczuk/iptv-player/releases/download/v1/s.exe",
+            "https://github.com@example.invalid/noahklimczuk/iptv-player/releases/download/v1/s.exe",
+            "http://github.com/noahklimczuk/iptv-player/releases/download/v1/s.exe",
+        ] {
+            assert!(!is_release_asset_url(url, DEFAULT_REPO), "{url} must be refused");
+        }
+    }
+
+    /// Drive the fetch half directly: the shipped entry point only accepts GitHub
+    /// release URLs, and a test server is not GitHub.
+    fn fetch(
+        server: &TestServer,
+        dest: &Path,
+        expected: &Expected,
+    ) -> Result<Downloaded, NetFailure> {
+        let sha = expected.sha256.clone().unwrap_or_default();
+        fetch_verified(
+            &client(),
+            &server.url("/setup.exe"),
+            dest,
+            expected,
+            &sha,
+            &mut |_, _| {},
+        )
+    }
+
+    #[test]
+    fn an_installer_is_kept_only_once_it_matches_what_was_published() {
+        let body = vec![7u8; 300_000]; // more than one chunk
+        let server = TestServer::always(Reply::ok(body.clone()));
+        let dir = tempdir("ok");
+        let dest = dir.join("setup.exe");
+
+        let mut seen: Vec<u64> = Vec::new();
+        let out = fetch_verified(
+            &client(),
+            &server.url("/setup.exe"),
+            &dest,
+            &Expected {
+                bytes: Some(body.len() as u64),
+                sha256: Some(sha256_of(&body)),
+            },
+            &sha256_of(&body),
+            &mut |done, total| {
+                assert_eq!(total, Some(body.len() as u64));
+                seen.push(done);
+            },
+        )
+        .expect("a matching download is kept");
+
+        assert_eq!(out.bytes, body.len() as u64);
+        assert_eq!(out.sha256, sha256_of(&body));
+        assert_eq!(fs::read(&dest).unwrap(), body, "byte for byte");
+        assert!(
+            !dest.with_extension("part").exists(),
+            "the part file is gone"
+        );
+        assert!(seen.len() > 1, "progress was reported as it went");
+        assert_eq!(seen.last().copied(), Some(body.len() as u64));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_download_that_fails_its_checksum_is_deleted_rather_than_kept() {
+        let body = vec![1u8; 50_000];
+        let server = TestServer::always(Reply::ok(body.clone()));
+        let dir = tempdir("badsha");
+        let dest = dir.join("setup.exe");
+
+        let err = fetch(
+            &server,
+            &dest,
+            &Expected {
+                bytes: Some(body.len() as u64),
+                // The right length, the wrong file: exactly the case a length check
+                // alone would wave through.
+                sha256: Some("c".repeat(64)),
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.message.contains("checksum"), "{}", err.message);
+        assert!(!dest.exists(), "nothing executable may be left behind");
+        assert!(!dest.with_extension("part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_download_of_the_wrong_length_is_refused_before_the_digest_is_blamed() {
+        let body = vec![2u8; 4_000];
+        let server = TestServer::always(Reply::ok(body.clone()));
+        let dir = tempdir("badlen");
+        let dest = dir.join("setup.exe");
+
+        let err = fetch(
+            &server,
+            &dest,
+            &Expected {
+                bytes: Some(9_999),
+                sha256: Some(sha256_of(&body)),
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.message.contains("completely"), "{}", err.message);
+        assert!(err.cause.contains("9999"), "{}", err.cause);
+        assert!(!dest.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_connection_cut_mid_download_leaves_nothing_to_run() {
+        // The recorder keeps a cut stream on purpose — a partial recording still
+        // plays. A partial installer is the opposite: it must not survive.
+        let server = TestServer::always(Reply::Truncated {
+            announced: 100_000,
+            send: vec![3u8; 40_000],
+        });
+        let dir = tempdir("cut");
+        let dest = dir.join("setup.exe");
+
+        let err = fetch(
+            &server,
+            &dest,
+            &Expected {
+                bytes: Some(100_000),
+                sha256: Some("d".repeat(64)),
+            },
+        )
+        .unwrap_err();
+
+        assert!(!err.message.is_empty());
+        assert!(!dest.exists(), "a truncated installer must not be kept");
+        assert!(!dest.with_extension("part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_release_without_a_checksum_is_not_downloaded_at_all() {
+        let dir = tempdir("nosha");
+        let err = download_installer(
+            &client(),
+            &real_url(),
+            &dir.join("setup.exe"),
+            &Expected {
+                bytes: Some(10),
+                sha256: None,
+            },
+            &mut |_, _| {},
+        )
+        .unwrap_err();
+        assert!(err.message.contains("checksum"), "{}", err.message);
+        assert!(!dir.join("setup.exe").exists());
+        assert!(!err.retryable, "retrying cannot make a checksum appear");
+    }
+
+    #[test]
+    fn a_download_from_anywhere_but_this_projects_releases_is_refused() {
+        let dir = tempdir("host");
+        let err = download_installer(
+            &client(),
+            "https://example.invalid/setup.exe",
+            &dir.join("setup.exe"),
+            &Expected {
+                bytes: Some(1),
+                sha256: Some("b".repeat(64)),
+            },
+            &mut |_, _| {},
+        )
+        .unwrap_err();
+        assert!(err.message.contains("not from Aurora"), "{}", err.message);
+    }
 
     #[test]
     fn a_first_run_is_always_due_a_check() {
