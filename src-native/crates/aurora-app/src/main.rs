@@ -2,7 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, library, metadata, now_unix, playlist, profiles, providers, services::Services,
+    commands, dvr, library, metadata, now_unix, playlist, profiles, providers,
+    services::Services,
+    supervise::{log_panics, supervised},
     timeshift, updates,
 };
 
@@ -45,6 +47,34 @@ const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
 /// opens it.
 const UPDATE_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Ask GitHub whether there is a newer build.
+///
+/// On its own thread and after a pause, because nothing about this is urgent and the
+/// first seconds after launch belong to getting a picture on screen.
+fn check_for_updates(app: &tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    let services = app.state::<Services>();
+
+    let (automatic, last) = {
+        let db = services.db.lock();
+        (updates::automatic(&db), updates::last_checked(&db))
+    };
+    if !automatic || !aurora_ingest::updates::due(last, now_unix()) {
+        return;
+    }
+
+    match updates::run(&services, now_unix(), false) {
+        Ok(check) if check.available => {
+            tracing::info!(current = %check.current, "a newer build is published");
+            let _ = app.emit("update.available", &check);
+        }
+        Ok(_) => tracing::debug!("this is the newest published build"),
+        // Never a dialog: failing to reach GitHub is not the viewer's problem and must
+        // not interrupt whatever they are watching.
+        Err(e) => tracing::info!("update check failed: {e}"),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -60,6 +90,9 @@ fn main() {
             };
 
             init_logging(&data_dir);
+            // After the subscriber exists, so the hook has somewhere to write. Before
+            // any thread is spawned, so none of them can panic unrecorded.
+            log_panics();
             tracing::info!(
                 "Aurora TV {} starting, data in {}",
                 env!("CARGO_PKG_VERSION"),
@@ -82,9 +115,11 @@ fn main() {
                 .name("aurora-player".into())
                 .spawn(move || loop {
                     std::thread::sleep(PLAYER_TICK);
-                    if let Some(state) = playback.tick(now_unix()) {
-                        let _ = player_handle.emit("player.state", &state);
-                    }
+                    supervised("player", || {
+                        if let Some(state) = playback.tick(now_unix()) {
+                            let _ = player_handle.emit("player.state", &state);
+                        }
+                    });
                 })
                 .expect("spawning the player thread");
 
@@ -95,14 +130,16 @@ fn main() {
                 .name("aurora-dvr".into())
                 .spawn(move || loop {
                     std::thread::sleep(dvr::TICK_INTERVAL);
-                    match scheduler.tick(now_unix()) {
+                    // A panic here used to end the scheduler outright, and a DVR that
+                    // has silently stopped has no symptom until the programme is gone.
+                    supervised("DVR", || match scheduler.tick(now_unix()) {
                         Ok(report) if !report.is_empty() => {
                             use tauri::Emitter;
                             let _ = handle.emit("dvr.tick", &report);
                         }
                         Ok(_) => {}
                         Err(e) => tracing::error!("DVR tick failed: {e}"),
-                    }
+                    });
                 })?;
 
             // Ask GitHub whether there is a newer build. On its own thread and after a
@@ -113,27 +150,7 @@ fn main() {
                 .name("aurora-updates".into())
                 .spawn(move || {
                     std::thread::sleep(UPDATE_CHECK_DELAY);
-                    use tauri::Manager;
-                    let services = updates_handle.state::<Services>();
-
-                    let (automatic, last) = {
-                        let db = services.db.lock();
-                        (updates::automatic(&db), updates::last_checked(&db))
-                    };
-                    if !automatic || !aurora_ingest::updates::due(last, now_unix()) {
-                        return;
-                    }
-
-                    match updates::run(&services, now_unix(), false) {
-                        Ok(check) if check.available => {
-                            tracing::info!(current = %check.current, "a newer build is published");
-                            let _ = updates_handle.emit("update.available", &check);
-                        }
-                        Ok(_) => tracing::debug!("this is the newest published build"),
-                        // Never a dialog: failing to reach GitHub is not the viewer's
-                        // problem and must not interrupt whatever they are watching.
-                        Err(e) => tracing::info!("update check failed: {e}"),
-                    }
+                    supervised("update", || check_for_updates(&updates_handle));
                 })
                 .expect("spawning the update thread");
 

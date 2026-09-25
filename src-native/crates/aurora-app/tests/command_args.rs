@@ -115,10 +115,7 @@ fn every_command_names_its_argument_parameter_args() {
 
 /// Byte offsets of every `#[tauri::command…]` attribute, whichever spelling it uses.
 fn command_offsets(source: &str) -> Vec<(usize, &str)> {
-    source
-        .match_indices("#[tauri::command")
-        .map(|(i, m)| (i, m))
-        .collect()
+    source.match_indices("#[tauri::command").collect()
 }
 
 /// Every source file under `src/`, so a new module cannot quietly opt out.
