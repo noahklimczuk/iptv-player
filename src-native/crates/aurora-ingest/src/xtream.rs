@@ -7,7 +7,7 @@
 
 use aurora_core::neterr::{ErrorAction, ErrorCode, NetFailure};
 use aurora_core::xtream::{
-    parse_json, AuthResponse, Category, LiveStream, SeriesListing, VodStream,
+    parse_json, AuthResponse, Category, LiveStream, SeriesInfo, SeriesListing, VodStream,
 };
 
 use crate::http::{redact, HttpClient};
@@ -169,6 +169,15 @@ impl<'a> XtreamClient<'a> {
         self.get(Some("get_series"))
     }
 
+    /// The seasons and episodes of one show.
+    ///
+    /// One request per show, which is why it is not part of a refresh: a panel with
+    /// 28,693 series would mean 28,693 requests before the library was usable. It is
+    /// asked for when somebody opens the show.
+    pub fn series_info(&self, series_id: u32) -> Result<SeriesInfo, NetFailure> {
+        self.get(Some(&format!("get_series_info&series_id={series_id}")))
+    }
+
     /// The provider's own EPG endpoint, for the XMLTV importer.
     pub fn xmltv_url(&self) -> String {
         format!(
@@ -270,6 +279,40 @@ mod tests {
         let http = client();
         let xtream = XtreamClient::new(&http, &server.url(""), "u", "p");
         assert!(xtream.vod_categories().expect("categories").is_empty());
+    }
+
+    /// The request nothing had ever made. Series were imported as rows with no
+    /// episodes, and the refresh's warning said the listings are "fetched when a show
+    /// is opened" — but no code anywhere asked a panel for one, so every show on every
+    /// panel read "0 seasons" for good.
+    #[test]
+    fn a_shows_episodes_can_be_asked_for() {
+        let server = TestServer::start(|_, req| {
+            if req.path.contains("action=get_series_info") {
+                // The id has to reach the panel, or every show returns the same
+                // listing and the library quietly fills with the wrong episodes.
+                assert!(
+                    req.path.contains("series_id=42"),
+                    "the show's id was not sent: {}",
+                    req.path
+                );
+                Reply::ok(
+                    r#"{"episodes":{"1":[
+                         {"id":"501","episode_num":1,"title":"Pilot",
+                          "container_extension":"mkv","info":{}},
+                         {"id":"502","episode_num":2,"title":"Second",
+                          "container_extension":"mkv","info":{}}]}}"#,
+                )
+            } else {
+                Reply::ok("[]")
+            }
+        });
+        let http = client();
+        let xtream = XtreamClient::new(&http, &server.url(""), "u", "p");
+
+        let info = xtream.series_info(42).expect("the episode listing");
+        assert_eq!(info.episodes.len(), 2);
+        assert_eq!(info.episodes[0].season, Some(1));
     }
 
     #[test]

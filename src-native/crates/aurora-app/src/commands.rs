@@ -285,6 +285,27 @@ pub fn library_episodes(
     services: State<'_, Services>,
     args: EpisodesArgs,
 ) -> Result<Vec<library::EpisodeRow>> {
+    {
+        let db = services.db.lock();
+        let have = library::episodes_for(&db, args.series_id, args.season)?;
+        if !have.is_empty() {
+            return Ok(have);
+        }
+    }
+
+    // Nothing stored. An import writes the series row but not its episodes — one
+    // request per show would mean 28,693 of them before the library was usable — so
+    // the listing is fetched the first time somebody opens the show. That is what the
+    // refresh's own warning has always claimed happens; until now nothing did it, and
+    // every series on every panel showed "0 seasons" forever.
+    //
+    // The lock is released above, deliberately: this goes to the network, and holding
+    // it across a request is what used to freeze the DVR scheduler during a refresh.
+    if let Err(e) = crate::series::fetch_episodes(&services, args.series_id) {
+        tracing::warn!(series = args.series_id, "could not fetch episodes: {e}");
+        return Err(e);
+    }
+
     let db = services.db.lock();
     Ok(library::episodes_for(&db, args.series_id, args.season)?)
 }
