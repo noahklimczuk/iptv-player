@@ -161,7 +161,7 @@ pub fn write(db: &Connection, data_dir: &Path, args: &SetArgs) -> Result<Setting
     read(db, data_dir)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn timeshift_settings(services: State<'_, Services>) -> Result<Settings> {
     let db = services.db.lock();
     read(&db, &services.data_dir)
@@ -172,14 +172,14 @@ pub fn timeshift_settings(services: State<'_, Services>) -> Result<Settings> {
 /// Deliberately not to the stream already playing: mpv sizes its cache when a file is
 /// loaded, and re-loading to apply a settings change would black out a programme
 /// somebody is watching.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn timeshift_set_settings(services: State<'_, Services>, args: SetArgs) -> Result<Settings> {
     let db = services.db.lock();
     write(&db, &services.data_dir, &args)
 }
 
 /// Empty the buffer. Returns the bytes reclaimed.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn timeshift_clear(services: State<'_, Services>) -> Result<u64> {
     let dir = {
         let db = services.db.lock();

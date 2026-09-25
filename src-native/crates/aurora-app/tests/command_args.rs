@@ -1,3 +1,6 @@
+//! Two conventions every command has to keep, both of which are invisible until the
+//! app is running on Windows.
+//!
 //! Every command must take its arguments as one parameter named `args`.
 //!
 //! Tauri keys the invoke payload by the *parameter's name*: `fn f(args: A)` reads
@@ -69,7 +72,7 @@ fn every_command_names_its_argument_parameter_args() {
         }
         let source = std::fs::read_to_string(&path).expect("read source");
 
-        for (offset, _) in source.match_indices("#[tauri::command]") {
+        for (offset, _) in command_offsets(&source) {
             let rest = &source[offset..];
             let Some(fn_at) = rest.find("fn ") else {
                 continue;
@@ -107,5 +110,82 @@ fn every_command_names_its_argument_parameter_args() {
         offenders.is_empty(),
         "commands the UI cannot reach:\n  {}",
         offenders.join("\n  ")
+    );
+}
+
+/// Byte offsets of every `#[tauri::command…]` attribute, whichever spelling it uses.
+fn command_offsets(source: &str) -> Vec<(usize, &str)> {
+    source
+        .match_indices("#[tauri::command")
+        .map(|(i, m)| (i, m))
+        .collect()
+}
+
+/// Every source file under `src/`, so a new module cannot quietly opt out.
+fn command_sources() -> Vec<(String, String)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("src directory") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        out.push((name, std::fs::read_to_string(&path).expect("read source")));
+    }
+    out
+}
+
+/// No command may run on the main thread.
+///
+/// `tauri-macros` defaults a `#[tauri::command]` over a synchronous `fn` to
+/// `ExecutionContext::Blocking`, which runs the body inline in the IPC handler — on
+/// the thread that owns the window and the event loop. Every handler here is
+/// synchronous, so every one of them was blocking it: a refresh measured at 23.7
+/// seconds against a real panel (docs/ROADMAP.md) froze the window for all of it,
+/// including the `ingest.progress` events the UI draws its progress bar from, which
+/// also need the main thread to be delivered.
+///
+/// `#[tauri::command(async)]` over a synchronous `fn` selects the `sync_threadpool`
+/// path instead: same body, same signature, run on the async runtime's blocking
+/// pool. The attribute is the whole fix, which is exactly why it is worth a test —
+/// it is one token, and a command added without it looks right.
+#[test]
+fn every_command_runs_off_the_main_thread() {
+    let mut checked = 0usize;
+    let mut blocking = Vec::new();
+
+    for (name, source) in command_sources() {
+        for (offset, _) in command_offsets(&source) {
+            let rest = &source[offset..];
+            let Some(line_end) = rest.find('\n') else {
+                continue;
+            };
+            let attribute = &rest[..line_end];
+            let Some(fn_at) = rest.find("fn ") else {
+                continue;
+            };
+            let after = &rest[fn_at + 3..];
+            let Some(open) = after.find('(') else {
+                continue;
+            };
+            let command = after[..open].trim();
+
+            checked += 1;
+            let is_async_fn = rest[..fn_at].contains("async ");
+            if !attribute.contains("(async)") && !is_async_fn {
+                blocking.push(format!("{name}::{command}"));
+            }
+        }
+    }
+
+    assert!(
+        checked > 50,
+        "only found {checked} commands — the scan is broken"
+    );
+    assert!(
+        blocking.is_empty(),
+        "these run on the window's own thread; mark them #[tauri::command(async)]:\n  {}",
+        blocking.join("\n  ")
     );
 }

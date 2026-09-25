@@ -176,7 +176,7 @@ pub struct CheckArgs {
     pub force: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn updates_check(
     services: State<'_, Services>,
     args: Option<CheckArgs>,
@@ -217,7 +217,7 @@ const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// checked against this project's own releases, and is verified against the digest
 /// published beside it — the same reasoning as `updates_open_releases`, one step
 /// further along (docs/DECISIONS.md D17).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) -> Result<Download> {
     let current = services.updates.get();
     if current.status == DownloadStatus::Downloading {
@@ -374,7 +374,7 @@ fn refusal(
     None
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn updates_install(app: tauri::AppHandle, services: State<'_, Services>) -> Result<()> {
     let state = services.updates.get();
     let present = state.path.as_ref().is_some_and(|p| p.exists());
@@ -440,7 +440,7 @@ pub struct SetAutomaticArgs {
     pub enabled: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn updates_set_automatic(
     services: State<'_, Services>,
     args: SetAutomaticArgs,
@@ -451,7 +451,7 @@ pub fn updates_set_automatic(
 }
 
 /// Open the releases page in the viewer's browser.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn updates_open_releases() -> Result<()> {
     open_releases_page().map_err(AppError::Other)
 }

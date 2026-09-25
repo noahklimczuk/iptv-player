@@ -330,7 +330,7 @@ pub struct RecordingView {
     pub live_bytes: Option<u64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_list(services: State<'_, Services>, args: ListArgs) -> Result<Vec<RecordingView>> {
     let state = args.state.as_deref().and_then(parse_state);
     let rows = {
@@ -379,7 +379,7 @@ pub struct ScheduleArgs {
 }
 
 /// Schedule one airing. `None` means it was already on the schedule.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_schedule(services: State<'_, Services>, args: ScheduleArgs) -> Result<Option<i64>> {
     let db = services.db.lock();
     Ok(repo::schedule(
@@ -413,14 +413,14 @@ pub struct IdArgs {
     pub id: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_cancel(services: State<'_, Services>, args: IdArgs) -> Result<bool> {
     let db = services.db.lock();
     Ok(repo::cancel(&db, args.id)?)
 }
 
 /// Delete a recording and its file.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_delete(services: State<'_, Services>, args: IdArgs) -> Result<bool> {
     let path = {
         let db = services.db.lock();
@@ -445,21 +445,21 @@ pub struct FlagArgs {
     pub value: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_set_keep(services: State<'_, Services>, args: FlagArgs) -> Result<()> {
     let db = services.db.lock();
     repo::set_keep(&db, args.id, args.value)?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_set_watched(services: State<'_, Services>, args: FlagArgs) -> Result<()> {
     let db = services.db.lock();
     repo::set_watched(&db, args.id, args.value)?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_conflicts(services: State<'_, Services>) -> Result<Vec<aurora_core::dvr::Conflict>> {
     let db = services.db.lock();
     Ok(repo::conflicts(
@@ -469,7 +469,7 @@ pub fn dvr_conflicts(services: State<'_, Services>) -> Result<Vec<aurora_core::d
     )?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_rules(services: State<'_, Services>) -> Result<Vec<repo::RuleView>> {
     let db = services.db.lock();
     Ok(repo::list_rules(&db)?)
@@ -488,7 +488,7 @@ pub struct CreateRuleArgs {
     pub keep_episodes: Option<u16>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_create_rule(services: State<'_, Services>, args: CreateRuleArgs) -> Result<i64> {
     let db = services.db.lock();
     let now = now_unix();
@@ -540,20 +540,20 @@ fn local_utc_offset_secs() -> i32 {
         .unwrap_or(0)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_delete_rule(services: State<'_, Services>, args: IdArgs) -> Result<bool> {
     let db = services.db.lock();
     Ok(repo::delete_rule(&db, args.id)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_set_rule_enabled(services: State<'_, Services>, args: FlagArgs) -> Result<()> {
     let db = services.db.lock();
     repo::set_rule_enabled(&db, args.id, args.value)?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_reminders(services: State<'_, Services>) -> Result<Vec<repo::Reminder>> {
     let db = services.db.lock();
     Ok(repo::list_reminders(&db)?)
@@ -568,7 +568,7 @@ pub struct ReminderArgs {
     pub lead_secs: Option<i64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_add_reminder(services: State<'_, Services>, args: ReminderArgs) -> Result<Option<i64>> {
     let db = services.db.lock();
     Ok(repo::add_reminder(
@@ -581,7 +581,7 @@ pub fn dvr_add_reminder(services: State<'_, Services>, args: ReminderArgs) -> Re
     )?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_remove_reminder(services: State<'_, Services>, args: IdArgs) -> Result<bool> {
     let db = services.db.lock();
     Ok(repo::remove_reminder(&db, args.id)?)
@@ -600,7 +600,7 @@ pub struct Storage {
     pub max_concurrent: usize,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dvr_storage(services: State<'_, Services>) -> Result<Storage> {
     let db = services.db.lock();
     let quota: i64 = settings::get_or(&db, QUOTA_KEY, 0)?;

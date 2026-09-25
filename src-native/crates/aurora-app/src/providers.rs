@@ -56,7 +56,7 @@ pub struct PastedArgs {
     pub text: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_detect(args: PastedArgs) -> DetectedSource {
     match parse_pasted_xtream(&args.text) {
         Some(p) => DetectedSource {
@@ -92,7 +92,7 @@ pub struct ValidateArgs {
 }
 
 /// Check credentials without saving anything, so the wizard can say yes or no live.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_validate(
     services: State<'_, Services>,
     args: ValidateArgs,
@@ -194,7 +194,7 @@ pub struct SavedProvider {
 
 /// Persist a provider. The password goes to the OS credential store; the database
 /// gets only a reference to it.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_save(services: State<'_, Services>, args: ValidateArgs) -> Result<SavedProvider> {
     let draft = args.draft;
     let db = services.db.lock();
@@ -254,7 +254,7 @@ pub struct ProviderCredentials {
     pub password_is_persistent: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_credentials(
     services: State<'_, Services>,
     args: ProviderIdArgs,
@@ -297,7 +297,7 @@ pub struct UpdateArgs {
 /// leaves the stored one alone, `Some("")` clears it, and anything else replaces it.
 /// Without that distinction, an edit form that shows a masked placeholder would wipe
 /// the password every time someone changed only the name.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_update(services: State<'_, Services>, args: UpdateArgs) -> Result<bool> {
     let id = args.provider_id;
     let draft = args.draft;
@@ -348,7 +348,7 @@ pub fn providers_update(services: State<'_, Services>, args: UpdateArgs) -> Resu
 /// credential store is not in the database and nothing cascades into Windows
 /// Credential Manager; skipping it would leave the password on the machine after the
 /// account it belongs to is gone.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_delete(services: State<'_, Services>, args: ProviderIdArgs) -> Result<bool> {
     let id = args.provider_id;
     let db = services.db.lock();
@@ -407,7 +407,7 @@ fn stored_password(
 }
 
 /// Run a full refresh, emitting `ingest.progress` as it goes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_refresh(
     app: tauri::AppHandle,
     services: State<'_, Services>,
