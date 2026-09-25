@@ -25,6 +25,9 @@ Chromium via Playwright 1.49.
 | `aurora-app` `stress.rs` (soak, `--ignored`) | — | 3 | **+3 (new)** |
 | Rust doc-tests | 1 | 1 | — |
 | **Rust total** | **713** | **776** | **+63** |
+
+`cargo test --workspace --all-targets` reports **772**: it excludes the doc-test and
+does not run the three `#[ignore]` soak tests, which are run separately in §6.
 | Playwright journeys | 84 | 96 | +12 |
 | Vitest (TypeScript units) | **0 — suite exited 1** | 12 | **+12 (new)** |
 | `scripts/version.test.mjs` | 14 | 14 | — |
@@ -59,6 +62,9 @@ test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
    Doc-tests aurora_core
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
+
+Summed: `88 + 2 + 5 + 255 + 9 + 206 + 186 + 21 = 772`, plus 1 doc-test and the 3
+soak tests below = **776**.
 
 **Warnings: zero.** `cargo clippy --workspace --all-targets -- -D warnings` exits 0
 with no output, and `cargo fmt --all --check` is clean. No lint is allowed or
@@ -240,7 +246,7 @@ distinct. Keyboard: every sidebar destination reachable, `Alt+1…5` verified.
 ```
 $ pnpm audit
 Before: 1 critical, 1 high, 7 moderate
-After:  0 critical, 0 high, 0 moderate
+After:  No known vulnerabilities found
 ```
 
 `vitest` 2.1.9 → 5.0.1 (clears the critical UI-server file-read, the high
