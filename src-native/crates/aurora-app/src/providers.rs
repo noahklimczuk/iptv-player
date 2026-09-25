@@ -102,6 +102,23 @@ pub fn providers_validate(
         "xtream" => {
             let username = draft.username.unwrap_or_default();
             let password = draft.password.unwrap_or_default();
+            // Saying so beats sending it. A panel asked to sign in with a blank field
+            // answers HTTP 200 and an empty body, which comes back through the error
+            // taxonomy as the provider having sent something unreadable — the provider
+            // blamed for a field this form left empty.
+            if let Err(e) = aurora_ingest::sync::missing_sign_in(&username, &password) {
+                return Ok(ValidationResult {
+                    ok: false,
+                    message: e.message,
+                    detail: Some(e.cause),
+                    expires_at: None,
+                    days_until_expiry: None,
+                    max_connections: None,
+                    active_connections: None,
+                    is_trial: false,
+                    credentials_detected: false,
+                });
+            }
             let client = XtreamClient::new(&services.http, &draft.url, &username, &password);
             match client.authenticate(now_unix()) {
                 Ok(status) => Ok(ValidationResult {
@@ -367,6 +384,28 @@ pub struct RefreshArgs {
     pub provider_id: i64,
 }
 
+/// The password behind a provider's `credential_ref`, if it has one.
+///
+/// Not `.ok()`, which is what this was. A provider with no reference has no password by
+/// design — an M3U URL carries its own — but one that *has* a reference the store will
+/// not give back is a different thing entirely, and swallowing that difference sent the
+/// import off to sign in with an empty password. The panel then answers with an empty
+/// body, and the viewer is told their provider sent something Aurora could not read.
+fn stored_password(
+    store: &dyn aurora_ingest::credentials::CredentialStore,
+    credential_ref_value: Option<String>,
+) -> Result<Option<String>> {
+    match credential_ref_value {
+        None => Ok(None),
+        Some(key) => store.get(&key).map(Some).map_err(|e| {
+            AppError::Other(format!(
+                "Aurora could not read this provider's saved password: {e}. Edit the \
+                 provider in Settings and enter it again."
+            ))
+        }),
+    }
+}
+
 /// Run a full refresh, emitting `ingest.progress` as it goes.
 #[tauri::command]
 pub fn providers_refresh(
@@ -403,7 +442,7 @@ pub fn providers_refresh(
     };
 
     let mut options = SyncOptions::new(args.provider_id, source, now_unix());
-    options.password = credential_ref_value.and_then(|key| services.credentials.get(&key).ok());
+    options.password = stored_password(services.credentials.as_ref(), credential_ref_value)?;
 
     let rules = load_rules(&services)?;
 
@@ -482,6 +521,40 @@ fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use aurora_ingest::credentials::{credential_ref, CredentialStore, MemoryStore};
+
+    #[test]
+    fn a_provider_with_no_stored_credential_simply_has_none() {
+        // An M3U provider: the URL carries whatever it needs. Not an error.
+        let store = MemoryStore::default();
+        assert_eq!(stored_password(&store, None).unwrap(), None);
+    }
+
+    #[test]
+    fn a_stored_credential_comes_back_as_itself() {
+        let store = MemoryStore::default();
+        store.set(&credential_ref(7), "hunter2").unwrap();
+        assert_eq!(
+            stored_password(&store, Some(credential_ref(7)))
+                .unwrap()
+                .as_deref(),
+            Some("hunter2")
+        );
+    }
+
+    #[test]
+    fn a_credential_the_store_will_not_give_back_is_an_error_not_an_empty_password() {
+        // The case this exists for: the row says there is a password, and Credential
+        // Manager disagrees. Importing anyway signs in with nothing and the panel gets
+        // blamed for the empty answer.
+        let store = MemoryStore::default();
+        let err = stored_password(&store, Some(credential_ref(7)))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("could not read"), "{err}");
+        assert!(err.contains("Settings"), "it has to say what to do: {err}");
+    }
 
     #[test]
     fn detects_a_pasted_xtream_url() {
