@@ -27,5 +27,11 @@ flate2 = "1"
 # Windows Credential Manager (README C10). Gated to Windows deliberately: on Linux
 # the same crate wants a D-Bus Secret Service, which a headless CI runner has no
 # business requiring just to run the parser tests.
+#
+# `windows-native` is not optional despite reading like it. keyring 3 makes every
+# platform store an opt-in feature and falls back to `mock` without one — and the mock
+# builds a *fresh, empty* credential per `Entry`, so a password written through one
+# and read through another is simply gone. That is not a store, and with it Aurora
+# saved no provider password on Windows at all.
 [target.'cfg(windows)'.dependencies]
-keyring = "3"
+keyring = { version = "3", features = ["windows-native"] }

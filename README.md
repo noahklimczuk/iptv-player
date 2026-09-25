@@ -28,6 +28,8 @@ This repository holds two things:
 | Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
 | Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
 | Timeshift / pause live TV (§7.6) | ✅ built and tested; rides mpv's own on-disk cache rather than a buffer of ours (D21), so it has never met a real stream |
+| Provider passwords in Windows Credential Manager (C10) | ✅ built and tested; the store was a keyring stub until v0.6.2 — no password was ever written, which is why importing failed on every real panel |
+| Series from an Xtream panel | ❌ the listings are fetched and discarded; the Series screen is empty on a real subscription — see `docs/ROADMAP.md` |
 | Stream failover: demote a dead source, roll to the next (§7.14) | ✅ built and tested; never seen a real stream drop |
 | Windows installer + portable build from CI | ✅ built on every merge to main; the app itself has still never been run |
 | Versioned releases: patch for a fix, minor for a feature (§23) | ✅ derived from the commit subjects at build time; never seen a real release yet |

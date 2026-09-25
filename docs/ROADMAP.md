@@ -146,6 +146,49 @@ was guessable from the spec:
   been merely wasteful on this account; it would have made pausing live TV impossible
   while watching it (docs/DECISIONS.md D21).
 
+## What a real import cost
+
+`examples/import.rs` runs the app's own `sync::fetch` and `sync::apply` against a real
+panel into a throwaway database. First time, on the subscription above — 22,305
+channels, 122,283 films, a 482,190-programme guide:
+
+| | |
+|---|---|
+| fetch | 8.7 s (authenticate 0.6, playlist 4.2, guide 3.9) |
+| apply | 14.9 s (channels 0.3, movies 1.0, series 3.8, EPG matching 8.6, indexing 1.2) |
+| total | **23.7 s** |
+| peak memory | 325 MB after fetch, **470 MB** at the end |
+| database | **204 MB** |
+| search, after | 0–2 ms per query |
+
+Twenty-four seconds and a fifth of a gigabyte is a faster and fatter import than anyone
+had guessed at. Three things it settled:
+
+- **The memory D20 warned about is real and is fine.** Holding the whole download
+  between the halves costs 325 MB on a library this size. That is the number to watch if
+  a provider ever ships a guide several times this one's size, and it is nowhere near a
+  problem today.
+- **Classification works on real names**: 20,347 of 22,121 channels get a language
+  (en 7,417, ar 2,425, fr 1,466, es 1,388, de 821…), and quality ranks are populated.
+  This is `lang_code`, not `language` — the latter is what the provider claimed, and
+  this panel claims nothing.
+- **De-duplication is doing something.** 22,305 channels arrive and 22,121 are stored;
+  122,283 films arrive and 117,383 are stored. The provider lists the same stream id
+  more than once, roughly 4% of the time for films.
+
+Two things it found that are not fine:
+
+- **No series are imported at all.** `xtream_entries` fetches all 28,693 series
+  listings and then discards them with a warning that episode listings are deferred —
+  but the *series* are deferred too, so nothing is written. The wizard offers "Series"
+  as something to import, Phase 7 is marked Done, and on a real panel the Series screen
+  has nothing in it. The episode-listing cost that warning is about is real (one request
+  per series), but the series rows themselves come from the one call already made.
+- **The guide is emptier than its coverage number suggests.** 9,476 channels carry an
+  EPG id, which is what "coverage" counts, but only **2,949** have any programmes: the
+  XMLTV holds 4,851 channels, and many ids on the panel's channels appear nowhere in it.
+  13% of the library has a guide, not 43%.
+
 ## The Phase 0 caveat
 
 README §21 requires the compositing spike to be proven before anything else is built.
@@ -187,12 +230,11 @@ were built first.
 1. **Wire and run the Phase 0 spike on Windows.** Everything else is downstream of that
    answer, and the caveat above lists the three calls that are missing before it can be
    asked.
-2. **Import a real subscription and read the library.** The probe has now been run
-   against one — see "What a real subscription showed" above for what it found, and for
-   the two things left undecided: the country prefix on VOD titles, and the catch-up
-   timezone. What has still not happened is a full `sync::run` into a database: 22,305
-   channels, 122,274 films and a 29%-covered guide is where import time, memory and the
-   reconciliation logic get their first honest measurement.
+2. **Import the series.** A full import has now been run — see "What a real import
+   cost" above. The gap it found is the one worth closing next: 28,693 series are
+   fetched from the panel and thrown away, so the Series screen is empty on a real
+   subscription while Phase 7 is marked Done. The listings are already in hand; writing
+   them is not the part that needs one request per show.
 
    Earlier attempts found: a bare panel host could not be entered in the wizard at all,
    and every refused connection was reported as a DNS failure because reqwest's error

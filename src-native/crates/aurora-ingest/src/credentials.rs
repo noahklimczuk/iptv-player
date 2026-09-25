@@ -106,8 +106,67 @@ mod windows_store {
             }
         }
 
+        /// What the store actually is, not what it is meant to be.
+        ///
+        /// This returned a hard-coded `true` while the crate was quietly falling back
+        /// to its mock, so the app both lost every password and said it had kept them.
+        /// keyring knows the answer; asking it is the only version of this that cannot
+        /// drift from reality.
         fn is_persistent(&self) -> bool {
-            true
+            matches!(
+                keyring::default::default_credential_builder().persistence(),
+                keyring::credential::CredentialPersistence::UntilDelete
+            )
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn scratch_key() -> String {
+            format!(
+                "aurora-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            )
+        }
+
+        /// The test that would have caught it.
+        ///
+        /// Separate calls, because that is the whole bug: `providers_save` writes
+        /// through one `Entry` and `providers_refresh` reads through another, and
+        /// keyring's mock gives each `Entry` its own empty credential. A round trip
+        /// inside a single `Entry` would have passed against the mock and proved
+        /// nothing.
+        #[test]
+        fn a_password_survives_being_written_and_read_back_by_separate_calls() {
+            let store = KeyringStore;
+            let key = scratch_key();
+
+            store
+                .set(&key, "hunter2")
+                .expect("write to the credential store");
+            let got = store.get(&key).expect("read it back");
+            assert_eq!(got, "hunter2");
+
+            store.delete(&key).expect("delete it again");
+            assert!(
+                matches!(store.get(&key), Err(CredentialError::NotFound(_))),
+                "a deleted credential must be gone, not stale"
+            );
+        }
+
+        #[test]
+        fn the_store_is_the_real_credential_manager_and_says_so() {
+            assert!(
+                KeyringStore.is_persistent(),
+                "keyring fell back to its mock, which keeps secrets in the Entry and \
+                 loses them the moment it drops — check the windows-native feature"
+            );
         }
     }
 }
