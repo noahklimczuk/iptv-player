@@ -147,10 +147,7 @@ pub struct NowNext {
 #[tauri::command(async)]
 pub fn epg_now_next(services: State<'_, Services>, args: NowNextArgs) -> Result<NowNext> {
     let db = services.db.lock();
-    let Some(ch) = channels::list(&db, &channels::ChannelFilter::default())?
-        .into_iter()
-        .find(|c| c.id == args.channel_id)
-    else {
+    let Some(ch) = channels::get(&db, args.channel_id)? else {
         return Ok(NowNext {
             now: None,
             next: None,
