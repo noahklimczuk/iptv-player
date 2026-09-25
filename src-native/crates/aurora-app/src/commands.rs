@@ -153,6 +153,43 @@ pub struct NowNext {
     pub next: Option<epg::ProgrammeRow>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NowNextManyArgs {
+    pub channel_ids: Vec<i64>,
+}
+
+/// Now and next for a screenful of channels, in one call.
+///
+/// Live TV used to mount a `useCommand('epg.nowNext')` per row. With no virtualiser
+/// that was one IPC round trip per channel in the library — 22,121 of them on the
+/// subscription in docs/ROADMAP.md, each taking the single writer mutex, each on the
+/// window's own thread. The list is virtualised now, so this is asked about the rows
+/// actually on screen; the batching is what stops a fast scroll turning into a
+/// thousand round trips anyway.
+#[tauri::command(async)]
+pub fn epg_now_next_many(
+    services: State<'_, Services>,
+    args: NowNextManyArgs,
+) -> Result<std::collections::HashMap<i64, NowNext>> {
+    let now = now_unix();
+    let db = services.db.lock();
+    let mut out = std::collections::HashMap::with_capacity(args.channel_ids.len());
+    for id in args.channel_ids {
+        let Some(epg_id) = channels::get(&db, id)?.and_then(|c| c.epg_channel_id) else {
+            continue;
+        };
+        let (current, next) = epg::now_next(&db, &epg_id, now)?;
+        // A channel with a guide id but nothing in the guide is the common case on a
+        // real panel: 9,476 channels carry an id and 2,949 have any programmes. Left
+        // out rather than sent as a pair of nulls.
+        if current.is_some() || next.is_some() {
+            out.insert(id, NowNext { now: current, next });
+        }
+    }
+    Ok(out)
+}
+
 #[tauri::command(async)]
 pub fn epg_now_next(services: State<'_, Services>, args: NowNextArgs) -> Result<NowNext> {
     let db = services.db.lock();

@@ -17,7 +17,7 @@ const BEHIND_MS = 7_000;
 async function tuneLive(page: Page) {
   await page.goto('/#/live');
   await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
-  await page.locator('button', { hasText: 'Meridian News' }).first().click();
+  await page.getByRole('button', { name: 'Watch Meridian News' }).first().click();
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
 }
 

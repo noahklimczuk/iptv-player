@@ -34,7 +34,30 @@ async function liveChannelNames(page: Page): Promise<string[]> {
   await page.goto('/#/live');
   await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
   await page.waitForTimeout(500);
-  return page.locator('button', { hasText: /\S/ }).allInnerTexts();
+
+  // The list is virtualised, so the DOM only ever holds the rows on screen: reading
+  // it once would answer "what is visible", not "what does Live TV list". Scroll a
+  // screenful at a time and accumulate. The rows are `div role="button"` because a
+  // heart lives inside each one and a button inside a button is invalid markup.
+  const rows = page.getByTestId('channel-row');
+  await expect(rows.first()).toBeVisible();
+  const scroller = page.getByTestId('channel-scroller');
+  const seen = new Set<string>();
+  for (let guard = 0; guard < 200; guard += 1) {
+    for (const name of await rows.evaluateAll((els) =>
+      els.map((el) => (el.getAttribute('aria-label') ?? '').replace(/^Watch /, '')),
+    )) {
+      seen.add(name);
+    }
+    const more = await scroller.evaluate((el) => {
+      const before = el.scrollTop;
+      el.scrollTop = Math.min(before + el.clientHeight, el.scrollHeight);
+      return el.scrollTop > before;
+    });
+    if (!more) break;
+    await page.waitForTimeout(100);
+  }
+  return [...seen];
 }
 
 test('the editor lists every entry, hidden ones included', async ({ page }) => {
@@ -265,4 +288,39 @@ test('films and shows are editable in the same screen as channels', async ({ pag
 
   await openEditor(page, 'Series');
   await expect(page.getByRole('button', { name: /^Name for / }).first()).toBeVisible();
+});
+
+/**
+ * Live TV rendered `(channels ?? []).map(...)` with no virtualiser, and each row
+ * mounted its own `epg.nowNext`. On the subscription in docs/ROADMAP.md that is
+ * 22,121 buttons and 22,121 IPC round trips to paint one screen — each of those
+ * round trips itself scanning the whole channel table to find one row.
+ *
+ * The Guide and this playlist editor were already virtualised; Live TV was missed.
+ */
+test('live TV renders a large channel list without mounting every row', async ({ page }) => {
+  await page.goto('/#/live');
+  await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
+
+  const total = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke?: (c: string, a: unknown) => Promise<unknown>;
+    };
+    const all = (await w.__auroraInvoke!('channels.list', {})) as unknown[];
+    return all.length;
+  });
+  expect(total).toBeGreaterThan(20);
+
+  const rows = page.getByTestId('channel-row');
+  await expect(rows.first()).toBeVisible();
+  const mounted = await rows.count();
+  expect(mounted).toBeLessThan(total);
+
+  // The rows past the fold are reachable, they are simply not in the DOM yet.
+  const firstName = await rows.first().getAttribute('aria-label');
+  await page.getByTestId('channel-scroller').evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await page.waitForTimeout(400);
+  await expect(rows.first()).not.toHaveAttribute('aria-label', firstName!);
 });

@@ -723,6 +723,12 @@ export interface Commands {
     now: Programme | null;
     next: Programme | null;
   };
+  /** Now and next for a screenful of channels at once, keyed by channel id.
+   *  Channels with nothing in the guide are left out rather than sent as nulls. */
+  'epg.nowNextMany': (args: { channelIds: number[] }) => Record<
+    number,
+    { now: Programme | null; next: Programme | null }
+  >;
 
   'search.query': (args: { text: string }) => SearchResults;
 

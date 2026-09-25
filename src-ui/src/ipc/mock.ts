@@ -1073,6 +1073,19 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (!ch) return { now: null, next: null };
     return nowNext(ch, Math.floor(Date.now() / 1000));
   },
+  'epg.nowNextMany': ({ channelIds }) => {
+    const at = Math.floor(Date.now() / 1000);
+    const out: Record<number, { now: Programme | null; next: Programme | null }> = {};
+    for (const id of channelIds) {
+      const ch = fx.channels.find((c) => c.id === id);
+      if (!ch) continue;
+      const pair = nowNext(ch, at);
+      // Matches the host: a channel with nothing in the guide is absent, not a pair
+      // of nulls.
+      if (pair.now || pair.next) out[id] = pair;
+    }
+    return out;
+  },
 
   'library.filters': () => filters,
   'library.setFilters': (next) => {

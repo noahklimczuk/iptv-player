@@ -128,7 +128,7 @@ test('typing digits opens the channel-entry overlay and tunes', async ({ page })
 test('player OSD exposes transport, tracks and stats', async ({ page }) => {
   await page.goto('/#/live');
   await settle(page, 600);
-  await page.locator('button', { hasText: 'Meridian News' }).first().click();
+  await page.getByRole('button', { name: 'Watch Meridian News' }).first().click();
 
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
   await page.getByRole('button', { name: 'Subtitles' }).click();

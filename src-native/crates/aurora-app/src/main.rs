@@ -172,6 +172,7 @@ fn main() {
             commands::channels_by_number,
             commands::epg_grid_slice,
             commands::epg_now_next,
+            commands::epg_now_next_many,
             commands::library_movies,
             commands::library_series,
             commands::library_genres,
