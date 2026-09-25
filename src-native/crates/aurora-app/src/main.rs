@@ -15,8 +15,9 @@ use aurora_app::{
 /// "libmpv would not load" from "the video is behind the window". So release builds log
 /// to a file beside their data, and debug builds keep the console they already have.
 ///
-/// Truncated per run: the question being asked of a log is almost always about the
-/// launch that just failed, not the twenty before it.
+/// The previous run is kept as `aurora.log.1` rather than overwritten. This used to
+/// truncate, which meant the one sequence that matters — it crashed, I relaunched to
+/// report it — was also the one that destroyed the evidence.
 fn init_logging(data_dir: &std::path::Path) {
     let filter =
         tracing_subscriber::EnvFilter::try_from_env("AURORA_LOG").unwrap_or_else(|_| "info".into());
@@ -27,7 +28,7 @@ fn init_logging(data_dir: &std::path::Path) {
     }
 
     let _ = std::fs::create_dir_all(data_dir);
-    match std::fs::File::create(data_dir.join("aurora.log")) {
+    match std::fs::File::create(aurora_app::logging::rotate(data_dir)) {
         Ok(file) => tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_ansi(false)
@@ -248,6 +249,8 @@ fn main() {
             providers::providers_update,
             providers::providers_delete,
             commands::player_set_speed,
+            aurora_app::logging::app_diagnostics,
+            aurora_app::logging::logs_export,
             library::providers_list,
             library::library_stats,
             library::library_rails,

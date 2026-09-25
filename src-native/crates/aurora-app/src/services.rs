@@ -29,16 +29,28 @@ pub struct Services {
     /// The update installer being fetched, if any (docs/DECISIONS.md D17).
     pub updates: Arc<crate::updates::Downloads>,
     pub data_dir: PathBuf,
+    /// What opening the library took. `Replaced` means the viewer's favourites, watch
+    /// progress and recordings metadata are gone and a refresh is needed, which is
+    /// worth saying out loud rather than letting them find an empty library.
+    pub opened: aurora_db::Opened,
 }
 
 impl Services {
     pub fn new(data_dir: PathBuf) -> Result<Self, crate::AppError> {
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| crate::AppError::Other(format!("cannot create data dir: {e}")))?;
-        let db = aurora_db::open(data_dir.join("library.db"))?;
-
-        if !aurora_db::integrity_check(&db)? {
-            tracing::error!("database failed its integrity check");
+        // Not `open`: a corrupt file propagated straight out of here, which Tauri
+        // turns into a start-up failure — no window, no dialog, and no console in a
+        // release build to say why. The app simply did not launch. `open_or_recover`
+        // moves the unusable file aside and starts a fresh one, and what it had to do
+        // is kept so Settings can say so rather than the library quietly being empty.
+        let (db, opened) = aurora_db::open_or_recover(data_dir.join("library.db"))?;
+        if let aurora_db::Opened::Replaced { corrupt_copy } = &opened {
+            tracing::error!(
+                "the library could not be read and has been started again; the old \
+                 file is at {}",
+                corrupt_copy.display()
+            );
         }
 
         // A library imported before this build — or before the classifier last changed
@@ -86,6 +98,7 @@ impl Services {
             http: Arc::new(http),
             credentials: Arc::from(default_store()),
             data_dir,
+            opened,
         })
     }
 }

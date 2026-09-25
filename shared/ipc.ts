@@ -730,6 +730,16 @@ export interface Commands {
     { now: Programme | null; next: Programme | null }
   >;
 
+  /** Copy the current and previous log beside the library, for a support message. */
+  'logs.export': () => { files: string[]; folder: string };
+  /** What this launch found: where the data lives, and whether anything was lost. */
+  'app.diagnostics': () => {
+    dataDir: string;
+    /** Path the unreadable library was moved to, when startup had to replace it. */
+    libraryWasReplaced: string | null;
+    credentialsPersist: boolean;
+  };
+
   'search.query': (args: { text: string }) => SearchResults;
 
   'player.play': (args: {

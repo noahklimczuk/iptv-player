@@ -7,6 +7,7 @@ pub mod commands;
 pub mod dvr;
 pub mod error;
 pub mod library;
+pub mod logging;
 pub mod metadata;
 pub mod playback;
 pub mod playlist;

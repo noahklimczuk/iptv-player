@@ -1138,6 +1138,16 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return ids.length;
   },
 
+  'logs.export': () => ({
+    files: ['C:\\Users\\You\\AppData\\Local\\Aurora TV\\logs-export\\aurora.log'],
+    folder: 'C:\\Users\\You\\AppData\\Local\\Aurora TV\\logs-export',
+  }),
+  'app.diagnostics': () => ({
+    dataDir: 'C:\\Users\\You\\AppData\\Local\\Aurora TV',
+    libraryWasReplaced: null,
+    credentialsPersist: true,
+  }),
+
   'search.query': ({ text }) => search(text),
 
   'player.playCatchup': ({ channelId, start, stop }) => {
