@@ -61,6 +61,36 @@ pub struct SyncReport {
     pub epg_unmatched: Vec<String>,
     /// Non-fatal problems worth surfacing after the refresh.
     pub warnings: Vec<String>,
+    /// What the import saw and did not keep. Zero everywhere is the claim that
+    /// nothing was lost; anything else says exactly what went and why.
+    pub dropped: Dropped,
+}
+
+/// Everything an import saw and did not keep, and why.
+///
+/// A refresh that reports "22,000 channels" and an app that shows none is a gap
+/// nobody can close from the outside, because the places an entry can vanish are all
+/// inside this module and none of them used to leave a trace. Each field here is one
+/// of those places. The rule is that every entry the provider listed is either
+/// imported or counted below — never neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dropped {
+    /// A playlist rule matched it and said hide.
+    pub hidden_by_rule: usize,
+    /// Its content type was switched off for this import.
+    pub kind_excluded: usize,
+    /// The panel listed it with no stream id, so there is no URL to play.
+    pub no_stream_id: usize,
+    /// An episode entry whose name carries no season/episode marker, so it cannot be
+    /// placed in a show.
+    pub no_episode_marker: usize,
+}
+
+impl Dropped {
+    pub fn total(&self) -> usize {
+        self.hidden_by_rule + self.kind_excluded + self.no_stream_id + self.no_episode_marker
+    }
 }
 
 pub struct SyncOptions {
@@ -114,6 +144,7 @@ pub struct Fetched {
     series: Vec<FetchedSeries>,
     epg: Vec<FetchedEpg>,
     warnings: Vec<String>,
+    dropped: Dropped,
 }
 
 /// One show as the provider listed it, owned so it can outlive the HTTP client.
@@ -182,7 +213,13 @@ pub fn fetch(
                 done: 0,
                 total: 0,
             });
-            xtream_entries(&client, options, &mut out.warnings, &mut series)?
+            xtream_entries(
+                &client,
+                options,
+                &mut out.warnings,
+                &mut series,
+                &mut out.dropped,
+            )?
         }
     };
 
@@ -191,13 +228,20 @@ pub fn fetch(
     for mut entry in entries {
         let outcome = rules.apply(&mut entry);
         if outcome.hidden {
+            out.dropped.hidden_by_rule += 1;
             continue;
         }
+        // Every arm accounts for its entry. The catch-all used to be `_ => {}`, which
+        // is the difference between "your provider sent nothing" and "your provider
+        // sent twenty thousand channels and this import threw them away" — two
+        // sentences that looked identical from the sofa.
         match entry.kind {
             MediaKind::Live if options.import_live => out.live.push(entry),
             MediaKind::Movie if options.import_vod => out.movies.push(entry),
             MediaKind::Episode if options.import_series => out.episodes.push(entry),
-            _ => {}
+            MediaKind::Live | MediaKind::Movie | MediaKind::Episode => {
+                out.dropped.kind_excluded += 1;
+            }
         }
     }
 
@@ -271,6 +315,7 @@ pub fn apply(
     // Warnings from the download carry through; everything else is counted here.
     let mut report = SyncReport {
         warnings: fetched.warnings,
+        dropped: fetched.dropped,
         ..Default::default()
     };
 
@@ -357,6 +402,7 @@ pub fn apply(
 
     let (groups, ungrouped) = series::group_series(&fetched.episodes);
     if !ungrouped.is_empty() {
+        report.dropped.no_episode_marker += ungrouped.len();
         report.warnings.push(format!(
             "{} episode entries had no recognisable season/episode marker and were skipped",
             ungrouped.len()
@@ -504,6 +550,7 @@ fn xtream_entries(
     options: &SyncOptions,
     warnings: &mut Vec<String>,
     series: &mut Vec<FetchedSeries>,
+    dropped: &mut Dropped,
 ) -> Result<Vec<PlaylistEntry>, NetFailure> {
     let mut out = Vec::new();
 
@@ -516,7 +563,10 @@ fn xtream_entries(
     if options.import_live {
         let cats = category_names(client.live_categories()?);
         for s in client.live_streams()? {
-            let Some(id) = s.stream_id else { continue };
+            let Some(id) = s.stream_id else {
+                dropped.no_stream_id += 1;
+                continue;
+            };
             let mut entry = PlaylistEntry::new(
                 s.name.clone().unwrap_or_else(|| format!("Channel {id}")),
                 client.stream_url(MediaKind::Live, id, None),
@@ -540,7 +590,10 @@ fn xtream_entries(
     if options.import_vod {
         let cats = category_names(client.vod_categories()?);
         for s in client.vod_streams()? {
-            let Some(id) = s.stream_id else { continue };
+            let Some(id) = s.stream_id else {
+                dropped.no_stream_id += 1;
+                continue;
+            };
             let mut entry = PlaylistEntry::new(
                 s.name.clone().unwrap_or_else(|| format!("Movie {id}")),
                 client.stream_url(MediaKind::Movie, id, s.container_extension.as_deref()),
@@ -556,6 +609,7 @@ fn xtream_entries(
         let cats = category_names(client.series_categories()?);
         for listing in client.series()? {
             let Some(id) = listing.series_id else {
+                dropped.no_stream_id += 1;
                 continue;
             };
             let raw = listing
@@ -1540,6 +1594,104 @@ mod tests {
         assert_eq!(report.channels, 3);
         assert_eq!(report.movies, 0);
         assert_eq!(report.episodes, 0);
+
+        // What was excluded is counted, not silently gone. This used to be `_ => {}`,
+        // which is the difference between "your provider sent nothing" and "your
+        // provider sent everything and the import threw it away".
+        assert!(
+            report.dropped.kind_excluded > 0,
+            "excluded entries vanished without being counted"
+        );
+    }
+
+    /// A clean import loses nothing, and says so.
+    ///
+    /// The strongest claim this module can make: every entry the provider listed was
+    /// either imported or counted with a reason. A zero here is that claim; anything
+    /// else names what went.
+    #[test]
+    fn an_ordinary_import_drops_nothing_at_all() {
+        let server = combined_server();
+        let mut conn = db();
+        let report = run(&mut conn, &http(), &options(&server), &no_rules(), |_| {}).unwrap();
+
+        assert_eq!(
+            report.dropped,
+            Dropped::default(),
+            "an import with nothing wrong with it lost something: {:?}",
+            report.dropped
+        );
+        assert_eq!(report.dropped.total(), 0);
+    }
+
+    /// A rule that hides things is a choice the viewer made, and still has to be
+    /// visible: "my channels are missing" and "I hid them last week" are the same
+    /// screen otherwise.
+    #[test]
+    fn what_a_rule_hides_is_counted_rather_than_silently_gone() {
+        let server = combined_server();
+        let mut conn = db();
+
+        let kept = run(&mut conn, &http(), &options(&server), &no_rules(), |_| {})
+            .unwrap()
+            .channels;
+        assert!(kept > 0, "nothing was imported to hide");
+
+        // An empty `contains` matches every name, so this hides the lot.
+        let rules =
+            RuleSet::compile(&[Rule::new(Field::Name, Match::Contains, "", Action::Hide)]).unwrap();
+
+        let mut opts = options(&server);
+        opts.now_unix += 3600;
+        let report = run(&mut conn, &http(), &opts, &rules, |_| {}).unwrap();
+
+        assert!(
+            report.dropped.hidden_by_rule > 0,
+            "a rule hid entries and nothing counted them"
+        );
+    }
+
+    /// A panel that lists a stream with no id has listed something unplayable. It is
+    /// dropped — there is no URL to build — but never in silence.
+    #[test]
+    fn a_stream_with_no_id_is_counted_as_dropped() {
+        let server = TestServer::start(|_, req| {
+            let p = &req.path;
+            if p.contains("action=get_live_streams") {
+                // One usable, one with no id at all.
+                Reply::ok(r#"[{"stream_id":101,"name":"CNN"},{"name":"Nameless"}]"#)
+            } else if p.contains("action=get_vod_streams")
+                || p.contains("action=get_series")
+                || p.contains("categories")
+            {
+                Reply::ok("[]")
+            } else if p.contains("xmltv.php") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(
+                    r#"{"user_info":{"username":"u","status":"Active",
+                          "max_connections":"2","active_cons":0}}"#,
+                )
+            }
+        });
+
+        let mut conn = db();
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "u".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = Some("p".into());
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(report.channels, 1, "the usable stream was imported");
+        assert_eq!(
+            report.dropped.no_stream_id, 1,
+            "the stream with no id was not counted"
+        );
     }
 
     /// The failure a real subscription produced, and what it looked like from the

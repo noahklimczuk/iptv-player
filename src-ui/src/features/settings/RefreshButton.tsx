@@ -87,8 +87,39 @@ export function RefreshButton({
           style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}
         >
           {done.channels} channels · {done.movies} movies · {done.series} series
+          {skipped(done) > 0 && (
+            <>
+              {' · '}
+              <span style={{ color: 'var(--text)' }} title={whySkipped(done)}>
+                {skipped(done)} skipped
+              </span>
+            </>
+          )}
         </span>
       )}
     </>
   );
+}
+
+/** How many entries the provider listed that the import did not keep. */
+function skipped(r: SyncReport): number {
+  const d = r.dropped;
+  if (!d) return 0;
+  return d.hiddenByRule + d.kindExcluded + d.noStreamId + d.noEpisodeMarker;
+}
+
+/**
+ * Why they went, in the order somebody would want to know.
+ *
+ * Each of these used to be a `continue` with nothing behind it, which is how a
+ * refresh could report twenty thousand channels to a screen that showed none.
+ */
+function whySkipped(r: SyncReport): string {
+  const d = r.dropped;
+  const parts: string[] = [];
+  if (d.hiddenByRule) parts.push(`${d.hiddenByRule} hidden by a playlist rule`);
+  if (d.kindExcluded) parts.push(`${d.kindExcluded} of a content type not being imported`);
+  if (d.noStreamId) parts.push(`${d.noStreamId} listed by the provider with no stream id`);
+  if (d.noEpisodeMarker) parts.push(`${d.noEpisodeMarker} episodes with no season/episode marker`);
+  return parts.join(', ');
 }

@@ -453,6 +453,19 @@ export interface SyncReport {
   epgMatched: number;
   epgUnmatched: string[];
   warnings: string[];
+  /**
+   * Everything the import saw and did not keep, and why.
+   *
+   * Zero everywhere is the claim that nothing was lost. Anything else names what went:
+   * "your provider sent nothing" and "your provider sent twenty thousand channels and
+   * the import threw them away" used to be the same screen.
+   */
+  dropped: {
+    hiddenByRule: number;
+    kindExcluded: number;
+    noStreamId: number;
+    noEpisodeMarker: number;
+  };
 }
 
 export interface LibraryStats {
