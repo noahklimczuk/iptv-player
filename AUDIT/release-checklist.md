@@ -133,11 +133,28 @@ None of this could run here. On a clean Windows VM:
 - Confirm the credential entries under service `AuroraTV` in Credential Manager. A
   provider deleted in-app removes its own; an uninstall currently does not sweep them.
 
-## 6. Dependency advisories in CI — **done**
+## 6. Dependency advisories in CI — **done, and the correction is the interesting part**
 
-The `core` job now runs `rustsec/audit-check` (the Rust side had never been checked at
-all), `pnpm audit --audit-level high`, and `pnpm test`, which had nothing to run until
-this pass. `pnpm audit` currently reports no known vulnerabilities.
+The `core` job runs `rustsec/audit-check`, `pnpm audit --audit-level high`, and
+`pnpm test`, which had nothing to run until this pass.
+
+**The Rust half of that was wrong when it was first written here.** The action defaults
+to `./Cargo.lock`; this workspace keeps its lockfile under `src-native`, so the step
+died with `Couldn't load ./Cargo.lock` before auditing anything — and because a failed
+step skips the rest of a job, it also took `pnpm audit`, the release-tooling tests and
+all 97 end-to-end journeys down with it. A checklist item that read **done** was a step
+that had never once run, in a job whose green was hiding four other things.
+
+Pointing it at the right lockfile found two **high-severity (7.5)** advisories in
+`quick-xml 0.36`, both reachable from a provider's XMLTV guide: RUSTSEC-2026-0194
+(quadratic parse time on duplicate attribute names) and RUSTSEC-2026-0195 (unbounded
+allocation in `NsReader`). Both are fixed by the upgrade to 0.42. `cargo audit` now
+exits clean, with seven informational warnings it does not fail on — five unmaintained
+build-time crates, and `glib`'s `VariantStrIter` unsoundness, which is Linux GTK and
+not in the shipped Windows binary.
+
+The steps after the advisory checks now carry `if: ${{ !cancelled() }}`, so a future
+advisory fails the job without taking the test results with it.
 
 Worth adding later: `cargo deny`, which would police the licence question in item 8
 automatically rather than by anyone remembering to.
