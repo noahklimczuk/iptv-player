@@ -100,6 +100,70 @@ pub fn app_diagnostics(
     })
 }
 
+/// What Settings → About shows.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct About {
+    pub version: String,
+    /// Aurora's own licence.
+    pub license: String,
+    /// The notice the bundled libmpv's licence requires, in full. Read from the file
+    /// shipped beside the executable so what is on screen is what was shipped, rather
+    /// than a copy in the UI bundle that could drift from it.
+    pub notices: Option<String>,
+    /// Where the notices were read from, or looked for and not found.
+    pub notices_path: String,
+    pub releases_url: &'static str,
+}
+
+/// The licence notices, and enough about this build to report a bug against it.
+///
+/// The notices are a legal obligation, not a nicety: the shipped `mpv-2.dll` is
+/// LGPL (or GPL, depending how it was built) and carries FFmpeg with it, and both
+/// require that their terms travel with the binary and be findable by the person
+/// holding it. A file in a repository nobody has cloned does not satisfy that; a
+/// screen in the application does.
+#[tauri::command(async)]
+pub fn app_about() -> About {
+    let path = notices_path();
+    let notices = std::fs::read_to_string(&path).ok();
+    if notices.is_none() {
+        // An error rather than a shrug: a build that cannot show the licence notices
+        // it is obliged to carry is one that should not be distributed.
+        tracing::error!(
+            "THIRD-PARTY-NOTICES.md is not beside the executable ({}); this build \
+             cannot show the licence notices it is obliged to carry",
+            path.display()
+        );
+    }
+    About {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        license: "GPL-3.0-or-later".to_string(),
+        notices,
+        notices_path: path.to_string_lossy().into_owned(),
+        releases_url: crate::updates::RELEASES_URL,
+    }
+}
+
+/// Beside the executable in a packaged build; at the repository root in a dev one.
+fn notices_path() -> PathBuf {
+    const NAME: &str = "THIRD-PARTY-NOTICES.md";
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let beside = dir.join(NAME);
+            if beside.exists() {
+                return beside;
+            }
+        }
+    }
+    // A dev run: `target/debug/aurora-app` is four levels below the root.
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .map(|root| root.join(NAME))
+        .unwrap_or_else(|| PathBuf::from(NAME))
+}
+
 /// Copy the logs to a folder beside the library, and say where they went.
 ///
 /// Deliberately not a path the UI chooses: a command that writes wherever it is told

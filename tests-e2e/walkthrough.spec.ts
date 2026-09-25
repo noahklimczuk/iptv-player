@@ -189,3 +189,27 @@ test('the themes all render without losing text against their background', async
     await page.screenshot({ path: `${SHOTS}/walkthrough-theme-${theme}.png` });
   }
 });
+
+/**
+ * The licence notices are an obligation, not a nicety: the shipped libmpv is LGPL (or
+ * GPL) and carries FFmpeg, and both require their terms to reach whoever is holding
+ * the binary. A file in a repository nobody has cloned does not do that.
+ */
+test('About shows the version and the third-party notices', async ({ page }) => {
+  await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+
+  // Scoped to the page rather than to a section: `Section` renders a plain `section`
+  // with an `h2`, which carries no accessible name and is therefore not a `region`.
+  await expect(page.getByText('GPL-3.0-or-later').first()).toBeVisible();
+  await expect(
+    page.getByText(/not endorsed or certified by TMDB/).first(),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Third-party notices' }).click();
+  const notices = page.getByTestId('third-party-notices');
+  await expect(notices).toBeVisible();
+  await expect(notices).toContainText('Lesser General Public License');
+
+  await page.screenshot({ path: `${SHOTS}/42-about.png` });
+});

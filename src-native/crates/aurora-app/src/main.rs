@@ -284,6 +284,7 @@ fn main() {
             providers::providers_update,
             providers::providers_delete,
             commands::player_set_speed,
+            aurora_app::logging::app_about,
             aurora_app::logging::app_diagnostics,
             aurora_app::logging::logs_export,
             library::providers_list,

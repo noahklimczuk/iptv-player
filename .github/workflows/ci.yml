@@ -79,6 +79,24 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc -p tsconfig.json --noEmit
 
+      - name: UI unit tests
+        # `pnpm test` answered "No test files found, exiting with code 1" until there
+        # were some, which is why nothing ran it.
+        run: pnpm test
+
+      - name: Rust advisories
+        # The JavaScript side has had `pnpm audit` run against it; the Rust side had
+        # never been checked at all. `Cargo.lock` is committed, so this is a question
+        # with a definite answer rather than a moving target.
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: JavaScript advisories
+        # Fails the job on a high or critical only: a moderate in a dev-only tool is
+        # worth knowing about and not worth blocking a pull request over.
+        run: pnpm audit --audit-level high
+
       - name: Release tooling
         # The version arithmetic decides what every build is called, and it is wrong in
         # ways nothing else would notice — a lexicographic compare, or reading the word
@@ -307,6 +325,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item 'src-native\target\release\aurora-app.exe' $out
           Copy-Item $env:AURORA_MPV_DLL $out
+          # The licence notices travel with the binary, not with the repository: the
+          # bundled libmpv is LGPL (or GPL) and carries FFmpeg, and both require their
+          # terms to reach whoever is holding the executable. Settings -> About reads
+          # THIRD-PARTY-NOTICES.md from exactly here.
+          Copy-Item 'LICENSE' (Join-Path $out 'LICENSE.txt')
+          Copy-Item 'THIRD-PARTY-NOTICES.md' $out
+          Copy-Item 'licenses' (Join-Path $out 'licenses') -Recurse
           # README §13: this marker keeps every byte of state beside the exe, which is
           # what you want from a build you are only trying out.
           '' | Out-File (Join-Path $out 'portable.txt') -Encoding utf8

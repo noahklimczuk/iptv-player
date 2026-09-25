@@ -732,6 +732,15 @@ export interface Commands {
 
   /** Copy the current and previous log beside the library, for a support message. */
   'logs.export': () => { files: string[]; folder: string };
+  /** Version, licence, and the third-party notices this build is obliged to carry. */
+  'app.about': () => {
+    version: string;
+    license: string;
+    /** The full notices text, or null when the file is not beside the executable. */
+    notices: string | null;
+    noticesPath: string;
+    releasesUrl: string;
+  };
   /** What this launch found: where the data lives, and whether anything was lost. */
   'app.diagnostics': () => {
     dataDir: string;

@@ -1142,6 +1142,17 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     files: ['C:\\Users\\You\\AppData\\Local\\Aurora TV\\logs-export\\aurora.log'],
     folder: 'C:\\Users\\You\\AppData\\Local\\Aurora TV\\logs-export',
   }),
+  'app.about': () => ({
+    version: '0.1.0',
+    license: 'GPL-3.0-or-later',
+    notices:
+      '# Third-party notices\n\nlibmpv is licensed under the GNU Lesser General '
+      + 'Public License, version 2.1 or later, and contains FFmpeg. It is shipped as '
+      + 'a separate file and can be replaced with your own build.\n\nThis product '
+      + 'uses the TMDB API but is not endorsed or certified by TMDB.\n',
+    noticesPath: 'C:\\Program Files\\Aurora TV\\THIRD-PARTY-NOTICES.md',
+    releasesUrl: 'https://github.com/noahklimczuk/iptv-player/releases/latest',
+  }),
   'app.diagnostics': () => ({
     dataDir: 'C:\\Users\\You\\AppData\\Local\\Aurora TV',
     libraryWasReplaced: null,
