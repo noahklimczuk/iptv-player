@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use aurora_core::epg_match::{self, EpgIndex};
 use aurora_core::model::{EpgChannel, MediaKind, PlaylistEntry, Programme};
-use aurora_core::neterr::NetFailure;
+use aurora_core::neterr::{ErrorAction, ErrorCode, NetFailure};
 use aurora_core::rules::RuleSet;
 use aurora_core::{series, title};
 use aurora_db::repo::{channels, epg as epg_repo, library, search};
@@ -157,6 +157,7 @@ pub fn fetch(
                 total: 0,
             });
             let password = options.password.as_deref().unwrap_or_default();
+            missing_sign_in(username, password)?;
             let client = XtreamClient::new(http, base_url, username, password);
             client.authenticate(options.now_unix)?;
             epg_urls.push(client.xmltv_url());
@@ -210,6 +211,39 @@ pub fn fetch(
 ///
 /// The caller holds the database for the whole of this, which is deliberate: these
 /// writes are local and bounded, and an import that let other commands see it halfway
+/// Refuse a panel import that has no sign-in to send.
+///
+/// Worth its own refusal because of what a panel does with a blank one. The first real
+/// subscription this was pointed at answers `player_api.php` with HTTP 200 and *zero
+/// bytes* when the username or the password is empty — which arrives here as "the
+/// response to the account check was not valid JSON", and reads on screen as the
+/// provider having sent something broken. The provider sent exactly what it was asked
+/// for; the request had no password in it.
+///
+/// So the check is here, before the request, where the difference between "this panel is
+/// misbehaving" and "Aurora has nothing to sign in with" is still known. Public because
+/// the wizard's validate step needs the same refusal in the same words, one screen
+/// earlier.
+pub fn missing_sign_in(username: &str, password: &str) -> Result<(), NetFailure> {
+    let missing = match (username.trim().is_empty(), password.is_empty()) {
+        (false, false) => return Ok(()),
+        (true, true) => "username or password",
+        (true, false) => "username",
+        (false, true) => "password",
+    };
+    Err(NetFailure {
+        code: ErrorCode::Unauthorized,
+        message: format!("Aurora has no {missing} saved for this provider"),
+        cause: "Nothing was sent to sign in with, so the panel would answer with \
+                nothing. Open Settings, edit the provider and enter it again — on \
+                Windows the password lives in Credential Manager, and a provider added \
+                before it could be written there has none."
+            .into(),
+        actions: vec![ErrorAction::OpenSettings],
+        retryable: false,
+    })
+}
+
 /// through would show a library missing its search index.
 pub fn apply(
     db: &mut Connection,
@@ -1154,6 +1188,77 @@ mod tests {
         assert_eq!(report.channels, 3);
         assert_eq!(report.movies, 0);
         assert_eq!(report.episodes, 0);
+    }
+
+    /// The failure a real subscription produced, and what it looked like from the
+    /// outside: a panel that answers HTTP 200 with zero bytes to a blank sign-in.
+    #[test]
+    fn a_panel_import_with_no_password_refuses_before_it_asks() {
+        let server = TestServer::always(Reply::ok(Vec::new()));
+        let mut conn = db();
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "u".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = None;
+
+        let err = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap_err();
+
+        assert!(
+            err.message.contains("no password saved"),
+            "the message must name the missing password, got {:?}",
+            err.message
+        );
+        assert_eq!(err.code, aurora_core::neterr::ErrorCode::Unauthorized);
+        assert!(!err.retryable, "retrying cannot invent a password");
+        assert!(
+            server.requests().is_empty(),
+            "nothing should be sent: a blank sign-in is answered with an empty body, \
+             and the provider then gets blamed for it"
+        );
+    }
+
+    #[test]
+    fn a_panel_import_with_no_username_refuses_too() {
+        let server = TestServer::always(Reply::ok(Vec::new()));
+        let mut conn = db();
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "   ".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = Some("p".into());
+
+        let err = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap_err();
+        assert!(err.message.contains("no username saved"), "{}", err.message);
+        assert!(server.requests().is_empty());
+    }
+
+    #[test]
+    fn an_m3u_import_needs_no_sign_in() {
+        // The guard is for panels. An M3U URL carries whatever it needs in the URL, and
+        // a password-less one is the normal case rather than a broken one.
+        let server = TestServer::always(Reply::ok(
+            b"#EXTM3U\n#EXTINF:-1,One\nhttp://example.com/1.ts\n".to_vec(),
+        ));
+        let mut conn = db();
+        let opts = SyncOptions::new(
+            1,
+            SourceKind::M3u {
+                url: server.url("/get.php"),
+            },
+            1_705_320_000,
+        );
+        assert_eq!(opts.password, None);
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(report.channels, 1);
     }
 
     #[test]
