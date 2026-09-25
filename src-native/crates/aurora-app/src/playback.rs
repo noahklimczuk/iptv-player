@@ -244,7 +244,17 @@ impl Playback {
     ///
     /// Safe to call as often as you like; it only reports changes.
     pub fn tick(&self, now: i64) -> Option<PlayerState> {
-        let state = self.player.lock().state();
+        let state = {
+            let mut player = self.player.lock();
+            // Drain the backend's own event queue before reading it. Without this the
+            // heartbeat *reads* a state nothing ever *writes*: position, tracks,
+            // buffering, errors and the timeshift window all arrive as mpv events, so
+            // the OSD would sit on whatever the load set and never move again — and
+            // nothing would ever notice a dead stream needed rolling over. Zero
+            // timeout: this thread has somewhere to be in 250 ms.
+            player.pump(0.0);
+            player.state()
+        };
 
         if state.status == PlayerStatus::Error && self.try_recover(now) {
             // A rollover happened, so the interesting state is the new one.

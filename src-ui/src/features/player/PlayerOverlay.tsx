@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Episode, PlayerState, TimeshiftWindow } from '@shared/ipc';
 import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
-import { invoke } from '@/ipc';
+import { invoke, isNativeHost } from '@/ipc';
 import { report } from '@/lib/errors';
 import { clockTime, duration } from '@/lib/format';
 
@@ -61,6 +61,8 @@ export function PlayerOverlay({
 
   const playing = player.status === 'playing';
   const behind = behindLive(player);
+  // Whether there is a real video surface behind this overlay.
+  const hosted = isNativeHost();
 
   return (
     <div
@@ -68,26 +70,34 @@ export function PlayerOverlay({
       onClick={bump}
       style={{
         position: 'fixed', inset: 0, zIndex: 150,
-        // Opaque only where there is no real video surface behind (browser dev).
-        background: 'radial-gradient(ellipse at center, #10101a 0%, #05050a 100%)',
+        // The one place in the app that must let the window through. Under a native
+        // host, mpv is rendering into a child window *behind* the WebView2, and
+        // anything painted here covers it — which is the difference between an OSD
+        // floating over live video and a gradient with buttons on it. In a browser
+        // there is nothing behind, so it paints its own backdrop instead.
+        background: hosted
+          ? 'transparent'
+          : 'radial-gradient(ellipse at center, #10101a 0%, #05050a 100%)',
         cursor: visible ? 'default' : 'none',
       }}
     >
-      {/* Stand-in for the mpv surface. On Windows this element is fully transparent. */}
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
-          color: 'var(--text-faint)',
-        }}
-      >
-        <div style={{ textAlign: 'center' }}>
-          <Icon name="tv" size={64} strokeWidth={1} />
-          <div style={{ marginTop: 12, fontSize: 'var(--fs-sm)' }}>
-            Video surface (libmpv renders here on Windows)
+      {/* Stand-in for the mpv surface, drawn only when there is no mpv. */}
+      {!hosted && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
+            color: 'var(--text-faint)',
+          }}
+        >
+          <div style={{ textAlign: 'center' }}>
+            <Icon name="tv" size={64} strokeWidth={1} />
+            <div style={{ marginTop: 12, fontSize: 'var(--fs-sm)' }}>
+              Video surface (libmpv renders here on Windows)
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {player.status === 'buffering' && (
         <div

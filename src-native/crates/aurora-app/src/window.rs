@@ -214,7 +214,19 @@ pub fn resolve_playback(
 
 /// Compose the video surface behind the transparent WebView2 (README §2.1).
 ///
-/// UNVERIFIED on real hardware — this is the Phase 0 spike (docs/ROADMAP.md).
+/// The order matters and is the whole function: make the WebView2 background
+/// transparent, create the child window mpv draws into, and put it at the bottom of
+/// the z-order so the UI composites on top of it.
+///
+/// This used to set the background and then call `resize` on a surface that did not
+/// exist yet, because nothing created one — `attach` was written and unreachable, the
+/// app layer holding a `Box<dyn PlayerBackend>` that did not expose it. Both halves
+/// are connected now.
+///
+/// **UNVERIFIED on real hardware.** This is the Phase 0 spike (docs/ROADMAP.md): it
+/// compiles for `x86_64-pc-windows-msvc` and has never met a display. Everything here
+/// fails soft — a window that cannot be attached to leaves the app running with no
+/// picture and a line in the log, rather than refusing to start.
 #[cfg(windows)]
 pub fn attach_video_surface(
     window: &tauri::WebviewWindow,
@@ -228,7 +240,30 @@ pub fn attach_video_surface(
     let size = window
         .inner_size()
         .map_err(|e| AppError::Other(format!("inner_size failed: {e}")))?;
-    player.resize(size.width, size.height)?;
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|e| AppError::Other(format!("the window has no HWND yet: {e}")))?;
+
+    player.attach(hwnd.0 as isize, size.width, size.height)?;
+    tracing::info!(
+        width = size.width,
+        height = size.height,
+        "video surface attached"
+    );
+    Ok(())
+}
+
+/// Nothing to compose onto: off Windows there is no mpv and no child HWND.
+///
+/// Present so the call site in `main.rs` is one line with no `cfg` around it — a
+/// second, differently-shaped startup path is how the Windows one stopped being
+/// called in the first place.
+#[cfg(not(windows))]
+pub fn attach_video_surface(
+    _window: &tauri::WebviewWindow,
+    _player: &mut dyn aurora_player::PlayerBackend,
+) -> Result<()> {
     Ok(())
 }
 
