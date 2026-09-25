@@ -20,7 +20,9 @@ export interface Channel {
   hidden: boolean;
   isRadio: boolean;
   hasCatchup: boolean;
-  favorite?: boolean;
+  /** Whether the profile the list was fetched for has this channel in Favourites.
+   *  False when the request named no profile. */
+  favorite: boolean;
   /** ISO 639-1 as the host worked it out, or null when the name never said. */
   lang?: string | null;
 }
@@ -710,7 +712,9 @@ export interface Commands {
   'playlist.hideMatching': (args: PlaylistQuery & { hidden: boolean }) => number;
   'playlist.reset': (args: { kind: PlaylistKind; ids: number[] }) => number;
 
-  'channels.list': (args: { group?: string; favoritesOnly?: boolean }) => Channel[];
+  'channels.list': (
+    args: { group?: string; favoritesOnly?: boolean; profileId?: number },
+  ) => Channel[];
   'channels.groups': () => { name: string; count: number }[];
   'channels.byNumber': (args: { number: number }) => Channel | null;
 

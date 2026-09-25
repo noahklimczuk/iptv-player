@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PlaybackAids, PlayerState, SkipMarker } from '@shared/ipc';
 import { invoke } from '@/ipc';
+import { report } from '@/lib/errors';
 import { activeProfileId } from '@/state/profile';
 
 export interface EpisodeAids {
@@ -49,11 +50,15 @@ export function useEpisodeAids(
     if (fetchedFor.current === episodeId) return;
     fetchedFor.current = episodeId;
     setDismissed(null);
-    void invoke('library.playbackAids', {
+    invoke('library.playbackAids', {
       profileId,
       episodeId,
       durationSecs: duration,
-    }).then(setAids);
+    })
+      .then(setAids)
+      // Not fatal: these drive Skip Intro and Up Next, and a show without them is
+      // simply a show you scrub yourself.
+      .catch(report('Could not load this episode\u2019s skip markers'));
   }, [episodeId, duration, profileId]);
 
   const activeMarker = useMemo(() => {
@@ -74,16 +79,17 @@ export function useEpisodeAids(
 
   const skip = useCallback(
     (marker: SkipMarker, automatic: boolean) => {
-      void invoke('player.seek', { positionSecs: marker.endSecs });
+      invoke('player.seek', { positionSecs: marker.endSecs })
+        .catch(report('Could not skip'));
       // A press is a statement about where this show's intro really is, so remember
       // it; an automatic jump is just us replaying what we already knew.
       if (!automatic && episodeId != null) {
-        void invoke('library.recordSkip', {
+        invoke('library.recordSkip', {
           episodeId,
           kind: marker.kind,
           startSecs: marker.startSecs,
           endSecs: marker.endSecs,
-        });
+        }).catch(report('Could not remember that skip'));
       }
     },
     [episodeId],

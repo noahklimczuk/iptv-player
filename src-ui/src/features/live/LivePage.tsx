@@ -3,23 +3,39 @@
  * The set-top-box behaviours (banner, digit entry, last-channel) live in
  * features/player/ChannelBanner.tsx and hooks/useZapper.ts so they work from any screen.
  */
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { Channel } from '@shared/ipc';
 import { Badge, Button, EmptyState, Skeleton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
+import { invoke } from '@/ipc';
+import { report } from '@/lib/errors';
 import { clockTime, progressPct } from '@/lib/format';
+import { activeProfileId } from '@/state/profile';
 
 export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   const [group, setGroup] = useState<string | undefined>(undefined);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [view, setView] = useState<'list' | 'grid'>('list');
 
+  const profileId = activeProfileId();
   const { data: groups } = useCommand('channels.groups', undefined, []);
+  // A nonce rather than a full reload, so toggling a heart repaints the list without
+  // the screen blanking back to skeletons.
+  const [favNonce, setFavNonce] = useState(0);
   const { data: channels, loading } = useCommand(
     'channels.list',
-    { group, favoritesOnly },
-    [group, favoritesOnly],
+    { group, favoritesOnly, profileId },
+    [group, favoritesOnly, profileId, favNonce],
+  );
+
+  const toggleFavorite = useCallback(
+    (channel: Channel) => {
+      invoke('favorites.toggle', { profileId, channelId: channel.id })
+        .then(() => setFavNonce((n) => n + 1))
+        .catch(report(`Could not change favourites for ${channel.name}`));
+    },
+    [profileId],
   );
 
   const categories = useMemo(
@@ -112,7 +128,12 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
       {view === 'list' ? (
         <div style={{ display: 'grid', gap: 4 }}>
           {(channels ?? []).map((c) => (
-            <ChannelRow key={c.id} channel={c} onTune={onTune} />
+            <ChannelRow
+              key={c.id}
+              channel={c}
+              onTune={onTune}
+              onToggleFavorite={toggleFavorite}
+            />
           ))}
         </div>
       ) : (
@@ -131,7 +152,13 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   );
 }
 
-function ChannelRow({ channel, onTune }: { channel: Channel; onTune: (c: Channel) => void }) {
+function ChannelRow({
+  channel, onTune, onToggleFavorite,
+}: {
+  channel: Channel;
+  onTune: (c: Channel) => void;
+  onToggleFavorite: (c: Channel) => void;
+}) {
   const { data } = useCommand('epg.nowNext', { channelId: channel.id }, [channel.id]);
   const now = Math.floor(Date.now() / 1000);
   const pct = data?.now
@@ -139,8 +166,18 @@ function ChannelRow({ channel, onTune }: { channel: Channel; onTune: (c: Channel
     : 0;
 
   return (
-    <button
+    // A div with a button role rather than a <button>: the heart is a control of its
+    // own and a button inside a button is invalid markup that browsers resolve by
+    // dropping one of them.
+    <div
+      role="button"
+      tabIndex={0}
+      data-testid="channel-row"
+      aria-label={`Watch ${channel.name}`}
       onClick={() => onTune(channel)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTune(channel); }
+      }}
       style={{
         display: 'grid', gridTemplateColumns: '44px 44px 1fr auto', gap: 'var(--sp-3)',
         alignItems: 'center', padding: 'var(--sp-3)', textAlign: 'left',
@@ -167,7 +204,6 @@ function ChannelRow({ channel, onTune }: { channel: Channel; onTune: (c: Channel
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
           <strong style={{ fontSize: 'var(--fs-md)' }}>{channel.name}</strong>
           {channel.quality && <Badge tone={channel.quality === '4K' ? 'accent' : 'neutral'}>{channel.quality}</Badge>}
-          {channel.favorite && <Icon name="heart" size={13} filled style={{ color: 'var(--accent)' }} />}
         </div>
         <div
           style={{
@@ -198,9 +234,28 @@ function ChannelRow({ channel, onTune }: { channel: Channel; onTune: (c: Channel
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {channel.hasCatchup && <Badge tone="outline">Catch-up</Badge>}
+        <button
+          type="button"
+          aria-label={
+            channel.favorite
+              ? `Remove ${channel.name} from favourites`
+              : `Add ${channel.name} to favourites`
+          }
+          aria-pressed={channel.favorite}
+          data-testid={`favorite-${channel.id}`}
+          onClick={(e) => { e.stopPropagation(); onToggleFavorite(channel); }}
+          style={{
+            display: 'grid', placeItems: 'center', width: 30, height: 30,
+            background: 'transparent', border: 'none', borderRadius: 'var(--r-full)',
+            cursor: 'pointer',
+            color: channel.favorite ? 'var(--accent)' : 'var(--text-faint)',
+          }}
+        >
+          <Icon name="heart" size={16} filled={channel.favorite} />
+        </button>
         <Icon name="play" size={18} filled style={{ color: 'var(--text-faint)' }} />
       </div>
-    </button>
+    </div>
   );
 }
 

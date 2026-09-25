@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { CatalogItem, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
+import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
 import { BrowsePage } from '@/features/browse/BrowsePage';
 import { RecordingsPage } from '@/features/dvr/RecordingsPage';
@@ -22,6 +23,7 @@ import { useEpisodeAids } from '@/hooks/useEpisodeAids';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { invoke } from '@/ipc';
+import { report } from '@/lib/errors';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
 
@@ -62,14 +64,25 @@ export default function App() {
 
   const play = useCallback(async (item: CatalogItem, episodeId?: number) => {
     ui.openDetail(null);
-    if (item.kind === 'series') {
-      const eps = await invoke('library.episodes', { seriesId: item.id });
-      const target = episodeId ?? eps[0]?.id;
-      if (target != null) await invoke('player.play', { kind: 'episode', id: target });
-    } else {
-      await invoke('player.play', { kind: 'movie', id: item.id });
+    try {
+      if (item.kind === 'series') {
+        const eps = await invoke('library.episodes', { seriesId: item.id });
+        const target = episodeId ?? eps[0]?.id;
+        if (target == null) {
+          report(`No episodes of ${item.title} have been imported yet`)(
+            new Error('The provider listed the show but not its episodes.'),
+          );
+          return;
+        }
+        await invoke('player.play', { kind: 'episode', id: target });
+      } else {
+        await invoke('player.play', { kind: 'movie', id: item.id });
+      }
+      setPlayerOpen(true);
+    } catch (e) {
+      // Opening a black player and saying nothing is what this used to do.
+      report(`Could not play ${item.title}`)(e);
     }
-    setPlayerOpen(true);
   }, [ui]);
 
   /**
@@ -82,15 +95,26 @@ export default function App() {
    */
   const playCatchup = useCallback(
     async (channelId: number, start: number, stop: number) => {
-      await invoke('player.playCatchup', { channelId, start, stop });
-      setPlayerOpen(true);
+      try {
+        await invoke('player.playCatchup', { channelId, start, stop });
+        setPlayerOpen(true);
+      } catch (e) {
+        // The three ways catch-up refuses — no catch-up, outside the window, the
+        // provider did not say how to ask — are each things the viewer can act on,
+        // and each was being thrown into a promise nobody was holding.
+        report('Cannot watch that from the start')(e);
+      }
     },
     [],
   );
 
   const playEpisode = useCallback(async (episodeId: number) => {
-    await invoke('player.play', { kind: 'episode', id: episodeId });
-    setPlayerOpen(true);
+    try {
+      await invoke('player.play', { kind: 'episode', id: episodeId });
+      setPlayerOpen(true);
+    } catch (e) {
+      report('Could not play that episode')(e);
+    }
   }, []);
 
   const episode = useEpisodeAids(ui.player, (id) => void playEpisode(id));
@@ -127,7 +151,10 @@ export default function App() {
     },
     onPlayPause: () => {
       const s = ui.player?.status;
-      if (s) void invoke(s === 'playing' ? 'player.pause' : 'player.resume');
+      if (s) {
+        invoke(s === 'playing' ? 'player.pause' : 'player.resume')
+          .catch(report('The player did not respond'));
+      }
     },
     /**
      * `T` on live TV: pausing is what puts the viewer behind live, so this pauses when
@@ -138,19 +165,26 @@ export default function App() {
       const p = ui.player;
       if (!p || p.status === 'idle') return;
       if (!p.isLive) {
-        void invoke(p.status === 'playing' ? 'player.pause' : 'player.resume');
+        invoke(p.status === 'playing' ? 'player.pause' : 'player.resume')
+          .catch(report('The player did not respond'));
         return;
       }
       if (behindLive(p) > 0) {
-        void invoke('player.backToLive');
+        invoke('player.backToLive').catch(report('Could not return to live'));
         return;
       }
-      void invoke(p.status === 'playing' ? 'player.pause' : 'player.resume');
+      invoke(p.status === 'playing' ? 'player.pause' : 'player.resume')
+        .catch(report('The player did not respond'));
     },
-    onSeek: (secs: number) => void invoke('player.seek', { positionSecs: secs, relative: true }),
+    onSeek: (secs: number) =>
+      invoke('player.seek', { positionSecs: secs, relative: true })
+        .catch(report('Could not seek')),
     onVolume: (delta: number) =>
-      void invoke('player.setVolume', { volume: (ui.player?.volume ?? 70) + delta }),
-    onMute: () => void invoke('player.setMuted', { muted: !(ui.player?.muted ?? false) }),
+      invoke('player.setVolume', { volume: (ui.player?.volume ?? 70) + delta })
+        .catch(report('Could not change the volume')),
+    onMute: () =>
+      invoke('player.setMuted', { muted: !(ui.player?.muted ?? false) })
+        .catch(report('Could not change the volume')),
     onFullscreen: () => void document.documentElement.requestFullscreen?.().catch(() => {}),
     onInfo: () => {},
     onNavigate: (to: string) => { setPlayerOpen(false); navigate(to); },
@@ -299,6 +333,10 @@ export default function App() {
       <DigitEntry digits={ui.digits} />
 
       <DetailModal item={ui.detail} onClose={() => ui.openDetail(null)} onPlay={play} />
+
+      {/* Above the player overlay, because most of what fails here fails while
+          something is playing and the whole point is that it is visible. */}
+      <NoticeStack />
 
       <CommandPalette
         open={ui.paletteOpen}

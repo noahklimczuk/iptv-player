@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SearchHit, SearchResults } from '@shared/ipc';
 import { Icon, type IconName } from '@/components/Icon';
 import { invoke } from '@/ipc';
+import { report } from '@/lib/errors';
 
 const GROUPS: { key: keyof SearchResults; label: string; icon: IconName }[] = [
   { key: 'channels', label: 'Live Channels', icon: 'tv' },
@@ -48,7 +49,9 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) return;
     const t = window.setTimeout(() => {
-      void invoke('search.query', { text }).then(setResults);
+      invoke('search.query', { text })
+        .then(setResults)
+        .catch(report('Search failed'));
     }, 90);
     return () => window.clearTimeout(t);
   }, [text, open]);

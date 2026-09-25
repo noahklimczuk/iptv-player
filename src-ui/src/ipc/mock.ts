@@ -1040,10 +1040,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'library.genres': () =>
     [...new Set([...visibleMovies(), ...visibleSeries()].flatMap((m) => m.genres))].sort(),
 
+  // `favorite` is reported the way the host reports it: from the live set, not from
+  // the fixture the channel was built with. Reading a stale fixture flag is how the
+  // mock and the host drifted apart in the first place.
   'channels.list': ({ group, favoritesOnly } = {}) =>
-    visibleChannels().filter(
-      (c) => (!group || c.group === group) && (!favoritesOnly || favorites.has(c.id)),
-    ),
+    visibleChannels()
+      .filter((c) => (!group || c.group === group) && (!favoritesOnly || favorites.has(c.id)))
+      .map((c) => ({ ...c, favorite: favorites.has(c.id) })),
   'channels.groups': () => {
     const counts = new Map<string, number>();
     for (const c of visibleChannels()) {
@@ -1670,10 +1673,32 @@ export function getProgress(kind: 'movie' | 'episode', id: number) {
   return progress.get(`${kind}:${id}`) ?? null;
 }
 
+/**
+ * Commands the next call to which should refuse, and with what.
+ *
+ * A test seam, in the same spirit as `__auroraInvoke`: the mock answers everything
+ * happily, which is right for a fixture and wrong for proving that a refusal reaches
+ * the viewer. Every real failure mode here — a channel whose sources are all dead, a
+ * provider that is down, catch-up outside the window — arrives at the UI as exactly
+ * this: a rejected promise carrying the host's message.
+ */
+const faults = new Map<string, string>();
+
+export function failNextMock(name: string, message: string): void {
+  faults.set(name, message);
+}
+
 export async function invokeMock<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
 ): Promise<CommandResult<K>> {
+  const fault = faults.get(name);
+  if (fault !== undefined) {
+    faults.delete(name);
+    // A string, not an Error: Tauri serialises `AppError` through its Display impl,
+    // so a rejection from the real host is a bare string and the UI has to read one.
+    throw fault;
+  }
   const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
   return await fn(args);
