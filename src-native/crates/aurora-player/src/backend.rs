@@ -139,6 +139,34 @@ pub trait PlayerBackend: Send {
     fn chapters(&self) -> Vec<Chapter>;
     /// Re-attach the video surface after the window is resized or moved.
     fn resize(&mut self, width: u32, height: u32) -> Result<(), PlayerError>;
+
+    /// Give the backend a window to render into.
+    ///
+    /// `parent` is the host window's native handle as an integer — on Windows, the
+    /// `HWND`. An integer rather than a typed handle because this trait compiles on
+    /// every platform and `HWND` does not; the backend that cares is the one that
+    /// knows how to interpret it.
+    ///
+    /// This is on the trait, rather than being an inherent method on `MpvBackend`,
+    /// because that is the whole reason it was never called: the app layer holds a
+    /// `Box<dyn PlayerBackend>` and could not reach it. The default does nothing,
+    /// which is correct for a backend that renders nothing.
+    fn attach(&mut self, parent: isize, width: u32, height: u32) -> Result<(), PlayerError> {
+        let _ = (parent, width, height);
+        Ok(())
+    }
+
+    /// Drain whatever the player has to say and fold it into its state.
+    ///
+    /// The other half of the same gap. Position, tracks, buffering, errors and the
+    /// timeshift window only change when this runs, so the 250 ms heartbeat that
+    /// *reads* the state has to call it first or the OSD never moves after a load.
+    ///
+    /// `timeout_secs` is how long to wait for an event that has not arrived yet; the
+    /// heartbeat passes zero, because it has somewhere else to be.
+    fn pump(&mut self, timeout_secs: f64) {
+        let _ = timeout_secs;
+    }
 }
 
 /// A backend that models state without decoding anything. Used on non-Windows hosts

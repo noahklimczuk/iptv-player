@@ -57,8 +57,20 @@ pub struct MpvBackend {
     timeshift: Option<Timeshift>,
 }
 
-// SAFETY: Mpv is internally synchronized and the HWND is only touched from the thread
-// that owns the backend. The backend is moved into a Mutex by the app layer.
+// SAFETY: `Mpv` is internally synchronized, and the backend lives behind a `Mutex` in
+// the app layer, so only one thread is inside it at a time.
+//
+// The HWND is now touched from two: `attach` and `resize` run on the main thread (at
+// setup, and from the window event loop), while `pump` runs on the player heartbeat.
+// That is sound rather than merely tolerated. `CreateWindowExW` ties the child window
+// to the creating thread's message queue — the main thread, which is the one with a
+// message loop, and the only place that could be right. `SetWindowPos` on a window
+// owned by another thread is explicitly permitted by Win32. And mpv renders into the
+// handle from its own threads regardless of either, which is what passing `wid` means.
+//
+// What would *not* be sound is destroying the window from a thread other than its
+// creator; `Drop` runs wherever the `Mutex` is dropped, which is the main thread at
+// exit.
 unsafe impl Send for MpvBackend {}
 
 impl MpvBackend {
@@ -532,6 +544,21 @@ impl PlayerBackend for MpvBackend {
             }
         }
         Ok(())
+    }
+
+    /// The host hands over its `HWND` as an integer, because the trait it is coming
+    /// through compiles on platforms where `HWND` does not exist.
+    fn attach(&mut self, parent: isize, width: u32, height: u32) -> Result<(), PlayerError> {
+        if parent == 0 {
+            return Err(PlayerError::Init(
+                "the host gave no window to attach to".into(),
+            ));
+        }
+        MpvBackend::attach(self, HWND(parent as *mut c_void), width, height)
+    }
+
+    fn pump(&mut self, timeout_secs: f64) {
+        MpvBackend::pump(self, timeout_secs)
     }
 }
 

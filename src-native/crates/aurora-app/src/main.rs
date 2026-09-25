@@ -5,7 +5,7 @@ use aurora_app::{
     commands, dvr, library, metadata, now_unix, playlist, profiles, providers,
     services::Services,
     supervise::{log_panics, supervised},
-    timeshift, updates,
+    timeshift, updates, window,
 };
 
 /// Send the log somewhere a person can read it.
@@ -103,6 +103,28 @@ fn main() {
             let services = Services::new(data_dir)?;
             let scheduler = std::sync::Arc::clone(&services.dvr);
             let playback_handle = std::sync::Arc::clone(&services.playback);
+            let player_backend = std::sync::Arc::clone(&services.player);
+
+            // The Phase 0 spike, finally connected (docs/ROADMAP.md). `attach` creates
+            // the child window mpv draws into and hands it the handle; without it there
+            // is no surface and mpv has nowhere to put a frame. It was written, and
+            // unreachable, because the app layer holds a `Box<dyn PlayerBackend>` and
+            // the method was not on the trait.
+            //
+            // A failure here is not a reason to refuse to start: an app running with no
+            // picture and a line in the log is something a person can report; a window
+            // that never appears is not.
+            match app.get_webview_window("main") {
+                Some(main_window) => {
+                    let mut player = player_backend.lock();
+                    match window::attach_video_surface(&main_window, player.as_mut()) {
+                        Ok(()) => tracing::info!("video surface ready"),
+                        Err(e) => tracing::error!("no video surface: {e}"),
+                    }
+                }
+                None => tracing::error!("no main window at setup; video cannot composite"),
+            }
+
             app.manage(services);
 
             // The player's heartbeat. The backend only knows its state when asked, and
@@ -157,14 +179,27 @@ fn main() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Closing the window must not orphan a recording in flight: finalise it so
-            // the file is flushed and the row says what actually happened.
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                use tauri::Manager;
-                if let Some(services) = window.try_state::<Services>() {
-                    services.dvr.shutdown(now_unix());
+        .on_window_event(|win, event| {
+            use tauri::Manager;
+            match event {
+                // Closing the window must not orphan a recording in flight: finalise it
+                // so the file is flushed and the row says what actually happened.
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    if let Some(services) = win.try_state::<Services>() {
+                        services.dvr.shutdown(now_unix());
+                    }
                 }
+                // The video surface is a sibling of the WebView2, not a child of it, so
+                // nothing moves it on its own. Repositioning it in the same event the
+                // resize arrives on is what stops the two tearing apart (README §2.1).
+                tauri::WindowEvent::Resized(size) => {
+                    if let Some(services) = win.try_state::<Services>() {
+                        if let Err(e) = services.player.lock().resize(size.width, size.height) {
+                            tracing::warn!("could not resize the video surface: {e}");
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

@@ -249,3 +249,74 @@ fn the_csp_allows_the_image_schemes_providers_actually_use() {
         "the default must stay same-origin: {csp}"
     );
 }
+
+/// The Phase 0 spike must stay wired.
+///
+/// `attach`, `attach_video_surface` and `pump` were each written, each correct as far
+/// as anyone could tell, and each called from nowhere — so a Windows run showed no
+/// video for reasons that had nothing to do with compositing, and the OSD would have
+/// frozen after the first frame because nothing drained mpv's event queue. They were
+/// unreachable structurally: the app layer holds a `Box<dyn PlayerBackend>`, and
+/// neither method was on the trait.
+///
+/// This reads the sources rather than running anything, because the thing that went
+/// wrong is not behaviour — it is a call that does not exist. Nothing on this machine
+/// can run the Windows path, so what is worth pinning is that the calls are there.
+#[test]
+fn the_video_surface_and_the_event_pump_are_actually_called() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let read = |name: &str| std::fs::read_to_string(src.join(name)).expect(name);
+
+    let main = read("main.rs");
+    assert!(
+        main.contains("window::attach_video_surface("),
+        "nothing creates the video surface, so mpv has nowhere to draw"
+    );
+    assert!(
+        main.contains("tauri::WindowEvent::Resized"),
+        "nothing repositions the video surface, so it tears away from the WebView"
+    );
+
+    let window = read("window.rs");
+    assert!(
+        window.contains("player.attach("),
+        "attach_video_surface no longer attaches anything"
+    );
+    assert!(
+        window.contains(".hwnd()"),
+        "the surface is not given the host window's handle"
+    );
+
+    let playback = read("playback.rs");
+    assert!(
+        playback.contains("player.pump("),
+        "the heartbeat reads a state that nothing produces: position, tracks, \
+         buffering, errors and the timeshift window all arrive as backend events"
+    );
+}
+
+/// The compositing model needs the window itself to be transparent, not only the
+/// WebView2's background (README §2.1). This was `false`, which alone would have been
+/// enough to show no video.
+#[test]
+fn the_window_is_transparent_so_video_can_show_through() {
+    let config =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+            .expect("tauri.conf.json");
+    let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
+    let window = &parsed["app"]["windows"][0];
+
+    assert_eq!(
+        window["transparent"].as_bool(),
+        Some(true),
+        "an opaque window hides the mpv surface behind it"
+    );
+    // The label the host looks the window up by. Absent means Tauri's default, "main",
+    // which is what `get_webview_window("main")` asks for.
+    if let Some(label) = window["label"].as_str() {
+        assert_eq!(
+            label, "main",
+            "main.rs looks up the window labelled \"main\""
+        );
+    }
+}
