@@ -146,8 +146,11 @@ fn main() {
     for (label, sql) in [
         ("channels", "SELECT COUNT(*) FROM channels"),
         ("  with an EPG id", "SELECT COUNT(*) FROM channels WHERE epg_channel_id IS NOT NULL AND epg_channel_id <> ''"),
-        ("  with a country", "SELECT COUNT(*) FROM channels WHERE country IS NOT NULL AND country <> ''"),
-        ("  with a language", "SELECT COUNT(*) FROM channels WHERE language IS NOT NULL AND language <> ''"),
+        // `lang_code` and `quality_rank`, not `language` and `quality`: the latter are
+        // what the provider claimed, which this panel does not send at all, and the
+        // former are what classification worked out and what the filters read.
+        ("  classified by language", "SELECT COUNT(*) FROM channels WHERE lang_code IS NOT NULL AND lang_code <> ''"),
+        ("  English", "SELECT COUNT(*) FROM channels WHERE lang_code = 'en'"),
         ("  distinct match keys", "SELECT COUNT(DISTINCT match_key) FROM channels"),
         ("  hidden by rules", "SELECT COUNT(*) FROM channels WHERE hidden = 1"),
         ("channel sources", "SELECT COUNT(*) FROM channel_sources"),
