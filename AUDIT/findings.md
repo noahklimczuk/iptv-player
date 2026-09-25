@@ -36,7 +36,7 @@ commit and the test that would catch a regression.
 | F-21 | Low | m3u | `looks_like_url` treats any `x:…` line as a path, so junk becomes an entry | Fixed |
 | F-22 | Low | xmltv | `parse_time` accepts 31 February and similar impossible dates | Fixed |
 | F-23 | Medium | catchup | Xtream catch-up timestamps are sent in UTC; panels read them as local time | Deferred |
-| F-24 | High | player | Phase 0: `attach`, `attach_video_surface` and `pump` are never called | Deferred |
+| F-24 | High | player | Phase 0: `attach`, `attach_video_surface` and `pump` are never called | Fixed (wired; unrun) |
 | F-25 | Medium | release | Nothing is code-signed; the updater verifies a digest, not a signature | Deferred |
 | F-26 | Low | build | No ARM64 target is configured | Won't fix |
 | F-27 | High | ui | A host failure renders as an empty state: "you have no channels" | Fixed |
@@ -584,24 +584,46 @@ frame is checked against the programme's advertised start.
 
 ---
 
-## F-24 — High — The Phase 0 spike is unwired — **Deferred**
+## F-24 — High — The Phase 0 spike was unwired — **Fixed (wired; never run)**
 
 **Where.** `crates/aurora-player/src/mpv.rs` (`attach`, `pump`),
-`crates/aurora-app/src/window.rs:206` (`attach_video_surface`).
+`crates/aurora-app/src/window.rs` (`attach_video_surface`),
+`crates/aurora-app/src/main.rs`, `crates/aurora-app/tauri.conf.json`.
 
-None of the three is called from anywhere. Without `attach` mpv has no `wid` and
-nowhere to draw; without `pump` its event queue is never drained, so position,
-tracks, buffering, errors and the timeshift window never change after a load — the
-250 ms heartbeat reads that state, it does not produce it. `tauri.conf.json` also
-sets `"transparent": false`, which the compositing model in README §2.1 needs to be
-true.
+None of the three was called from anywhere. Without `attach` mpv had no `wid` and
+nowhere to draw; without `pump` its event queue was never drained, so position, tracks,
+buffering, errors and the timeshift window never changed after a load — the 250 ms
+heartbeat reads that state, it does not produce it. `tauri.conf.json` also set
+`"transparent": false`, which alone was enough to show no video.
 
-**Why deferred.** This is Win32 message plumbing whose correctness is only observable
-on Windows with `mpv-2.dll` present. `docs/ROADMAP.md` already names it as the
-nearest next step and budgets an hour of wiring. Writing it blind from Linux would
-produce code that compiles, cannot be run, and would have to be rewritten by whoever
-does have the machine — which is how it got here. It is in the release checklist as
-the first blocking item.
+**Why it was unreachable, which is the part worth knowing.** Not an oversight in
+`main.rs`: `attach` and `pump` were inherent methods on `MpvBackend`, and the app layer
+holds a `Box<dyn PlayerBackend>`. There was no way to call them at all. Moving them
+onto the trait — with defaults that do nothing, so `NullBackend` and every test fake
+are untouched — is what made the wiring possible. `attach` takes the handle as an
+`isize` because the trait compiles on platforms where `HWND` does not, and both
+windows-crate versions in the tree agree an `HWND` is a `*mut c_void`, so the cast is
+version-agnostic.
+
+**Fix.** Four calls and a flag: attach at setup, pump from `Playback::tick`,
+reposition on `WindowEvent::Resized`, `"transparent": true`, and an OSD that goes
+transparent under a native host instead of painting a gradient over the video.
+Everything fails soft — a window that cannot be attached to leaves the app running
+with no picture and a line in the log, which is reportable; a window that never
+appears is not.
+
+**What "Fixed" does and does not mean here.** The code exists and is reachable, and
+`aurora-player` type-checks for `x86_64-pc-windows-msvc`. It has still never met a
+display, and `aurora-app` could not even be cross-checked in this container because
+rustls's `ring` needs an MSVC C compiler — CI's Windows job is the first thing that
+will compile `window.rs` and `main.rs`. What changed is that the spike can now be
+*run*: before it, a Windows build showed a black rectangle however well the
+compositing worked.
+
+**Regression test.**
+`crates/aurora-app/tests/contract.rs::the_video_surface_and_the_event_pump_are_actually_called`
+and `::the_window_is_transparent_so_video_can_show_through` — they read the sources and
+the config, because what went wrong was not behaviour but a call that did not exist.
 
 ---
 
@@ -676,13 +698,20 @@ reported rather than left as a blank panel`.
 | F-12, F-13, F-14 | `fix(diagnostics): keep the evidence, and say when the library was lost` |
 | F-15, F-18, F-20, F-22 | `fix(hardening): redaction, an atomic provider save, and two sharp edges` |
 | F-27 | `test: the inputs providers actually send, and what happens after an hour` |
+| F-24 | `feat(player): connect the video surface and the event pump` |
 
 ## Counts
 
 | Severity | Fixed | Deferred | Won't fix | Total |
 |---|---|---|---|---|
 | Critical | 2 | 0 | 0 | **2** |
-| High | 9 | 1 | 0 | **10** |
+| High | 10 | 0 | 0 | **10** |
 | Medium | 9 | 2 | 0 | **11** |
 | Low | 3 | 0 | 1 | **4** |
-| **Total** | **23** | **3** | **1** | **27** |
+| **Total** | **24** | **2** | **1** | **27** |
+
+F-24 counts as Fixed on the strength of the code being written, reachable and
+type-checking for Windows — not on the strength of anyone having seen it work. The two
+still deferred are F-23 (the Xtream catch-up timezone, unfixable against evidence until
+a panel whose `timeshift.php` answers is available) and F-25 (code signing, which needs
+a certificate somebody buys).

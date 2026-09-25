@@ -20,18 +20,18 @@ Chromium via Playwright 1.49.
 | `aurora-ingest` unit | 173 | 186 | +13 |
 | `aurora-player` unit | 21 | 21 | — |
 | `aurora-app` unit | 69 | 88 | +19 |
-| `aurora-app` `contract.rs` | 4 | 5 | +1 |
+| `aurora-app` `contract.rs` | 4 | 7 | +3 |
 | `aurora-app` `command_args.rs` | 1 | 2 | +1 |
 | `aurora-app` `stress.rs` (soak, `--ignored`) | — | 3 | **+3 (new)** |
 | Rust doc-tests | 1 | 1 | — |
-| **Rust total** | **713** | **776** | **+63** |
+| **Rust total** | **713** | **778** | **+65** |
 
-`cargo test --workspace --all-targets` reports **772**: it excludes the doc-test and
+`cargo test --workspace --all-targets` reports **774**: it excludes the doc-test and
 does not run the three `#[ignore]` soak tests, which are run separately in §6.
-| Playwright journeys | 84 | 96 | +12 |
+| Playwright journeys | 84 | 97 | +13 |
 | Vitest (TypeScript units) | **0 — suite exited 1** | 12 | **+12 (new)** |
 | `scripts/version.test.mjs` | 14 | 14 | — |
-| **Grand total** | **811** | **898** | **+87** |
+| **Grand total** | **811** | **901** | **+90** |
 
 `pnpm test` answered `No test files found, exiting with code 1` before this pass.
 There was not one unit test for any TypeScript in the repository.
@@ -46,7 +46,7 @@ test result: ok. 88 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
      Running tests/command_args.rs
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
      Running tests/contract.rs
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
      Running tests/stress.rs
 test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out
      Running unittests src/lib.rs (target/debug/deps/aurora_core-7b7bc4e7e9c669e8)
@@ -63,8 +63,8 @@ test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-Summed: `88 + 2 + 5 + 255 + 9 + 206 + 186 + 21 = 772`, plus 1 doc-test and the 3
-soak tests below = **776**.
+Summed: `88 + 2 + 7 + 255 + 9 + 206 + 186 + 21 = 774`, plus 1 doc-test and the 3
+soak tests below = **778**.
 
 **Warnings: zero.** `cargo clippy --workspace --all-targets -- -D warnings` exits 0
 with no output, and `cargo fmt --all --check` is clean. No lint is allowed or
@@ -270,12 +270,13 @@ subscription, and no amount of work in this container changes that.
 
 | Claim | Why not |
 |---|---|
-| Video decodes and composites behind the WebView | Phase 0. `MpvBackend::attach`, `window::attach_video_surface` and `MpvBackend::pump` are written and called from nowhere, and `tauri.conf.json` still has `"transparent": false`. F-24 — deferred, with reasons, and item 1 of the checklist. |
+| Video decodes and composites behind the WebView | Phase 0. The wiring is **done** (F-24): `attach`, `pump` and `attach_video_surface` are called, the window is transparent, and the OSD no longer paints over the video. `aurora-player` type-checks for `x86_64-pc-windows-msvc`; `aurora-app` could not be cross-checked here because rustls's `ring` needs an MSVC C compiler, so CI's Windows job compiles `window.rs` and `main.rs` first. Nothing has met a display. Item 1 of the checklist. |
 | The commands really do run off the main thread | The macro path is proven (`ExecutionContext::Blocking` vs `sync_threadpool` in `tauri-macros-2.6.3`) and pinned by a test, but "the window stays responsive during a 24-second refresh" is an observation somebody has to make on Windows. |
 | A recording survives a real provider's stream | The recorder has only met the test server. |
 | Catch-up works on a real panel | The probe in `docs/ROADMAP.md` found `timeshift.php` 404s on the one panel available, so F-23 (the UTC/local timezone bug) cannot be fixed against evidence. |
 | TMDB's real responses | Parsed from the documented shape, never called with a key. |
 | Artwork served from the cache | `assetProtocol` is still not enabled; the UI renders remote URLs. The CSP now allows `asset:` so the swap is one config flag away. |
+| The licence notices reach a viewer | The files are bundled and Settings → About reads them from beside the executable, which is verified against the mock; whether the packaged `.exe` really has them beside it needs the installer to have run. |
 | The installer, upgrade and uninstall | No Windows runner here. |
 | High-DPI, multi-monitor, per-monitor DPI, media keys | Needs the real shell. |
 | Screen-reader behaviour | Roles, names and tab order are in place and asserted where they can be; an actual NVDA/Narrator pass is a human job. |

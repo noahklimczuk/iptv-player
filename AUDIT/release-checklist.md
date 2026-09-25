@@ -1,33 +1,35 @@
 # Release checklist
 
-What is left for a person, in the order it blocks 1.0. Everything here needs a
-Windows machine, a paid account, a certificate, or a decision — none of which this
-audit could supply. Items 1–4 are blocking; 5 onwards are the difference between
+What is left for a person, in the order it blocks 1.0. Everything still open here
+needs a Windows machine, a paid account, a certificate, or a decision — none of which
+this audit could supply.
+
+Items 6 and 8 are **done**. Item 1's code is done and only its *verification* is left.
+Items 2, 3, 4 and 5 are blocking and untouched; 7, 9 and 10 are the difference between
 shipping and shipping well.
 
 ---
 
-## 1. Wire and run the Phase 0 spike — **blocking, and everything else is downstream**
+## 1. Run the Phase 0 spike — **blocking, and everything else is downstream**
 
-Budget an hour of Win32 plumbing, then an afternoon of looking at it.
+**The wiring is done.** It was the gap that made every other question unanswerable:
+three things were written and called from nowhere, so a run would have shown no video
+for reasons unrelated to compositing. They are connected now (`feat(player): connect
+the video surface and the event pump`):
 
-Three things are written and called from nowhere, so a run today shows no video for
-reasons that have nothing to do with compositing:
+- `MpvBackend::attach` and `pump` are on the `PlayerBackend` trait, which is what made
+  them reachable at all — the app layer holds a `Box<dyn PlayerBackend>`.
+- `main.rs` attaches the surface at setup; `WindowEvent::Resized` repositions it.
+- `Playback::tick` pumps before it reads, so the OSD is driven by something.
+- `"transparent": true` is set, and the OSD no longer paints over the video.
 
-- `MpvBackend::attach` (`aurora-player/src/mpv.rs`) creates the child HWND video
-  renders into and hands mpv its `wid`. Nothing calls it, so mpv has nowhere to draw.
-- `window::attach_video_surface` (`aurora-app/src/window.rs`) is the host half. Also
-  never called, and it does not call `attach` — it makes the WebView2 background
-  transparent and resizes a surface that does not exist yet.
-- `MpvBackend::pump` drains mpv's event queue and is the only thing that updates
-  position, tracks, buffering, errors and the timeshift window. The 250 ms heartbeat
-  in `main.rs` *reads* that state; it does not produce it.
+`aurora-player` type-checks for `x86_64-pc-windows-msvc`. **`aurora-app` could not be
+cross-checked here** — rustls's `ring` needs an MSVC C compiler this container does
+not have — so CI's Windows job is the first thing that will compile `window.rs` and
+`main.rs`. Expect to fix a compile error or two there before anything runs.
 
-Also set `"transparent": true` on the window in
-`crates/aurora-app/tauri.conf.json` — the compositing model in README §2.1 needs it and
-it is currently `false`.
-
-Then run `cargo tauri dev` on Windows with `mpv-2.dll` beside the exe and confirm:
+What remains is the part only a machine can do. Run `cargo tauri dev` on Windows with
+`mpv-2.dll` beside the exe and confirm:
 
 1. Video renders *behind* the UI, not in a separate window.
 2. The UI receives input while video plays underneath.
@@ -37,11 +39,16 @@ Then run `cargo tauri dev` on Windows with `mpv-2.dll` beside the exe and confir
 If (1) or (3) fails, the fallback is a native XAML/WinUI shell for the player surface.
 `aurora-core`, `aurora-db` and `aurora-player` are backend-agnostic and port unchanged.
 
-**While you are there**, confirm the one thing this audit changed that only Windows can
-show: with every command now on the thread pool (F-01), the window should stay movable
-and repaint throughout a full provider refresh, and the `ingest.progress` bar should
-actually move. Before the fix it could not, because delivering the event needed the
-same thread the refresh was holding.
+**While you are there**, confirm the two things this audit changed that only Windows
+can show. With every command now on the thread pool (F-01), the window should stay
+movable and repaint throughout a full provider refresh, and the `ingest.progress` bar
+should actually move — before the fix it could not, because delivering the event
+needed the thread the refresh was holding. And with `pump` wired, the OSD's clock,
+buffer readout and track lists should change *during* playback rather than freezing on
+whatever the load set.
+
+If there is no picture, the log says which step failed: look for `video surface
+ready`, `no video surface: …`, or `no main window at setup`.
 
 ## 2. Code signing — **blocking for anything a stranger installs**
 
@@ -105,19 +112,14 @@ None of this could run here. On a clean Windows VM:
 - Confirm the credential entries under service `AuroraTV` in Credential Manager. A
   provider deleted in-app removes its own; an uninstall currently does not sweep them.
 
-## 6. Add `cargo audit` to CI
+## 6. Dependency advisories in CI — **done**
 
-`pnpm audit` is clean (0 critical / 0 high / 0 moderate after the upgrades in this
-pass). The Rust side was never checked — `cargo-audit` is not installed in this
-container. Add a step to the `core` job:
+The `core` job now runs `rustsec/audit-check` (the Rust side had never been checked at
+all), `pnpm audit --audit-level high`, and `pnpm test`, which had nothing to run until
+this pass. `pnpm audit` currently reports no known vulnerabilities.
 
-```yaml
-- uses: rustsec/audit-check@v2
-  with: { token: ${{ secrets.GITHUB_TOKEN }} }
-```
-
-`cargo deny` would also catch the licence question, which matters here: the workspace
-is GPL-3.0-or-later and links libmpv (LGPL). See item 8.
+Worth adding later: `cargo deny`, which would police the licence question in item 8
+automatically rather than by anyone remembering to.
 
 ## 7. Turn on the artwork cache
 
@@ -132,22 +134,23 @@ TMDB URLs, so every poster is fetched from the network on each paint. Closing it
 The CSP already allows `asset:` and `http://asset.localhost` (F-12), so that half is
 done. Neither step is verifiable without running the app.
 
-## 8. Third-party licences and the LGPL obligation
+## 8. Third-party licences — **done, with one thing to record per release**
 
-The workspace is `GPL-3.0-or-later` and the shipped build links **libmpv**, which is
-LGPL-2.1+ and itself links FFmpeg. The installer must carry:
+`LICENSE` (GPL-3.0), `licenses/LGPL-2.1.txt`, `licenses/GPL-3.0.txt` and
+`THIRD-PARTY-NOTICES.md` are in the tree, bundled as installer resources, copied into
+the portable zip, and shown in Settings → About — which reads them from beside the
+executable, so what is on screen is what shipped.
 
-- libmpv's licence text and a note that it is dynamically linked (the `.dll` shipped
-  beside the exe already satisfies the relink requirement — keep it that way; do not
-  static-link libmpv without re-reading the LGPL).
-- FFmpeg's licence, and a statement of which build is bundled.
-- The Rust crate licences. `cargo about generate` or `cargo deny list` produces the
-  list; there is currently no About screen showing any of it.
+**The one thing still on a person:** the notices say libmpv is LGPL-2.1+ *or* GPL-2+
+"depending how the `mpv-2.dll` in this build was compiled", because the release
+workflow *discovers* the shinchiro archive rather than pinning one and those builds
+may or may not enable GPL-only components. Aurora is GPL-3.0-or-later so either is
+compatible — but the release notes should record which archive was used, and if you
+pin a specific build, replace that paragraph with the definite answer.
 
-Add an About section to Settings with the version, the commit, and a scrollable
-licence list. The version is already available (`env!("CARGO_PKG_VERSION")`, surfaced
-by `updates.check`), and `app.diagnostics` now reports the data folder — About is the
-natural home for both.
+Do not static-link libmpv. The relinking obligation is satisfied by its being a
+separate `.dll`, and `THIRD-PARTY-NOTICES.md` now states that as a constraint on the
+build rather than an observation about it.
 
 ## 9. Store listing / release page copy
 
@@ -176,3 +179,5 @@ Say so on the release page; people ask.
   threads never wedge; 20,000 tunes grow RSS by 0 kB.
 - No `todo!`, `unimplemented!` or `dbg!` anywhere in `src`; every fixture host is
   `example.com` or a loopback address.
+- The Phase 0 spike is wired (item 1), the licence obligation is met (item 8), and CI
+  checks advisories on both ecosystems (item 6).

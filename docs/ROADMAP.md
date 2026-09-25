@@ -196,24 +196,32 @@ Two things it found that are not fine:
 README §21 requires the compositing spike to be proven before anything else is built.
 That needs a Windows machine with WebView2 and `mpv-2.dll`; this was built on Linux. The
 backend exists (`aurora-player/src/mpv.rs`) and type-checks for `x86_64-pc-windows-msvc`,
-but **compiling is not proving** — and less is wired than a file list suggests.
+but **compiling is not proving**.
 
-Three things the spike needs are written and never called, so a run today would show no
-video for reasons that have nothing to do with compositing:
+Three things the spike needed were written and never called, so a run would have shown
+no video for reasons that have nothing to do with compositing. **They are wired now**
+(`AUDIT/findings.md` F-24):
 
-- `MpvBackend::attach` creates the child HWND video renders into and hands mpv its `wid`.
-  Nothing calls it, so there is no video surface and mpv has nowhere to draw.
-- `window::attach_video_surface` — the host half — is not called either, and does not
-  call `attach`; it makes the WebView2 background transparent and resizes a surface that
-  does not exist yet. (Despite the name, the rest of `window.rs` is URL resolution.)
+- `MpvBackend::attach` creates the child HWND video renders into and hands mpv its
+  `wid`. It is called from `main.rs` at setup, through the `PlayerBackend` trait —
+  which is where it had to go: the app layer holds a `Box<dyn PlayerBackend>` and could
+  not otherwise reach it, which is the real reason it was never called.
+- `window::attach_video_surface` — the host half — now takes the window's `HWND` and
+  passes it on, rather than resizing a surface that did not exist yet.
 - `MpvBackend::pump` drains mpv's event queue and is the only thing that updates
-  position, tracks, buffering, errors and the timeshift window. Nothing calls it, so the
-  state the OSD mirrors would never change after a load. The player heartbeat in
-  `main.rs` reads that state every 250 ms; it does not produce it.
+  position, tracks, buffering, errors and the timeshift window. `Playback::tick` calls
+  it before reading, so the heartbeat produces the state it mirrors rather than only
+  reading it.
 
-None of it is hard, and none of it is worth guessing at from Linux: it is Win32 message
-plumbing whose correctness is only observable on the machine it runs on. Budget an hour
-of wiring before the questions below can even be asked.
+`tauri.conf.json` also had `"transparent": false`, which alone was enough to show
+nothing, and the OSD painted an opaque gradient over the whole window — the difference
+between floating over live video and being a gradient with buttons on it.
+
+What is left is the part that was always going to need the machine. `aurora-player`
+type-checks for `x86_64-pc-windows-msvc`, but `aurora-app` cannot be cross-compiled off
+Windows — rustls's `ring` wants an MSVC C compiler — so CI's Windows job is the first
+thing that will compile `window.rs` and `main.rs`. Expect a compile error or two there
+before anything runs.
 
 Then, running `cargo tauri dev` on Windows, confirm:
 
@@ -229,9 +237,9 @@ were built first.
 
 ## Nearest useful next steps
 
-1. **Wire and run the Phase 0 spike on Windows.** Everything else is downstream of that
-   answer, and the caveat above lists the three calls that are missing before it can be
-   asked.
+1. **Run the Phase 0 spike on Windows.** The wiring is done; the answer is not, and
+   everything else is downstream of it. If there is no picture, the log says which step
+   failed: `video surface ready`, `no video surface: …`, or `no main window at setup`.
 2. **Import the series.** A full import has now been run — see "What a real import
    cost" above. The gap it found is the one worth closing next: 28,693 series are
    fetched from the panel and thrown away, so the Series screen is empty on a real
