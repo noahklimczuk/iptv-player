@@ -273,6 +273,17 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
     // Whichever asset matches how this copy was installed. Never the other one: see
     // `asset_kind`.
     let kind = asset_kind();
+    // Logged before it can fail, because every refusal below is invisible from a bug
+    // report otherwise. "It says there is an update and the button does nothing" is
+    // the shape these arrive in, and the two things worth knowing — which copy this
+    // is, and which assets the release actually carries — are both decided here.
+    tracing::info!(
+        ?kind,
+        version = %release.version,
+        installer = release.installer_url.is_some(),
+        portable = release.portable_url.is_some(),
+        "starting an update download"
+    );
     let (url, expected) = release
         .asset(kind)
         .map(|(url, expected)| (url.to_string(), expected))
@@ -285,7 +296,8 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
                         .to_string()
                 }
             })
-        })?;
+        })
+        .inspect_err(|e: &AppError| tracing::warn!("update download refused: {e}"))?;
     let version = release.version.to_string();
 
     // Named from the version rather than from anything the response said, so there is
@@ -395,15 +407,51 @@ fn finish(app: &tauri::AppHandle, state: &Arc<Downloads>, download: Download) {
     let _ = app.emit("update.download", &state.set(download));
 }
 
-/// Delete every other file beside the installer just verified.
+/// Whether a name in the updates folder is a downloaded release asset.
+///
+/// Deliberately narrow, and matched on the names *this* code chose rather than on
+/// anything a response said: `updates_download` builds the filename from the version
+/// it is fetching, so these are the only two shapes it can produce, plus the partial
+/// file `fetch_verified` writes on the way.
+fn is_download_artifact(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".part")
+        || (lower.starts_with("aurora-tv-") && (lower.ends_with(".exe") || lower.ends_with(".zip")))
+}
+
+/// Delete the *other* downloads beside the one just verified.
+///
+/// One update at a time: 40 MB per version left behind adds up on a machine that
+/// updates often.
+///
+/// This used to remove every entry in the folder that was not the file being kept, and
+/// it shares that folder with `staged/`, `previous/` and the apply breadcrumb. It got
+/// away with it only because `remove_file` refuses a directory — so the staged update
+/// and the rollback copy survived by accident rather than by intent, and one
+/// `remove_dir_all` here would have deleted the update it had just prepared, or the
+/// only copy of the version being replaced. Matching names is the difference between
+/// housekeeping and a blast radius.
 fn forget_other_installers(keep: &std::path::Path) {
     let Some(dir) = keep.parent() else { return };
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        if entry.path() != keep {
-            let _ = std::fs::remove_file(entry.path());
+        let path = entry.path();
+        if path == keep {
+            continue;
+        }
+        // Never a directory, whatever it is called: `staged/` holds an update that is
+        // ready to apply and `previous/` holds the only copy of the version it
+        // replaced.
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if is_download_artifact(name) {
+            let _ = std::fs::remove_file(&path);
         }
     }
 }
@@ -473,6 +521,9 @@ pub fn updates_install(app: tauri::AppHandle, services: State<'_, Services>) -> 
         can_install(),
         services.dvr.active_ids().len(),
     ) {
+        // Same reasoning as the download refusal: "Install does nothing" is
+        // undiagnosable from a log that never mentions the attempt.
+        tracing::warn!(?kind, present, "update install refused: {reason}");
         return Err(AppError::Other(reason));
     }
 
@@ -796,6 +847,100 @@ mod tests {
             .join(aurora_ingest::selfupdate::STAGE_DIR);
         write(&stage.join(aurora_ingest::selfupdate::APP_EXE), exe_body);
         write(&stage.join(aurora_ingest::selfupdate::READY_MARKER), b"");
+    }
+
+    /// The housekeeping that runs after every download shares a folder with the
+    /// staged update and the rollback copy.
+    ///
+    /// It used to delete every entry that was not the file being kept, and survived
+    /// only because `remove_file` refuses a directory. That is luck, not a design: the
+    /// two things in there are an update that is ready to apply and the only copy of
+    /// the version it replaces, and losing either is losing somebody's television.
+    #[test]
+    fn housekeeping_keeps_the_staged_update_and_the_rollback_copy() {
+        let dir = scratch("housekeeping");
+        let updates = dir.join("updates");
+
+        let keep = updates.join("Aurora-TV-0.9.0-portable.zip");
+        write(&keep, b"the new one");
+        // An older download, and a partial one: these are what it is for.
+        write(&updates.join("Aurora-TV-0.8.1-portable.zip"), b"last time");
+        write(
+            &updates.join("Aurora-TV-0.8.0-x64-setup.exe"),
+            b"older still",
+        );
+        write(
+            &updates.join("Aurora-TV-0.9.0-portable.part"),
+            b"half a download",
+        );
+        // And the things it must not touch.
+        stage(&dir, b"staged exe");
+        write(
+            &updates.join("previous").join("aurora-app.exe"),
+            b"the old one",
+        );
+        write(&updates.join(APPLY_BREADCRUMB), b"applied 3 files");
+
+        forget_other_installers(&keep);
+
+        assert!(keep.exists(), "the download just verified was deleted");
+        assert!(
+            !updates.join("Aurora-TV-0.8.1-portable.zip").exists(),
+            "an older download should be cleaned up"
+        );
+        assert!(
+            !updates.join("Aurora-TV-0.8.0-x64-setup.exe").exists(),
+            "an older installer should be cleaned up"
+        );
+        assert!(
+            !updates.join("Aurora-TV-0.9.0-portable.part").exists(),
+            "a partial download should be cleaned up"
+        );
+
+        // The three that matter.
+        assert!(
+            updates
+                .join(aurora_ingest::selfupdate::STAGE_DIR)
+                .join(aurora_ingest::selfupdate::APP_EXE)
+                .exists(),
+            "the staged update was deleted"
+        );
+        assert!(
+            updates.join("previous").join("aurora-app.exe").exists(),
+            "the rollback copy was deleted"
+        );
+        assert!(
+            updates.join(APPLY_BREADCRUMB).exists(),
+            "the apply breadcrumb was deleted before it could be read"
+        );
+    }
+
+    /// What counts as ours to delete. Named after the files `updates_download` itself
+    /// writes, so nothing else in the folder can be caught by accident.
+    #[test]
+    fn only_this_code_s_own_downloads_are_cleaned_up() {
+        for ours in [
+            "Aurora-TV-0.9.0-portable.zip",
+            "Aurora-TV-0.9.0-x64-setup.exe",
+            "aurora-tv-0.9.0-portable.zip",
+            "Aurora-TV-0.9.0-portable.part",
+            "anything.part",
+        ] {
+            assert!(is_download_artifact(ours), "{ours} should be cleaned up");
+        }
+        for theirs in [
+            APPLY_BREADCRUMB,
+            "staged",
+            "previous",
+            "aurora.log",
+            "library.db",
+            "notes.txt",
+        ] {
+            assert!(
+                !is_download_artifact(theirs),
+                "{theirs} is not this code's to delete"
+            );
+        }
     }
 
     /// With nothing staged, startup must be a no-op — this runs on every launch.
