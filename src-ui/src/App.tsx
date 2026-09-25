@@ -93,17 +93,23 @@ export default function App() {
    * the three ways catch-up can refuse — no catch-up, outside the window, provider did
    * not say how — are things the viewer can act on.
    */
+  /**
+   * Play a past programme from its start.
+   *
+   * The refusal is deliberately *not* turned into a toast here: the Guide catches it
+   * and prints it beside the programme it is about, which is where somebody can act
+   * on it. The three ways catch-up says no — no catch-up on this channel, outside the
+   * provider's window, the provider did not say how to ask — are each specific to the
+   * thing that was clicked, and a notification in the corner is a worse answer than a
+   * line next to the button.
+   *
+   * So this rethrows. A caller that does not handle it is caught by the global
+   * `unhandledrejection` backstop rather than by silence.
+   */
   const playCatchup = useCallback(
     async (channelId: number, start: number, stop: number) => {
-      try {
-        await invoke('player.playCatchup', { channelId, start, stop });
-        setPlayerOpen(true);
-      } catch (e) {
-        // The three ways catch-up refuses — no catch-up, outside the window, the
-        // provider did not say how to ask — are each things the viewer can act on,
-        // and each was being thrown into a promise nobody was holding.
-        report('Cannot watch that from the start')(e);
-      }
+      await invoke('player.playCatchup', { channelId, start, stop });
+      setPlayerOpen(true);
     },
     [],
   );

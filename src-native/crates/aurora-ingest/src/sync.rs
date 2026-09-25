@@ -845,6 +845,283 @@ mod tests {
         RuleSet::compile(&[]).unwrap()
     }
 
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+
+    /// One Xtream panel, answering however the test says.
+    fn xtream_options(server: &TestServer) -> SyncOptions {
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "u".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = Some("p".into());
+        opts
+    }
+
+    /* ── What a panel sends when something is wrong ──────────────────────────── */
+
+    /// The classic: a panel behind a reverse proxy answering HTTP 200 with an HTML
+    /// error page. `serde_json` on that produces something unreadable; the viewer
+    /// needs to be told the provider is misbehaving, not shown a parser message.
+    #[test]
+    fn an_html_error_page_served_as_200_is_reported_as_the_provider_misbehaving() {
+        let server = TestServer::always(
+            Reply::ok("<!DOCTYPE html><html><body><h1>502 Bad Gateway</h1></body></html>")
+                .with_header("Content-Type", "text/html"),
+        );
+        let mut conn = db();
+        let opts = xtream_options(&server);
+
+        let err = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap_err();
+        assert!(
+            !err.message.to_lowercase().contains("expected value"),
+            "a serde message reached the viewer: {}",
+            err.message
+        );
+        assert!(!err.message.is_empty());
+        // Nothing was written on the way to failing.
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM channels", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    /// Every HTTP status a panel is known to answer with, none of which may write a
+    /// partial library or produce a message with the password in it.
+    #[test]
+    fn every_provider_error_status_is_refused_cleanly() {
+        for status in [401, 403, 404, 429, 500, 502, 503] {
+            let server = TestServer::always(Reply::status(status));
+            let mut conn = db();
+            let opts = xtream_options(&server);
+
+            let err = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap_err();
+            assert!(
+                !err.message.contains('p') || !err.message.contains("password=p"),
+                "HTTP {status} leaked the password: {}",
+                err.message
+            );
+            assert!(
+                !err.cause.contains("password=p"),
+                "HTTP {status}: {}",
+                err.cause
+            );
+            assert_eq!(
+                conn.query_row("SELECT count(*) FROM channels", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "HTTP {status} wrote something"
+            );
+        }
+    }
+
+    /// An expired account answers 200 with a perfectly valid body saying no.
+    #[test]
+    fn an_expired_account_is_refused_before_anything_is_written() {
+        let server = TestServer::always(Reply::ok(
+            r#"{"user_info":{"username":"u","status":"Expired","exp_date":"1700000000"}}"#,
+        ));
+        let mut conn = db();
+        let err = run(
+            &mut conn,
+            &http(),
+            &xtream_options(&server),
+            &no_rules(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(!err.message.is_empty());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM channels", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    /// A panel that answers the account check and then hands back nonsense for the
+    /// catalogue must not take the library down with it.
+    #[test]
+    fn a_broken_catalogue_response_does_not_destroy_what_is_there() {
+        let server = TestServer::start(|_, req| {
+            if req.path.contains("action=get_live_streams") {
+                Reply::ok("{ this is not json at all")
+            } else if req.path.contains("action=") {
+                Reply::ok("[]")
+            } else {
+                Reply::ok(r#"{"user_info":{"username":"u","status":"Active"}}"#)
+            }
+        });
+        let mut conn = db();
+        // Something already imported, which a failed refresh must leave alone.
+        conn.execute(
+            "INSERT INTO channels (provider_id, provider_key, name, match_key, last_seen_at)
+             VALUES (1, 'existing', 'Already Here', 'alreadyhere', 0)",
+            [],
+        )
+        .unwrap();
+
+        assert!(run(
+            &mut conn,
+            &http(),
+            &xtream_options(&server),
+            &no_rules(),
+            |_| {}
+        )
+        .is_err());
+        let name: String = conn
+            .query_row("SELECT name FROM channels", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "Already Here", "a failed refresh emptied the library");
+    }
+
+    /// The fields a panel gets wrong: numbers as strings, nulls where a string is
+    /// expected, arrays where a scalar is. The lenient deserializers exist for this;
+    /// this is the test that says so at the pipeline level.
+    #[test]
+    fn a_panel_that_types_its_json_loosely_still_imports() {
+        let server = TestServer::start(|_, req| {
+            let p = &req.path;
+            if p.contains("action=get_live_categories") {
+                Reply::ok(r#"[{"category_id":1,"category_name":null}]"#)
+            } else if p.contains("action=get_live_streams") {
+                Reply::ok(
+                    r#"[{"stream_id":"101","name":"CNN","num":"202","category_id":1,
+                         "tv_archive":"1","tv_archive_duration":"3"},
+                        {"stream_id":102,"name":null},
+                        {"name":"No id at all"}]"#,
+                )
+            } else if p.contains("action=") {
+                Reply::ok("[]")
+            } else if p.contains("xmltv.php") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(
+                    r#"{"user_info":{"username":"u","status":"Active",
+                              "max_connections":"2","active_cons":"0"}}"#,
+                )
+            }
+        });
+        let mut conn = db();
+
+        let report = run(
+            &mut conn,
+            &http(),
+            &xtream_options(&server),
+            &no_rules(),
+            |_| {},
+        )
+        .unwrap();
+        // The two with a stream id arrive; the one without is skipped.
+        assert_eq!(report.channels, 2);
+
+        let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
+        let cnn = rows.iter().find(|c| c.name == "CNN").unwrap();
+        assert_eq!(cnn.number, Some(202), "a stringy number did not survive");
+        assert!(cnn.has_catchup, "a stringy tv_archive did not survive");
+    }
+
+    /* ── Guides, as they are actually served ────────────────────────────────── */
+
+    /// Providers serve guides gzipped, and say so in two different ways: a `.gz`
+    /// filename, or a content type on a `.php` endpoint. Both have to inflate.
+    #[test]
+    fn a_gzipped_guide_imports_whichever_way_the_provider_announces_it() {
+        for (path, header) in [
+            ("/epg.xml.gz", None),
+            ("/xmltv.php", Some("application/gzip")),
+        ] {
+            let body = gzip(EPG.as_bytes());
+            let server = TestServer::always(match header {
+                Some(h) => Reply::ok(body).with_header("Content-Type", h),
+                None => Reply::ok(body),
+            });
+
+            let mut conn = db();
+            let mut opts = SyncOptions::new(
+                1,
+                SourceKind::M3u {
+                    url: server.url("/playlist.m3u"),
+                },
+                1_705_320_000,
+            );
+            // The playlist is the same server, so it answers gzip too — which is fine,
+            // since the EPG url is what this is about.
+            opts.extra_epg_urls = vec![server.url(path)];
+
+            let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+            assert!(
+                report.epg_programmes > 0,
+                "{path} produced no programmes: {report:?}"
+            );
+        }
+    }
+
+    /// Concatenated gzip members are legal, and some providers build their dumps that
+    /// way — one member per source, appended.
+    #[test]
+    fn a_guide_built_from_concatenated_gzip_members_imports_whole() {
+        let mut body = gzip(b"<tv><channel id=\"a\"><display-name>A</display-name></channel>");
+        body.extend(gzip(
+            b"<programme channel=\"a\" start=\"20240115120000 +0000\" \
+              stop=\"20240115130000 +0000\"><title>Split across members</title></programme></tv>",
+        ));
+
+        let server = TestServer::always(Reply::ok(body));
+        let mut conn = db();
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::M3u {
+                url: server.url("/playlist.m3u"),
+            },
+            1_705_320_000,
+        );
+        opts.extra_epg_urls = vec![server.url("/epg.xml.gz")];
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(report.epg_programmes, 1, "{report:?}");
+    }
+
+    /// A guide that fails must not fail the refresh: the library is still usable
+    /// without one, and a channel list that vanished because an EPG 404'd would be a
+    /// much worse outcome than a missing guide.
+    #[test]
+    fn a_guide_that_will_not_load_costs_a_warning_not_the_import() {
+        let server = TestServer::start(|_, req| {
+            if req.path.contains("epg") {
+                Reply::status(404)
+            } else {
+                Reply::ok("#EXTM3U\n#EXTINF:-1,CNN\nhttp://example.com/1.ts\n")
+            }
+        });
+        let mut conn = db();
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::M3u {
+                url: server.url("/playlist.m3u"),
+            },
+            1_705_320_000,
+        );
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(report.channels, 1);
+        assert_eq!(report.epg_programmes, 0);
+        assert!(
+            report.warnings.iter().any(|w| w.contains("EPG")),
+            "{:?}",
+            report.warnings
+        );
+    }
+
     #[test]
     fn fetching_is_not_given_a_database_and_applying_is_not_given_a_network() {
         // The guarantee is structural, not a habit: `fetch` never receives a Connection
