@@ -108,8 +108,22 @@ pub struct Fetched {
     live: Vec<PlaylistEntry>,
     movies: Vec<PlaylistEntry>,
     episodes: Vec<PlaylistEntry>,
+    /// Shows a panel listed outright, rather than ones inferred from flat episode
+    /// entries. An Xtream `get_series` call returns all of them with their artwork and
+    /// plot; only the per-episode listing needs a request each.
+    series: Vec<FetchedSeries>,
     epg: Vec<FetchedEpg>,
     warnings: Vec<String>,
+}
+
+/// One show as the provider listed it, owned so it can outlive the HTTP client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FetchedSeries {
+    provider_key: String,
+    title: String,
+    year: Option<i32>,
+    poster: Option<String>,
+    group: Option<String>,
 }
 
 /// One guide source, parsed and waiting to be written.
@@ -135,6 +149,7 @@ pub fn fetch(
 ) -> Result<Fetched, NetFailure> {
     let mut out = Fetched::default();
     let mut epg_urls: Vec<String> = options.extra_epg_urls.clone();
+    let mut series: Vec<FetchedSeries> = Vec::new();
 
     let entries = match &options.source {
         SourceKind::M3u { url } => {
@@ -167,9 +182,11 @@ pub fn fetch(
                 done: 0,
                 total: 0,
             });
-            xtream_entries(&client, options, &mut out.warnings)?
+            xtream_entries(&client, options, &mut out.warnings, &mut series)?
         }
     };
+
+    out.series = series;
 
     for mut entry in entries {
         let outcome = rules.apply(&mut entry);
@@ -310,8 +327,34 @@ pub fn apply(
     on_progress(Progress {
         phase: Phase::ImportingSeries,
         done: 0,
-        total: fetched.episodes.len(),
+        total: fetched.episodes.len() + fetched.series.len(),
     });
+
+    // Shows the provider listed outright. These used to be fetched and dropped on the
+    // floor — 28,693 of them on the subscription in docs/ROADMAP.md — so the Series
+    // screen was empty on every real Xtream panel while Phase 7 was marked Done. Their
+    // episodes still need one request per show and are still deferred; the rows
+    // themselves come from the one call already made.
+    for show in &fetched.series {
+        let match_key = title::match_key(&show.title);
+        library::upsert_series(
+            db,
+            options.provider_id,
+            &library::NewSeries {
+                provider_key: &show.provider_key,
+                title: &show.title,
+                match_key: &match_key,
+                year: show.year,
+                poster: show.poster.as_deref(),
+                group: show.group.as_deref(),
+                quality: None,
+            },
+            options.now_unix,
+        )
+        .map_err(db_failure)?;
+    }
+    report.series += fetched.series.len();
+
     let (groups, ungrouped) = series::group_series(&fetched.episodes);
     if !ungrouped.is_empty() {
         report.warnings.push(format!(
@@ -353,7 +396,7 @@ pub fn apply(
         report.episodes +=
             library::upsert_episodes(db, series_id, &eps, options.now_unix).map_err(db_failure)?;
     }
-    report.series = groups.len();
+    report.series += groups.len();
 
     // ── EPG ─────────────────────────────────────────────────────────────────────
     let mut epg_channels: Vec<EpgChannel> = Vec::new();
@@ -460,6 +503,7 @@ fn xtream_entries(
     client: &XtreamClient<'_>,
     options: &SyncOptions,
     warnings: &mut Vec<String>,
+    series: &mut Vec<FetchedSeries>,
 ) -> Result<Vec<PlaylistEntry>, NetFailure> {
     let mut out = Vec::new();
 
@@ -509,19 +553,50 @@ fn xtream_entries(
     }
 
     if options.import_series {
-        // The per-series episode listing needs one request each; that is a lot of
-        // round trips, so it is deferred to a follow-up pass rather than blocking
-        // the first refresh.
-        let listings = client.series()?;
-        if !listings.is_empty() {
+        let cats = category_names(client.series_categories()?);
+        for listing in client.series()? {
+            let Some(id) = listing.series_id else {
+                continue;
+            };
+            let raw = listing
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Series {id}"));
+            // Same cleaning films get: a panel's titles carry release tags and a year,
+            // and the cleaned form is what enrichment sends to TMDB.
+            let cleaned = title::clean_movie_title(&raw);
+            series.push(FetchedSeries {
+                provider_key: format!("series:{id}"),
+                title: cleaned.title,
+                year: cleaned
+                    .year
+                    .or_else(|| year_from(listing.release_date.as_deref())),
+                poster: listing.cover.clone().filter(|c| !c.trim().is_empty()),
+                group: listing
+                    .category_id
+                    .as_ref()
+                    .and_then(|c| cats.get(c).cloned()),
+            });
+        }
+        if !series.is_empty() {
             warnings.push(format!(
-                "{} series found; episode listings are fetched on demand",
-                listings.len()
+                "{} series imported; their episode listings need one request each and \
+                 are fetched when a show is opened",
+                series.len()
             ));
         }
     }
 
     Ok(out)
+}
+
+/// The year out of an Xtream `releaseDate`, which panels write as `2019-04-14`,
+/// `2019` or nothing at all.
+fn year_from(release_date: Option<&str>) -> Option<i32> {
+    let raw = release_date?.trim();
+    let head: String = raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let year: i32 = head.parse().ok()?;
+    (1880..=2200).contains(&year).then_some(year)
 }
 
 /// Download and parse one guide source. Writes nothing.
@@ -1312,6 +1387,95 @@ mod tests {
         assert_eq!(rows[0].number, Some(202));
         assert!(rows[0].has_catchup);
         assert_eq!(rows[0].epg_channel_id.as_deref(), Some("cnn.us"));
+    }
+
+    /// The gap a real import found: 28,693 series downloaded and thrown away.
+    ///
+    /// `xtream_entries` fetched `get_series` and then discarded the result with a
+    /// warning saying episode listings were deferred — but the *series* were deferred
+    /// too, so nothing was written at all. The wizard offered Series as something to
+    /// import, Phase 7 was marked Done, and the Series screen was empty on every real
+    /// panel.
+    #[test]
+    fn xtream_series_listings_are_imported_not_discarded() {
+        let server = TestServer::start(|_, req| {
+            let p = &req.path;
+            if p.contains("action=get_series_categories") {
+                Reply::ok(r#"[{"category_id":"7","category_name":"Drama"}]"#)
+            } else if p.contains("action=get_series") {
+                Reply::ok(
+                    r#"[{"series_id":11,"name":"Ratched (2020)","category_id":"7",
+                         "cover":"https://example.com/ratched.jpg",
+                         "releaseDate":"2020-09-18"},
+                        {"series_id":12,"name":"The Office","category_id":"7",
+                         "releaseDate":"2005"},
+                        {"series_id":null,"name":"Broken row"}]"#,
+                )
+            } else if p.contains("action=get_live_categories")
+                || p.contains("action=get_live_streams")
+                || p.contains("action=get_vod_categories")
+                || p.contains("action=get_vod_streams")
+            {
+                Reply::ok("[]")
+            } else if p.contains("xmltv.php") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(r#"{"user_info":{"username":"u","status":"Active"}}"#)
+            }
+        });
+
+        let mut conn = db();
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "u".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = Some("p".into());
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(
+            report.series, 2,
+            "a listing with no id is skipped, not counted"
+        );
+
+        let browse = library::BrowseQuery {
+            limit: 50,
+            ..Default::default()
+        };
+        let rows = library::list_series(&conn, &browse).unwrap();
+        let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
+        assert!(titles.contains(&"Ratched"), "{titles:?}");
+        assert!(titles.contains(&"The Office"), "{titles:?}");
+
+        let ratched = rows.iter().find(|r| r.title == "Ratched").unwrap();
+        assert_eq!(ratched.year, Some(2020), "the year comes off the title");
+        assert_eq!(
+            ratched.poster.as_deref(),
+            Some("https://example.com/ratched.jpg")
+        );
+
+        // A bare year in `releaseDate` is the other form panels use.
+        let office = rows.iter().find(|r| r.title == "The Office").unwrap();
+        assert_eq!(office.year, Some(2005));
+
+        // Re-importing must not duplicate them.
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(report.series, 2);
+        assert_eq!(library::list_series(&conn, &browse).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_release_date_that_is_not_a_year_is_left_alone() {
+        assert_eq!(year_from(Some("2019-04-14")), Some(2019));
+        assert_eq!(year_from(Some("2019")), Some(2019));
+        assert_eq!(year_from(Some("  1999-01-01 ")), Some(1999));
+        assert_eq!(year_from(Some("")), None);
+        assert_eq!(year_from(Some("n/a")), None);
+        assert_eq!(year_from(Some("0000-00-00")), None);
+        assert_eq!(year_from(None), None);
     }
 
     #[test]
