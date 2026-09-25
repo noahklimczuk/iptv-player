@@ -17,7 +17,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
 | 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
-| 11 — Hardening | Perf budgets, soak, diagnostics | **Not started.** No §16 budget is measured yet. One known correctness issue is listed below. |
+| 11 — Hardening | Perf budgets, soak, diagnostics | **Partial.** A 1.0 audit pass fixed 23 findings, two of them Critical (every command on the main thread; a playlist panicking the process) — see `AUDIT/findings.md`. Soak numbers are measured: 2,000 zaps always end on the right channel, 2,400 concurrent tunes across 8 threads never wedge, 20,000 tunes grow RSS by 0 kB. Diagnostics, log rotation and log export exist. The §16 budgets that need a window — zap time, startup — still need Windows. |
 | 12 — Release | Installers, signing, auto-update | **CI type-checks Windows; no installer is produced.** |
 
 ## What is actually verified
@@ -178,12 +178,14 @@ had guessed at. Three things it settled:
 
 Two things it found that are not fine:
 
-- **No series are imported at all.** `xtream_entries` fetches all 28,693 series
-  listings and then discards them with a warning that episode listings are deferred —
-  but the *series* are deferred too, so nothing is written. The wizard offers "Series"
-  as something to import, Phase 7 is marked Done, and on a real panel the Series screen
-  has nothing in it. The episode-listing cost that warning is about is real (one request
-  per series), but the series rows themselves come from the one call already made.
+- **No series were imported at all — fixed.** `xtream_entries` fetched all 28,693
+  series listings and then discarded them with a warning that episode listings are
+  deferred; the *series* were deferred too, so nothing was written. The wizard offered
+  "Series" as something to import, Phase 7 was marked Done, and on a real panel the
+  Series screen had nothing in it. The rows come from the one call already made, so
+  they are written now, under a `series:{id}` key, with their artwork, category and
+  year. The episode listings genuinely do cost one request per show and are still
+  deferred; the warning says that rather than implying the shows were too.
 - **The guide is emptier than its coverage number suggests.** 9,476 channels carry an
   EPG id, which is what "coverage" counts, but only **2,949** have any programmes: the
   XMLTV holds 4,851 channels, and many ids on the panel's channels appear nowhere in it.
