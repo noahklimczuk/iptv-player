@@ -40,6 +40,8 @@ commit and the test that would catch a regression.
 | F-25 | Medium | release | Nothing is code-signed; the updater verifies a digest, not a signature | Deferred |
 | F-26 | Low | build | No ARM64 target is configured | Won't fix |
 | F-27 | High | ui | A host failure renders as an empty state: "you have no channels" | Fixed |
+| F-28 | High | ci | The Rust advisory step audits nothing and skips the four steps after it, journeys included | Fixed |
+| F-29 | High | deps | `quick-xml` 0.36 carries two high-severity advisories reachable from a provider's guide | Fixed |
 
 ---
 
@@ -467,9 +469,10 @@ After:  0 critical, 0 high, 0 moderate
 Both upgrades rode in on the F-03 commit rather than one of their own, because the
 new vitest config had to land with the tests it runs.
 
-Rust: `cargo audit` is not installed in this container and building it was not worth
-the minutes; `Cargo.lock` is pinned and `cargo deny`/`cargo audit` should run in CI.
-Listed in the release checklist.
+Rust: originally deferred to CI on the grounds that `cargo-audit` was not installed
+here and `Cargo.lock` is pinned. That deferral was wrong twice over — the CI step it
+was deferred to could not find the lockfile and so never ran (F-28), and when it was
+finally run it was not a formality (F-29).
 
 ---
 
@@ -681,6 +684,107 @@ reported rather than left as a blank panel`.
 
 ---
 
+## F-28 — High — The advisory step audited nothing, and hid four steps that did
+
+**Found after the fact**, reading the CI run of the pull request that added the step.
+This audit wrote it, marked release-checklist item 6 **done**, and never watched it
+run — the same mistake in miniature that the rest of this document is about.
+
+**Where.** `.github/workflows/ci.yml`, the `Rust advisories` step of the `core` job.
+
+**What.** `rustsec/audit-check@v2` takes a `working-directory` input defaulting to
+`.`, and runs `cargo audit --file <dir>/Cargo.lock`. This workspace's lockfile is
+`src-native/Cargo.lock`. Every other Rust step in the job carries
+`working-directory: src-native`; this one did not, because it is an action rather
+than a `run:`, and the setting looks like something the action would work out.
+
+Two consequences, and the second is the worse one. The step never audited anything.
+And a failed step skips the rest of the job, so `JavaScript advisories`,
+`Release tooling`, `Install Playwright browser` and `End-to-end journeys` were all
+reported as **skipped** — a job that looked like it had run the whole suite had run
+none of the last four. The merge to `main` then showed green, because on a push only
+the Windows bundling job runs at all.
+
+**Repro.** PR #16's run, job *Core tests + UI*:
+
+```
+[command]/home/runner/.cargo/bin/cargo audit --json --file ./Cargo.lock
+error: not found: Couldn't load ./Cargo.lock
+##[error]Unexpected end of JSON input
+
+JavaScript advisories     skipped
+Release tooling           skipped
+Install Playwright browser skipped
+End-to-end journeys       skipped
+```
+
+**Fix.** `working-directory: src-native` on the step, which is what makes it audit
+anything at all — and `if: ${{ !cancelled() }}` on the four steps after the advisory
+checks, so that a real advisory fails the job without also deciding whether the tests
+get to run. An advisory is a reason to fail a build; it is not a reason to stop knowing
+whether the application works.
+
+**Regression test.** None that runs here — this is a CI configuration, and the only
+honest test of it is the run on this pull request, where the advisory step must report
+a real result and the journey count must be 98 rather than "skipped". Called out
+rather than papered over: a green tick on this one has to be read, not assumed.
+
+---
+
+## F-29 — High — `quick-xml` 0.36 is vulnerable, through the guide a provider serves
+
+**Found by F-28's fix**, on the first occasion the advisory check could run.
+
+**Where.** `src-native/Cargo.toml` (`quick-xml = "0.36"`), used by
+`crates/aurora-core/src/xmltv.rs` — the XMLTV parser.
+
+**What.** Two advisories, both scored 7.5 (high), both fixed in 0.41:
+
+| ID | Title |
+|---|---|
+| RUSTSEC-2026-0194 | Quadratic run time when checking a start tag for duplicate attribute names |
+| RUSTSEC-2026-0195 | Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service |
+
+What makes these this application's problem rather than a line in a report: XMLTV is
+downloaded from whatever address the viewer's provider gave, it is parsed
+unconditionally on every refresh, and README §4.4 expects it to be enormous — a 7-day
+guide for 3,000 channels can exceed 1 GB. Untrusted, large, and parsed on a schedule is
+the exact shape both advisories describe. A hostile or merely broken guide could pin a
+core or exhaust memory, and the app's own defence — the streaming parser that buffers
+no more than one programme — does not help, because the cost is inside the reader.
+
+**Fix.** Upgraded to 0.42, which the dependency tree already carried a second copy of,
+so this unified two copies of quick-xml into one rather than adding a third. 0.42 is
+not a drop-in: `name()` and `key()` hand back `&str` instead of `&[u8]`,
+`unescape_value` became `normalized_value(XmlVersion)`, and — the part with teeth —
+`BytesText::unescape` is gone because **the reader now ends a text run at every entity
+and reports the entity as its own `GeneralRef` event**. A title reading
+`Tom &amp; Jerry` arrives as five events instead of one, and `trim_text(true)` was
+trimming each piece, which would have turned it into `Tom&Jerry`. The parser resolves
+the references itself and trims once, at the closing tag, over the assembled value.
+
+**Repro.** Before the fix, in `src-native/`:
+
+```
+$ cargo audit
+Crate: quick-xml  Version: 0.36.2  Severity: 7.5 (high)  ID: RUSTSEC-2026-0194
+Crate: quick-xml  Version: 0.36.2  Severity: 7.5 (high)  ID: RUSTSEC-2026-0195
+error: 2 vulnerabilities found!
+```
+
+After: `error: 0 vulnerabilities`, exit 0, with seven informational warnings
+`cargo audit` does not fail on.
+
+**Regression test.** `crates/aurora-core/src/xmltv.rs::entities_in_a_title_are_resolved_
+and_the_text_around_them_survives` and `::an_unresolvable_entity_is_kept_as_written_
+rather_than_guessed_at`, plus the existing
+`tests/hostile_input.rs::a_hostile_guide_loses_only_the_broken_programmes`, which is
+what caught the entity split in the first place and would have let it ship otherwise.
+The advisories themselves are pinned by `cargo audit` in CI, which is the point of
+F-28.
+
+---
+
 ## Where each fix landed
 
 | Finding | Commit |
@@ -699,19 +803,30 @@ reported rather than left as a blank panel`.
 | F-15, F-18, F-20, F-22 | `fix(hardening): redaction, an atomic provider save, and two sharp edges` |
 | F-27 | `test: the inputs providers actually send, and what happens after an hour` |
 | F-24 | `feat(player): connect the video surface and the event pump` |
+| F-28 | `fix(ci): point the advisory check at the lockfile it was meant to read` |
+| F-29 | `fix(deps): take the XMLTV parser off a quick-xml with two high advisories` |
 
 ## Counts
 
 | Severity | Fixed | Deferred | Won't fix | Total |
 |---|---|---|---|---|
 | Critical | 2 | 0 | 0 | **2** |
-| High | 10 | 0 | 0 | **10** |
+| High | 12 | 0 | 0 | **12** |
 | Medium | 9 | 2 | 0 | **11** |
 | Low | 3 | 0 | 1 | **4** |
-| **Total** | **24** | **2** | **1** | **27** |
+| **Total** | **26** | **2** | **1** | **29** |
 
 F-24 counts as Fixed on the strength of the code being written, reachable and
 type-checking for Windows — not on the strength of anyone having seen it work. The two
 still deferred are F-23 (the Xtream catch-up timezone, unfixable against evidence until
 a panel whose `timeshift.php` answers is available) and F-25 (code signing, which needs
 a certificate somebody buys).
+
+F-28 and F-29 were found *after* the audit reported itself finished, by reading the CI
+run of the pull request that closed it. They are recorded here rather than quietly
+fixed because of what they say about the rest of this document: an item marked **done**
+on the strength of code being written, and never watched running, is exactly the
+failure this audit kept finding in the project — and F-28 is this audit committing it.
+The pattern is now three for three: F-24 (three functions called from nowhere), F-09
+and F-12 (invisible behind the mock transport), and now a CI step that ran, reported,
+and checked nothing.

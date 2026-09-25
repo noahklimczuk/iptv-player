@@ -88,24 +88,47 @@ jobs:
         # The JavaScript side has had `pnpm audit` run against it; the Rust side had
         # never been checked at all. `Cargo.lock` is committed, so this is a question
         # with a definite answer rather than a moving target.
+        #
+        # `working-directory` is not optional here, whatever its default suggests. The
+        # action runs `cargo audit --file <dir>/Cargo.lock`, and this workspace's
+        # lockfile is under src-native, not at the repository root — so the default `.`
+        # made the step die with "Couldn't load ./Cargo.lock" before it audited
+        # anything. It had never once run.
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: src-native
 
       - name: JavaScript advisories
         # Fails the job on a high or critical only: a moderate in a dev-only tool is
         # worth knowing about and not worth blocking a pull request over.
+        #
+        # Guarded like the steps below it, and for the same reason: one ecosystem's
+        # advisory should not decide whether the other ecosystem gets checked at all.
+        if: ${{ !cancelled() }}
         run: pnpm audit --audit-level high
 
+      # The three steps below run even when something above them failed, and the reason
+      # is the advisory steps specifically. A step failure normally skips the rest of
+      # the job, so the first time the Rust advisory check was capable of failing it
+      # took the end-to-end suite, the release-tooling tests and the JavaScript audit
+      # down with it — 97 journeys reported as "skipped" because of a lockfile path.
+      # An advisory is a reason to fail the job, never a reason to stop knowing whether
+      # the application works. `!cancelled()` keeps that true without weakening
+      # anything: every step still reports its own result, and any failure still fails
+      # the job.
       - name: Release tooling
         # The version arithmetic decides what every build is called, and it is wrong in
         # ways nothing else would notice — a lexicographic compare, or reading the word
         # "feature" in prose as a feature commit.
+        if: ${{ !cancelled() }}
         run: node --test scripts/version.test.mjs
 
       - name: Install Playwright browser
+        if: ${{ !cancelled() }}
         run: pnpm exec playwright install --with-deps chromium
       - name: End-to-end journeys
+        if: ${{ !cancelled() }}
         run: pnpm exec playwright test
 
       - uses: actions/upload-artifact@v4

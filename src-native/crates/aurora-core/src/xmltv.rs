@@ -7,7 +7,7 @@
 use std::io::BufRead;
 
 use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::{Reader, XmlVersion};
 
 use crate::error::{CoreError, Result};
 use crate::model::{Credit, EpgChannel, Programme};
@@ -75,10 +75,36 @@ const CREDIT_ROLES: &[&str] = &[
     "guest",
 ];
 
+/// Resolve an entity reference to the text it stands for, or `None` if it is neither a
+/// character reference nor one of XML's five predefined entities.
+///
+/// XMLTV documents in the wild use exactly these; anything else would have to come from
+/// a DTD, which this parser does not read and which a provider has no business relying
+/// on in a feed.
+fn resolve_entity(r: &quick_xml::events::BytesRef<'_>) -> Option<String> {
+    // `&#233;` and `&#xE9;`. Malformed ones (`&#zz;`) resolve to nothing, not to an
+    // error that would take the surrounding programme down with it.
+    if r.is_char_ref() {
+        return r.resolve_char_ref().ok().flatten().map(String::from);
+    }
+    match r.xml10_content().as_ref() {
+        "amp" => Some("&".to_string()),
+        "lt" => Some("<".to_string()),
+        "gt" => Some(">".to_string()),
+        "quot" => Some("\"".to_string()),
+        "apos" => Some("'".to_string()),
+        _ => None,
+    }
+}
+
 /// Parse an XMLTV document, pushing items into `sink` as they complete.
 pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvStats> {
     let mut xml = Reader::from_reader(reader);
-    xml.config_mut().trim_text(true);
+    // `trim_text` is deliberately off, where it used to be on. quick-xml 0.42 ends a
+    // text run at every entity and reports the entity separately, so `Tom &amp; Jerry`
+    // arrives as three pieces — and trimming each piece turns it into `Tom&Jerry`. The
+    // whole accumulated value is trimmed once at the closing tag instead, which is what
+    // `trim_text` used to do back when a run was never split.
     xml.config_mut().check_end_names = false;
 
     let mut buf = Vec::new();
@@ -88,7 +114,7 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
     let mut in_channel: Option<EpgChannel> = None;
     let mut in_prog: Option<ProgBuilder> = None;
     let mut in_credits = false;
-    let mut current: Vec<u8> = Vec::new();
+    let mut current = String::new();
     let mut text = String::new();
     // `<rating>` and `<star-rating>` both wrap a `<value>`; remember which we are inside.
     let mut rating_scope: Option<&'static str> = None;
@@ -104,49 +130,61 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                 )))
             }
             Ok(Event::Start(e)) => {
-                let name = e.name().as_ref().to_vec();
+                let name = e.name().as_ref().to_string();
                 text.clear();
-                match name.as_slice() {
-                    b"channel" => {
+                match name.as_str() {
+                    "channel" => {
                         let mut c = EpgChannel::default();
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"id" {
-                                c.id = a.unescape_value().unwrap_or_default().into_owned();
+                            if a.key.as_ref() == "id" {
+                                c.id = a
+                                    .normalized_value(XmlVersion::Implicit1_0)
+                                    .unwrap_or_default()
+                                    .into_owned();
                             }
                         }
                         in_channel = Some(c);
                     }
-                    b"programme" => {
+                    "programme" => {
                         let mut p = ProgBuilder::default();
                         for a in e.attributes().flatten() {
-                            let v = a.unescape_value().unwrap_or_default().into_owned();
+                            let v = a
+                                .normalized_value(XmlVersion::Implicit1_0)
+                                .unwrap_or_default()
+                                .into_owned();
                             match a.key.as_ref() {
-                                b"channel" => p.channel_id = v,
-                                b"start" => p.start = parse_time(&v),
-                                b"stop" => p.stop = parse_time(&v),
+                                "channel" => p.channel_id = v,
+                                "start" => p.start = parse_time(&v),
+                                "stop" => p.stop = parse_time(&v),
                                 _ => {}
                             }
                         }
                         in_prog = Some(p);
                     }
-                    b"credits" => in_credits = true,
-                    b"rating" => rating_scope = Some("rating"),
-                    b"star-rating" => rating_scope = Some("star"),
-                    b"episode-num" => {
+                    "credits" => in_credits = true,
+                    "rating" => rating_scope = Some("rating"),
+                    "star-rating" => rating_scope = Some("star"),
+                    "episode-num" => {
                         episode_system.clear();
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"system" {
-                                episode_system =
-                                    a.unescape_value().unwrap_or_default().into_owned();
+                            if a.key.as_ref() == "system" {
+                                episode_system = a
+                                    .normalized_value(XmlVersion::Implicit1_0)
+                                    .unwrap_or_default()
+                                    .into_owned();
                             }
                         }
                     }
-                    b"icon" => {
+                    "icon" => {
                         let src = e
                             .attributes()
                             .flatten()
-                            .find(|a| a.key.as_ref() == b"src")
-                            .and_then(|a| a.unescape_value().ok().map(|v| v.into_owned()));
+                            .find(|a| a.key.as_ref() == "src")
+                            .and_then(|a| {
+                                a.normalized_value(XmlVersion::Implicit1_0)
+                                    .ok()
+                                    .map(|v| v.into_owned())
+                            });
                         if let Some(src) = src {
                             if let Some(p) = in_prog.as_mut() {
                                 p.icon.get_or_insert(src);
@@ -162,27 +200,31 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
             Ok(Event::Empty(e)) => {
                 // Self-closing flags and icons.
                 match e.name().as_ref() {
-                    b"new" => {
+                    "new" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.is_new = true;
                         }
                     }
-                    b"live" => {
+                    "live" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.is_live = true;
                         }
                     }
-                    b"premiere" => {
+                    "premiere" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.is_premiere = true;
                         }
                     }
-                    b"icon" => {
+                    "icon" => {
                         let src = e
                             .attributes()
                             .flatten()
-                            .find(|a| a.key.as_ref() == b"src")
-                            .and_then(|a| a.unescape_value().ok().map(|v| v.into_owned()));
+                            .find(|a| a.key.as_ref() == "src")
+                            .and_then(|a| {
+                                a.normalized_value(XmlVersion::Implicit1_0)
+                                    .ok()
+                                    .map(|v| v.into_owned())
+                            });
                         if let Some(src) = src {
                             if let Some(p) = in_prog.as_mut() {
                                 p.icon.get_or_insert(src);
@@ -195,19 +237,38 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                 }
             }
             Ok(Event::Text(t)) => {
-                if let Ok(v) = t.unescape() {
-                    text.push_str(v.as_ref());
-                }
+                // `xml10_content` normalises end-of-line and nothing else. Entities are
+                // no longer in this event at all — they arrive as `GeneralRef` below.
+                text.push_str(t.xml10_content().as_ref());
             }
+            // An entity reference: `&amp;`, or `&#233;`. In quick-xml 0.36 these were
+            // resolved inside the text event and never seen; 0.42 reports each one and
+            // ends the text run around it, which is why this arm has to exist for a
+            // title as ordinary as `Tom &amp; Jerry` to survive.
+            Ok(Event::GeneralRef(r)) => match resolve_entity(&r) {
+                Some(resolved) => text.push_str(&resolved),
+                // Not one of the five XML predefines and not a character reference —
+                // an XMLTV file is not carrying a DTD we could resolve it against.
+                // Kept as it was written rather than dropped: inventing a character
+                // would be worse, and silently losing one hides a malformed feed.
+                None => {
+                    text.push('&');
+                    text.push_str(r.xml10_content().as_ref());
+                    text.push(';');
+                }
+            },
             Ok(Event::CData(t)) => {
-                text.push_str(&String::from_utf8_lossy(t.as_ref()));
+                text.push_str(t.as_ref());
             }
             Ok(Event::End(e)) => {
-                let name = e.name().as_ref().to_vec();
-                let value = std::mem::take(&mut text);
+                let name = e.name().as_ref().to_string();
+                // Trimmed here rather than by the reader, because the reader would trim
+                // each piece of a run split around an entity. Once, at the end, over
+                // the whole assembled value, is what `trim_text(true)` used to mean.
+                let value = std::mem::take(&mut text).trim().to_string();
 
-                match name.as_slice() {
-                    b"channel" => {
+                match name.as_str() {
+                    "channel" => {
                         if let Some(c) = in_channel.take() {
                             if !c.id.is_empty() {
                                 stats.channels += 1;
@@ -217,7 +278,7 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                             }
                         }
                     }
-                    b"programme" => {
+                    "programme" => {
                         if let Some(p) = in_prog.take() {
                             match finish(p) {
                                 Some(prog) => {
@@ -228,44 +289,44 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                             }
                         }
                     }
-                    b"credits" => in_credits = false,
-                    b"display-name" => {
+                    "credits" => in_credits = false,
+                    "display-name" => {
                         if let Some(c) = in_channel.as_mut() {
                             if !value.is_empty() {
                                 c.display_names.push(value);
                             }
                         }
                     }
-                    b"title" => {
+                    "title" => {
                         if let Some(p) = in_prog.as_mut() {
                             if p.title.is_empty() {
                                 p.title = value;
                             }
                         }
                     }
-                    b"sub-title" => {
+                    "sub-title" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.sub_title.get_or_insert(value);
                         }
                     }
-                    b"desc" => {
+                    "desc" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.description.get_or_insert(value);
                         }
                     }
-                    b"category" => {
+                    "category" => {
                         if let Some(p) = in_prog.as_mut() {
                             if !value.is_empty() && !p.categories.contains(&value) {
                                 p.categories.push(value);
                             }
                         }
                     }
-                    b"episode-num" => {
+                    "episode-num" => {
                         if let Some(p) = in_prog.as_mut() {
                             apply_episode_num(p, &episode_system, &value);
                         }
                     }
-                    b"value" => {
+                    "value" => {
                         if let Some(p) = in_prog.as_mut() {
                             match rating_scope {
                                 Some("rating") => {
@@ -278,24 +339,24 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                             }
                         }
                     }
-                    b"rating" | b"star-rating" => rating_scope = None,
-                    b"new" => {
+                    "rating" | "star-rating" => rating_scope = None,
+                    "new" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.is_new = true;
                         }
                     }
-                    b"live" => {
+                    "live" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.is_live = true;
                         }
                     }
-                    b"premiere" => {
+                    "premiere" => {
                         if let Some(p) = in_prog.as_mut() {
                             p.is_premiere = true;
                         }
                     }
                     role if in_credits => {
-                        let role_s = String::from_utf8_lossy(role).to_string();
+                        let role_s = role.to_string();
                         if CREDIT_ROLES.contains(&role_s.as_str()) && !value.is_empty() {
                             if let Some(p) = in_prog.as_mut() {
                                 p.credits.push(Credit {
@@ -474,6 +535,54 @@ mod tests {
     fn epoch_is_correct() {
         assert_eq!(parse_time("19700101000000 +0000"), Some(0));
         assert_eq!(parse_time("20240115120000 +0000"), Some(1_705_320_000));
+    }
+
+    /// Wrap a title in just enough XMLTV to be parsed.
+    fn title_of(title: &str) -> String {
+        let mut sink = CollectSink::default();
+        let xml = format!(
+            "<tv><programme channel=\"a\" start=\"20240115120000 +0000\">\
+             <title>{title}</title></programme></tv>"
+        );
+        parse(std::io::Cursor::new(xml.into_bytes()), &mut sink).unwrap();
+        sink.programmes
+            .first()
+            .map(|p| p.title.clone())
+            .unwrap_or_default()
+    }
+
+    /// quick-xml 0.42 ends a text run at every entity and reports the entity as its own
+    /// event, where 0.36 resolved them inside the text and never mentioned it. That is
+    /// invisible until a title contains an ampersand — and then the title is either
+    /// right, or silently cut off at the first one. These pin each way it can go.
+    #[test]
+    fn entities_in_a_title_are_resolved_and_the_text_around_them_survives() {
+        // The predefined five, each splitting the run it sits in.
+        assert_eq!(title_of("Tom &amp; Jerry"), "Tom & Jerry");
+        assert_eq!(title_of("&lt;live&gt;"), "<live>");
+        assert_eq!(
+            title_of("&quot;Quoted&quot; &apos;so&apos;"),
+            "\"Quoted\" 'so'"
+        );
+
+        // The spaces on either side of an entity are the thing that breaks if the
+        // reader is left trimming each piece: this would come back as `Tom&Jerry`.
+        assert_eq!(title_of("  Tom &amp; Jerry  "), "Tom & Jerry");
+
+        // Character references, decimal and hexadecimal.
+        assert_eq!(title_of("Caf&#233;"), "Café");
+        assert_eq!(title_of("Caf&#xE9;"), "Café");
+    }
+
+    /// An entity that is not predefined and not a character reference could only be
+    /// declared in a DTD, which this parser does not read. Keeping the source text is
+    /// the one option that neither invents a character nor loses one silently.
+    #[test]
+    fn an_unresolvable_entity_is_kept_as_written_rather_than_guessed_at() {
+        assert_eq!(title_of("Tom &nbsp; Jerry"), "Tom &nbsp; Jerry");
+        // Malformed character references resolve to nothing, and must not take the
+        // rest of the title with them.
+        assert_eq!(title_of("Bad &#zz; reference"), "Bad &#zz; reference");
     }
 
     /// `1..=31` accepted 31 February, and `days_from_civil` happily answers for it —

@@ -256,10 +256,46 @@ the nine; the app uses `HashRouter`, `Routes`, `Route`, `NavLink`, `useNavigate`
 `useLocation`, all of which v7 keeps, and the typecheck and all 96 journeys pass on it
 unchanged.
 
-**Rust: not run.** `cargo-audit` is not installed in this container and building it
-was not worth the minutes against the rest of this work. `Cargo.lock` is committed and
-pinned; running `cargo audit` (or `cargo deny`) in CI is item 6 of the release
-checklist.
+**Rust: run, after a correction.** The first pass of this audit said "not run —
+`cargo-audit` is not installed in this container and building it was not worth the
+minutes", and handed the job to CI. CI then ran it against `./Cargo.lock`, which does
+not exist here (the workspace lives under `src-native`), so the step errored instead of
+auditing — and took the four steps after it down with it, including all 97 journeys.
+
+Built and run properly, it is a three-minute install and this:
+
+```
+$ cargo audit          # in src-native/
+    Scanning Cargo.lock for vulnerabilities (512 crate dependencies)
+
+Crate:    quick-xml   Version: 0.36.2
+Title:    Quadratic run time when checking a start tag for duplicate attribute names
+ID:       RUSTSEC-2026-0194   Severity: 7.5 (high)   Solution: Upgrade to >=0.41.0
+
+Crate:    quick-xml   Version: 0.36.2
+Title:    Unbounded namespace-declaration allocation in `NsReader` enables
+          memory-exhaustion denial of service
+ID:       RUSTSEC-2026-0195   Severity: 7.5 (high)   Solution: Upgrade to >=0.41.0
+
+error: 2 vulnerabilities found!
+warning: 7 allowed warnings found
+```
+
+Both are in the XMLTV parser's dependency, and XMLTV is a file fetched from whatever
+address the viewer's provider gave — untrusted input by definition, and large by
+design. After upgrading to 0.42 (which the tree already carried a copy of, so this
+unified two copies into one):
+
+```
+$ cargo audit
+error: 0 vulnerabilities                       exit 0
+warning: 7 allowed warnings found
+```
+
+The seven warnings are informational and `cargo audit` does not fail on them: five
+unmaintained build-time crates (`proc-macro-error`, four `unic-*`), and `glib` 0.18.5's
+`VariantStrIter` unsoundness, which arrives through Tauri's GTK dependencies and is not
+in the shipped Windows binary.
 
 ---
 
