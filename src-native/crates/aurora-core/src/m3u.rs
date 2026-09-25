@@ -266,12 +266,23 @@ fn is_truthy(v: &str) -> bool {
 
 fn looks_like_url(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
-    ["http://", "https://", "rtsp://", "rtmp://", "udp://", "rtp://", "file://"]
+    ["http://", "https://", "rtsp://", "rtmp://", "rtmps://", "udp://", "rtp://", "file://"]
         .iter()
         .any(|p| lower.starts_with(p))
-        // Allow bare Windows/UNC paths and relative files too.
+        // Bare UNC and Windows drive paths, which playlists pointing at local files use.
         || line.starts_with("\\\\")
-        || (line.len() > 2 && line.as_bytes()[1] == b':')
+        || is_drive_path(line)
+}
+
+/// `C:\Videos\clip.mkv` — a drive letter, a colon, and a separator.
+///
+/// The separator is the part that was missing. Testing only for a colon in the
+/// second byte accepted `a:b`, `1:30` and anything else whose second character
+/// happens to be one, so a stray line in a playlist became an entry with a URL
+/// nothing can play, rather than a warning naming the line.
+fn is_drive_path(line: &str) -> bool {
+    let b = line.as_bytes();
+    b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
 /// Split the `#EXTINF:` payload into its attribute section and the display name.
@@ -361,22 +372,43 @@ fn split_once_trim(s: &str, sep: char) -> (&str, &str) {
     }
 }
 
+/// Percent-decode, over bytes.
+///
+/// Two things it has to get right, both of which the obvious `&str` version gets
+/// wrong. Slicing `s[i + 1..i + 3]` to read the two hex digits panics whenever those
+/// offsets land inside a multi-byte character — `"%a\u{e9}"` is enough — and this
+/// parser's whole contract is that a broken playlist costs a warning, not the
+/// process. And `byte as char` is a Latin-1 cast, so `%C3%A9` decoded to `Ã©`
+/// instead of `é`, in a string that goes back out as an HTTP header.
+///
+/// Decoding into a `Vec<u8>` and interpreting the result as UTF-8 once at the end
+/// removes both: there is no `&str` index to get wrong, and the bytes a provider
+/// escaped are reassembled before anything decides what characters they are.
 fn urldecode(s: &str) -> String {
     let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v as char);
+            if let (Some(hi), Some(lo)) = (hex_digit(b[i + 1]), hex_digit(b[i + 2])) {
+                out.push(hi * 16 + lo);
                 i += 3;
                 continue;
             }
         }
-        out.push(if b[i] == b'+' { ' ' } else { b[i] as char });
+        out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -515,6 +547,70 @@ https://example.com/live/cnn.ts
         let bytes = b"#EXTM3U\n#EXTINF:-1,Caf\xe9 TV\nhttps://example.com/c.ts\n".to_vec();
         let p = parse(std::io::Cursor::new(bytes));
         assert_eq!(p.result.entries.len(), 1);
+    }
+
+    /// The crash this parser's own header said could not happen.
+    ///
+    /// `%a` followed by a two-byte character put byte index 3 inside `é`, and slicing
+    /// a `&str` there panics. `[profile.release]` sets `panic = "abort"`, so a
+    /// playlist line like this one did not raise an error — it ended the process
+    /// mid-import.
+    #[test]
+    fn a_percent_escape_before_a_multibyte_character_does_not_panic() {
+        let p = parse_str(
+            "#EXTM3U\n#EXTINF:-1,Ch\n\
+             #KODIPROP:inputstream.adaptive.stream_headers=User-Agent=%a\u{e9}\n\
+             https://example.com/s.ts\n",
+        );
+        assert_eq!(p.result.entries.len(), 1);
+        // Whatever it decoded to, it got here.
+        assert!(p.result.entries[0].http.user_agent.is_some());
+    }
+
+    /// Every truncated escape a hostile file can end on, none of which may panic.
+    #[test]
+    fn truncated_and_invalid_escapes_are_left_alone() {
+        for tail in ["%", "%2", "%zz", "%2z", "%\u{e9}", "\u{e9}%", "%%41"] {
+            let p = parse_str(&format!(
+                "#EXTM3U\n#EXTINF:-1,Ch\n\
+                 #KODIPROP:inputstream.adaptive.stream_headers=User-Agent={tail}\n\
+                 https://example.com/s.ts\n"
+            ));
+            assert_eq!(p.result.entries.len(), 1, "{tail:?}");
+        }
+    }
+
+    #[test]
+    fn percent_escapes_decode_to_utf8_not_latin1() {
+        let p = parse_str(
+            "#EXTM3U\n#EXTINF:-1,Ch\n\
+             #KODIPROP:inputstream.adaptive.stream_headers=User-Agent=Caf%C3%A9%20TV\n\
+             https://example.com/s.ts\n",
+        );
+        // `byte as char` gave "CafÃ© TV" here, which is what then went out as a header.
+        assert_eq!(
+            p.result.entries[0].http.user_agent.as_deref(),
+            Some("Caf\u{e9} TV")
+        );
+    }
+
+    /// `line.as_bytes()[1] == b':'` called every one of these a Windows path, so a
+    /// stray line in a playlist became a channel with an unplayable URL instead of a
+    /// warning somebody could read.
+    #[test]
+    fn a_bare_colon_line_is_not_mistaken_for_a_windows_path() {
+        let p = parse_str(
+            "#EXTM3U\n\
+             #EXTINF:-1,Junk\n\
+             a:b\n\
+             #EXTINF:-1,Also junk\n\
+             1:30\n\
+             #EXTINF:-1,Real\n\
+             C:\\Videos\\clip.mkv\n",
+        );
+        assert_eq!(p.result.entries.len(), 1);
+        assert_eq!(p.result.entries[0].name, "Real");
+        assert_eq!(p.result.skipped, 2);
     }
 
     #[test]
