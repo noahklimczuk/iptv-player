@@ -23,6 +23,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 # reqwest's gzip feature only covers Content-Encoding. Providers also serve plain
 # `.xml.gz` *files*, which have to be inflated by hand.
 flate2 = "1"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 # Windows Credential Manager (README C10). Gated to Windows deliberately: on Linux
 # the same crate wants a D-Bus Secret Service, which a headless CI runner has no

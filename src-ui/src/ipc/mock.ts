@@ -50,6 +50,10 @@ const mockUpdates: UpdateStatus = {
     installerUrl: 'https://github.com/noahklimczuk/iptv-player/releases/download/v0.1.1/Aurora-TV-0.1.1-x64-setup.exe',
     installerBytes: 38_767_916,
     installerSha256: 'fc27bb794fb5584255a4f18d06fa1fcc09dd483d4c334e2f071970de3ece99bb',
+    portableUrl:
+      'https://github.com/noahklimczuk/iptv-player/releases/download/v0.1.1/aurora-tv-0.1.1-portable.zip',
+    portableBytes: 41_233_408,
+    portableSha256: '8e1d5c2b9a4f3706d8c1e5b2a9f4370612d8c5e1b9a4f37068c1e5b2a9f43706',
     publishedAt: '2026-09-23T03:13:28Z',
   },
   available: true,
@@ -58,10 +62,15 @@ const mockUpdates: UpdateStatus = {
   releasesUrl: 'https://github.com/noahklimczuk/iptv-player/releases/latest',
   get download() { return mockDownload; },
   // The browser preview is not Windows, but the panel's install path is the
-  // interesting one to be able to see and to test. `?portable` stands in for the
-  // build that cannot install over itself, the way `?setup` forces the wizard.
-  get canInstall() {
-    return !new URLSearchParams(window.location.search).has('portable');
+  // interesting one to be able to see and to test.
+  canInstall: true,
+  // `?portable` stands in for an unzipped copy, the way `?setup` forces the wizard.
+  // Both kinds install now; what differs is what pressing the button does, and that
+  // is what the panel words differently.
+  get kind(): 'installer' | 'portable' {
+    return new URLSearchParams(window.location.search).has('portable')
+      ? 'portable'
+      : 'installer';
   },
 };
 

@@ -64,7 +64,47 @@ pub struct Release {
     /// asset. `None` on a release old enough to predate the API field — which is a
     /// reason to refuse to install it, not a reason to skip the check.
     pub installer_sha256: Option<String>,
+    /// The portable zip, which is what a portable copy updates itself from. Carried
+    /// separately from the installer because the two are different files with
+    /// different digests and a copy must never be offered the wrong one.
+    pub portable_url: Option<String>,
+    pub portable_bytes: Option<u64>,
+    pub portable_sha256: Option<String>,
     pub published_at: Option<String>,
+}
+
+/// Which file a given copy of the app updates itself from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AssetKind {
+    /// The NSIS installer, for a copy that was installed.
+    Installer,
+    /// The portable zip, for a copy that was unzipped.
+    Portable,
+}
+
+impl Release {
+    /// The asset this copy should fetch, with everything needed to verify it.
+    ///
+    /// `None` when the release does not publish that kind — which is a refusal the
+    /// viewer can read, not a reason to fall back to the other one. Handing a portable
+    /// copy an installer is how someone ends up with two installations and updates
+    /// neither.
+    pub fn asset(&self, kind: AssetKind) -> Option<(&str, Expected)> {
+        let (url, bytes, sha256) = match kind {
+            AssetKind::Installer => (
+                self.installer_url.as_deref()?,
+                self.installer_bytes,
+                self.installer_sha256.clone(),
+            ),
+            AssetKind::Portable => (
+                self.portable_url.as_deref()?,
+                self.portable_bytes,
+                self.portable_sha256.clone(),
+            ),
+        };
+        Some((url, Expected { bytes, sha256 }))
+    }
 }
 
 /// The answer to "is there anything newer?".
@@ -163,12 +203,21 @@ impl Updates {
             return Ok(None);
         };
 
-        // The single-file installer, which is the only asset worth pointing at. The MSI
-        // and the portable zip are for people who already know which they want.
+        // The single-file NSIS installer. The `.msi` is deliberately not a candidate:
+        // it is a second way to install the same thing, and an updater that could pick
+        // either would sometimes swap one for the other.
         let installer = release
             .assets
             .iter()
             .find(|a| a.name.to_ascii_lowercase().ends_with(".exe"));
+
+        // The portable archive, which is what an unzipped copy replaces itself with.
+        // Matched on "portable" rather than on `.zip` alone, so a release that also
+        // carries source archives or debug symbols cannot be mistaken for one.
+        let portable = release.assets.iter().find(|a| {
+            let name = a.name.to_ascii_lowercase();
+            name.ends_with(".zip") && name.contains("portable")
+        });
 
         Ok(Some(Release {
             version,
@@ -183,6 +232,11 @@ impl Updates {
             installer_url: installer.map(|a| a.browser_download_url.clone()),
             installer_bytes: installer.and_then(|a| a.size),
             installer_sha256: installer
+                .and_then(|a| a.digest.as_deref())
+                .and_then(parse_sha256),
+            portable_url: portable.map(|a| a.browser_download_url.clone()),
+            portable_bytes: portable.and_then(|a| a.size),
+            portable_sha256: portable
                 .and_then(|a| a.digest.as_deref())
                 .and_then(parse_sha256),
             published_at: release.published_at,
@@ -234,7 +288,7 @@ pub fn is_release_asset_url(url: &str, repo: &str) -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Expected {
     pub bytes: Option<u64>,
-    /// Lowercase hex SHA-256. Without one, [`download_installer`] refuses.
+    /// Lowercase hex SHA-256. Without one, [`download_asset`] refuses.
     pub sha256: Option<String>,
 }
 
@@ -254,7 +308,7 @@ pub struct Downloaded {
 ///
 /// `progress` is called on every chunk with the bytes so far and the expected total;
 /// throttling that into something a progress bar can use is the caller's job.
-pub fn download_installer(
+pub fn download_asset(
     http: &HttpClient,
     url: &str,
     dest: &Path,
@@ -264,8 +318,8 @@ pub fn download_installer(
     let Some(want_sha) = expected.sha256.as_ref() else {
         return Err(refuse(
             "This release does not publish a checksum",
-            "Aurora will not download and run an installer it cannot verify. The \
-             release page in a browser is the way to install this one.",
+            "Aurora will not install an update it cannot verify. The release page in \
+             a browser is the way to install this one.",
         ));
     };
     if !is_release_asset_url(url, DEFAULT_REPO) {
@@ -460,6 +514,87 @@ mod tests {
       "browser_download_url": "https://github.com/owner/repo/releases/download/v0.2.0/setup.exe",
       "size": 38767916
     }"#;
+
+    const PORTABLE: &str = r#"{
+      "name": "aurora-tv-portable.zip",
+      "browser_download_url": "https://github.com/owner/repo/releases/download/v0.2.0/aurora-tv-portable.zip",
+      "size": 41000000,
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }"#;
+
+    /// A portable copy has to be able to find its own asset. Before this, a release
+    /// carried only the installer and the portable build was told to go to a browser.
+    #[test]
+    fn a_release_carrying_both_assets_reports_both() {
+        let server = TestServer::always(Reply::ok(release_json(
+            "v0.2.0",
+            &format!("{INSTALLER}, {PORTABLE}"),
+        )));
+        let release = updates(&server).latest().unwrap().expect("a release");
+
+        assert!(release.installer_url.unwrap().ends_with("setup.exe"));
+        assert_eq!(
+            release.portable_url.as_deref(),
+            Some("https://github.com/owner/repo/releases/download/v0.2.0/aurora-tv-portable.zip")
+        );
+        assert_eq!(release.portable_bytes, Some(41_000_000));
+        assert_eq!(
+            release.portable_sha256.as_deref(),
+            Some(&"1".repeat(64)[..])
+        );
+    }
+
+    /// Matching on "portable" rather than on `.zip`, so a release that also carries
+    /// source archives cannot hand one of those to the updater.
+    #[test]
+    fn a_source_archive_is_not_mistaken_for_the_portable_build() {
+        let others = r#"{
+          "name": "Source code.zip",
+          "browser_download_url": "https://github.com/owner/repo/releases/download/v0.2.0/source.zip",
+          "size": 900000
+        }, {
+          "name": "aurora-tv-debug-symbols.zip",
+          "browser_download_url": "https://github.com/owner/repo/releases/download/v0.2.0/pdb.zip",
+          "size": 900000
+        }"#;
+        let server = TestServer::always(Reply::ok(release_json(
+            "v0.2.0",
+            &format!("{INSTALLER}, {others}"),
+        )));
+        let release = updates(&server).latest().unwrap().expect("a release");
+        assert_eq!(release.portable_url, None);
+    }
+
+    /// A release with no portable asset must refuse rather than quietly hand back the
+    /// installer: unzipping an installer over a portable folder updates nothing, and
+    /// running it creates a second installation nobody asked for.
+    #[test]
+    fn a_copy_is_never_offered_the_other_kind_of_asset() {
+        let server = TestServer::always(Reply::ok(release_json("v0.2.0", INSTALLER)));
+        let release = updates(&server).latest().unwrap().expect("a release");
+
+        assert!(release.asset(AssetKind::Installer).is_some());
+        assert!(
+            release.asset(AssetKind::Portable).is_none(),
+            "a portable copy was offered the installer"
+        );
+    }
+
+    #[test]
+    fn an_asset_carries_what_is_needed_to_verify_it() {
+        let server = TestServer::always(Reply::ok(release_json(
+            "v0.2.0",
+            &format!("{INSTALLER}, {PORTABLE}"),
+        )));
+        let release = updates(&server).latest().unwrap().expect("a release");
+
+        let (url, expected) = release
+            .asset(AssetKind::Portable)
+            .expect("the portable zip");
+        assert!(url.ends_with("aurora-tv-portable.zip"));
+        assert_eq!(expected.bytes, Some(41_000_000));
+        assert_eq!(expected.sha256.as_deref(), Some(&"1".repeat(64)[..]));
+    }
 
     fn tempdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -661,7 +796,7 @@ mod tests {
     #[test]
     fn a_release_without_a_checksum_is_not_downloaded_at_all() {
         let dir = tempdir("nosha");
-        let err = download_installer(
+        let err = download_asset(
             &client(),
             &real_url(),
             &dir.join("setup.exe"),
@@ -680,7 +815,7 @@ mod tests {
     #[test]
     fn a_download_from_anywhere_but_this_projects_releases_is_refused() {
         let dir = tempdir("host");
-        let err = download_installer(
+        let err = download_asset(
             &client(),
             "https://example.invalid/setup.exe",
             &dir.join("setup.exe"),

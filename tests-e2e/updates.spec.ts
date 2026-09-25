@@ -69,15 +69,47 @@ test('downloading an update fills a bar and then offers to install it', async ({
   await expect(page.getByText(/installer would run here/i)).toBeVisible();
 });
 
-test('a portable copy is offered the release page, not an installer', async ({ page }) => {
-  // An NSIS installer would install beside the portable folder rather than replacing
-  // it, which is how someone ends up with two copies and updates neither.
+/**
+ * This replaces a test that asserted the opposite: that a portable copy is offered the
+ * release page and no download button. That was the behaviour, and it was the gap —
+ * the build that is easiest to update, a folder of files nobody installed, was the
+ * only one that could not update itself. It downloads the portable zip now, and
+ * replaces its own files.
+ */
+test('a portable copy updates itself rather than being sent to a browser', async ({
+  page,
+}) => {
   await page.goto('/?portable#/settings');
   await expect(page.getByRole('heading', { name: 'Updates' })).toBeVisible();
 
-  await expect(page.getByRole('button', { name: 'Get the update' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Download update' })).toBeHidden();
-  await expect(page.getByText(/copy is portable/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download update' })).toBeEnabled();
+  await expect(page.getByText(/copy is portable, so/i)).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Download update' }).click();
+  await expect(page.getByRole('button', { name: 'Install and restart' })).toBeEnabled({
+    timeout: 15_000,
+  });
+
+  // The wording has to match what the button does. A portable copy runs no installer,
+  // so there is no unsigned-binary prompt to warn about — saying there is would be a
+  // warning about something that will not happen.
+  await expect(page.getByText(/already unpacked/i)).toBeVisible();
+  await expect(page.getByText(/Windows will ask/i)).toHaveCount(0);
+
+  await page.screenshot({ path: `${SHOTS}/43-update-portable.png` });
+});
+
+test('an installed copy still says the installer will run, and that Windows will ask', async ({
+  page,
+}) => {
+  await openUpdates(page);
+  await page.getByRole('button', { name: 'Download update' }).click();
+  await expect(page.getByRole('button', { name: 'Install and restart' })).toBeEnabled({
+    timeout: 15_000,
+  });
+
+  await expect(page.getByText(/Windows will ask/i)).toBeVisible();
+  await expect(page.getByText(/already unpacked/i)).toHaveCount(0);
 });
 
 test('the launch-time check can be turned off', async ({ page }) => {

@@ -225,6 +225,10 @@ untouched, which is how someone ends up with two copies and updates neither. And
 install **while a recording is in progress** is postponed with a message saying so: a
 recording cannot be taken again later, and an update can.
 
+**The first of those two refusals is superseded — see D25.** It was right about the
+installer and wrong about the conclusion: a portable copy should not run an installer,
+but that is an argument for giving it a different file, not for giving it nothing.
+
 What this still is not: **signature verification**, which README §18 asks for. The
 digest and the file both come from GitHub, so this defends against a corrupted or
 substituted download, not against whoever can publish a release. Closing that properly
@@ -443,3 +447,64 @@ decide. And recovering *silently* would mean opening Aurora to find the library 
 with no explanation, which is a worse experience than the crash it replaced; so the
 Diagnostics panel says it happened, where the old file went, and that a refresh will
 rebuild the library.
+
+## D25 — A portable copy updates itself; it is not sent to a browser
+
+**Context.** D17 refused a portable build the update button, reasoning that the NSIS
+installer would install into Program Files and leave the running folder untouched —
+two copies, neither updated. That reasoning is correct. The conclusion drawn from it
+was not.
+
+The outcome was that the build which is *easiest* to update — a folder of files nobody
+installed, with no registry entries and no elevation — was the only one that could not
+update itself, while the build that needs an installer and a UAC prompt got the button.
+A viewer of a portable copy was told to open a browser, find the release, download a
+zip, close the app and copy files over it by hand. That is not an update mechanism; it
+is a set of instructions.
+
+**Decision.** Both kinds of copy update themselves, from different files. The release
+publishes the installer *and* the portable zip; `Release::asset` hands each copy the
+one that matches it and **refuses rather than substituting the other**. An installed
+copy runs the installer, as before. A portable copy downloads the zip, verifies the
+digest, unpacks it, and swaps the files in at the next launch.
+
+**Why the swap happens at launch.** A running `.exe` cannot be deleted or overwritten
+on Windows — but it *can* be renamed. So `selfupdate::apply` never deletes: for each
+file it moves what is there into `previous/` and moves the new one in. Doing that in
+`main` before Tauri builds is what makes it safe, because nothing is open yet: no
+library, no log, no video surface. It is also what makes it recoverable — at every
+point either the old copy or the new one is complete, a failure part way rolls back
+what it already did, and the displaced copy stays on disk until the *next* launch
+proves something started.
+
+**Three things that follow.**
+
+The ready marker is written last. A staged folder without one is a download that did
+not finish, and is deleted rather than applied: half an application is worse than none.
+
+The archive is unpacked when it is downloaded, not when Install is pressed. Extraction
+is where the things a digest cannot see get caught — a path escaping the folder, an
+archive that is not Aurora — and finding that out while the viewer is watching a
+progress bar is much better than finding it out after they have pressed Install and the
+app is closing.
+
+And a digest is not a safety check. It proves the file is the one GitHub published; it
+says nothing about whether that file is well behaved. `stage_zip` refuses absolute
+paths, `..`, drive letters and backslash separators, and refuses an archive with no
+`aurora-app.exe` in it.
+
+**Consequence.** `can_install` no longer means "is this an installed copy" — it means
+"is this Windows at all", which is the only remaining reason the button cannot work.
+The kind of copy is reported to the UI instead, so the panel can say what pressing
+Install will actually do: a portable copy is told nothing else on the machine is
+touched, and is *not* warned that Windows will ask about an unsigned installer, because
+no installer runs.
+
+What this does not change: the digest is still the only thing verifying the download,
+and it still comes from the same place as the file. D17's closing paragraph about
+signatures stands, and applies to the zip exactly as it does to the installer.
+
+**And it has never been run.** The swap is ordinary filesystem work and is tested end
+to end on Linux — staging, the path refusals, applying, rolling back, the partial
+download — which is the point of keeping it out of `#[cfg(windows)]`. But "a running
+`.exe` can be renamed" is the load-bearing claim, and nothing here has yet renamed one.

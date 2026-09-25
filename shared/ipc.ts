@@ -286,6 +286,10 @@ export interface UpdateRelease {
    * anything is allowed to run it.
    */
   installerSha256: string | null;
+  /** The portable zip, which is what an unzipped copy updates itself from. */
+  portableUrl: string | null;
+  portableBytes: number | null;
+  portableSha256: string | null;
   publishedAt: string | null;
 }
 
@@ -316,10 +320,13 @@ export interface UpdateStatus {
   releasesUrl: string;
   download: UpdateDownload;
   /**
-   * Whether this build can install an update over itself: false for a portable copy,
-   * which an installer would not replace, and false off Windows.
+   * Whether this build can install an update over itself. False only off Windows,
+   * where there is neither an installer to run nor a `.exe` to swap.
    */
   canInstall: boolean;
+  /** Which kind of copy this is: a portable one replaces its own files and restarts,
+   *  an installed one runs the installer. */
+  kind: 'installer' | 'portable';
 }
 
 /**
