@@ -50,6 +50,27 @@ whatever the load set.
 If there is no picture, the log says which step failed: look for `video surface
 ready`, `no video surface: …`, or `no main window at setup`.
 
+## 1b. Test the portable self-update — **new, and unproven**
+
+A portable copy now updates itself instead of being sent to a browser (D25): it
+downloads the zip, verifies the digest, unpacks it, and swaps its own files in at the
+next launch. The staging, the path refusals, the apply and the rollback are all tested
+on Linux, because none of it is `#[cfg(windows)]` — it is `std::fs` throughout.
+
+**What is not tested is the claim it rests on:** that Windows lets you rename a
+running `.exe`. It does, and it is how every self-updating Windows application works,
+but nothing here has done it. On the machine from item 1:
+
+1. Unzip the portable build, run it, and let it find a newer release.
+2. Download, then Install and restart. It should come back as the new version with no
+   installer and no Windows prompt.
+3. Check `data\updates\previous\` holds the old files, and that they are gone after
+   the launch *after* that.
+4. **Then break it on purpose** — make the install folder read-only, or hold
+   `mpv-2.dll` open — and confirm the rollback leaves a working copy of the old
+   version and a line in `aurora.log` saying why. That is the path that matters; a
+   failed update must never be why somebody's television stops working.
+
 ## 2. Code signing — **blocking for anything a stranger installs**
 
 Nothing is signed. SmartScreen warns on every install, and D17's updater verifies the
@@ -181,3 +202,5 @@ Say so on the release page; people ask.
   `example.com` or a loopback address.
 - The Phase 0 spike is wired (item 1), the licence obligation is met (item 8), and CI
   checks advisories on both ecosystems (item 6).
+- Both kinds of build update themselves in-app (item 1b); CI publishes the portable zip
+  to the release so the portable one has something to fetch.

@@ -10,12 +10,17 @@ share a Downloads folder without becoming `(1)` and `(2)`.
 
 Once it is running, **Settings → Updates** says which build you have and whether there is
 a newer one. It checks by itself a few seconds after launch and then at most every six
-hours, and it will fetch and run the installer when you ask it to: **Download update**,
+hours, and it will fetch and apply the update when you ask it to: **Download update**,
 then **Install and restart**. The file is checked against the SHA-256 GitHub published
-for it before anything runs, and Aurora closes so the installer can replace it. These
-builds are not code-signed, so Windows will warn — see `docs/DECISIONS.md` D17 for what
-that check does and does not prove. A *portable* copy is not offered the button, because
-the installer would install beside it rather than replacing it.
+for it before anything runs.
+
+**Both builds update themselves, by different means** (`docs/DECISIONS.md` D25). The
+installed copy runs the installer and Aurora closes so it can replace the files; these
+builds are not code-signed, so Windows will warn — D17 says what the checksum does and
+does not prove. The *portable* copy downloads the zip instead, unpacks it while the bar
+is still moving, and swaps its own files in on the way back up, so there is no
+installer and no Windows prompt. It used to be offered nothing at all and told to go
+and download a zip by hand.
 
 That run also attaches the raw builds under **Actions → the merge's run →
 Artifacts**, though these expire and the releases do not:
@@ -109,6 +114,13 @@ In rough order of value:
    then **Install and restart**. Nothing about that path has ever been run — not the
    download, not the checksum, not handing the installer to Windows — and the failure
    that matters is the quiet one, where the app closes and nothing replaces it.
+
+   **Worth testing on the portable build especially**, because its path is newer and
+   the claim underneath it is unproven: that a running `aurora-app.exe` can be renamed
+   while it is running. If it can't, the swap fails, rolls back, and you should still
+   have a working copy of the old version with a line in `aurora.log` saying why — that
+   rollback is the thing to check, not just the happy path. After a successful update
+   the old files are in `data\updates\previous\` until the next launch.
 6. Whether pausing live TV works. Press `T` or Space on a live channel, leave it a minute,
    and press it again: the picture should carry on from where it stopped, with a scrub bar
    showing how far behind live you are and a **Back to live** button to give that up. The
