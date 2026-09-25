@@ -144,6 +144,14 @@ export interface Rail {
   title: string;
   /** For "Because you watched X" — what drove the recommendation (README §11). */
   reason?: string;
+  /**
+   * How far into each item, keyed `movie:12` / `series:7`. Continue Watching only.
+   *
+   * On the rail rather than on the items because a `CatalogItem` is a library row:
+   * the same film is the same row whether it sits in My List or half-watched, and
+   * giving the row a position would make it mean different things in different places.
+   */
+  progress?: Record<string, { positionSecs: number; durationSecs: number }>;
   items: CatalogItem[];
 }
 

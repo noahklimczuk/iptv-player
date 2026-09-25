@@ -20,12 +20,36 @@ import { SetupWizard } from '@/features/setup/SetupWizard';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useCommand } from '@/hooks/useCommand';
 import { useEpisodeAids } from '@/hooks/useEpisodeAids';
+import { useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { hasVideoSurface, invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
+
+/**
+ * Where to start a title, given what was saved last time.
+ *
+ * Continue Watching is only half a feature if pressing a card starts from zero. A
+ * failure here is deliberately not surfaced: not knowing the position is a reason to
+ * start at the beginning, which is what would have happened anyway, and not a reason
+ * to refuse to play the thing.
+ */
+async function resumeAt(
+  kind: 'movie' | 'episode',
+  id: number,
+  profileId: number,
+): Promise<number | undefined> {
+  try {
+    const saved = await invoke('progress.get', { profileId, kind, id });
+    if (!saved || saved.completed) return undefined;
+    // Finished-but-not-marked, or barely started: both are better begun again.
+    return saved.positionSecs > 60 ? saved.positionSecs : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const NAV: { to: string; icon: IconName; label: string }[] = [
   { to: '/', icon: 'home', label: 'Home' },
@@ -62,6 +86,13 @@ export default function App() {
   const profile = useProfile();
   useEffect(() => { void profile.load(); }, [profile.load]);
 
+  // Where the viewer got to. Nothing in the app wrote this before, so Continue
+  // Watching had nothing to continue from — the mock saved progress, the host never
+  // was asked to.
+  useWatchProgress(ui.player, profile.active?.id ?? 0);
+
+  const profileId = profile.active?.id ?? 0;
+
   const play = useCallback(async (item: CatalogItem, episodeId?: number) => {
     ui.openDetail(null);
     try {
@@ -74,16 +105,24 @@ export default function App() {
           );
           return;
         }
-        await invoke('player.play', { kind: 'episode', id: target });
+        await invoke('player.play', {
+          kind: 'episode',
+          id: target,
+          positionSecs: await resumeAt('episode', target, profileId),
+        });
       } else {
-        await invoke('player.play', { kind: 'movie', id: item.id });
+        await invoke('player.play', {
+          kind: 'movie',
+          id: item.id,
+          positionSecs: await resumeAt('movie', item.id, profileId),
+        });
       }
       setPlayerOpen(true);
     } catch (e) {
       // Opening a black player and saying nothing is what this used to do.
       report(`Could not play ${item.title}`)(e);
     }
-  }, [ui]);
+  }, [ui, profileId]);
 
   /**
    * Play a past programme from its start.

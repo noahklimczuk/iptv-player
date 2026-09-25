@@ -101,3 +101,23 @@ test('series page in too, and a short library says its real size at once', async
   );
   await expect(page.getByTestId('browse-sentinel')).toHaveCount(0);
 });
+
+test('a browse grid prints the titles, because artwork alone is not a name', async ({
+  page,
+}) => {
+  // A library whose posters are in a script the viewer cannot read is unusable
+  // without the names, and the grid showed the title on hover only — one at a time,
+  // to somebody holding a mouse.
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+
+  const titles = page.getByTestId('card-title');
+  expect(await titles.count(), 'no titles under the posters').toBe(PAGE);
+  await expect(titles.first()).toBeVisible();
+  await expect(titles.first()).not.toBeEmpty();
+
+  // The home rails stay as they were: a short row read by its artwork.
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  expect(await page.getByTestId('card-title').count()).toBe(0);
+});

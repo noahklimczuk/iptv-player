@@ -3,7 +3,7 @@
  * metadata pills, cast, and tabs for episodes / more like this / details.
  */
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CatalogItem, Episode, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
 import { getProgress, invoke } from '@/ipc';
@@ -391,11 +391,29 @@ function Episodes({
   seriesId: number; seasons: number[]; season: number;
   setSeason: (s: number) => void; onPlay: (episodeId: number) => void;
 }) {
-  const { data, loading } = useCommand('library.episodes', { seriesId, season }, [seriesId, season]);
+  // `seasons` comes from the series row, which counts the episodes already stored —
+  // so on a show whose listing has never been fetched it is empty, and asking for
+  // "season 1" is a guess. Ask for the whole show until the answer says otherwise:
+  // the host fetches the listing on this call, and a show whose episodes turn out to
+  // be in season 2 would show nothing for ever if this insisted on season 1.
+  const knowsSeasons = seasons.length > 0;
+  const { data, loading } = useCommand(
+    'library.episodes',
+    knowsSeasons ? { seriesId, season } : { seriesId },
+    [seriesId, season, knowsSeasons],
+  );
+
+  // What actually came back, which is the truth about this show even when the row
+  // that described it was written before its episodes existed.
+  const found = useMemo(
+    () => [...new Set((data ?? []).map((e: Episode) => e.season))].sort((a, b) => a - b),
+    [data],
+  );
+  const choices = knowsSeasons ? seasons : found;
 
   return (
     <div>
-      {seasons.length > 1 && (
+      {choices.length > 1 && (
         <select
           value={season}
           onChange={(e) => setSeason(Number(e.target.value))}
@@ -407,7 +425,7 @@ function Episodes({
             fontSize: 'var(--fs-md)', fontWeight: 600,
           }}
         >
-          {seasons.map((s) => (
+          {choices.map((s) => (
             <option key={s} value={s}>Season {s}</option>
           ))}
         </select>
@@ -415,6 +433,11 @@ function Episodes({
 
       <div style={{ display: 'grid', gap: 'var(--sp-1)' }}>
         {loading && [0, 1, 2].map((i) => <Skeleton key={i} h={88} />)}
+        {!loading && (data ?? []).length === 0 && (
+          <div style={{ padding: 'var(--sp-5)', color: 'var(--text-muted)' }}>
+            This provider listed the show but returned no episodes for it.
+          </div>
+        )}
         {(data ?? []).map((ep: Episode) => (
           <button
             key={ep.id}

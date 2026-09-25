@@ -19,13 +19,22 @@ export interface CardProgress {
 }
 
 export const CatalogCard = memo(function CatalogCard({
-  item, index, progress, onOpen, onPlay, rank,
+  item, index, progress, onOpen, onPlay, rank, showTitle,
 }: {
   item: CatalogItem;
   index: number;
   progress?: CardProgress | null;
   onOpen: (item: CatalogItem) => void;
   onPlay: (item: CatalogItem) => void;
+  /**
+   * Print the title under the poster.
+   *
+   * On for the browse grids, off for the home rails. A rail is a short row you read by
+   * its artwork; a grid is hundreds of posters you are looking *through*, and a
+   * library of films whose artwork is in a script you cannot read is unusable without
+   * the names — which is what it was.
+   */
+  showTitle?: boolean;
   /** Set for the Top 10 rail's numeral treatment (README §8.2). */
   rank?: number;
 }) {
@@ -117,11 +126,39 @@ export const CatalogCard = memo(function CatalogCard({
           </div>
 
           {pct > 0 && (
-            <div style={{ position: 'absolute', left: 8, right: 8, bottom: 8 }}>
+            <div
+              data-testid="card-progress"
+              style={{ position: 'absolute', left: 8, right: 8, bottom: 8 }}
+            >
               <ProgressBar percent={pct} />
             </div>
           )}
         </div>
+
+        {showTitle && (
+          <div
+            data-testid="card-title"
+            style={{
+              padding: '6px 2px 0',
+              fontSize: 'var(--fs-sm)',
+              fontWeight: 600,
+              lineHeight: 1.25,
+              // Two lines, then ellipsis: a long title must not push its neighbours
+              // out of the grid's rows.
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
+            {item.title}
+          </div>
+        )}
+        {showTitle && year && (
+          <div style={{ padding: '1px 2px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+            {year}
+          </div>
+        )}
 
         {/* Expanded panel: quick actions + metadata, Netflix-style. */}
         <AnimatePresence>

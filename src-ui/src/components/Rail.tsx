@@ -5,7 +5,6 @@
  */
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import type { CatalogItem, Rail as RailData } from '@shared/ipc';
-import { getProgress } from '@/ipc';
 import { CatalogCard } from './CatalogCard';
 import { Icon } from './Icon';
 
@@ -98,9 +97,7 @@ export function Rail({
                 item={item}
                 index={i}
                 rank={showRank ? i + 1 : undefined}
-                progress={
-                  item.kind === 'movie' ? getProgress('movie', item.id) : null
-                }
+                progress={rail.progress?.[`${item.kind}:${item.id}`] ?? null}
                 onOpen={onOpen}
                 onPlay={onPlay}
               />

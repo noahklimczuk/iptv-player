@@ -488,17 +488,32 @@ function buildRails(): Rail[] {
   const shownSeries = visibleSeries();
   const byRating = [...shownMovies].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
   const byAdded = [...shownMovies].sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
+  // Mirrors the host's rail exactly, including the progress map the cards draw their
+  // bars from — the bar used to come from this module's own memory, so it worked here
+  // and was dead on a real machine.
+  const continueProgress: Record<string, { positionSecs: number; durationSecs: number }> = {};
   const continueItems = [...progress.values()]
     .filter((p) => !p.completed && p.positionSecs > 60)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map((p) => {
+      let item: CatalogItem | null = null;
       if (p.itemKind === 'movie') {
         const m = shownMovies.find((x) => x.id === p.itemId);
-        return m ? asMovie(m) : null;
+        item = m ? asMovie(m) : null;
+      } else {
+        const ep = fx.episodes.find((x) => x.id === p.itemId);
+        const sr = ep && shownSeries.find((x) => x.id === ep.seriesId);
+        item = sr ? asSeries(sr) : null;
       }
-      const ep = fx.episodes.find((x) => x.id === p.itemId);
-      const s = ep && shownSeries.find((x) => x.id === ep.seriesId);
-      return s ? asSeries(s) : null;
+      if (!item) return null;
+      const key = `${item.kind}:${item.id}`;
+      // One card per show, the most recent wins — the list is newest-first.
+      if (key in continueProgress) return null;
+      continueProgress[key] = {
+        positionSecs: p.positionSecs,
+        durationSecs: p.durationSecs,
+      };
+      return item;
     })
     .filter((x): x is CatalogItem => x !== null);
 
@@ -510,7 +525,13 @@ function buildRails(): Rail[] {
   });
 
   const rails: Rail[] = [
-    { id: 'continue', kind: 'continueWatching', title: 'Continue Watching', items: continueItems },
+    {
+      id: 'continue',
+      kind: 'continueWatching',
+      title: 'Continue Watching',
+      progress: continueProgress,
+      items: continueItems,
+    },
     {
       id: 'upnext', kind: 'upNext', title: 'Up Next',
       items: shownSeries.slice(6, 20).map(asSeries),
