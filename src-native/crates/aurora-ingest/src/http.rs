@@ -244,6 +244,17 @@ fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
     NetFailure::classify(&causes)
 }
 
+/// `1234.ts` — the last segment of an Xtream stream URL.
+fn looks_like_stream_id(segment: &str) -> bool {
+    let Some((id, ext)) = segment.rsplit_once('.') else {
+        return false;
+    };
+    !id.is_empty()
+        && id.chars().all(|c| c.is_ascii_digit())
+        && !ext.is_empty()
+        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 fn looks_gzipped(url: &str) -> bool {
     let path = url
         .split(['?', '#'])
@@ -256,29 +267,48 @@ fn looks_gzipped(url: &str) -> bool {
 /// Strip credentials before a URL reaches a log line (README C10).
 pub fn redact(url: &str) -> String {
     let mut out = url.to_string();
-    // Xtream carries them as query parameters.
+    // Xtream carries them as query parameters. Every occurrence, not the first: a
+    // panel that repeats a parameter, or a URL assembled from two of them, would
+    // otherwise leave the second copy in the log.
     for key in [
         "password", "pass", "token", "username", "user", "api_key", "apikey",
     ] {
-        if let Some(start) = out.to_ascii_lowercase().find(&format!("{key}=")) {
-            let value_start = start + key.len() + 1;
+        let needle = format!("{key}=");
+        let mut from = 0usize;
+        while let Some(offset) = out[from..].to_ascii_lowercase().find(&needle) {
+            let start = from + offset;
+            let value_start = start + needle.len();
             let end = out[value_start..]
                 .find('&')
                 .map(|i| value_start + i)
                 .unwrap_or(out.len());
             out.replace_range(value_start..end, "***");
+            from = value_start + 3;
+            if from >= out.len() {
+                break;
+            }
         }
     }
     // ...and path segments carry them in stream URLs: /live/user/pass/123.ts
     if let Some(idx) = out.find("://") {
         let (scheme, rest) = out.split_at(idx + 3);
         let mut segments: Vec<&str> = rest.split('/').collect();
+        let mut redacted = false;
         for marker in ["live", "movie", "series"] {
             if let Some(pos) = segments.iter().position(|s| *s == marker) {
                 for seg in segments.iter_mut().skip(pos + 1).take(2) {
                     *seg = "***";
                 }
+                redacted = true;
             }
+        }
+        // Many panels serve `http://host/<user>/<pass>/<id>.ts` with no marker at all
+        // — `aurora_core::catchup::split_xtream_stream_url` supports exactly that
+        // form, so the codebase already knows it exists. Without this the commonest
+        // stream URL there is went into the log intact.
+        if !redacted && segments.len() == 4 && looks_like_stream_id(segments[3]) {
+            segments[1] = "***";
+            segments[2] = "***";
         }
         out = format!("{scheme}{}", segments.join("/"));
     }
@@ -596,6 +626,46 @@ mod tests {
         assert!(!got.contains("alice"), "{got}");
         assert!(!got.contains("hunter2"), "{got}");
         assert!(got.contains("123.ts"), "{got}");
+    }
+
+    /// The commonest stream URL a panel serves, and the one `redact` walked past.
+    ///
+    /// Path redaction only fired after a literal `live`, `movie` or `series` segment.
+    /// Plenty of panels serve `http://host/<user>/<pass>/<id>.ts` with no marker —
+    /// `aurora_core::catchup::split_xtream_stream_url` supports exactly that form —
+    /// and every retry logs the URL it is retrying.
+    #[test]
+    fn a_markerless_user_pass_id_url_is_redacted() {
+        let out = redact("http://panel.example/bob/hunter2/1234.ts");
+        assert!(!out.contains("bob"), "{out}");
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(
+            out.contains("1234.ts"),
+            "the stream id is not a secret: {out}"
+        );
+    }
+
+    /// The shape must be specific enough not to mangle an ordinary path.
+    #[test]
+    fn an_ordinary_three_segment_path_is_left_alone() {
+        for url in [
+            "http://example.com/epg/guide/today.xml",
+            "http://example.com/a/b/c",
+            "http://example.com/one/two/three.html",
+        ] {
+            assert_eq!(redact(url), url, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_credential_parameter_is_redacted_every_time() {
+        let out = redact(
+            "http://panel.example/player_api.php?username=bob&password=hunter2\
+             &action=get_series&password=hunter2",
+        );
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(!out.contains("bob"), "{out}");
+        assert!(out.contains("action=get_series"), "{out}");
     }
 
     #[test]

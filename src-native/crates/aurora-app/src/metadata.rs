@@ -34,7 +34,7 @@ pub struct MetadataStatus {
     pub series: Coverage,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn metadata_status(services: State<'_, Services>) -> Result<MetadataStatus> {
     let db = services.db.lock();
     Ok(MetadataStatus {
@@ -53,7 +53,7 @@ pub struct SetKeyArgs {
     pub key: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn metadata_set_key(services: State<'_, Services>, args: SetKeyArgs) -> Result<()> {
     match args
         .key
@@ -135,7 +135,7 @@ pub struct RunArgs {
 ///
 /// One batch per call rather than looping to completion: a forty-thousand title library
 /// would hold the connection for an hour, and the user can press the button again.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn metadata_run(
     app: tauri::AppHandle,
     services: State<'_, Services>,
@@ -209,7 +209,7 @@ fn parse_kind(s: &str) -> Result<ItemKind> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn metadata_credits(
     services: State<'_, Services>,
     args: CreditsArgs,
@@ -223,7 +223,7 @@ pub fn metadata_credits(
 ///
 /// The escape hatch for a wrong match: the matcher declines when it is unsure, but it
 /// can still be confidently wrong, and there has to be a way to say so.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn metadata_rematch(services: State<'_, Services>, args: CreditsArgs) -> Result<()> {
     let kind = parse_kind(&args.kind)?;
     let db = services.db.lock();
@@ -242,7 +242,7 @@ pub struct ArtworkStatus {
     pub max_bytes: u64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn artwork_status(services: State<'_, Services>) -> Result<ArtworkStatus> {
     let cache = &services.artwork;
     Ok(ArtworkStatus {
@@ -260,7 +260,7 @@ pub struct PrefetchArgs {
 }
 
 /// Download the library's artwork, emitting `artwork.progress` as it goes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn artwork_prefetch(
     app: tauri::AppHandle,
     services: State<'_, Services>,
@@ -288,7 +288,7 @@ pub fn artwork_prefetch(
 }
 
 /// Empty the cache. Always safe: the library keeps the remote URLs.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn artwork_clear(services: State<'_, Services>) -> Result<usize> {
     Ok(services.artwork.clear())
 }

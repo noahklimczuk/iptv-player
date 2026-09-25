@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Channel } from '@shared/ipc';
 import { invoke } from '@/ipc';
+import { report } from '@/lib/errors';
 import { useUi } from '@/state/ui';
 
 const DIGIT_TIMEOUT_MS = 1800;
@@ -33,7 +34,11 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
       if (current && current.id !== ch.id) previous.current = current;
       setCurrent(ch);
       showBanner(ch.id);
-      void invoke('player.play', { kind: 'live', id: ch.id });
+      // A channel whose every source is dead used to fail into an unhandled
+      // rejection: the banner appeared, the player opened, and nothing ever said
+      // why the picture was black.
+      invoke('player.play', { kind: 'live', id: ch.id })
+        .catch(report(`Could not tune ${ch.name}`));
       onTuneRef.current?.(ch);
     },
     [current, showBanner],
@@ -60,7 +65,10 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
     const n = Number(digits);
     clearDigits();
     if (!Number.isFinite(n) || n <= 0) return;
-    const hit = await invoke('channels.byNumber', { number: n });
+    const hit = await invoke('channels.byNumber', { number: n }).catch((e: unknown) => {
+      report(`Could not find channel ${n}`)(e);
+      return null;
+    });
     if (hit) tune(hit);
   }, [digits, clearDigits, tune]);
 

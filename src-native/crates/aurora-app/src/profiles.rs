@@ -7,7 +7,7 @@ use tauri::State;
 use crate::error::Result;
 use crate::services::Services;
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_list(services: State<'_, Services>) -> Result<Vec<Profile>> {
     let db = services.db.lock();
     Ok(profiles::list(&db)?)
@@ -23,7 +23,7 @@ pub struct CreateProfileArgs {
     pub daily_limit_min: Option<u32>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_create(services: State<'_, Services>, args: CreateProfileArgs) -> Result<i64> {
     let db = services.db.lock();
     Ok(profiles::create(
@@ -46,7 +46,7 @@ pub struct ProfileIdArgs {
     pub profile_id: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_delete(services: State<'_, Services>, args: ProfileIdArgs) -> Result<bool> {
     let db = services.db.lock();
     Ok(profiles::delete(&db, args.profile_id)?)
@@ -59,7 +59,7 @@ pub struct RenameArgs {
     pub name: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_rename(services: State<'_, Services>, args: RenameArgs) -> Result<()> {
     let db = services.db.lock();
     profiles::rename(&db, args.profile_id, &args.name)?;
@@ -75,7 +75,7 @@ pub struct LimitsArgs {
     pub daily_limit_min: Option<u32>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_set_limits(services: State<'_, Services>, args: LimitsArgs) -> Result<()> {
     let db = services.db.lock();
     profiles::set_limits(
@@ -96,7 +96,7 @@ pub struct SetPinArgs {
     pub pin: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_set_pin(services: State<'_, Services>, args: SetPinArgs) -> Result<()> {
     let db = services.db.lock();
     profiles::set_pin(&db, args.profile_id, args.pin.as_deref())?;
@@ -111,7 +111,7 @@ pub struct VerifyPinArgs {
     pub pin: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_verify_pin(
     services: State<'_, Services>,
     args: VerifyPinArgs,
@@ -123,7 +123,7 @@ pub fn profiles_verify_pin(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_parental(services: State<'_, Services>) -> Result<ParentalSettings> {
     let db = services.db.lock();
     Ok(profiles::parental_settings(&db)?)
@@ -138,7 +138,7 @@ pub struct ParentalArgs {
     pub master_pin: Option<Option<String>>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_set_parental(services: State<'_, Services>, args: ParentalArgs) -> Result<()> {
     let db = services.db.lock();
     profiles::set_parental_flags(&db, args.hide_adult, args.lock_settings, now_unix())?;
@@ -149,7 +149,7 @@ pub fn profiles_set_parental(services: State<'_, Services>, args: ParentalArgs) 
 }
 
 /// Minutes watched today, for the daily limit on a kids profile.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn profiles_watched_today(services: State<'_, Services>, args: ProfileIdArgs) -> Result<u32> {
     let db = services.db.lock();
     let midnight = start_of_local_day(now_unix());

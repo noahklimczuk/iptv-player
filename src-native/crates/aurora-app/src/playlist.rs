@@ -27,13 +27,13 @@ fn show_of(raw: Option<&str>) -> Show {
 
 /* ── Filters ──────────────────────────────────────────────────────────────── */
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_filters(services: State<'_, Services>) -> Result<LibraryFilter> {
     let db = services.db.lock();
     Ok(LibraryFilter::load(&db)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_set_filters(
     services: State<'_, Services>,
     args: LibraryFilter,
@@ -49,7 +49,7 @@ pub struct KindArgs {
     pub kind: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_filter_counts(
     services: State<'_, Services>,
     args: KindArgs,
@@ -66,7 +66,7 @@ pub struct AlternatesArgs {
     pub id: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_alternates(
     services: State<'_, Services>,
     args: AlternatesArgs,
@@ -114,7 +114,7 @@ pub struct PlaylistPage {
     pub total: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playlist_list(services: State<'_, Services>, args: ListArgs) -> Result<PlaylistPage> {
     let query = args.query()?;
     let db = services.db.lock();
@@ -131,7 +131,7 @@ pub struct GroupRow {
     pub count: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playlist_groups(services: State<'_, Services>, args: KindArgs) -> Result<Vec<GroupRow>> {
     let kind = kind_of(&args.kind)?;
     let db = services.db.lock();
@@ -149,7 +149,7 @@ pub struct UpdateArgs {
     pub patch: playlist::Patch,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playlist_update(services: State<'_, Services>, args: UpdateArgs) -> Result<()> {
     let kind = kind_of(&args.kind)?;
     let db = services.db.lock();
@@ -165,7 +165,7 @@ pub struct SetHiddenArgs {
     pub hidden: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playlist_set_hidden(services: State<'_, Services>, args: SetHiddenArgs) -> Result<usize> {
     let kind = kind_of(&args.kind)?;
     let mut db = services.db.lock();
@@ -189,7 +189,7 @@ pub struct HideMatchingArgs {
     pub hidden: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playlist_hide_matching(
     services: State<'_, Services>,
     args: HideMatchingArgs,
@@ -213,7 +213,7 @@ pub struct ResetArgs {
     pub ids: Vec<i64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playlist_reset(services: State<'_, Services>, args: ResetArgs) -> Result<usize> {
     let kind = kind_of(&args.kind)?;
     let mut db = services.db.lock();

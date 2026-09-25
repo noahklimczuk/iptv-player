@@ -121,9 +121,11 @@ pub fn live_sources(
     channel_id: i64,
     now: i64,
 ) -> Result<(Vec<aurora_db::repo::sources::Source>, LoadOptions)> {
-    let ch = channels::list(db, &channels::ChannelFilter::default())?
-        .into_iter()
-        .find(|c| c.id == channel_id)
+    // `channels::get`, not `channels::list(default)`. The list filter is for painting a
+    // screen: it hides what the viewer hid and answers `is_radio = 0`, so tuning went
+    // through a predicate that excluded every radio station and every hidden channel —
+    // and read the whole table to find one name.
+    let ch = channels::get(db, channel_id)?
         .ok_or_else(|| AppError::Other(format!("unknown channel {channel_id}")))?;
 
     let sources = aurora_db::repo::sources::for_channel(db, channel_id, now)?;
@@ -277,6 +279,51 @@ mod tests {
         assert!(!opts.is_live);
         assert_eq!(opts.start_at_secs, Some(90.0));
         assert_eq!(opts.title.as_deref(), Some("Example Film"));
+    }
+
+    /// Radio is a kind of channel the parser recognises (`radio="true"`), stores, and
+    /// could not play: every lookup went through the list filter, which answers
+    /// `is_radio = 0`.
+    #[test]
+    fn a_radio_channel_can_be_tuned() {
+        let db = aurora_db::open_memory().unwrap();
+        db.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO channels (id, provider_id, provider_key, name, match_key,
+                                   is_radio, last_seen_at)
+             VALUES (1, 1, 'r1', 'Jazz FM', 'jazzfm', 1, 0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO channel_sources (channel_id, url) VALUES (1, 'http://example.com/j.mp3')",
+            [],
+        )
+        .unwrap();
+
+        let (sources, opts) = live_sources(&db, 1, NOW).expect("a radio channel is tunable");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(opts.title.as_deref(), Some("Jazz FM"));
+
+        let (url, _) = resolve_playback(&db, "live", 1, None).unwrap();
+        assert_eq!(url, "http://example.com/j.mp3");
+    }
+
+    /// A recording on a channel the viewer has hidden must still record. `Dvr::begin`
+    /// resolves through exactly this call.
+    #[test]
+    fn a_hidden_channel_is_still_playable_and_recordable() {
+        let db = aurora_db::open_memory().unwrap();
+        let id = seed_channel(&db, None, 0, "http://example.com/live/a/b/9.ts");
+        aurora_db::repo::channels::set_hidden(&db, id, true).unwrap();
+
+        let (sources, _) = live_sources(&db, id, NOW).expect("a hidden channel is tunable");
+        assert_eq!(sources.len(), 1);
     }
 
     #[test]

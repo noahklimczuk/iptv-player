@@ -19,6 +19,7 @@
 //! different cache — which is why the two live here together rather than apart.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use aurora_db::repo::sources;
@@ -56,6 +57,18 @@ pub struct Playback {
     last: Mutex<Option<PlayerState>>,
     /// Where the timeshift buffer goes when the setting does not name a folder.
     data_dir: PathBuf,
+    /// Held for the whole of a tune, so two of them cannot interleave.
+    ///
+    /// The player lock alone is not enough: it is taken per `load`, and a tune is a
+    /// sequence of loads. Two `play_live` calls — which is what rapid zapping is, since
+    /// each command runs on its own thread — could therefore take turns, and the one
+    /// that finished last won, whichever the viewer asked for last. `recover` loads
+    /// too, from the heartbeat thread, every 250 ms.
+    tune: Mutex<()>,
+    /// Bumped by every deliberate tune. A load that completes for an older generation
+    /// is discarded rather than published, so a slow channel cannot overwrite the one
+    /// the viewer moved on to.
+    generation: AtomicU64,
 }
 
 impl Playback {
@@ -70,7 +83,24 @@ impl Playback {
             session: Mutex::new(None),
             last: Mutex::new(None),
             data_dir,
+            tune: Mutex::new(()),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// Claim the next tune. Returns the guard that serialises it and the generation
+    /// number that says whether its result is still wanted when it finishes.
+    fn begin_tune(&self) -> (parking_lot::MutexGuard<'_, ()>, u64) {
+        // The generation moves before the lock is taken, deliberately: a tune waiting
+        // its turn has already invalidated the one in progress, which is what makes the
+        // earlier one's success a stale result rather than the current picture.
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        (self.tune.lock(), generation)
+    }
+
+    /// Whether `generation` is still the tune the viewer is waiting for.
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::SeqCst) == generation
     }
 
     pub fn state(&self) -> PlayerState {
@@ -79,6 +109,7 @@ impl Playback {
 
     /// Tune a live channel, trying its sources in order until one loads.
     pub fn play_live(&self, channel_id: i64, now: i64) -> Result<PlayerState> {
+        let (_tune, generation) = self.begin_tune();
         let (sources, options) = {
             let db = self.db.lock();
             let mut resolved = crate::window::live_sources(&db, channel_id, now)?;
@@ -106,6 +137,12 @@ impl Playback {
 
         let mut last_error = None;
         for index in 0..session.candidates.len() {
+            // Between attempts is where a newer zap gets in. Stopping here means a
+            // channel whose sources are slow to fail cannot load over the one the
+            // viewer has since asked for.
+            if !self.is_current(generation) {
+                return Err(AppError::Superseded);
+            }
             session.current = index;
             match self.load_current(&session, now) {
                 Ok(state) => {
@@ -116,7 +153,10 @@ impl Playback {
             }
         }
 
-        *self.session.lock() = None;
+        // Only clear the session if it is still ours to clear.
+        if self.is_current(generation) {
+            *self.session.lock() = None;
+        }
         Err(last_error.unwrap_or_else(|| {
             AppError::Other(format!("nothing would play on channel {channel_id}"))
         }))
@@ -130,6 +170,7 @@ impl Playback {
         id: i64,
         position_secs: Option<f64>,
     ) -> Result<PlayerState> {
+        let (_tune, _generation) = self.begin_tune();
         let (url, options) = {
             let db = self.db.lock();
             crate::window::resolve_playback(&db, kind, id, position_secs)?
@@ -150,6 +191,7 @@ impl Playback {
         stop: i64,
         now: i64,
     ) -> Result<PlayerState> {
+        let (_tune, _generation) = self.begin_tune();
         let (url, options) = {
             let db = self.db.lock();
             crate::window::resolve_catchup(&db, channel_id, start, stop, now)?
@@ -189,6 +231,9 @@ impl Playback {
     }
 
     pub fn stop(&self) -> Result<PlayerState> {
+        // Counts as a tune: it takes the same lock and invalidates anything in flight,
+        // so a load that was already under way cannot restart the picture afterwards.
+        let (_tune, _generation) = self.begin_tune();
         *self.session.lock() = None;
         let mut player = self.player.lock();
         player.stop()?;
@@ -201,7 +246,7 @@ impl Playback {
     pub fn tick(&self, now: i64) -> Option<PlayerState> {
         let state = self.player.lock().state();
 
-        if state.status == PlayerStatus::Error && self.recover(now) {
+        if state.status == PlayerStatus::Error && self.try_recover(now) {
             // A rollover happened, so the interesting state is the new one.
             let recovered = self.player.lock().state();
             *self.last.lock() = Some(recovered.clone());
@@ -242,11 +287,28 @@ impl Playback {
         }
     }
 
+    /// Roll over, unless a tune is already under way.
+    ///
+    /// The heartbeat runs every 250 ms on its own thread and must never queue up
+    /// behind a tune: waiting for the lock would mean the error it is reacting to has
+    /// already been overtaken by whatever the viewer asked for, and it would then load
+    /// the old channel over the new one. Not getting the lock is the answer, not a
+    /// reason to wait for it.
+    fn try_recover(&self, now: i64) -> bool {
+        let Some(tune) = self.tune.try_lock() else {
+            return false;
+        };
+        let generation = self.generation.load(Ordering::SeqCst);
+        let recovered = self.recover(now, generation);
+        drop(tune);
+        recovered
+    }
+
     /// A live stream died. Move to the next source, if there is one worth trying.
     ///
     /// Returns whether anything was actually attempted, so `tick` knows whether the
     /// error it saw is still the truth.
-    fn recover(&self, now: i64) -> bool {
+    fn recover(&self, now: i64, generation: u64) -> bool {
         let Some(mut session) = self.session.lock().clone() else {
             return false;
         };
@@ -281,6 +343,11 @@ impl Playback {
         );
 
         let loaded = self.load_current(&session, now);
+        // A zap that arrived while this was loading owns the picture now; publishing
+        // this session over it would put the viewer back on the channel they left.
+        if !self.is_current(generation) {
+            return false;
+        }
         *self.session.lock() = Some(session);
         loaded.is_ok()
     }
@@ -302,15 +369,32 @@ mod tests {
         state: PlayerState,
     }
 
+    /// URLs whose `load` sleeps, so one tune can be held open while another overtakes
+    /// it. Kept outside `FakeInner` because the sleep must happen with the inner lock
+    /// released — otherwise it serialises the very thing the test is trying to
+    /// interleave.
+    #[derive(Default)]
+    struct Delays(Mutex<std::collections::HashMap<String, std::time::Duration>>);
+
     #[derive(Clone)]
-    struct Fake(Arc<Mutex<FakeInner>>);
+    struct Fake(Arc<Mutex<FakeInner>>, Arc<Delays>);
 
     impl Fake {
         fn new() -> Self {
-            Self(Arc::new(Mutex::new(FakeInner::default())))
+            Self(
+                Arc::new(Mutex::new(FakeInner::default())),
+                Arc::new(Delays::default()),
+            )
         }
         fn refuse(&self, url: &str) {
             self.0.lock().refuse.push(url.to_string());
+        }
+        /// Make loading `url` take `millis`, so a test can hold a tune open.
+        fn delay(&self, url: &str, millis: u64) {
+            self.1
+                 .0
+                .lock()
+                .insert(url.to_string(), std::time::Duration::from_millis(millis));
         }
         fn loaded(&self) -> Vec<String> {
             self.0.lock().loaded.clone()
@@ -320,7 +404,7 @@ mod tests {
             self.0.lock().state.status = PlayerStatus::Error;
         }
         fn backend(&self) -> Box<dyn PlayerBackend> {
-            Box::new(Self(Arc::clone(&self.0)))
+            Box::new(Self(Arc::clone(&self.0), Arc::clone(&self.1)))
         }
     }
 
@@ -330,6 +414,10 @@ mod tests {
             url: &str,
             _options: &LoadOptions,
         ) -> std::result::Result<(), PlayerError> {
+            let wait = self.1 .0.lock().get(url).copied();
+            if let Some(wait) = wait {
+                std::thread::sleep(wait);
+            }
             let mut inner = self.0.lock();
             if inner.refuse.iter().any(|u| u == url) {
                 return Err(PlayerError::Command(format!("refused {url}")));
@@ -543,6 +631,177 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+
+    /// Two channels with `sources` URLs each, and a harness that can hold a load open.
+    ///
+    /// More than one source per channel matters: `load_current` takes the player lock
+    /// per attempt and releases it between them, and that gap between attempts is the
+    /// window a second tune gets in through.
+    fn two_channel_harness(sources: usize) -> (Arc<Playback>, Fake) {
+        let conn = aurora_db::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for id in [1i64, 2] {
+            conn.execute(
+                "INSERT INTO channels (id, provider_id, provider_key, name, match_key,
+                                       last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 0)",
+                aurora_db::rusqlite::params![id, format!("c{id}"), format!("ch{id}")],
+            )
+            .unwrap();
+            for n in 0..sources {
+                conn.execute(
+                    "INSERT INTO channel_sources (channel_id, url, priority) VALUES (?1, ?2, ?3)",
+                    aurora_db::rusqlite::params![id, source_url(id, n), n as i64],
+                )
+                .unwrap();
+            }
+        }
+        aurora_db::repo::settings::set(&conn, crate::timeshift::ENABLED_KEY, &false).unwrap();
+
+        let db = Arc::new(Mutex::new(conn));
+        let fake = Fake::new();
+        let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(fake.backend()));
+        (Arc::new(Playback::new(db, player, tempdir("race"))), fake)
+    }
+
+    fn source_url(channel: i64, n: usize) -> String {
+        format!("http://example.com/ch{channel}-{n}.ts")
+    }
+
+    /// Rapid zapping must never leave the wrong channel on.
+    ///
+    /// `load_current` takes the player lock for one `load` and gives it back, so a
+    /// tune that is a *sequence* of loads has a gap between each. Each Tauri command
+    /// runs on its own thread, so pressing Ch+ twice is two `play_live` calls, and the
+    /// second one fits straight through that gap. Whichever finished last used to win.
+    ///
+    /// Here channel 1's first two sources are slow and then refuse, which is a
+    /// provider having a bad evening. Channel 2 loads immediately. Without a lock held
+    /// across the whole tune, channel 1's third source loads on top of it.
+    #[test]
+    fn a_later_tune_wins_however_slowly_the_earlier_one_finishes() {
+        let (playback, fake) = two_channel_harness(3);
+        for n in 0..2 {
+            fake.refuse(&source_url(1, n));
+            fake.delay(&source_url(1, n), 150);
+        }
+
+        let first = {
+            let playback = Arc::clone(&playback);
+            std::thread::spawn(move || playback.play_live(1, NOW))
+        };
+        // Inside channel 1's first attempt, before it has given the lock back.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let second = playback.play_live(2, NOW);
+        let first = first.join().expect("the slow tune thread");
+
+        assert!(
+            second.is_ok(),
+            "the tune asked for last must be the one that plays"
+        );
+        let loaded = fake.loaded();
+        assert_eq!(
+            loaded.last().map(String::as_str),
+            Some(source_url(2, 0).as_str()),
+            "the last URL loaded is not the channel the viewer asked for: {loaded:?}"
+        );
+        assert_eq!(
+            playback.session.lock().as_ref().map(|s| s.channel_id),
+            Some(2),
+            "the session names a channel that is not playing"
+        );
+        assert!(
+            matches!(first, Err(AppError::Superseded)),
+            "a superseded tune must say so rather than report a failure at the viewer"
+        );
+    }
+
+    /// The heartbeat's rollover must not run while a tune is under way.
+    ///
+    /// `tick` fires every 250 ms on its own thread and reacts to the error a dead
+    /// stream leaves behind. It used to do that with no reference to what the viewer
+    /// had since asked for — it waited for the player lock and then used it — so a zap
+    /// that was still loading could be overwritten by the *old* channel's next source.
+    ///
+    /// Holding the tune lock is what a zap in flight looks like from here, and the
+    /// answer has to be "not now" rather than "after you": by the time the lock came
+    /// free the error being reacted to would already be history.
+    #[test]
+    fn recovery_does_not_run_while_a_tune_is_in_flight() {
+        let (playback, fake) = two_channel_harness(2);
+        playback.play_live(1, NOW).unwrap();
+        fake.die();
+        let before = fake.loaded();
+
+        // Stand in for a zap that is part-way through its own sequence of loads.
+        let zapping = playback.tune.lock();
+        playback.tick(NOW);
+        drop(zapping);
+
+        assert_eq!(
+            fake.loaded(),
+            before,
+            "the heartbeat rolled a source over on top of a tune in progress"
+        );
+        assert!(
+            !fake.loaded().contains(&source_url(1, 1)),
+            "channel 1's next source was tried while the viewer was leaving it"
+        );
+
+        // And with nothing in flight it still does its job.
+        assert!(playback.tick(NOW).is_some());
+        assert!(fake.loaded().contains(&source_url(1, 1)));
+    }
+
+    /// A rollover that finishes after the viewer has moved on is thrown away.
+    ///
+    /// Belt and braces against the same bug from the other side: the generation check
+    /// is what stops a `recover` that *did* start from publishing a session for a
+    /// channel nobody is watching any more.
+    #[test]
+    fn a_stale_rollover_is_not_published() {
+        let (playback, fake) = two_channel_harness(2);
+        playback.play_live(1, NOW).unwrap();
+        fake.die();
+
+        // A generation from before the tune that is about to happen.
+        let stale = playback.generation.load(Ordering::SeqCst);
+        playback.play_live(2, NOW).unwrap();
+
+        assert!(!playback.recover(NOW, stale));
+        assert_eq!(
+            playback.session.lock().as_ref().map(|s| s.channel_id),
+            Some(2),
+            "a stale rollover replaced the session the viewer is watching"
+        );
+    }
+
+    /// Stopping counts as a tune: a load already under way must not restart the
+    /// picture after the viewer has pressed stop.
+    #[test]
+    fn stopping_during_a_slow_tune_leaves_the_player_stopped() {
+        let (playback, fake) = two_channel_harness(2);
+        fake.refuse(&source_url(1, 0));
+        fake.delay(&source_url(1, 0), 250);
+
+        let tuning = {
+            let playback = Arc::clone(&playback);
+            std::thread::spawn(move || playback.play_live(1, NOW))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        playback.stop().unwrap();
+        let _ = tuning.join();
+
+        assert!(
+            playback.session.lock().is_none(),
+            "a stop must not leave a live session behind"
+        );
     }
 
     #[test]

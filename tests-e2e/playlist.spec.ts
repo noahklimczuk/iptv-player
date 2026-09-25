@@ -19,14 +19,52 @@ async function openEditor(page: Page, tab: 'Live TV' | 'Movies' | 'Series' = 'Li
 }
 
 /** Turn one of the library filters on or off in settings. */
+/** Which field of `LibraryFilters` each switch in Settings writes. */
+const FILTER_FIELD: Record<string, 'englishOnly' | 'hideDuplicates'> = {
+  'Show English content only': 'englishOnly',
+  'Collapse duplicates': 'hideDuplicates',
+};
+
+/** What the host currently believes about one filter. */
+async function hostFilter(page: Page, field: string): Promise<boolean> {
+  return page.evaluate(async (key) => {
+    const w = window as unknown as {
+      __auroraInvoke?: (c: string, a: unknown) => Promise<unknown>;
+    };
+    const filters = (await w.__auroraInvoke!('library.filters', undefined)) as Record<
+      string,
+      boolean
+    >;
+    return filters[key]!;
+  }, field);
+}
+
+/**
+ * Turn a library filter on or off, and do not return until the *host* agrees.
+ *
+ * Two races, both of which made this flaky once Live TV started reading the list
+ * lazily. The switch renders its default before its own fetch resolves, so deciding
+ * whether to click from `aria-checked` alone could skip a click that was needed; and
+ * the command carrying the change to the host is still in flight when the switch
+ * flips, so navigating straight to Live TV read a list filtered by what the host
+ * still believed. Driving off the host removes both.
+ */
 async function setFilter(page: Page, name: string, on: boolean) {
+  const field = FILTER_FIELD[name]!;
   await page.goto('/#/settings');
   const toggle = page.getByRole('switch', { name });
   await expect(toggle).toBeVisible();
-  if ((await toggle.getAttribute('aria-checked')) !== String(on)) {
+
+  // Wait for the panel to have read the host, so the switch means something.
+  await expect
+    .poll(async () => (await toggle.getAttribute('aria-checked')) === String(await hostFilter(page, field)))
+    .toBe(true);
+
+  if ((await hostFilter(page, field)) !== on) {
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', String(on));
   }
+  await expect.poll(() => hostFilter(page, field)).toBe(on);
 }
 
 /** Channel names as Live TV lists them. */
@@ -34,7 +72,35 @@ async function liveChannelNames(page: Page): Promise<string[]> {
   await page.goto('/#/live');
   await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
   await page.waitForTimeout(500);
-  return page.locator('button', { hasText: /\S/ }).allInnerTexts();
+
+  // The list is virtualised, so the DOM only ever holds the rows on screen: reading
+  // it once would answer "what is visible", not "what does Live TV list". Scroll a
+  // screenful at a time and accumulate. The rows are `div role="button"` because a
+  // heart lives inside each one and a button inside a button is invalid markup.
+  const rows = page.getByTestId('channel-row');
+  await expect(rows.first()).toBeVisible();
+  const scroller = page.getByTestId('channel-scroller');
+  const seen = new Set<string>();
+
+  // Keep going until the set stops growing, rather than until `scrollTop` stops
+  // moving. The virtualiser measures rows as it renders them, so `scrollHeight` is
+  // still settling on the first few passes: stopping when the scroll appears to have
+  // reached the bottom truncated the list and made this flaky.
+  let idle = 0;
+  for (let guard = 0; guard < 200 && idle < 3; guard += 1) {
+    const before = seen.size;
+    for (const name of await rows.evaluateAll((els) =>
+      els.map((el) => (el.getAttribute('aria-label') ?? '').replace(/^Watch /, '')),
+    )) {
+      seen.add(name);
+    }
+    idle = seen.size > before ? 0 : idle + 1;
+    await scroller.evaluate((el) => {
+      el.scrollTop += Math.max(el.clientHeight - 80, 100);
+    });
+    await page.waitForTimeout(120);
+  }
+  return [...seen];
 }
 
 test('the editor lists every entry, hidden ones included', async ({ page }) => {
@@ -265,4 +331,39 @@ test('films and shows are editable in the same screen as channels', async ({ pag
 
   await openEditor(page, 'Series');
   await expect(page.getByRole('button', { name: /^Name for / }).first()).toBeVisible();
+});
+
+/**
+ * Live TV rendered `(channels ?? []).map(...)` with no virtualiser, and each row
+ * mounted its own `epg.nowNext`. On the subscription in docs/ROADMAP.md that is
+ * 22,121 buttons and 22,121 IPC round trips to paint one screen — each of those
+ * round trips itself scanning the whole channel table to find one row.
+ *
+ * The Guide and this playlist editor were already virtualised; Live TV was missed.
+ */
+test('live TV renders a large channel list without mounting every row', async ({ page }) => {
+  await page.goto('/#/live');
+  await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
+
+  const total = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke?: (c: string, a: unknown) => Promise<unknown>;
+    };
+    const all = (await w.__auroraInvoke!('channels.list', {})) as unknown[];
+    return all.length;
+  });
+  expect(total).toBeGreaterThan(20);
+
+  const rows = page.getByTestId('channel-row');
+  await expect(rows.first()).toBeVisible();
+  const mounted = await rows.count();
+  expect(mounted).toBeLessThan(total);
+
+  // The rows past the fold are reachable, they are simply not in the DOM yet.
+  const firstName = await rows.first().getAttribute('aria-label');
+  await page.getByTestId('channel-scroller').evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await page.waitForTimeout(400);
+  await expect(rows.first()).not.toHaveAttribute('aria-label', firstName!);
 });

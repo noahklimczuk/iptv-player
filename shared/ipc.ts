@@ -20,7 +20,9 @@ export interface Channel {
   hidden: boolean;
   isRadio: boolean;
   hasCatchup: boolean;
-  favorite?: boolean;
+  /** Whether the profile the list was fetched for has this channel in Favourites.
+   *  False when the request named no profile. */
+  favorite: boolean;
   /** ISO 639-1 as the host worked it out, or null when the name never said. */
   lang?: string | null;
 }
@@ -710,7 +712,9 @@ export interface Commands {
   'playlist.hideMatching': (args: PlaylistQuery & { hidden: boolean }) => number;
   'playlist.reset': (args: { kind: PlaylistKind; ids: number[] }) => number;
 
-  'channels.list': (args: { group?: string; favoritesOnly?: boolean }) => Channel[];
+  'channels.list': (
+    args: { group?: string; favoritesOnly?: boolean; profileId?: number },
+  ) => Channel[];
   'channels.groups': () => { name: string; count: number }[];
   'channels.byNumber': (args: { number: number }) => Channel | null;
 
@@ -718,6 +722,22 @@ export interface Commands {
   'epg.nowNext': (args: { channelId: number }) => {
     now: Programme | null;
     next: Programme | null;
+  };
+  /** Now and next for a screenful of channels at once, keyed by channel id.
+   *  Channels with nothing in the guide are left out rather than sent as nulls. */
+  'epg.nowNextMany': (args: { channelIds: number[] }) => Record<
+    number,
+    { now: Programme | null; next: Programme | null }
+  >;
+
+  /** Copy the current and previous log beside the library, for a support message. */
+  'logs.export': () => { files: string[]; folder: string };
+  /** What this launch found: where the data lives, and whether anything was lost. */
+  'app.diagnostics': () => {
+    dataDir: string;
+    /** Path the unreadable library was moved to, when startup had to replace it. */
+    libraryWasReplaced: string | null;
+    credentialsPersist: boolean;
   };
 
   'search.query': (args: { text: string }) => SearchResults;

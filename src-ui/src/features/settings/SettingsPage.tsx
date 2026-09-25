@@ -4,6 +4,7 @@ import type { Theme } from '@/state/ui';
 import { Badge, Button } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { isNativeHost } from '@/ipc';
+import { DiagnosticsPanel } from '@/features/settings/DiagnosticsPanel';
 import { FilterPanel } from '@/features/settings/FilterPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
@@ -179,6 +180,10 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
 
       <Section title="Updates">
         <UpdatePanel />
+      </Section>
+
+      <Section title="Diagnostics">
+        <DiagnosticsPanel />
       </Section>
 
       <Section title="Keyboard">

@@ -365,9 +365,14 @@ impl MpvBackend {
     }
 
     fn cmd(&self, args: &[&str]) -> Result<(), PlayerError> {
+        // `args[0]` on an empty slice panics, in Windows-only code CI cannot run. No
+        // caller passes one today; this is one edit away from being reachable.
+        let Some((name, rest)) = args.split_first() else {
+            return Err(PlayerError::Command("an mpv command with no name".into()));
+        };
         self.mpv
-            .command(args[0], &args[1..])
-            .map_err(|e| PlayerError::Command(format!("{}: {e}", args[0])))
+            .command(name, rest)
+            .map_err(|e| PlayerError::Command(format!("{name}: {e}")))
     }
 }
 

@@ -10,6 +10,7 @@ import type { Episode, PlayerState, TimeshiftWindow } from '@shared/ipc';
 import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { invoke } from '@/ipc';
+import { report } from '@/lib/errors';
 import { clockTime, duration } from '@/lib/format';
 
 const HIDE_AFTER_MS = 3200;
@@ -168,17 +169,20 @@ export function PlayerOverlay({
                 <IconButton
                   icon={playing ? 'pause' : 'play'} filled active size={46}
                   label={playing ? 'Pause' : 'Play'}
-                  onClick={() => void invoke(playing ? 'player.pause' : 'player.resume')}
+                  onClick={() => invoke(playing ? 'player.pause' : 'player.resume')
+                    .catch(report('The player did not respond'))}
                 />
                 {(!player.isLive || player.timeshift) && (
                   <>
                     <IconButton
                       icon="back10" label="Back 10 seconds"
-                      onClick={() => void invoke('player.seek', { positionSecs: -10, relative: true })}
+                      onClick={() => invoke('player.seek', { positionSecs: -10, relative: true })
+                        .catch(report('Could not seek'))}
                     />
                     <IconButton
                       icon="forward10" label="Forward 10 seconds"
-                      onClick={() => void invoke('player.seek', { positionSecs: 10, relative: true })}
+                      onClick={() => invoke('player.seek', { positionSecs: 10, relative: true })
+                        .catch(report('Could not seek'))}
                     />
                   </>
                 )}
@@ -192,12 +196,14 @@ export function PlayerOverlay({
                 <IconButton
                   icon={player.muted ? 'volumeOff' : 'volume'}
                   label={player.muted ? 'Unmute' : 'Mute'}
-                  onClick={() => void invoke('player.setMuted', { muted: !player.muted })}
+                  onClick={() => invoke('player.setMuted', { muted: !player.muted })
+                    .catch(report('Could not change the volume'))}
                 />
                 <input
                   type="range" min={0} max={200} value={player.volume}
                   aria-label="Volume"
-                  onChange={(e) => void invoke('player.setVolume', { volume: Number(e.target.value) })}
+                  onChange={(e) => invoke('player.setVolume', { volume: Number(e.target.value) })
+                    .catch(report('Could not change the volume'))}
                   style={{ width: 110, accentColor: 'var(--accent)' }}
                 />
                 <span
@@ -233,12 +239,12 @@ export function PlayerOverlay({
                   <TrackPanel
                     kind={panel}
                     player={player}
-                    onPick={(id) =>
-                      void invoke(
+                    onPick={(id) => {
+                      invoke(
                         panel === 'audio' ? 'player.setAudioTrack' : 'player.setSubtitleTrack',
                         { trackId: id as number },
-                      )
-                    }
+                      ).catch(report('Could not switch track'));
+                    }}
                   />
                 )}
               </AnimatePresence>
@@ -285,7 +291,8 @@ function Scrubber({ player }: { player: PlayerState }) {
         type="range" min={0} max={Math.max(1, player.durationSecs)}
         value={player.positionSecs}
         aria-label="Seek"
-        onChange={(e) => void invoke('player.seek', { positionSecs: Number(e.target.value) })}
+        onChange={(e) => invoke('player.seek', { positionSecs: Number(e.target.value) })
+          .catch(report('Could not seek'))}
         style={{ flex: 1, accentColor: 'var(--accent)' }}
       />
       <span
@@ -333,7 +340,8 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
           min={Math.floor(w.startSecs)} max={Math.ceil(w.liveSecs)} value={w.positionSecs}
           aria-label="Timeshift"
           onChange={(e) =>
-            void invoke('player.seek', { positionSecs: Number(e.target.value) })}
+            invoke('player.seek', { positionSecs: Number(e.target.value) })
+              .catch(report('Could not seek'))}
           style={{ flex: 1, accentColor: atLive ? 'var(--live)' : 'var(--accent)' }}
         />
         {/* The live edge itself, so the end of the track reads as "now" rather than as
@@ -360,7 +368,8 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
 
       {!atLive && (
         <button
-          onClick={() => void invoke('player.backToLive')}
+          onClick={() => invoke('player.backToLive')
+            .catch(report('Could not return to live'))}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px',
             borderRadius: 'var(--r-full)', cursor: 'pointer', whiteSpace: 'nowrap',

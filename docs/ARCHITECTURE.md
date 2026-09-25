@@ -66,8 +66,16 @@ On resize the host repositions the mpv child HWND to match the WebView2 client r
 
 ## Threading
 
-- The Tauri main thread owns windows and the event loop only.
-- Ingestion, parsing, EPG import, and metadata enrichment run on a Tokio pool.
+- The Tauri main thread owns windows and the event loop only. Every command is
+  `#[tauri::command(async)]`, which for a synchronous `fn` selects Tauri's
+  `sync_threadpool` path — the body runs on the async runtime's blocking pool, not in
+  the IPC handler. This is load-bearing rather than tidy: the plain
+  `#[tauri::command]` default is `ExecutionContext::Blocking`, which runs the body on
+  the main thread, and a 23.7-second refresh there freezes the window for all of it —
+  including the `ingest.progress` events the progress bar is drawn from, since
+  delivering one needs the same thread. `tests/command_args.rs` fails on any handler
+  left on the blocking path.
+- Ingestion, parsing, EPG import, and metadata enrichment therefore run on that pool.
 - The DB is accessed through a single writer connection plus a read pool; writes are batched into
   transactions (README §16 requires a 50 MB playlist to import in ≤20 s without blocking the UI).
 - libmpv runs its own threads; its event loop is pumped on a dedicated thread that forwards
@@ -84,6 +92,10 @@ State is owned natively and mirrored to the UI; the UI sends intents, never muta
 ```
 keypress → UI intent player.play{channelId}
          → aurora-app resolves URL (provider auth, catchup, failover list)
+           · channels::get — a primary-key lookup, not a filtered list, so radio and
+             hidden channels resolve and a zap does not scan the table
+           · Playback::begin_tune — one tune at a time, with a generation counter, so a
+             slow tune cannot load over the channel the viewer moved on to
          → aurora-player::MpvBackend.load(url, headers)
          → mpv property events → player.state event → UI banner + OSD
 ```

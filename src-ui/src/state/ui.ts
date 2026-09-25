@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { CatalogItem, PlayerState } from '@shared/ipc';
 import { invoke, onPlayerState } from '@/ipc';
+import { report } from '@/lib/errors';
 
 export type Theme = 'dark' | 'oled' | 'light' | 'contrast';
 export type Density = 'desktop' | 'tv';
@@ -78,6 +79,8 @@ export const useUi = create<UiState>((set, get) => ({
 
 /** Mirror host player state into the store (README §3: UI mirrors, never owns). */
 export function bindPlayerState() {
-  void invoke('player.state').then((s) => useUi.getState().setPlayer(s));
+  invoke('player.state')
+    .then((s) => useUi.getState().setPlayer(s))
+    .catch(report('Could not read the player state'));
   return onPlayerState((s) => useUi.getState().setPlayer(s));
 }

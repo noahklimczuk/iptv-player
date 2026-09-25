@@ -8,6 +8,7 @@ import type { CatalogItem, Episode, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
 import { getProgress, invoke } from '@/ipc';
 import { useProfile } from '@/state/profile';
+import { report } from '@/lib/errors';
 import { duration, progressPct, runtime } from '@/lib/format';
 import { Badge, Button, IconButton, ProgressBar, Skeleton } from './Primitives';
 import { Icon } from './Icon';
@@ -344,7 +345,8 @@ function PlaybackPrefs({ seriesId }: { seriesId: number }) {
   const update = (patch: Partial<SeriesPrefs>) => {
     const next = { ...prefs, ...patch };
     setLocal(next);
-    void invoke('library.setSeriesPrefs', { profileId, seriesId, prefs: next });
+    invoke('library.setSeriesPrefs', { profileId, seriesId, prefs: next })
+      .catch(report('Could not save that preference'));
   };
 
   const toggles: [keyof SeriesPrefs, string][] = [

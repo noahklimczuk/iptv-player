@@ -2,7 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, library, metadata, now_unix, playlist, profiles, providers, services::Services,
+    commands, dvr, library, metadata, now_unix, playlist, profiles, providers,
+    services::Services,
+    supervise::{log_panics, supervised},
     timeshift, updates,
 };
 
@@ -13,8 +15,9 @@ use aurora_app::{
 /// "libmpv would not load" from "the video is behind the window". So release builds log
 /// to a file beside their data, and debug builds keep the console they already have.
 ///
-/// Truncated per run: the question being asked of a log is almost always about the
-/// launch that just failed, not the twenty before it.
+/// The previous run is kept as `aurora.log.1` rather than overwritten. This used to
+/// truncate, which meant the one sequence that matters — it crashed, I relaunched to
+/// report it — was also the one that destroyed the evidence.
 fn init_logging(data_dir: &std::path::Path) {
     let filter =
         tracing_subscriber::EnvFilter::try_from_env("AURORA_LOG").unwrap_or_else(|_| "info".into());
@@ -25,7 +28,7 @@ fn init_logging(data_dir: &std::path::Path) {
     }
 
     let _ = std::fs::create_dir_all(data_dir);
-    match std::fs::File::create(data_dir.join("aurora.log")) {
+    match std::fs::File::create(aurora_app::logging::rotate(data_dir)) {
         Ok(file) => tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_ansi(false)
@@ -45,6 +48,34 @@ const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
 /// opens it.
 const UPDATE_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Ask GitHub whether there is a newer build.
+///
+/// On its own thread and after a pause, because nothing about this is urgent and the
+/// first seconds after launch belong to getting a picture on screen.
+fn check_for_updates(app: &tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    let services = app.state::<Services>();
+
+    let (automatic, last) = {
+        let db = services.db.lock();
+        (updates::automatic(&db), updates::last_checked(&db))
+    };
+    if !automatic || !aurora_ingest::updates::due(last, now_unix()) {
+        return;
+    }
+
+    match updates::run(&services, now_unix(), false) {
+        Ok(check) if check.available => {
+            tracing::info!(current = %check.current, "a newer build is published");
+            let _ = app.emit("update.available", &check);
+        }
+        Ok(_) => tracing::debug!("this is the newest published build"),
+        // Never a dialog: failing to reach GitHub is not the viewer's problem and must
+        // not interrupt whatever they are watching.
+        Err(e) => tracing::info!("update check failed: {e}"),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -60,6 +91,9 @@ fn main() {
             };
 
             init_logging(&data_dir);
+            // After the subscriber exists, so the hook has somewhere to write. Before
+            // any thread is spawned, so none of them can panic unrecorded.
+            log_panics();
             tracing::info!(
                 "Aurora TV {} starting, data in {}",
                 env!("CARGO_PKG_VERSION"),
@@ -82,9 +116,11 @@ fn main() {
                 .name("aurora-player".into())
                 .spawn(move || loop {
                     std::thread::sleep(PLAYER_TICK);
-                    if let Some(state) = playback.tick(now_unix()) {
-                        let _ = player_handle.emit("player.state", &state);
-                    }
+                    supervised("player", || {
+                        if let Some(state) = playback.tick(now_unix()) {
+                            let _ = player_handle.emit("player.state", &state);
+                        }
+                    });
                 })
                 .expect("spawning the player thread");
 
@@ -95,14 +131,16 @@ fn main() {
                 .name("aurora-dvr".into())
                 .spawn(move || loop {
                     std::thread::sleep(dvr::TICK_INTERVAL);
-                    match scheduler.tick(now_unix()) {
+                    // A panic here used to end the scheduler outright, and a DVR that
+                    // has silently stopped has no symptom until the programme is gone.
+                    supervised("DVR", || match scheduler.tick(now_unix()) {
                         Ok(report) if !report.is_empty() => {
                             use tauri::Emitter;
                             let _ = handle.emit("dvr.tick", &report);
                         }
                         Ok(_) => {}
                         Err(e) => tracing::error!("DVR tick failed: {e}"),
-                    }
+                    });
                 })?;
 
             // Ask GitHub whether there is a newer build. On its own thread and after a
@@ -113,27 +151,7 @@ fn main() {
                 .name("aurora-updates".into())
                 .spawn(move || {
                     std::thread::sleep(UPDATE_CHECK_DELAY);
-                    use tauri::Manager;
-                    let services = updates_handle.state::<Services>();
-
-                    let (automatic, last) = {
-                        let db = services.db.lock();
-                        (updates::automatic(&db), updates::last_checked(&db))
-                    };
-                    if !automatic || !aurora_ingest::updates::due(last, now_unix()) {
-                        return;
-                    }
-
-                    match updates::run(&services, now_unix(), false) {
-                        Ok(check) if check.available => {
-                            tracing::info!(current = %check.current, "a newer build is published");
-                            let _ = updates_handle.emit("update.available", &check);
-                        }
-                        Ok(_) => tracing::debug!("this is the newest published build"),
-                        // Never a dialog: failing to reach GitHub is not the viewer's
-                        // problem and must not interrupt whatever they are watching.
-                        Err(e) => tracing::info!("update check failed: {e}"),
-                    }
+                    supervised("update", || check_for_updates(&updates_handle));
                 })
                 .expect("spawning the update thread");
 
@@ -155,6 +173,7 @@ fn main() {
             commands::channels_by_number,
             commands::epg_grid_slice,
             commands::epg_now_next,
+            commands::epg_now_next_many,
             commands::library_movies,
             commands::library_series,
             commands::library_genres,
@@ -230,6 +249,8 @@ fn main() {
             providers::providers_update,
             providers::providers_delete,
             commands::player_set_speed,
+            aurora_app::logging::app_diagnostics,
+            aurora_app::logging::logs_export,
             library::providers_list,
             library::library_stats,
             library::library_rails,

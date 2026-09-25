@@ -370,3 +370,76 @@ Not yet built, and not silently dropped (README working-agreement rule 4). Track
 Optional), casting, voice search, gamepad (§14.3), and a local artwork cache (§12 —
 enrichment stores absolute TMDB image URLs, so every poster is currently fetched from the
 network on each paint).
+
+## D22 — Every command is `(async)`, and the attribute is tested
+
+**Context.** `tauri-macros` defaults a `#[tauri::command]` over a synchronous `fn` to
+`ExecutionContext::Blocking`, and `body_blocking` runs the body inline in the IPC
+handler — which the webview calls on the main thread. All 94 handlers here are
+synchronous, so all 94 were running there, despite `docs/ARCHITECTURE.md` describing a
+Tokio pool that does not exist.
+
+**Decision.** `#[tauri::command(async)]` on every one, which for a synchronous `fn`
+selects the `sync_threadpool` path: same body, same signature, run on the async
+runtime's blocking pool.
+
+**Consequence.** A refresh measured at 23.7 seconds against a real panel no longer
+freezes the window for its duration — and, more to the point, the `ingest.progress`
+events the progress bar is drawn from can actually be delivered while it runs, since
+delivering one needs the main thread the refresh was holding. The same applies to
+`updates.download` (a twelve-megabyte file), `providers.validate` (a twelve-second
+connect timeout) and `channels.list` (twenty-two thousand rows sorted and serialised).
+
+The reason this is a decision rather than a commit is the failure mode. The attribute
+is one token, a command written without it looks completely correct, and the symptom —
+a window that stops repainting — appears only on Windows, under a real provider, in a
+build nobody runs in CI. So `tests/command_args.rs` fails naming any handler left on
+the blocking path. Anything that can be lost by forgetting one token needs a test, not
+a convention.
+
+## D23 — A tune is held together; a rollover is not allowed to fight it
+
+**Context.** `load_current` takes the player lock for one `load` and gives it back, and
+a tune is a *sequence* of loads — a channel has several URLs and tries them in order.
+Every Tauri command runs on its own thread, so pressing Ch+ twice is two `play_live`
+calls, and the second fits straight through the gap between the first one's attempts.
+Whichever finished last won, whichever the viewer asked for last. The 250 ms heartbeat
+did the same thing from the other side: its rollover waited for the player lock and
+then used it, so a stream that died during a zap rolled the *old* channel forward on
+top of the new one.
+
+**Decision.** A `tune` mutex held for the whole of `play_live`, `play_item`,
+`play_catchup` and `stop`, plus a generation counter bumped before the lock is taken.
+A tune that gets in first and finishes late can tell its result is no longer wanted and
+returns `AppError::Superseded` rather than publishing a picture nobody asked for. The
+heartbeat uses `try_lock` and gives up rather than waiting — waiting would be worse
+than useless, since by the time the lock came free the error it is reacting to would
+already have been overtaken.
+
+**Consequence.** `Superseded` is a distinct error, not a failure: the UI recognises it
+and stays silent, because a toast for every double press of Ch+ would be worse than
+the silence it replaced. And rapid zapping is now something with a measurement rather
+than a hope — 2,000 zaps at ~49,000/s, always ending on the channel last asked for,
+with the heartbeat running and the stream killed every fiftieth zap
+(`aurora-app/tests/stress.rs`).
+
+## D24 — An unreadable library is replaced, and the viewer is told
+
+**Context.** `aurora_db::open` propagated a corrupt file straight out of
+`Services::new`, which Tauri turns into a start-up failure: no window, no dialog, and
+no console in a release build to print to. The app did not launch and gave no reason.
+A *failed* integrity check was worse — logged at error level and then used anyway,
+against README §5's promise of "check + repair on startup".
+
+**Decision.** `open_or_recover` moves the unusable file aside, WAL sidecars and all,
+and starts a fresh one. Renamed rather than deleted, and the host keeps what it had to
+do so Settings can say so.
+
+**Consequence.** Two things follow that are worth stating. The old file is kept because
+it holds favourites, watch progress and recordings metadata somebody may want
+recovered, and destroying the only copy of that to clear an error message is not a
+trade this should make unasked — it is on disk with a timestamp, and a person can
+decide. And recovering *silently* would mean opening Aurora to find the library gone
+with no explanation, which is a worse experience than the crash it replaced; so the
+Diagnostics panel says it happened, where the old file went, and that a refresh will
+rebuild the library.

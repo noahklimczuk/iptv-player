@@ -199,3 +199,53 @@ fn the_field_scan_reads_names_and_not_the_prose_around_them() {
         ["title", "match", "stats"]
     );
 }
+
+/// The Content-Security-Policy has to allow the schemes real providers actually use.
+///
+/// `img-src` was `'self' data: https:`. IPTV panels overwhelmingly serve `tvg-logo`
+/// and `stream_icon` over plain HTTP — the probe in docs/ROADMAP.md reached its origin
+/// over `http://` on a bare IP — so in the shipped app every one of those was blocked
+/// with "Refused to load the image" and rendered as a broken icon. `media-src` already
+/// allowed `http:`, so somebody had thought about this for streams and not for
+/// pictures.
+///
+/// Invisible from a browser: `vite preview` serves no CSP at all, which is what every
+/// Playwright journey runs against.
+#[test]
+fn the_csp_allows_the_image_schemes_providers_actually_use() {
+    let config =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+            .expect("tauri.conf.json");
+    let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
+    let csp = parsed["app"]["security"]["csp"]
+        .as_str()
+        .expect("a csp is set");
+
+    let img = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("img-src"))
+        .expect("img-src is declared");
+
+    for scheme in ["http:", "https:", "data:"] {
+        assert!(
+            img.split_whitespace().any(|s| s == scheme),
+            "img-src must allow {scheme}, or provider artwork served over it is blocked: {img}"
+        );
+    }
+
+    // The things that must stay shut: a page that can be told what to execute is a
+    // different application from this one.
+    assert!(
+        csp.contains("script-src 'self'"),
+        "scripts must stay same-origin: {csp}"
+    );
+    assert!(
+        !csp.contains("script-src 'self' 'unsafe-inline'"),
+        "inline scripts must not be allowed: {csp}"
+    );
+    assert!(
+        csp.starts_with("default-src 'self'"),
+        "the default must stay same-origin: {csp}"
+    );
+}

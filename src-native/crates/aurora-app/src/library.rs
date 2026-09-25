@@ -19,7 +19,7 @@ use crate::services::Services;
 
 /* ── Providers ────────────────────────────────────────────────────────────── */
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn providers_list(services: State<'_, Services>) -> Result<Vec<providers::ProviderRow>> {
     let db = services.db.lock();
     Ok(providers::list(&db)?)
@@ -27,7 +27,7 @@ pub fn providers_list(services: State<'_, Services>) -> Result<Vec<providers::Pr
 
 /* ── Library ──────────────────────────────────────────────────────────────── */
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_stats(services: State<'_, Services>) -> Result<library::LibraryStats> {
     let db = services.db.lock();
     Ok(library::stats(&db)?)
@@ -71,7 +71,7 @@ const RAIL_SIZE: u32 = 24;
 /// Empty rails are dropped rather than rendered empty: a row with a heading and no
 /// posters reads as a loading failure, and on a fresh library most of these have
 /// nothing in them yet.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<Vec<Rail>> {
     let db = services.db.lock();
     let filters = aurora_db::repo::filtering::LibraryFilter::load(&db)?;
@@ -167,7 +167,7 @@ pub struct MyListArgs {
 }
 
 /// Returns whether the title is on the list afterwards, so the UI never has to guess.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mylist_toggle(services: State<'_, Services>, args: MyListArgs) -> Result<bool> {
     let kind = match args.kind.as_str() {
         "series" => lists::ItemKind::Series,
@@ -190,7 +190,7 @@ pub struct FavoriteArgs {
     pub channel_id: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn favorites_toggle(services: State<'_, Services>, args: FavoriteArgs) -> Result<bool> {
     let db = services.db.lock();
     Ok(lists::toggle_favorite(
@@ -211,7 +211,7 @@ pub struct GetProgressArgs {
     pub id: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn progress_get(
     services: State<'_, Services>,
     args: GetProgressArgs,

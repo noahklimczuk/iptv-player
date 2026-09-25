@@ -16,9 +16,12 @@ use crate::services::Services;
 pub struct ListChannelsArgs {
     pub group: Option<String>,
     pub favorites_only: Option<bool>,
+    /// Whose favourites. Optional so a caller that does not care — the zapper's own
+    /// channel list, say — does not have to pass one.
+    pub profile_id: Option<i64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn channels_list(
     services: State<'_, Services>,
     args: ListChannelsArgs,
@@ -33,6 +36,12 @@ pub fn channels_list(
             limit: None,
             offset: 0,
             library: filtering::LibraryFilter::load(&db)?,
+            profile_id: args.profile_id,
+            // `favorites_only` was accepted and then ignored, so the Favorites button
+            // on Live TV re-fetched the same list and changed nothing on screen. The
+            // mock transport did filter, which is why every browser journey looked
+            // right.
+            favorites_only: args.favorites_only.unwrap_or(false),
         },
     )?)
 }
@@ -44,7 +53,7 @@ pub struct GroupRow {
     pub count: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn channels_groups(services: State<'_, Services>) -> Result<Vec<GroupRow>> {
     let db = services.db.lock();
     Ok(channels::groups(&db)?
@@ -59,7 +68,7 @@ pub struct ByNumberArgs {
     pub number: u32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn channels_by_number(
     services: State<'_, Services>,
     args: ByNumberArgs,
@@ -90,7 +99,7 @@ pub struct GuideSlice {
     pub to: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn epg_grid_slice(services: State<'_, Services>, args: GridSliceArgs) -> Result<GuideSlice> {
     let db = services.db.lock();
     let all = channels::list(
@@ -144,13 +153,47 @@ pub struct NowNext {
     pub next: Option<epg::ProgrammeRow>,
 }
 
-#[tauri::command]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NowNextManyArgs {
+    pub channel_ids: Vec<i64>,
+}
+
+/// Now and next for a screenful of channels, in one call.
+///
+/// Live TV used to mount a `useCommand('epg.nowNext')` per row. With no virtualiser
+/// that was one IPC round trip per channel in the library — 22,121 of them on the
+/// subscription in docs/ROADMAP.md, each taking the single writer mutex, each on the
+/// window's own thread. The list is virtualised now, so this is asked about the rows
+/// actually on screen; the batching is what stops a fast scroll turning into a
+/// thousand round trips anyway.
+#[tauri::command(async)]
+pub fn epg_now_next_many(
+    services: State<'_, Services>,
+    args: NowNextManyArgs,
+) -> Result<std::collections::HashMap<i64, NowNext>> {
+    let now = now_unix();
+    let db = services.db.lock();
+    let mut out = std::collections::HashMap::with_capacity(args.channel_ids.len());
+    for id in args.channel_ids {
+        let Some(epg_id) = channels::get(&db, id)?.and_then(|c| c.epg_channel_id) else {
+            continue;
+        };
+        let (current, next) = epg::now_next(&db, &epg_id, now)?;
+        // A channel with a guide id but nothing in the guide is the common case on a
+        // real panel: 9,476 channels carry an id and 2,949 have any programmes. Left
+        // out rather than sent as a pair of nulls.
+        if current.is_some() || next.is_some() {
+            out.insert(id, NowNext { now: current, next });
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command(async)]
 pub fn epg_now_next(services: State<'_, Services>, args: NowNextArgs) -> Result<NowNext> {
     let db = services.db.lock();
-    let Some(ch) = channels::list(&db, &channels::ChannelFilter::default())?
-        .into_iter()
-        .find(|c| c.id == args.channel_id)
-    else {
+    let Some(ch) = channels::get(&db, args.channel_id)? else {
         return Ok(NowNext {
             now: None,
             next: None,
@@ -196,7 +239,7 @@ fn browse_query(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_movies(
     services: State<'_, Services>,
     args: MoviesArgs,
@@ -214,7 +257,7 @@ pub struct SeriesArgs {
     pub genre: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_series(
     services: State<'_, Services>,
     args: SeriesArgs,
@@ -224,7 +267,7 @@ pub fn library_series(
     Ok(library::list_series(&db, &q)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_genres(services: State<'_, Services>) -> Result<Vec<String>> {
     let db = services.db.lock();
     Ok(library::genres(&db)?)
@@ -237,7 +280,7 @@ pub struct EpisodesArgs {
     pub season: Option<u16>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_episodes(
     services: State<'_, Services>,
     args: EpisodesArgs,
@@ -256,7 +299,7 @@ pub struct SearchArgs {
 ///
 /// The flat `search::query` is the FTS half of this; the palette wants programmes and
 /// people beside it, and those are not in the index.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn search_query(
     services: State<'_, Services>,
     args: SearchArgs,
@@ -275,7 +318,7 @@ pub struct PlayArgs {
     pub position_secs: Option<f64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_play(services: State<'_, Services>, args: PlayArgs) -> Result<PlayerState> {
     // Live goes through the failover path: a channel has several URLs and the first is
     // only a guess. Everything else has exactly one.
@@ -300,7 +343,7 @@ pub struct CatchupArgs {
 ///
 /// Separate from `player_play` rather than another `kind`: catch-up is addressed by a
 /// channel *and* a time window, which does not fit an item id.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_play_catchup(
     services: State<'_, Services>,
     args: CatchupArgs,
@@ -310,21 +353,21 @@ pub fn player_play_catchup(
         .play_catchup(args.channel_id, args.start, args.stop, now_unix())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_pause(services: State<'_, Services>) -> Result<PlayerState> {
     let mut p = services.player.lock();
     p.set_paused(true)?;
     Ok(p.state())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_resume(services: State<'_, Services>) -> Result<PlayerState> {
     let mut p = services.player.lock();
     p.set_paused(false)?;
     Ok(p.state())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_stop(services: State<'_, Services>) -> Result<PlayerState> {
     // Through the service, so stopping also ends the failover session — otherwise the
     // next dead-stream tick would reconnect a channel the viewer had closed.
@@ -340,7 +383,7 @@ pub struct SeekArgs {
 
 /// Through the service, not the backend: a seek on a buffered live stream has to be
 /// held inside what the buffer holds, and that bound belongs in one place (README §7.6).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_seek(services: State<'_, Services>, args: SeekArgs) -> Result<PlayerState> {
     services
         .playback
@@ -348,7 +391,7 @@ pub fn player_seek(services: State<'_, Services>, args: SeekArgs) -> Result<Play
 }
 
 /// Jump back to the live edge after pausing or rewinding live TV (README §7.6).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_back_to_live(services: State<'_, Services>) -> Result<PlayerState> {
     services.playback.back_to_live()
 }
@@ -359,7 +402,7 @@ pub struct VolumeArgs {
     pub volume: u32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_set_volume(services: State<'_, Services>, args: VolumeArgs) -> Result<PlayerState> {
     let mut p = services.player.lock();
     p.set_volume(args.volume)?;
@@ -372,7 +415,7 @@ pub struct MutedArgs {
     pub muted: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_set_muted(services: State<'_, Services>, args: MutedArgs) -> Result<PlayerState> {
     let mut p = services.player.lock();
     p.set_muted(args.muted)?;
@@ -385,7 +428,7 @@ pub struct TrackArgs {
     pub track_id: Option<i64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_set_audio_track(
     services: State<'_, Services>,
     args: TrackArgs,
@@ -395,7 +438,7 @@ pub fn player_set_audio_track(
     Ok(p.state())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_set_subtitle_track(
     services: State<'_, Services>,
     args: TrackArgs,
@@ -411,7 +454,7 @@ pub struct AspectArgs {
     pub aspect: Aspect,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_set_aspect(services: State<'_, Services>, args: AspectArgs) -> Result<PlayerState> {
     let mut p = services.player.lock();
     p.set_aspect(args.aspect)?;
@@ -426,14 +469,14 @@ pub struct SpeedArgs {
 
 /// Playback speed. The backend clamps to 0.25x–4x; past that mpv drops audio entirely
 /// and the result is indistinguishable from a broken stream.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_set_speed(services: State<'_, Services>, args: SpeedArgs) -> Result<PlayerState> {
     let mut p = services.player.lock();
     p.set_speed(args.speed)?;
     Ok(p.state())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn player_state(services: State<'_, Services>) -> Result<PlayerState> {
     Ok(services.player.lock().state())
 }
@@ -450,7 +493,7 @@ pub struct SaveProgressArgs {
     pub duration_secs: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn progress_save(services: State<'_, Services>, args: SaveProgressArgs) -> Result<bool> {
     let kind = match args.kind.as_str() {
         "episode" => progress::ItemKind::Episode,
@@ -496,7 +539,7 @@ pub struct AidsArgs {
     pub duration_secs: f64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_playback_aids(
     services: State<'_, Services>,
     args: AidsArgs,
@@ -535,7 +578,7 @@ pub struct RecordSkipArgs {
 
 /// Remember that the viewer skipped a region, so later episodes of the show can offer
 /// the button without being asked.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_record_skip(services: State<'_, Services>, args: RecordSkipArgs) -> Result<()> {
     let Some(kind) = MarkerKind::parse(&args.kind) else {
         return Err(crate::AppError::Other(format!(
@@ -554,7 +597,7 @@ pub fn library_record_skip(services: State<'_, Services>, args: RecordSkipArgs) 
 }
 
 /// Store the chapter-derived markers for the file the player just loaded.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_sync_chapters(services: State<'_, Services>, args: AidsArgs) -> Result<usize> {
     let chapters = services.player.lock().chapters();
     let derived = aurora_core::markers::from_chapters(&chapters, args.duration_secs);
@@ -574,7 +617,7 @@ pub struct SeriesPrefsArgs {
     pub series_id: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_series_prefs(
     services: State<'_, Services>,
     args: SeriesPrefsArgs,
@@ -591,7 +634,7 @@ pub struct SetSeriesPrefsArgs {
     pub prefs: markers::SeriesPrefs,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_set_series_prefs(
     services: State<'_, Services>,
     args: SetSeriesPrefsArgs,
