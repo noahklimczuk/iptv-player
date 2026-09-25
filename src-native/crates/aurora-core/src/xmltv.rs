@@ -387,6 +387,22 @@ fn parse_star(value: &str) -> Option<f32> {
     value.trim().parse().ok()
 }
 
+/// How long a month actually is.
+///
+/// `1..=31` accepted 31 February, and `days_from_civil` answers for it rather than
+/// refusing — so a guide with a typo in it silently produced a programme three days
+/// later, in the middle of real ones, rather than a skipped entry and a count that
+/// says something went wrong.
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
 /// Days since the Unix epoch for a civil date (Howard Hinnant's algorithm).
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -416,7 +432,7 @@ pub fn parse_time(raw: &str) -> Option<i64> {
     let year = num(0, 4)?;
     let month = num(4, 6)?;
     let day = num(6, 8)?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
         return None;
     }
     let hour = if digits.len() >= 10 { num(8, 10)? } else { 0 };
@@ -458,6 +474,57 @@ mod tests {
     fn epoch_is_correct() {
         assert_eq!(parse_time("19700101000000 +0000"), Some(0));
         assert_eq!(parse_time("20240115120000 +0000"), Some(1_705_320_000));
+    }
+
+    /// `1..=31` accepted 31 February, and `days_from_civil` happily answers for it —
+    /// so a guide with a typo silently produced a programme three days later, sitting
+    /// in the middle of real ones rather than being skipped and counted.
+    #[test]
+    fn an_impossible_date_is_rejected_rather_than_rolled_over() {
+        for bad in [
+            "20250231000000 +0000", // February has 28 days in 2025
+            "20250230000000 +0000",
+            "20250431000000 +0000", // April has 30
+            "20250631000000 +0000",
+            "20250931000000 +0000",
+            "20251131000000 +0000",
+            "20250100000000 +0000", // day zero
+            "20251301000000 +0000", // month thirteen
+            "20250001000000 +0000", // month zero
+        ] {
+            assert_eq!(parse_time(bad), None, "{bad} should not parse");
+        }
+    }
+
+    #[test]
+    fn leap_years_are_worked_out_rather_than_guessed() {
+        // Divisible by four: a leap year.
+        assert!(parse_time("20240229120000 +0000").is_some());
+        // Not divisible by four.
+        assert_eq!(parse_time("20250229120000 +0000"), None);
+        // Divisible by 100 but not 400: not a leap year.
+        assert_eq!(parse_time("19000229120000 +0000"), None);
+        // Divisible by 400: a leap year.
+        assert!(parse_time("20000229120000 +0000").is_some());
+    }
+
+    #[test]
+    fn the_last_day_of_every_month_still_parses() {
+        for (date, _) in [
+            ("20250131", 31),
+            ("20250228", 28),
+            ("20250331", 31),
+            ("20250430", 30),
+            ("20250630", 30),
+            ("20250930", 30),
+            ("20251130", 30),
+            ("20251231", 31),
+        ] {
+            assert!(
+                parse_time(&format!("{date}120000 +0000")).is_some(),
+                "{date} is a real date"
+            );
+        }
     }
 
     #[test]

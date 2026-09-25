@@ -196,30 +196,71 @@ pub struct SavedProvider {
 /// gets only a reference to it.
 #[tauri::command(async)]
 pub fn providers_save(services: State<'_, Services>, args: ValidateArgs) -> Result<SavedProvider> {
-    let draft = args.draft;
     let db = services.db.lock();
-
-    db.execute(
-        "INSERT INTO providers (name, kind, base_url, username, credential_ref, enabled, created_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, 1, ?5)",
-        params![draft.name, draft.kind, draft.url, draft.username, now_unix()],
-    )
-    .map_err(aurora_db::DbError::from)?;
-    let id = db.last_insert_rowid();
-
-    if let Some(password) = draft.password.filter(|p| !p.is_empty()) {
-        let key = credential_ref(id);
-        services
-            .credentials
-            .set(&key, &password)
-            .map_err(|e| AppError::Other(e.to_string()))?;
-        db.execute(
-            "UPDATE providers SET credential_ref = ?2 WHERE id = ?1",
-            params![id, key],
-        )
-        .map_err(aurora_db::DbError::from)?;
-    }
+    let id = save_provider(&db, services.credentials.as_ref(), args.draft, now_unix())?;
     Ok(SavedProvider { id })
+}
+
+/// The order that makes saving a provider safe, separated from the Tauri state so it
+/// can be tested against a store that refuses.
+///
+/// This used to insert the row, then write the credential, then update the row with
+/// its reference — three steps with no way back. A credential store that refused in
+/// the middle left a provider behind with no password, the wizard showing a failure,
+/// and a refresh that would go and sign in blank. Neither half can join the other's
+/// transaction (one is SQLite, the other is Windows Credential Manager), so the order
+/// is the whole mechanism: write the secret first, insert the row already carrying its
+/// reference, and take the secret back out again if the insert fails.
+fn save_provider(
+    db: &aurora_db::rusqlite::Connection,
+    store: &dyn aurora_ingest::credentials::CredentialStore,
+    draft: DraftProvider,
+    now: i64,
+) -> Result<i64> {
+    let password = draft.password.filter(|p| !p.is_empty());
+
+    // A key that does not depend on the row id, because there is no row yet. Ids are
+    // never reused, so the one this names is the one the insert will take.
+    let next_id: i64 = db
+        .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM providers", [], |r| {
+            r.get(0)
+        })
+        .map_err(aurora_db::DbError::from)?;
+    let key = credential_ref(next_id);
+
+    if let Some(password) = &password {
+        store
+            .set(&key, password)
+            .map_err(|e| AppError::Other(e.to_string()))?;
+    }
+
+    let stored = password.as_ref().map(|_| key.as_str());
+    let inserted = db.execute(
+        "INSERT INTO providers (id, name, kind, base_url, username, credential_ref,
+                                enabled, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)",
+        params![
+            next_id,
+            draft.name,
+            draft.kind,
+            draft.url,
+            draft.username,
+            stored,
+            now
+        ],
+    );
+
+    if let Err(e) = inserted {
+        // Nothing was saved, so nothing should be left in the credential store either:
+        // a stray secret under a key no provider references is exactly what README C10
+        // is about.
+        if password.is_some() {
+            let _ = store.delete(&key);
+        }
+        return Err(aurora_db::DbError::from(e).into());
+    }
+
+    Ok(next_id)
 }
 
 /* ── Editing an existing provider ─────────────────────────────────────────── */
@@ -581,6 +622,128 @@ mod tests {
             "there is nothing to fill in, only to offer"
         );
         assert_eq!(got.password, None);
+    }
+
+    use aurora_ingest::credentials::CredentialError;
+
+    fn draft(name: &str, password: Option<&str>) -> DraftProvider {
+        DraftProvider {
+            name: name.into(),
+            kind: "xtream".into(),
+            url: "http://panel.example".into(),
+            username: Some("bob".into()),
+            password: password.map(str::to_string),
+        }
+    }
+
+    /// A store that always refuses, standing in for a Credential Manager that is
+    /// locked, full, or governed by a policy that says no.
+    struct RefusingStore;
+
+    impl CredentialStore for RefusingStore {
+        fn set(&self, _: &str, _: &str) -> std::result::Result<(), CredentialError> {
+            Err(CredentialError::Backend("the vault said no".into()))
+        }
+        fn get(&self, key: &str) -> std::result::Result<String, CredentialError> {
+            Err(CredentialError::NotFound(key.into()))
+        }
+        fn delete(&self, _: &str) -> std::result::Result<(), CredentialError> {
+            Ok(())
+        }
+        fn is_persistent(&self) -> bool {
+            true
+        }
+    }
+
+    fn provider_count(db: &aurora_db::rusqlite::Connection) -> i64 {
+        db.query_row("SELECT count(*) FROM providers", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_saved_provider_keeps_its_password_and_its_reference() {
+        let db = aurora_db::open_memory().unwrap();
+        let store = MemoryStore::default();
+
+        let id = save_provider(&db, &store, draft("Panel", Some("hunter2")), 100).unwrap();
+
+        let stored: Option<String> = db
+            .query_row(
+                "SELECT credential_ref FROM providers WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some(credential_ref(id).as_str()));
+        assert_eq!(store.get(&credential_ref(id)).unwrap(), "hunter2");
+    }
+
+    /// The bug: the row went in first, so a credential store that refused left a
+    /// provider behind with no password — the wizard reporting a failure, the list
+    /// showing the provider, and a refresh that would sign in blank.
+    #[test]
+    fn a_failed_credential_write_leaves_no_provider_behind() {
+        let db = aurora_db::open_memory().unwrap();
+
+        let err = save_provider(&db, &RefusingStore, draft("Panel", Some("hunter2")), 100)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("the vault said no"), "{err}");
+        assert_eq!(
+            provider_count(&db),
+            0,
+            "a provider was saved that has no password"
+        );
+    }
+
+    /// And the other way round: a refused insert must not leave a secret behind under
+    /// a key nothing references.
+    #[test]
+    fn a_failed_insert_takes_the_secret_back_out() {
+        let db = aurora_db::open_memory().unwrap();
+        let store = MemoryStore::default();
+        // `kind` is constrained by the schema, so this insert cannot succeed.
+        let mut bad = draft("Panel", Some("hunter2"));
+        bad.kind = "not-a-kind".into();
+
+        assert!(save_provider(&db, &store, bad, 100).is_err());
+        assert_eq!(provider_count(&db), 0);
+        assert!(
+            store.get(&credential_ref(1)).is_err(),
+            "a secret was left under a key no provider references"
+        );
+    }
+
+    #[test]
+    fn a_provider_with_no_password_stores_no_reference() {
+        let db = aurora_db::open_memory().unwrap();
+        let store = MemoryStore::default();
+
+        // An M3U URL carries its own credentials; there is nothing to keep.
+        let id = save_provider(&db, &store, draft("Playlist", None), 100).unwrap();
+        let stored: Option<String> = db
+            .query_row(
+                "SELECT credential_ref FROM providers WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, None);
+        assert!(store.get(&credential_ref(id)).is_err());
+    }
+
+    #[test]
+    fn two_providers_get_different_keys() {
+        let db = aurora_db::open_memory().unwrap();
+        let store = MemoryStore::default();
+
+        let a = save_provider(&db, &store, draft("One", Some("first")), 100).unwrap();
+        let b = save_provider(&db, &store, draft("Two", Some("second")), 100).unwrap();
+
+        assert_ne!(a, b);
+        assert_eq!(store.get(&credential_ref(a)).unwrap(), "first");
+        assert_eq!(store.get(&credential_ref(b)).unwrap(), "second");
     }
 
     #[test]
