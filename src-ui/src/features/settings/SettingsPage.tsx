@@ -9,6 +9,7 @@ import { DiagnosticsPanel } from '@/features/settings/DiagnosticsPanel';
 import { FilterPanel } from '@/features/settings/FilterPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
+import { RefreshButton } from '@/features/settings/RefreshButton';
 import { TimeshiftPanel } from '@/features/settings/TimeshiftPanel';
 import { UpdatePanel } from '@/features/settings/UpdatePanel';
 import { useUi } from '@/state/ui';
@@ -74,6 +75,7 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
                     {days < 0 ? 'Expired' : `${days} days left`}
                   </Badge>
                 )}
+                <RefreshButton providerId={p.id} onDone={reloadProviders} />
                 <Button
                   size="sm"
                   aria-expanded={editing === p.id}
