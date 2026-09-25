@@ -16,6 +16,9 @@ use crate::services::Services;
 pub struct ListChannelsArgs {
     pub group: Option<String>,
     pub favorites_only: Option<bool>,
+    /// Whose favourites. Optional so a caller that does not care — the zapper's own
+    /// channel list, say — does not have to pass one.
+    pub profile_id: Option<i64>,
 }
 
 #[tauri::command(async)]
@@ -33,6 +36,12 @@ pub fn channels_list(
             limit: None,
             offset: 0,
             library: filtering::LibraryFilter::load(&db)?,
+            profile_id: args.profile_id,
+            // `favorites_only` was accepted and then ignored, so the Favorites button
+            // on Live TV re-fetched the same list and changed nothing on screen. The
+            // mock transport did filter, which is why every browser journey looked
+            // right.
+            favorites_only: args.favorites_only.unwrap_or(false),
         },
     )?)
 }

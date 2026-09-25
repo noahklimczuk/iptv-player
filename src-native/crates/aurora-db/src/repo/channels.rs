@@ -23,6 +23,9 @@ pub struct ChannelRow {
     pub has_catchup: bool,
     /// ISO 639-1, or nothing when the name never said (README §7.3).
     pub lang: Option<String>,
+    /// Whether the profile the query was made for has this channel in Favourites.
+    /// False when the query named no profile.
+    pub favorite: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -36,6 +39,12 @@ pub struct ChannelFilter {
     /// lookup that has to find a channel by id — playback, a recording, a favourite —
     /// is never affected by what the viewer chose to hide from a list.
     pub library: crate::repo::filtering::LibraryFilter,
+    /// Whose favourites to report in [`ChannelRow::favorite`], and to filter by when
+    /// `favorites_only` is set. Favourites are per profile (README §11), so a list
+    /// that names no profile simply has none.
+    pub profile_id: Option<i64>,
+    /// Show only this profile's favourites. Does nothing without `profile_id`.
+    pub favorites_only: bool,
 }
 
 /// Insert or update a batch of channels for one provider.
@@ -117,41 +126,68 @@ pub fn stale(conn: &Connection, provider_id: i64, before: i64) -> Result<Vec<i64
 }
 
 pub fn list(conn: &Connection, filter: &ChannelFilter) -> Result<Vec<ChannelRow>> {
+    // The favourites join is LEFT so an unfavourited channel is still a row, and it is
+    // keyed by profile because favourites are per profile. A filter that names no
+    // profile binds -1, which matches nothing, so `favorite` comes back false
+    // throughout rather than leaking one profile's choices into another's list.
     let mut sql = String::from(
         r#"
 SELECT channels.id,
-       COALESCE(custom_name, name),
-       COALESCE(custom_number, number),
-       COALESCE(custom_logo, logo),
-       COALESCE(custom_group, group_title),
-       tvg_id, epg_channel_id, quality, hidden, is_radio, catchup_days, lang_code
-FROM channels WHERE 1=1
+       COALESCE(channels.custom_name, channels.name),
+       COALESCE(channels.custom_number, channels.number),
+       COALESCE(channels.custom_logo, channels.logo),
+       COALESCE(channels.custom_group, channels.group_title),
+       channels.tvg_id, channels.epg_channel_id, channels.quality, channels.hidden,
+       channels.is_radio, channels.catchup_days, channels.lang_code,
+       fav.item_id IS NOT NULL
+FROM channels
+LEFT JOIN favorites fav
+       ON fav.item_id = channels.id
+      AND fav.item_kind = 'channel'
+      AND fav.list_name = 'Favorites'
+      AND fav.profile_id = :profile
+WHERE 1=1
 "#,
     );
+    if filter.favorites_only {
+        sql.push_str(" AND fav.item_id IS NOT NULL");
+    }
     if !filter.include_hidden {
-        sql.push_str(" AND hidden = 0");
+        sql.push_str(" AND channels.hidden = 0");
     }
     if filter.radio_only {
-        sql.push_str(" AND is_radio = 1");
+        sql.push_str(" AND channels.is_radio = 1");
     } else {
-        sql.push_str(" AND is_radio = 0");
+        sql.push_str(" AND channels.is_radio = 0");
     }
     if filter.group.is_some() {
-        sql.push_str(" AND COALESCE(custom_group, group_title) = :group");
+        sql.push_str(" AND COALESCE(channels.custom_group, channels.group_title) = :group");
     }
     sql.push_str(&filter.library.where_sql(crate::repo::filtering::Kind::Live));
-    sql.push_str(" ORDER BY COALESCE(custom_number, number, 999999), sort_order, name");
+    // Qualified: `favorites` has a `sort_order` of its own, and an unqualified one
+    // is ambiguous the moment the join is there.
+    sql.push_str(
+        " ORDER BY COALESCE(channels.custom_number, channels.number, 999999),
+                   channels.sort_order, channels.name",
+    );
     if let Some(limit) = filter.limit {
         sql.push_str(&format!(" LIMIT {limit} OFFSET {}", filter.offset));
     }
 
     let mut stmt = conn.prepare(&sql)?;
+    let profile = filter.profile_id.unwrap_or(-1);
     let rows = match &filter.group {
         Some(g) => stmt
-            .query_map(rusqlite::named_params! { ":group": g }, row_to_channel)?
+            .query_map(
+                rusqlite::named_params! { ":group": g, ":profile": profile },
+                row_to_channel,
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?,
         None => stmt
-            .query_map([], row_to_channel)?
+            .query_map(
+                rusqlite::named_params! { ":profile": profile },
+                row_to_channel,
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?,
     };
     Ok(rows)
@@ -172,6 +208,7 @@ fn row_to_channel(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelRow> {
         is_radio: r.get::<_, i64>(9)? != 0,
         has_catchup: r.get::<_, i64>(10)? > 0,
         lang: r.get(11)?,
+        favorite: r.get::<_, i64>(12)? != 0,
     })
 }
 
@@ -245,7 +282,10 @@ SELECT channels.id,
        COALESCE(custom_number, number),
        COALESCE(custom_logo, logo),
        COALESCE(custom_group, group_title),
-       tvg_id, epg_channel_id, quality, hidden, is_radio, catchup_days, lang_code
+       tvg_id, epg_channel_id, quality, hidden, is_radio, catchup_days, lang_code,
+       -- Favourites are per profile and this lookup has no profile to ask about.
+       -- The callers are playback, recording and now/next, none of which care.
+       0
 FROM channels WHERE channels.id = ?1
 "#,
             params![channel_id],
@@ -285,6 +325,91 @@ mod tests {
         e.number = number;
         e.group = Some("News".into());
         e
+    }
+
+    fn profile(conn: &Connection) -> i64 {
+        conn.query_row("SELECT id FROM profiles LIMIT 1", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// `Channel.favorite` was declared in `shared/ipc.ts`, filled in by the mock
+    /// transport, and never set by the host — so the heart was never filled in the
+    /// shipped app. `favoritesOnly` was accepted by the command and then ignored, so
+    /// the Favorites button re-fetched the same list.
+    #[test]
+    fn favorites_are_reported_and_filterable() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = entry("CNN HD", Some(202));
+        let b = entry("BBC One", Some(101));
+        upsert_batch(&mut conn, p, &[("k1".into(), &a), ("k2".into(), &b)], 100).unwrap();
+        let me = profile(&conn);
+
+        let cnn = list(&conn, &ChannelFilter::default())
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "CNN HD")
+            .unwrap()
+            .id;
+        crate::repo::lists::toggle_favorite(&conn, me, cnn, 0).unwrap();
+
+        let mine = ChannelFilter {
+            profile_id: Some(me),
+            ..Default::default()
+        };
+        let rows = list(&conn, &mine).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().find(|c| c.id == cnn).unwrap().favorite);
+        assert!(!rows.iter().find(|c| c.id != cnn).unwrap().favorite);
+
+        let only = ChannelFilter {
+            favorites_only: true,
+            ..mine.clone()
+        };
+        let rows = list(&conn, &only).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, cnn);
+
+        // Toggling off removes it again.
+        crate::repo::lists::toggle_favorite(&conn, me, cnn, 0).unwrap();
+        assert!(list(&conn, &only).unwrap().is_empty());
+    }
+
+    /// Favourites are per profile, and a list that names none must not show anybody's.
+    #[test]
+    fn one_profiles_favorites_do_not_appear_in_anothers() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = entry("CNN HD", Some(202));
+        upsert_batch(&mut conn, p, &[("k1".into(), &a)], 100).unwrap();
+        let me = profile(&conn);
+        conn.execute(
+            "INSERT INTO profiles (name, is_kids, created_at) VALUES ('Kid',1,0)",
+            [],
+        )
+        .unwrap();
+        let other = conn.last_insert_rowid();
+
+        let cnn = list(&conn, &ChannelFilter::default()).unwrap()[0].id;
+        crate::repo::lists::toggle_favorite(&conn, me, cnn, 0).unwrap();
+
+        let theirs = ChannelFilter {
+            profile_id: Some(other),
+            ..Default::default()
+        };
+        assert!(!list(&conn, &theirs).unwrap()[0].favorite);
+        assert!(list(
+            &conn,
+            &ChannelFilter {
+                favorites_only: true,
+                ..theirs
+            }
+        )
+        .unwrap()
+        .is_empty());
+
+        // And with no profile named at all.
+        assert!(!list(&conn, &ChannelFilter::default()).unwrap()[0].favorite);
     }
 
     /// The bug `get` exists for: a radio station could never be played.

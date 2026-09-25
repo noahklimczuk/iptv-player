@@ -101,3 +101,48 @@ test('the settings column is centred in the space it has', async ({ page }) => {
   expect(gutters!.width).toBeLessThan(1400);
   expect(Math.abs(gutters!.left - gutters!.right)).toBeLessThan(24);
 });
+
+/**
+ * Favourites existed in three places that never met: `lists::toggle_favorite` in the
+ * database, `Channel.favorite` in the IPC contract, and a filter in the mock
+ * transport. The host never set the flag and ignored `favoritesOnly`, and nothing in
+ * the UI called `favorites.toggle` at all — so the heart was never filled, the
+ * Favorites button changed nothing, and the empty state advised pressing a key bound
+ * to fullscreen.
+ */
+test('a channel can be favourited, and the filter then shows only it', async ({ page }) => {
+  await page.goto('/#/live');
+  await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
+
+  const rows = page.getByTestId('channel-row');
+  const before = await rows.count();
+  expect(before).toBeGreaterThan(1);
+
+  // Start from a clean slate: turn off whatever the fixtures shipped as favourited.
+  // One at a time, re-querying each round — the list is re-read from the host after
+  // every toggle, so a batch of handles collected up front goes stale.
+  await page.getByRole('button', { name: 'Favorites' }).click();
+  const filled = page.getByRole('button', { name: /Remove .* from favourites/ });
+  for (let guard = 0; guard < 40 && (await filled.count()) > 0; guard += 1) {
+    await filled.first().click();
+  }
+  await expect(filled).toHaveCount(0);
+  await page.getByRole('button', { name: 'Favorites' }).click();
+  await expect(rows.first()).toBeVisible();
+
+  const heart = page.getByRole('button', { name: /Add .* to favourites/ }).first();
+  const label = await heart.getAttribute('aria-label');
+  const name = label!.replace(/^Add /, '').replace(/ to favourites$/, '');
+  await heart.click();
+
+  // The host is the source of truth: the list is re-read, not patched locally.
+  await expect(
+    page.getByRole('button', { name: `Remove ${name} from favourites` }),
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Favorites' }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(page.getByTestId('channel-row').first()).toContainText(name);
+
+  await page.screenshot({ path: `${SHOTS}/41-favorites.png` });
+});
