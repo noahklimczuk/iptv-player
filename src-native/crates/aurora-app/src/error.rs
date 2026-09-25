@@ -9,6 +9,13 @@ pub enum AppError {
     Db(#[from] aurora_db::DbError),
     #[error(transparent)]
     Player(#[from] aurora_player::PlayerError),
+    /// A newer tune replaced this one before it finished.
+    ///
+    /// Not a failure the viewer should be told about: they pressed a second button,
+    /// and the answer to the first request is simply no longer interesting. The UI
+    /// recognises this message and stays quiet.
+    #[error("superseded by a newer request")]
+    Superseded,
     #[error("{0}")]
     Other(String),
 }
