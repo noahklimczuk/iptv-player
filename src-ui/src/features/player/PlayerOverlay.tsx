@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Episode, PlayerState, TimeshiftWindow } from '@shared/ipc';
 import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
-import { invoke, isNativeHost } from '@/ipc';
+import { hasVideoSurface, invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { clockTime, duration } from '@/lib/format';
 
@@ -62,7 +62,7 @@ export function PlayerOverlay({
   const playing = player.status === 'playing';
   const behind = behindLive(player);
   // Whether there is a real video surface behind this overlay.
-  const hosted = isNativeHost();
+  const hosted = hasVideoSurface();
 
   return (
     <div

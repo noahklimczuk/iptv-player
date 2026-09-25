@@ -531,6 +531,17 @@ pub fn providers_refresh(
         }),
     );
     let _ = Phase::Done;
+
+    // The lock has to be gone before this: it starts a thread that takes the same one.
+    drop(db);
+
+    // Posters, cast and ratings for everything just imported. Enrichment was only ever
+    // started by a button in Settings, so a library imported through the wizard was a
+    // wall of grey rectangles until somebody found that screen — which reads as a
+    // broken app rather than an optional step nobody mentioned. It runs in the
+    // background and cannot fail the refresh; with no key set it does nothing at all.
+    crate::metadata::enrich_in_background(app.clone());
+
     Ok(report)
 }
 

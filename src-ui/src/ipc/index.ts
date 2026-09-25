@@ -28,6 +28,23 @@ function tauri(): TauriInternals | null {
 
 export const isNativeHost = (): boolean => tauri() !== null;
 
+/**
+ * Whether libmpv is rendering into a window *behind* this page.
+ *
+ * Separate from `isNativeHost` on purpose. What the shell needs to know is not "is
+ * the transport real" but "is there a picture behind me that I must not paint over",
+ * and those are the same thing only on Windows. Keeping them apart is what lets a
+ * browser test assert the contract: `?video` says "pretend there is a surface back
+ * there" without also claiming there is a Tauri bridge, so the mock transport keeps
+ * answering commands while the shell composes itself the way it does on Windows.
+ *
+ * This distinction is not academic. Every end-to-end journey runs against the mock,
+ * where nothing is behind the page — which is exactly why an opaque shell painted
+ * over the video for as long as it did, with 98 green journeys the whole time.
+ */
+export const hasVideoSurface = (): boolean =>
+  isNativeHost() || new URLSearchParams(window.location.search).has('video');
+
 /** Call a host command. Rejects with a readable message; callers surface it per README §17. */
 export async function invoke<K extends CommandName>(
   name: K,

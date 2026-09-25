@@ -28,6 +28,10 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
 
   const profileId = activeProfileId();
   const { data: groups } = useCommand('channels.groups', undefined, []);
+  // Only so the empty state can say something true. "Add a provider in Settings" on a
+  // machine that already has one, with twenty thousand films in the library, is the
+  // F-27 mistake again: a confident answer to a question nobody asked.
+  const { data: providers } = useCommand('providers.list', undefined, []);
   // A nonce rather than a full reload, so toggling a heart repaints the list without
   // the screen blanking back to skeletons.
   const [favNonce, setFavNonce] = useState(0);
@@ -163,7 +167,7 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
           body={
             favoritesOnly
               ? 'Press F while watching, or use the heart on any channel, to add it here.'
-              : 'Add a provider in Settings to populate your channel list.'
+              : emptyReason(providers ?? null)
           }
         />
       )}
@@ -366,4 +370,38 @@ function ChannelTile({
       </span>
     </button>
   );
+}
+
+/**
+ * Why the channel list is empty, for someone who has to act on the answer.
+ *
+ * Three different situations used to produce the same sentence — "Add a provider in
+ * Settings to populate your channel list" — including the one where a provider is
+ * already there with twenty thousand films behind it. That reading sends somebody off
+ * to add a second copy of the provider they have, which fixes nothing and leaves them
+ * with two.
+ */
+function emptyReason(
+  providers: { name: string; channelCount: number }[] | null,
+): string {
+  if (providers === null) return 'Checking which providers are set up…';
+  if (providers.length === 0) {
+    return 'Add a provider in Settings to populate your channel list.';
+  }
+
+  const imported = providers.reduce((n, p) => n + p.channelCount, 0);
+  if (imported === 0) {
+    // The library has a provider and no channels from it. That is a fact about the
+    // import, not about the filter, and it is the one case the old text actively
+    // misdescribed.
+    const names = providers.map((p) => p.name).join(', ');
+    return `${names} imported no live channels. Some accounts carry films and series `
+      + 'but no live streams; if yours should have them, press Refresh next to the '
+      + 'provider in Settings and check the count it reports.';
+  }
+
+  // Channels exist and none are showing: something is filtering them out.
+  return `Your library has ${imported} channels, but none are visible here. Check `
+    + 'the group filter above, and Settings → Filters for English-only and '
+    + 'hide-duplicates.';
 }

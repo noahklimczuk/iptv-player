@@ -300,6 +300,76 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// How many batches one automatic sweep will run before it stops.
+///
+/// At 50 titles a batch that is 10,000 titles — enough to finish most libraries, and a
+/// bound on the pathological case rather than a target. Whatever is left is picked up
+/// by the next refresh, or by the button in Settings.
+const AUTO_MAX_BATCHES: usize = 200;
+
+/// Fetch artwork and cast for everything an import left bare, in the background.
+///
+/// Enrichment was only ever started by a button in Settings, so a library imported
+/// through the wizard had no posters, no cast and no ratings until somebody found that
+/// screen and pressed it. Nothing said the button existed, and a wall of grey
+/// rectangles reads as a broken app rather than as an unfinished optional step.
+///
+/// Deliberately fire-and-forget. This must never fail an import, hold it up, or
+/// surface an error of its own — a provider refresh succeeded whatever TMDB thinks,
+/// and the `metadata.progress` events say how it is going for anyone watching.
+pub fn enrich_in_background(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        use tauri::Manager;
+        let services = app.state::<Services>();
+
+        // No key, nothing to do, and nothing worth saying: running without one would
+        // be 401s in a loop.
+        let Ok(client) = client(&services) else {
+            tracing::debug!("no metadata key; skipping the automatic pass");
+            return;
+        };
+
+        let options = Options {
+            batch: enrich::DEFAULT_BATCH,
+            movies: true,
+            series: true,
+        };
+
+        let mut total = Report::default();
+        for _ in 0..AUTO_MAX_BATCHES {
+            let batch = match enrich_batch(&services.db, &client, &options, now_unix(), |p| {
+                let _ = app.emit("metadata.progress", &p);
+            }) {
+                Ok(r) => r,
+                Err(e) => {
+                    // One failed batch ends the sweep rather than retrying forever:
+                    // the usual cause is the network or the key, and neither improves
+                    // by being asked two hundred times.
+                    tracing::warn!("automatic metadata pass stopped: {e}");
+                    break;
+                }
+            };
+
+            // Nothing was attempted, so there is nothing left that is ready to be
+            // attempted — titles in their failure cooldown are not.
+            if batch.attempted() == 0 {
+                break;
+            }
+            total.matched += batch.matched;
+            total.no_match += batch.no_match;
+            total.failed += batch.failed;
+        }
+
+        tracing::info!(
+            matched = total.matched,
+            no_match = total.no_match,
+            failed = total.failed,
+            "automatic metadata pass finished"
+        );
+        let _ = app.emit("metadata.done", &total);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

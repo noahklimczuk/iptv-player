@@ -22,7 +22,7 @@ import { useCommand } from '@/hooks/useCommand';
 import { useEpisodeAids } from '@/hooks/useEpisodeAids';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
-import { invoke } from '@/ipc';
+import { hasVideoSurface, invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
@@ -230,13 +230,32 @@ export default function App() {
     return <ProfilePicker />;
   }
 
+  // Playing, with libmpv rendering into a window behind this page. The shell has to
+  // get out of the way of it — `body` is transparent, but everything below repainted
+  // that away: an opaque root, an opaque sidebar and a page still holding the grid
+  // the viewer pressed play from. The result on Windows was sound, an OSD, and no
+  // picture, with the poster grid sitting exactly where the film should have been.
+  //
+  // The overlay is `position: fixed; inset: 0`, so hiding the chrome costs nothing
+  // that is visible. `display: none` rather than unmounting keeps the page's state
+  // and scroll position for when playback stops.
+  const videoBehind = playerOpen && hasVideoSurface();
+
   return (
-    <div style={{ display: 'flex', height: '100%', background: 'var(--bg)' }}>
+    <div
+      data-testid="app-shell"
+      style={{
+        display: 'flex',
+        height: '100%',
+        background: videoBehind ? 'transparent' : 'var(--bg)',
+      }}
+    >
       <nav
         aria-label="Main"
         style={{
           width: 'var(--sidebar-w)', flexShrink: 0, background: 'var(--bg-elevated)',
-          borderRight: '1px solid var(--border)', display: 'flex',
+          borderRight: '1px solid var(--border)',
+          display: videoBehind ? 'none' : 'flex',
           flexDirection: 'column', alignItems: 'center', padding: 'var(--sp-4) 0',
           gap: 'var(--sp-2)', zIndex: 50,
         }}
@@ -274,7 +293,12 @@ export default function App() {
         ))}
       </nav>
 
-      <main style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}>
+      <main
+        style={{
+          flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative',
+          display: videoBehind ? 'none' : undefined,
+        }}
+      >
         <TopBar
           onSearch={() => ui.setPalette(true)}
           title={titleFor(location.pathname)}

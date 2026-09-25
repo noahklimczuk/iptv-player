@@ -187,6 +187,103 @@ pub struct SeriesListing {
     pub backdrop_path: Vec<String>,
 }
 
+/// `get_series_info` for one show: the seasons and their episodes.
+///
+/// Panels key `episodes` by season number *as a string* — `{"1": [...], "2": [...]}` —
+/// and a few write a JSON array instead when the seasons happen to be contiguous. Both
+/// are accepted, because the alternative is a show that looks empty on one panel and
+/// full on another for a reason no viewer could ever guess at.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SeriesInfo {
+    #[serde(default, deserialize_with = "lenient_episode_map")]
+    pub episodes: Vec<EpisodeListing>,
+}
+
+/// One episode as a panel lists it.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct EpisodeListing {
+    /// The stream id, which is what the playable URL is built from. A string on most
+    /// panels, a number on some.
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub id: Option<String>,
+    #[serde(default, deserialize_with = "lenient_u32")]
+    pub episode_num: Option<u32>,
+    /// Absent on panels that only key the season in the map; filled in from that key.
+    #[serde(default, deserialize_with = "lenient_u32")]
+    pub season: Option<u32>,
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub title: Option<String>,
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub container_extension: Option<String>,
+    #[serde(default)]
+    pub info: EpisodeInfoDetail,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct EpisodeInfoDetail {
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub plot: Option<String>,
+    /// The still. Panels disagree about the name, and a show whose episodes have no
+    /// artwork looks broken next to one whose do.
+    #[serde(
+        default,
+        alias = "movie_image",
+        alias = "cover_big",
+        deserialize_with = "lenient_string"
+    )]
+    pub movie_image: Option<String>,
+    #[serde(default, deserialize_with = "lenient_u32")]
+    pub duration_secs: Option<u32>,
+}
+
+/// Flatten `{"1": [...], "2": [...]}` — or `[[...], [...]]` — into one list, carrying
+/// the season down from the key when the episode itself does not say.
+fn lenient_episode_map<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<EpisodeListing>, D::Error> {
+    use serde::de::Error as _;
+    let raw = serde_json::Value::deserialize(d)?;
+    let mut out = Vec::new();
+
+    let mut take = |season_key: Option<&str>, value: &serde_json::Value| {
+        let Some(list) = value.as_array() else { return };
+        for item in list {
+            let Ok(mut ep) = serde_json::from_value::<EpisodeListing>(item.clone()) else {
+                // One malformed episode is not a reason to lose the other twenty-two.
+                continue;
+            };
+            if ep.season.is_none() {
+                ep.season = season_key.and_then(|k| k.trim().parse::<u32>().ok());
+            }
+            out.push(ep);
+        }
+    };
+
+    match raw {
+        serde_json::Value::Object(map) => {
+            for (key, value) in &map {
+                take(Some(key), value);
+            }
+        }
+        // An array of seasons: the index is the season, and panels that do this start
+        // at zero for "specials" exactly as the keyed form does.
+        serde_json::Value::Array(seasons) => {
+            for (i, value) in seasons.iter().enumerate() {
+                take(Some(&i.to_string()), value);
+            }
+        }
+        // `"episodes": []` on a show with none, and `null` on a panel that writes the
+        // key regardless. Neither is an error.
+        serde_json::Value::Null => {}
+        other => {
+            return Err(D::Error::custom(format!(
+                "episodes was neither an object nor an array: {other}"
+            )))
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct VodInfoDetail {
     #[serde(default, deserialize_with = "lenient_string")]
@@ -362,5 +459,90 @@ mod tests {
         let a: VodStream = parse_json(r#"{"stream_id":1,"rating":"7.4"}"#).unwrap();
         let b: VodStream = parse_json(r#"{"stream_id":1,"rating":7.4}"#).unwrap();
         assert_eq!(a.rating, b.rating);
+    }
+
+    /// The shape every panel probed actually sends: seasons as string keys, ids as
+    /// strings, and the season number present only in the key.
+    #[test]
+    fn series_info_flattens_a_season_keyed_map() {
+        let info: SeriesInfo = parse_json(
+            r#"{"seasons":[],"info":{},"episodes":{
+                 "1":[{"id":"501","episode_num":1,"title":"Pilot",
+                       "container_extension":"mkv",
+                       "info":{"movie_image":"http://e.com/1.jpg","duration_secs":2700}},
+                      {"id":"502","episode_num":2,"title":"Second",
+                       "container_extension":"mkv","info":{}}],
+                 "2":[{"id":"601","episode_num":1,"title":"Return",
+                       "container_extension":"mp4","info":{}}]}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(info.episodes.len(), 3);
+        let mut seen: Vec<(u32, u32)> = info
+            .episodes
+            .iter()
+            .map(|e| (e.season.unwrap(), e.episode_num.unwrap()))
+            .collect();
+        seen.sort_unstable();
+        assert_eq!(seen, vec![(1, 1), (1, 2), (2, 1)]);
+
+        let pilot = info
+            .episodes
+            .iter()
+            .find(|e| e.title.as_deref() == Some("Pilot"))
+            .unwrap();
+        assert_eq!(pilot.id.as_deref(), Some("501"));
+        assert_eq!(pilot.container_extension.as_deref(), Some("mkv"));
+        assert_eq!(
+            pilot.info.movie_image.as_deref(),
+            Some("http://e.com/1.jpg")
+        );
+        assert_eq!(pilot.info.duration_secs, Some(2700));
+    }
+
+    /// Some panels send an array of seasons instead of a map. The index is the season.
+    #[test]
+    fn series_info_accepts_an_array_of_seasons_too() {
+        let info: SeriesInfo = parse_json(
+            r#"{"episodes":[[],[{"id":7,"episode_num":"3","title":"Third","info":{}}]]}"#,
+        )
+        .unwrap();
+        assert_eq!(info.episodes.len(), 1);
+        let ep = &info.episodes[0];
+        // Index 1 of the array is season 1, and both a numeric id and a string
+        // episode number survive the trip.
+        assert_eq!(ep.season, Some(1));
+        assert_eq!(ep.episode_num, Some(3));
+        assert_eq!(ep.id.as_deref(), Some("7"));
+    }
+
+    /// A show with no episodes is a show with no episodes, not a failed import — and
+    /// one malformed entry must not take the rest of the season with it.
+    #[test]
+    fn series_info_survives_nothing_and_nonsense() {
+        let empty: SeriesInfo = parse_json(r#"{"episodes":{}}"#).unwrap();
+        assert!(empty.episodes.is_empty());
+
+        let null: SeriesInfo = parse_json(r#"{"episodes":null}"#).unwrap();
+        assert!(null.episodes.is_empty());
+
+        let missing: SeriesInfo = parse_json(r#"{"info":{}}"#).unwrap();
+        assert!(missing.episodes.is_empty());
+
+        // A bare string and a number where an object belongs: neither can be read as
+        // an episode, and neither is allowed to cost the one that can.
+        let partly: SeriesInfo =
+            parse_json(r#"{"episodes":{"1":[{"id":"1","episode_num":1,"info":{}},"nope",42]}}"#)
+                .unwrap();
+        assert_eq!(partly.episodes.len(), 1, "the good episode survived");
+    }
+
+    /// An episode that carries its own season disagrees with nothing.
+    #[test]
+    fn an_episode_that_names_its_own_season_keeps_it() {
+        let info: SeriesInfo =
+            parse_json(r#"{"episodes":{"1":[{"id":"9","episode_num":4,"season":3,"info":{}}]}}"#)
+                .unwrap();
+        assert_eq!(info.episodes[0].season, Some(3));
     }
 }

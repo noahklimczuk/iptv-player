@@ -12,6 +12,8 @@ const P: Record<string, string> = {
   chevronLeft: 'M15 6l-6 6 6 6',
   chevronDown: 'M6 9l6 6 6-6',
   search: 'M11 4a7 7 0 100 14 7 7 0 000-14zM20 20l-4-4',
+  // Two arcs with arrowheads — the usual "go and ask the provider again" glyph.
+  refresh: 'M20 11a8 8 0 10-.6 4M20 5v6h-6',
   home: 'M3 11l9-8 9 8M6 10v10h12V10',
   tv: 'M3 5h18v11H3zM8 20h8M12 16v4',
   grid: 'M3 4h18v4H3zM3 10h8v4H3zM13 10h8v4h-8zM3 16h18v4H3z',

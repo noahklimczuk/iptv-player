@@ -56,6 +56,7 @@ export const CatalogCard = memo(function CatalogCard({
 
   return (
     <div
+      data-testid="catalog-card"
       style={{
         position: 'relative',
         // Expanded cards must paint above their neighbours in both directions.
