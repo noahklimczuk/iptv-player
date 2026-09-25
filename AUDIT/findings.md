@@ -39,6 +39,7 @@ commit and the test that would catch a regression.
 | F-24 | High | player | Phase 0: `attach`, `attach_video_surface` and `pump` are never called | Deferred |
 | F-25 | Medium | release | Nothing is code-signed; the updater verifies a digest, not a signature | Deferred |
 | F-26 | Low | build | No ARM64 target is configured | Won't fix |
+| F-27 | High | ui | A host failure renders as an empty state: "you have no channels" | Fixed |
 
 ---
 
@@ -456,7 +457,15 @@ query key, not just the first.
 `NavLink`, `useNavigate` and `useLocation` — all of which v7 keeps — and every `to`
 and `navigate()` argument in the tree is a string literal, so nothing
 attacker-controlled reaches a redirect today. Upgraded anyway, because "no
-user-controlled route today" is not a property anyone will re-check.
+user-controlled route today" is not a property anyone will re-check. Result:
+
+```
+Before: 1 critical, 1 high, 7 moderate
+After:  0 critical, 0 high, 0 moderate
+```
+
+Both upgrades rode in on the F-03 commit rather than one of their own, because the
+new vitest config had to land with the tests it runs.
 
 Rust: `cargo audit` is not installed in this container and building it was not worth
 the minutes; `Cargo.lock` is pinned and `cargo deny`/`cargo audit` should run in CI.
@@ -615,3 +624,65 @@ Windows runs x64 binaries under emulation, which for a video player means softwa
 decode and a bad time — the useful version of this is a real ARM64 libmpv, which is
 not published by the upstream this project fetches from. Out of scope for 1.0;
 noted so it is a decision rather than an oversight.
+
+---
+
+## F-27 — High — A host failure is drawn as an empty state
+
+**Found during Phase 4**, walking every screen in its error state.
+
+**Where.** `src-ui/src/hooks/useCommand.ts`, and 20 of its 22 call sites.
+
+**What.** The hook returns `{ data, loading, error }`. Two callers read `error`
+(`HomePage`, `TimeshiftPanel`). The other twenty destructure `{ data, loading }` and
+render their empty state when `data` is null — which is also what null means when the
+call *failed*.
+
+**Repro.** Make `channels.list` refuse:
+
+```
+Live TV shows:  "No channels — Add a provider in Settings to populate your channel list."
+```
+
+On a machine that already has a provider and forty thousand channels. The same shape
+on Recordings, Playlist, Movies, Series and every settings panel. It is worse than a
+blank panel, because it is a confident wrong answer: it sends someone to add a
+provider they already have.
+
+**Fix.** The hook reports the failure through `lib/errors::notify` itself, so a screen
+that ignores `error` still surfaces it. Doing it per call site would mean twenty edits
+and a convention nobody will keep; doing it in the hook means a screen cannot swallow
+a failure by being written the obvious way.
+
+**Regression test.** `tests-e2e/walkthrough.spec.ts::a refusal on a list screen is
+reported rather than left as a blank panel`.
+
+---
+
+## Where each fix landed
+
+| Finding | Commit |
+|---|---|
+| F-02, F-19, F-21 | `fix(m3u): stop a percent escape in a playlist from ending the process` |
+| F-01 | `fix(host): stop every command from running on the window's own thread` |
+| F-06, F-07 | `fix(playback): look a channel up by its id, not by filtering the whole list` |
+| F-05 | `fix(playback): hold a tune together, so zapping cannot leave the wrong channel on` |
+| F-04 | `fix(ingest): write the series an Xtream panel lists, instead of counting them` |
+| F-03, F-16, F-17 | `fix(ui): give a failure somewhere to go` |
+| F-09 | `fix(favorites): let the host answer the question the UI was already asking` |
+| F-10 | `fix(ipc): stop an event subscription leaking when a screen closes too fast` |
+| F-11 | `fix(host): stop a background thread's panic from ending its feature silently` |
+| F-08 | `perf(live): virtualise the channel list and ask the guide once per screen` |
+| F-12, F-13, F-14 | `fix(diagnostics): keep the evidence, and say when the library was lost` |
+| F-15, F-18, F-20, F-22 | `fix(hardening): redaction, an atomic provider save, and two sharp edges` |
+| F-27 | `test: the inputs providers actually send, and what happens after an hour` |
+
+## Counts
+
+| Severity | Fixed | Deferred | Won't fix | Total |
+|---|---|---|---|---|
+| Critical | 2 | 0 | 0 | **2** |
+| High | 9 | 1 | 0 | **10** |
+| Medium | 9 | 2 | 0 | **11** |
+| Low | 3 | 0 | 1 | **4** |
+| **Total** | **23** | **3** | **1** | **27** |

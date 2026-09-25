@@ -357,3 +357,8 @@ a release.
 | "This parser … never panics" | `urldecode` slices a `&str` at a non-char boundary | F-02 |
 | §18 "structured logging with rotation" | one file, truncated per launch, no rotation, no export | F-12 |
 | §17 "errors the user can act on" | 23 of 27 UI `invoke` calls discard their rejection | F-03 |
+| §7 favourites, Phase 4 "Done" | the host never sends one and ignores the filter | F-09 |
+| §16 "usable in < 2s" | Live TV mounts a row and an IPC call per channel | F-08 |
+
+Every row above is now fixed; the table is kept as the record of what the audit found,
+not as a description of the code today. `AUDIT/findings.md` has the status of each.
