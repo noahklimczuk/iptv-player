@@ -464,6 +464,11 @@ jobs:
             'a build you were happy with stays downloadable. Aurora checks this page for'
             'itself and will say in Settings when there is something newer.'
             ''
+            'Two downloads: the installer, and a portable zip that needs no install.'
+            'Either can update itself from Settings once it is running — the portable'
+            'one replaces its own files and restarts, the installed one runs the'
+            'installer for you.'
+            ''
             'This is a development build, not a finished product. docs/TESTING_A_BUILD.md'
             'says what to look at first and where the log is.'
             ''
@@ -487,5 +492,17 @@ jobs:
             gh release create $tag --target $full --latest `
               --title "Aurora TV $version" --notes $notes
           }
-          gh release upload $tag $asset --clobber
+          # Both assets, because both are how a copy of Aurora updates itself: an
+          # installed one runs the installer, a portable one replaces its own files
+          # from the zip. Publishing only the installer is what made a portable build
+          # unable to update at all — `Release::asset` refuses to hand it the wrong
+          # file, and rightly, so the right one has to be here.
+          #
+          # Renamed to carry the version, like the installer: several of these share a
+          # Downloads folder and have to stay tellable apart. The updater matches on
+          # "portable" and ".zip", so the name stays within what it looks for.
+          $portableAsset = Join-Path $env:RUNNER_TEMP "aurora-tv-$version-portable.zip"
+          Copy-Item 'aurora-tv-portable.zip' $portableAsset
+
+          gh release upload $tag $asset $portableAsset --clobber
           Write-Host "Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"

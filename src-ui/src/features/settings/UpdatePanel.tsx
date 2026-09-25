@@ -2,10 +2,14 @@
  * Whether there is a newer build than this one, and installing it (README §23).
  *
  * Aurora installs from a GitHub release rather than a store, so nothing else would
- * ever tell someone the bug they hit was fixed a week ago. It now fetches and runs the
- * installer too — never silently, and never without checking the file against the
- * SHA-256 GitHub published beside it (docs/DECISIONS.md D17). A portable copy is the
- * exception: an installer would not replace it, so that build keeps the release page.
+ * ever tell someone the bug they hit was fixed a week ago. It fetches and applies the
+ * update too, without leaving the app — never without checking the file against the
+ * SHA-256 GitHub published beside it (docs/DECISIONS.md D17).
+ *
+ * Both kinds of copy update themselves, by different means: an installed one runs the
+ * installer, a portable one unpacks the new files and swaps them in on the way back
+ * up. The release page is still one click away, but it is no longer the only way for
+ * a portable copy to get a newer build — which it used to be.
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { UpdateDownload, UpdateStatus } from '@shared/ipc';
@@ -153,6 +157,7 @@ export function UpdatePanel() {
             {data.canInstall ? (
               <InstallControls
                 download={download}
+                kind={data.kind}
                 busy={busy}
                 onDownload={() => void startDownload()}
                 onInstall={() => void install()}
@@ -164,13 +169,13 @@ export function UpdatePanel() {
                   size="sm" variant="primary"
                   onClick={() => void open()} disabled={busy === 'opening'}
                 >
-                  Get the update
+                  Open release page
                 </Button>
                 <span
                   style={{ marginLeft: 10, fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}
                 >
-                  This copy is portable, so the installer would not replace it. The
-                  release page has the new zip.
+                  Aurora can only update itself on Windows. This is a development
+                  build.
                 </span>
               </>
             )}
@@ -224,9 +229,11 @@ export function UpdatePanel() {
  * exactly one thing worth pressing.
  */
 function InstallControls({
-  download, busy, onDownload, onInstall, onOpen,
+  download, kind, busy, onDownload, onInstall, onOpen,
 }: {
   download: UpdateDownload | null;
+  /** What pressing Install will actually do, which is different for the two copies. */
+  kind: UpdateStatus['kind'];
   busy: string | null;
   onDownload: () => void;
   onInstall: () => void;
@@ -257,14 +264,24 @@ function InstallControls({
   }
 
   if (status === 'ready') {
+    const portable = kind === 'portable';
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Button size="sm" variant="primary" onClick={onInstall} disabled={busy === 'installing'}>
-          {busy === 'installing' ? 'Starting the installer…' : 'Install and restart'}
+          {busy === 'installing'
+            ? (portable ? 'Restarting…' : 'Starting the installer…')
+            : 'Install and restart'}
         </Button>
         <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)', maxWidth: 420 }}>
-          Checked against the checksum GitHub published for it. Aurora will close so the
-          installer can replace it; these builds are not signed, so Windows will ask.
+          {portable
+            // Unpacked when it was downloaded, so the only thing left is the restart —
+            // and no installer means no unsigned-binary prompt to explain.
+            ? 'Checked against the checksum GitHub published for it, and already '
+              + 'unpacked. Aurora will restart into the new version; nothing else on '
+              + 'this machine is touched.'
+            : 'Checked against the checksum GitHub published for it. Aurora will close '
+              + 'so the installer can replace it; these builds are not signed, so '
+              + 'Windows will ask.'}
         </span>
       </div>
     );

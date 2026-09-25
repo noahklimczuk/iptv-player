@@ -18,7 +18,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
 | 11 — Hardening | Perf budgets, soak, diagnostics | **Partial.** A 1.0 audit pass fixed 23 findings, two of them Critical (every command on the main thread; a playlist panicking the process) — see `AUDIT/findings.md`. Soak numbers are measured: 2,000 zaps always end on the right channel, 2,400 concurrent tunes across 8 threads never wedge, 20,000 tunes grow RSS by 0 kB. Diagnostics, log rotation and log export exist. The §16 budgets that need a window — zap time, startup — still need Windows. |
-| 12 — Release | Installers, signing, auto-update | **CI type-checks Windows; no installer is produced.** |
+| 12 — Release | Installers, signing, auto-update | **Partial.** A merge builds and publishes an NSIS installer *and* the portable zip, both carrying the GPL/LGPL texts and `THIRD-PARTY-NOTICES.md`, which Settings → About reads from beside the executable. Both kinds of copy update themselves in-app — the installed one runs the installer, the portable one replaces its own files (D25). Nothing is code-signed, and neither path has been run on Windows. |
 
 ## What is actually verified
 

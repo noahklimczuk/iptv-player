@@ -76,7 +76,52 @@ fn check_for_updates(app: &tauri::AppHandle) {
     }
 }
 
+/// Swap in a staged update before the app starts, and relaunch into it.
+///
+/// Ahead of Tauri on purpose, and it is the only moment that is both safe and simple:
+/// nothing is open yet, so every file about to be replaced is closed. On Windows the
+/// running `.exe` still cannot be deleted — but it can be renamed, which is what the
+/// swap does.
+///
+/// Returns true when the caller should stop: the new binary is on disk and has been
+/// launched, and this process is the old one.
+fn take_staged_update() -> bool {
+    // Where the data lives has to be worked out before `Services`, because this runs
+    // before anything is built. A portable copy is the only one that stages an update,
+    // and it is the only one whose data directory is knowable this early.
+    let Some(data_dir) = aurora_app::portable_dir() else {
+        return false;
+    };
+    if !updates::apply_staged_update(&data_dir) {
+        return false;
+    }
+
+    // Relaunch the path we came from, which now holds the new binary.
+    match std::env::current_exe() {
+        Ok(exe) => match std::process::Command::new(&exe).spawn() {
+            Ok(_) => true,
+            Err(e) => {
+                // The files are already swapped, so the update succeeded even though
+                // the relaunch did not. Carrying on would run the *old* binary that is
+                // still in memory while the new one is on disk — confusing, but
+                // working, and far better than exiting into nothing.
+                eprintln!("Aurora updated but could not relaunch ({e}); continuing.");
+                false
+            }
+        },
+        Err(e) => {
+            eprintln!("Aurora updated but cannot find its own executable ({e}); continuing.");
+            false
+        }
+    }
+}
+
 fn main() {
+    // Before the logger, because the logger opens a file in the folder being replaced.
+    if take_staged_update() {
+        return;
+    }
+
     tauri::Builder::default()
         .setup(|app| {
             use tauri::Manager;
@@ -94,6 +139,9 @@ fn main() {
             // After the subscriber exists, so the hook has somewhere to write. Before
             // any thread is spawned, so none of them can panic unrecorded.
             log_panics();
+            // The pre-launch update swap runs before any of this exists, so whatever it
+            // did is waiting in a file rather than in the log.
+            updates::report_last_apply(&data_dir);
             tracing::info!(
                 "Aurora TV {} starting, data in {}",
                 env!("CARGO_PKG_VERSION"),

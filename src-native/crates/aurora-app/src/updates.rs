@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use aurora_core::version::Version;
 use aurora_db::repo::settings;
-use aurora_ingest::updates::{self, Expected, UpdateCheck, Updates};
+use aurora_ingest::selfupdate;
+use aurora_ingest::updates::{self, AssetKind, UpdateCheck, Updates};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -51,9 +52,13 @@ pub struct UpdateStatus {
     pub releases_url: &'static str,
     /// How far the installer has got, if the viewer asked for it.
     pub download: Download,
-    /// Whether this build can install an update over itself at all. False for a
-    /// portable copy, which the installer would not replace, and false off Windows.
+    /// Whether this build can install an update over itself at all. False only off
+    /// Windows, where there is neither an installer to run nor a `.exe` to swap.
     pub can_install: bool,
+    /// Which kind of copy this is, so the UI can say what pressing Install will do.
+    /// A portable copy replaces its own files and restarts; an installed one runs the
+    /// installer.
+    pub kind: AssetKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -195,16 +200,43 @@ fn status(services: &Services, check: UpdateCheck) -> UpdateStatus {
         releases_url: RELEASES_URL,
         download: services.updates.get(),
         can_install: can_install(),
+        kind: asset_kind(),
     }
 }
 
-/// Whether an installer could replace this copy of the app.
+/// How this copy of the app replaces itself.
 ///
-/// A portable build is the interesting case: the NSIS installer would install into
-/// Program Files and leave the folder the viewer is actually running untouched, so
-/// offering the button would be a way to end up with two copies and update neither.
+/// The distinction is not cosmetic. Running the NSIS installer over a portable copy
+/// installs into Program Files and leaves the folder the viewer is actually running
+/// untouched — two installations, neither updated. And unzipping the portable archive
+/// over an installed copy would leave the installer's own registry entries describing
+/// a version that is no longer there. Each kind of copy has exactly one right answer,
+/// and `Release::asset` refuses rather than substituting the other.
+pub fn asset_kind() -> AssetKind {
+    if crate::portable_dir().is_some() {
+        AssetKind::Portable
+    } else {
+        AssetKind::Installer
+    }
+}
+
+/// Whether this copy can update itself at all.
+///
+/// Both kinds can, now. It is false only off Windows, where there is neither an
+/// installer to run nor a `.exe` to swap — which is every developer machine this is
+/// built on, and is why the button has to be able to say so rather than fail late.
 pub fn can_install() -> bool {
-    cfg!(windows) && crate::portable_dir().is_none()
+    cfg!(windows)
+}
+
+/// Where a portable copy lives, which is the folder being replaced.
+///
+/// `portable_dir()` is the *data* folder beside the executable; the install folder is
+/// its parent, which is where `aurora-app.exe` and `mpv-2.dll` actually sit.
+pub fn install_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
 }
 
 /// How often the download reports itself to the UI. A 40 MB file at 256 KB a chunk is
@@ -238,21 +270,30 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
         return Ok(current);
     }
 
-    let url = release.installer_url.clone().ok_or_else(|| {
-        AppError::Other("This release does not publish a Windows installer".into())
-    })?;
+    // Whichever asset matches how this copy was installed. Never the other one: see
+    // `asset_kind`.
+    let kind = asset_kind();
+    let (url, expected) = release
+        .asset(kind)
+        .map(|(url, expected)| (url.to_string(), expected))
+        .ok_or_else(|| {
+            AppError::Other(match kind {
+                AssetKind::Installer => "This release does not publish a Windows installer".into(),
+                AssetKind::Portable => {
+                    "This release does not publish a portable build, so this copy \
+                     cannot update itself from it"
+                        .to_string()
+                }
+            })
+        })?;
     let version = release.version.to_string();
-    let expected = Expected {
-        bytes: release.installer_bytes,
-        sha256: release.installer_sha256.clone(),
-    };
 
     // Named from the version rather than from anything the response said, so there is
     // no filename from the network anywhere near the filesystem.
-    let dest = services
-        .data_dir
-        .join("updates")
-        .join(format!("Aurora-TV-{version}-x64-setup.exe"));
+    let dest = services.data_dir.join("updates").join(match kind {
+        AssetKind::Installer => format!("Aurora-TV-{version}-x64-setup.exe"),
+        AssetKind::Portable => format!("Aurora-TV-{version}-portable.zip"),
+    });
 
     let started = services.updates.set(Download {
         status: DownloadStatus::Downloading,
@@ -266,29 +307,61 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
 
     let http = Arc::clone(&services.http);
     let state = Arc::clone(&services.updates);
+    let stage_dir = services
+        .data_dir
+        .join("updates")
+        .join(selfupdate::STAGE_DIR);
     std::thread::Builder::new()
         .name("aurora-update-download".into())
         .spawn(move || {
             let mut last = std::time::Instant::now();
-            let outcome = updates::download_installer(
-                &http,
-                &url,
-                &dest,
-                &expected,
-                &mut |received, _total| {
+            let outcome =
+                updates::download_asset(&http, &url, &dest, &expected, &mut |received, _total| {
                     state.advance(received);
                     if last.elapsed() >= PROGRESS_INTERVAL {
                         last = std::time::Instant::now();
                         let _ = app.emit("update.download", &state.get());
                     }
-                },
-            );
+                });
 
             let finished = match outcome {
                 Ok(done) => {
-                    // One installer at a time: 40 MB per version left behind would add
-                    // up on a machine that updates often.
+                    // One update at a time: 40 MB per version left behind would add up
+                    // on a machine that updates often.
                     forget_other_installers(&done.path);
+
+                    // A portable update is unpacked now rather than at install time.
+                    // Extraction is where the archive gets checked for the things a
+                    // digest cannot see — a path that escapes the folder, an archive
+                    // that is not Aurora — and finding that out while the viewer is
+                    // watching a progress bar is much better than finding it out after
+                    // they have pressed Install and the app is closing.
+                    if kind == AssetKind::Portable {
+                        match selfupdate::stage_zip(&done.path, &stage_dir) {
+                            Ok(staged) => {
+                                tracing::info!(
+                                    version = %version,
+                                    files = staged.files.len(),
+                                    "update staged"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("could not stage the update: {}", e.cause);
+                                let _ = std::fs::remove_file(&done.path);
+                                return finish(
+                                    &app,
+                                    &state,
+                                    Download {
+                                        status: DownloadStatus::Failed,
+                                        version: Some(version),
+                                        message: Some(e.message),
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                        }
+                    }
+
                     tracing::info!(version = %version, "update downloaded and verified");
                     Download {
                         status: DownloadStatus::Ready,
@@ -309,11 +382,17 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
                     }
                 }
             };
-            let _ = app.emit("update.download", &state.set(finished));
+            finish(&app, &state, finished);
         })
         .map_err(|e| AppError::Other(format!("cannot start the download: {e}")))?;
 
     Ok(started)
+}
+
+/// Publish the download's final state and tell the UI. One place, because the failure
+/// paths above each need it and each would otherwise forget the emit.
+fn finish(app: &tauri::AppHandle, state: &Arc<Downloads>, download: Download) {
+    let _ = app.emit("update.download", &state.set(download));
 }
 
 /// Delete every other file beside the installer just verified.
@@ -353,9 +432,7 @@ fn refusal(
     }
     if !can_install {
         return Some(
-            "This copy is portable, so an installer would not replace it. The release \
-             page has the new zip."
-                .into(),
+            "Aurora can only update itself on Windows. This build is for development.".into(),
         );
     }
     // A recording is a thing that cannot be redone. The update can wait.
@@ -376,8 +453,20 @@ fn refusal(
 
 #[tauri::command(async)]
 pub fn updates_install(app: tauri::AppHandle, services: State<'_, Services>) -> Result<()> {
+    let kind = asset_kind();
     let state = services.updates.get();
-    let present = state.path.as_ref().is_some_and(|p| p.exists());
+
+    // A portable update is already unpacked, so what has to still be there is the
+    // staged folder rather than the archive it came from.
+    let stage_dir = services
+        .data_dir
+        .join("updates")
+        .join(selfupdate::STAGE_DIR);
+    let present = match kind {
+        AssetKind::Installer => state.path.as_ref().is_some_and(|p| p.exists()),
+        AssetKind::Portable => selfupdate::staged(&stage_dir).is_some(),
+    };
+
     if let Some(reason) = refusal(
         &state,
         present,
@@ -386,15 +475,95 @@ pub fn updates_install(app: tauri::AppHandle, services: State<'_, Services>) -> 
     ) {
         return Err(AppError::Other(reason));
     }
-    let path = state.path.expect("checked by the refusal above");
 
-    launch_installer(&path).map_err(AppError::Other)?;
     // Finalise anything the scheduler is holding before the process goes away, the
-    // same way closing the window does.
+    // same way closing the window does. Before either branch, because both of them
+    // end with this process exiting.
     services.dvr.shutdown(crate::now_unix());
-    tracing::info!("installer launched, exiting for it");
-    app.exit(0);
-    Ok(())
+
+    match kind {
+        // Nothing to run: the new files are already on disk, and the swap happens on
+        // the way back up, when no file is open. `restart` relaunches the same path —
+        // which by then holds the new binary.
+        AssetKind::Portable => {
+            tracing::info!("update staged, restarting to apply it");
+            app.restart();
+        }
+        AssetKind::Installer => {
+            let path = state.path.expect("checked by the refusal above");
+            launch_installer(&path).map_err(AppError::Other)?;
+            tracing::info!("installer launched, exiting for it");
+            app.exit(0);
+            Ok(())
+        }
+    }
+}
+
+/// Swap in a staged update, before anything is holding a file open.
+///
+/// Called from `main` ahead of Tauri, which is the only moment this is safe and simple:
+/// the app has opened no library, no log and no video surface, so every file it is
+/// about to replace is closed. On Windows the running `.exe` still cannot be deleted —
+/// but it can be renamed, which is what `selfupdate::apply` does and why it moves
+/// everything aside rather than removing it.
+///
+/// Returns whether anything was applied. The caller relaunches when it was, because
+/// this process is still the old binary: the new one is on disk, not running.
+pub fn apply_staged_update(data_dir: &std::path::Path) -> bool {
+    let updates_dir = data_dir.join("updates");
+    let previous = updates_dir.join(selfupdate::PREVIOUS_DIR);
+    // This runs before the logger exists — it has to, because the logger opens a file
+    // in the folder being replaced. So the one moment worth having a record of is the
+    // one moment `tracing` cannot reach. Leave a breadcrumb instead; `report_last_apply`
+    // picks it up once there is somewhere for it to go.
+    let breadcrumb = updates_dir.join(APPLY_BREADCRUMB);
+
+    // Last launch's displaced copy. Removed now rather than at the end of the update
+    // that made it, because "the new version started" is the only evidence worth
+    // waiting for, and this line running at all is that evidence.
+    selfupdate::forget_previous(&previous);
+
+    let Some(staged) = selfupdate::staged(&updates_dir.join(selfupdate::STAGE_DIR)) else {
+        return false;
+    };
+    let Some(install_dir) = install_dir() else {
+        tracing::error!("cannot work out where this copy lives; not applying the update");
+        return false;
+    };
+
+    match selfupdate::apply(&staged, &install_dir, &previous) {
+        Ok(count) => {
+            let _ = std::fs::write(&breadcrumb, format!("applied {count} files"));
+            true
+        }
+        Err(e) => {
+            // The old copy is intact — `apply` rolls back — so carrying on as the
+            // version we already were is both possible and the right answer. A failed
+            // update must never be why somebody's television stops working.
+            let _ = std::fs::write(&breadcrumb, format!("FAILED: {} ({})", e.message, e.cause));
+            false
+        }
+    }
+}
+
+/// What the last swap left behind, written before there was a logger.
+const APPLY_BREADCRUMB: &str = "last-apply.txt";
+
+/// Log what the pre-launch update swap did, now that there is somewhere to log it.
+///
+/// Read once and deleted, so a line appears in the log of the launch it belongs to and
+/// not in every launch after it.
+pub fn report_last_apply(data_dir: &std::path::Path) {
+    let breadcrumb = data_dir.join("updates").join(APPLY_BREADCRUMB);
+    let Ok(what) = std::fs::read_to_string(&breadcrumb) else {
+        return;
+    };
+    let _ = std::fs::remove_file(&breadcrumb);
+    if what.starts_with("FAILED") {
+        tracing::error!("the staged update was not applied: {what}");
+    } else {
+        tracing::info!("a staged update was applied before launch: {what}");
+    }
 }
 
 #[cfg(windows)]
@@ -532,11 +701,19 @@ mod tests {
             .contains("no longer there"));
     }
 
+    /// This replaces a test that asserted the opposite: that a portable copy is
+    /// refused and told the release page has the new zip. That was the behaviour, and
+    /// it was the gap — the build that is easiest to update was the only one that
+    /// could not update itself. `refusal` no longer knows what kind of copy this is;
+    /// `asset_kind` decides which file to fetch, and both kinds install.
     #[test]
-    fn a_portable_copy_is_told_why_rather_than_offered_an_installer() {
-        let message = refusal(&ready(Some(PathBuf::from("s.exe"))), true, false, 0).unwrap();
-        assert!(message.contains("portable"), "{message}");
-        assert!(message.contains("release page"), "{message}");
+    fn being_portable_is_no_longer_a_reason_to_refuse() {
+        let ready = ready(Some(PathBuf::from("s.exe")));
+        assert_eq!(
+            refusal(&ready, true, true, 0),
+            None,
+            "a verified download with nothing recording must install"
+        );
     }
 
     #[test]
@@ -592,6 +769,132 @@ mod tests {
         let json = serde_json::to_string(&ready(Some(PathBuf::from("/tmp/setup.exe")))).unwrap();
         assert!(!json.contains("setup.exe"), "{json}");
         assert!(json.contains("\"status\":\"ready\""), "{json}");
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aurora-app-upd-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(path: &std::path::Path, body: &[u8]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, body).unwrap();
+    }
+
+    /// A staged update waiting in the data folder, as `updates_download` leaves one.
+    fn stage(data_dir: &std::path::Path, exe_body: &[u8]) {
+        let stage = data_dir
+            .join("updates")
+            .join(aurora_ingest::selfupdate::STAGE_DIR);
+        write(&stage.join(aurora_ingest::selfupdate::APP_EXE), exe_body);
+        write(&stage.join(aurora_ingest::selfupdate::READY_MARKER), b"");
+    }
+
+    /// With nothing staged, startup must be a no-op — this runs on every launch.
+    #[test]
+    fn a_launch_with_nothing_staged_applies_nothing() {
+        let dir = scratch("nostage");
+        assert!(!apply_staged_update(&dir));
+    }
+
+    /// The breadcrumb exists because the swap happens before the logger does. Without
+    /// it the one thing worth a log line is the one thing that cannot write one.
+    #[test]
+    fn what_the_swap_did_is_reported_once_and_then_forgotten() {
+        let dir = scratch("breadcrumb");
+        let breadcrumb = dir.join("updates").join(APPLY_BREADCRUMB);
+        write(&breadcrumb, b"applied 3 files");
+
+        report_last_apply(&dir);
+        assert!(
+            !breadcrumb.exists(),
+            "the note would be repeated on every launch after this one"
+        );
+        // And with nothing to say, it says nothing rather than failing.
+        report_last_apply(&dir);
+    }
+
+    /// A download that did not finish must not be applied: the marker is written last,
+    /// so its absence means half an application is on disk.
+    #[test]
+    fn a_half_finished_download_is_never_applied() {
+        let dir = scratch("partial");
+        let stage = dir
+            .join("updates")
+            .join(aurora_ingest::selfupdate::STAGE_DIR);
+        write(&stage.join(aurora_ingest::selfupdate::APP_EXE), b"half");
+        // No ready marker.
+
+        assert!(!apply_staged_update(&dir));
+        assert!(
+            !stage.exists(),
+            "the partial download was left to be retried"
+        );
+    }
+
+    /// The previous copy is deleted at the *start* of the next launch rather than at
+    /// the end of the update that made it, because a version that has started is the
+    /// only evidence that the update worked.
+    #[test]
+    fn the_previous_copy_survives_until_something_has_started() {
+        let dir = scratch("previous");
+        let previous = dir
+            .join("updates")
+            .join(aurora_ingest::selfupdate::PREVIOUS_DIR);
+        write(
+            &previous.join(aurora_ingest::selfupdate::APP_EXE),
+            b"old app",
+        );
+
+        // A launch with nothing staged still clears what the last update displaced.
+        assert!(!apply_staged_update(&dir));
+        assert!(!previous.exists());
+    }
+
+    /// Staging happens whatever the outcome, so the refusal has to reflect what is
+    /// actually on disk rather than what was downloaded.
+    #[test]
+    fn a_staged_update_is_what_a_portable_copy_installs() {
+        let dir = scratch("staged");
+        stage(&dir, b"new app");
+
+        let found = aurora_ingest::selfupdate::staged(
+            &dir.join("updates")
+                .join(aurora_ingest::selfupdate::STAGE_DIR),
+        );
+        assert!(found.is_some(), "the staged update was not found");
+    }
+
+    /// The refusals, in the order a viewer can act on them.
+    #[test]
+    fn nothing_installs_while_a_recording_is_running() {
+        // A recording cannot be taken again later; an update can.
+        let reason =
+            refusal(&ready(Some(PathBuf::from("/tmp/x.exe"))), true, true, 2).expect("a refusal");
+        assert!(reason.contains("2 recordings are in progress"), "{reason}");
+    }
+
+    #[test]
+    fn nothing_installs_without_a_verified_download() {
+        let reason = refusal(&Download::default(), false, true, 0).expect("a refusal");
+        assert!(reason.contains("no verified update"), "{reason}");
+    }
+
+    #[test]
+    fn a_platform_that_cannot_update_itself_says_so_rather_than_failing_late() {
+        let reason =
+            refusal(&ready(Some(PathBuf::from("/tmp/x.exe"))), true, false, 0).expect("a refusal");
+        assert!(reason.contains("only update itself on Windows"), "{reason}");
+        // Notably *not* the old message, which told a portable copy to go to a browser.
+        assert!(!reason.contains("release page"), "{reason}");
     }
 
     #[test]
