@@ -120,6 +120,12 @@ $ pnpm exec playwright test
   96 passed (1.4m)
 ```
 
+Run twice back to back, and `playlist.spec.ts` a further three times with
+`--repeat-each=3` (42 passed), after the virtualised list exposed two races in the
+test helpers — a filter switch read before its panel had loaded, and a scroll that
+stopped while the virtualiser was still measuring. Both are fixed at the source
+rather than retried; see the `test(e2e)` commit.
+
 Twelve new ones: three on error surfacing (`errors.spec.ts`), one on favourites and
 one on virtualisation (`providers.spec.ts`, `playlist.spec.ts`), and seven sweeping
 every screen (`walkthrough.spec.ts`).
