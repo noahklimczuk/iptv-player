@@ -208,12 +208,20 @@ export function BrowsePage({
         )}
 
         {/* Genres only when there are any. An empty dropdown labelled "All genres" is
-            a control that looks broken and is, on every library without a TMDB key. */}
+            a control that looks broken and is, on any library whose provider sends no
+            genre and that has never been enriched — which is every library of films.
+
+            Counted and commonest-first, exactly like the categories beside them. The
+            panel sends 326 genres for its shows, 201 of them on two titles or fewer,
+            so alphabetical order opened the list with two entries that were a full
+            stop and one show. */}
         {(facets?.genres.length ?? 0) > 0 && (
           <Select
             label="Genre"
             placeholder="All genres"
-            options={facets!.genres.map((g) => ({ value: g, label: g }))}
+            options={facets!.genres.map((g) => ({
+              value: g.name, label: g.name, hint: NUMBER.format(g.count),
+            }))}
             value={genre}
             onChange={setGenre}
           />

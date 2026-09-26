@@ -168,20 +168,36 @@ def run(d, ctx):
     shows = ctx.count("series")
     d.click(picker[0])
     time.sleep(1)
-    # The first row is the placeholder that clears the filter; the genres follow it.
-    genres = d.js(
+
+    # Each genre row is a name and a count, like a shelf. The placeholder row that
+    # clears the filter carries neither, so pairing on the spans drops it.
+    offered = d.js(
         'return [...document.querySelectorAll("[data-testid=select-row]")]'
-        '  .map((e) => e.textContent.trim());'
+        '  .map((e) => [...e.querySelectorAll("span")].map((s) => s.textContent.trim()))'
+        '  .filter((p) => p.length === 2);'
     )
-    assert len(genres) > 6, f"only {len(genres) - 1} genres across {shows:,} shows: {genres}"
+    assert len(offered) > 5, f"only {len(offered)} genres across {shows:,} shows"
+
+    # Commonest first. Alphabetical order opened this list with '. ﺟﺮﻳﻤﺔ دراما' and
+    # '.الرسوم المتحركة' — a full stop stuck to a genre, on one show each — while
+    # Drama's eleven thousand sat in the middle of 326 entries.
+    counts = [int("".join(c for c in n if c.isdigit()) or 0) for _, n in offered]
+    assert counts == sorted(counts, reverse=True), (
+        f"genres are not offered commonest first: {offered[:6]}"
+    )
+    assert offered[0][0][:1].isalnum(), (
+        f"the genre list opens with {offered[0][0]!r}, which starts with punctuation"
+    )
+
+    # And the one at the top actually filters.
     d.click(d.find_all('[data-testid="select-row"]')[1])
     filtered = wait_for_count(d, lambda n: 0 < n < shows, timeout=30)
     assert 0 < filtered < shows, (
-        f"filtering by {genres[1]!r} left {filtered:,} of {shows:,} shows — a genre "
-        f"that matches nothing is what a list taken from the other table looks like"
+        f"filtering by {offered[0][0]!r} left {filtered:,} of {shows:,} shows — a "
+        f"genre that matches nothing is what a list from the other table looks like"
     )
     d.shot(ctx.shot("series-genre"))
     print(
-        f"   series: {len(genres) - 1} genres, {genres[1]!r} narrows "
-        f"{shows:,} to {filtered:,}"
+        f"   series: {len(offered)} genres, commonest {offered[0][0]!r} "
+        f"({counts[0]:,}) narrows {shows:,} to {filtered:,}"
     )

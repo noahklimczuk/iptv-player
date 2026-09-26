@@ -1150,7 +1150,10 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       kind === 'series' ? visibleSeries() : visibleMovies();
     return {
       categories: mockCategories(all),
-      genres: [...new Set(all.flatMap((x) => x.genres))].sort(),
+      // The same helper, because the host counts and orders genres exactly as it
+      // counts and orders categories — commonest first, name breaking the tie. A
+      // second implementation here is how a mock and a host come to disagree.
+      genres: mockCategories(all),
       total: browseFilter(all, { genre, category, query, letter }).length,
     };
   },

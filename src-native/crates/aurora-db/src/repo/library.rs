@@ -613,13 +613,20 @@ pub fn stats(conn: &Connection) -> Result<LibraryStats> {
 /// Filtered for the same reason the categories are: a genre whose every title the
 /// filters hide is an option that selects nothing.
 ///
-/// `DISTINCT` before the JSON is parsed, because thousands of rows share a handful of
-/// genre strings and this runs again on every change to the filters.
+/// Commonest first, like `categories`, and for the same reason. Alphabetical order
+/// put `. ﺟﺮﻳﻤﺔ دراما` and `.الرسوم المتحركة` — one show each — at the top of a list
+/// of 326, so the first two entries a viewer saw were punctuation while `Drama`
+/// (11,259 shows) was somewhere in the middle. 201 of those 326 are on two shows or
+/// fewer and the top 25 cover 91% of all tagging, so the order is the difference
+/// between a usable control and a wall.
+///
+/// Grouped in SQL before the JSON is parsed, because tens of thousands of rows share
+/// a few hundred distinct genre strings and this runs again on every filter change.
 pub fn genres(
     conn: &Connection,
     kind: crate::repo::filtering::Kind,
     filter: &crate::repo::filtering::LibraryFilter,
-) -> Result<Vec<String>> {
+) -> Result<Vec<Category>> {
     let table = match kind {
         crate::repo::filtering::Kind::Movies => "movies",
         crate::repo::filtering::Kind::Series => "series",
@@ -627,21 +634,33 @@ pub fn genres(
     };
     let visible = filter.where_sql(kind);
     let mut stmt = conn.prepare(&format!(
-        "SELECT DISTINCT genres FROM {table}
-          WHERE hidden = 0 AND genres IS NOT NULL AND genres != '' AND genres != '[]'{visible}"
+        "SELECT genres, count(*) FROM {table}
+          WHERE hidden = 0 AND genres IS NOT NULL AND genres != '' AND genres != '[]'{visible}
+          GROUP BY genres"
     ))?;
     let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let mut out = std::collections::BTreeSet::new();
-    for raw in rows {
+    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for (raw, n) in rows {
         // A row whose genres are malformed loses its genres, not the whole filter.
-        if let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) {
-            out.extend(list.into_iter().filter(|g| !g.trim().is_empty()));
+        let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) else {
+            continue;
+        };
+        for g in list.into_iter().filter(|g| !g.trim().is_empty()) {
+            *counts.entry(g).or_default() += n;
         }
     }
-    Ok(out.into_iter().collect())
+
+    let mut out: Vec<Category> = counts
+        .into_iter()
+        .map(|(name, count)| Category { name, count })
+        .collect();
+    // Name breaks the tie so the order is stable between calls; a `HashMap` alone
+    // would reshuffle equally-common genres on every keystroke in the filter.
+    out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    Ok(out)
 }
 
 /// README §13: the same film from three providers should be one card, not three.
@@ -1185,20 +1204,25 @@ mod tests {
         )
         .unwrap();
 
+        // Names only: the counts are what `genres_are_offered_commonest_first` covers,
+        // and what this test is about is which genres the language filter leaves behind.
+        let names = |f: &LibraryFilter| -> Vec<String> {
+            genres(&conn, Kind::Movies, f)
+                .unwrap()
+                .into_iter()
+                .map(|g| g.name)
+                .collect()
+        };
+
         assert_eq!(
-            genres(&conn, Kind::Movies, &LibraryFilter::default()).unwrap(),
+            names(&LibraryFilter::default()),
             vec!["Chanson".to_string(), "Western".to_string()]
         );
         assert_eq!(
-            genres(
-                &conn,
-                Kind::Movies,
-                &LibraryFilter {
-                    english_only: true,
-                    ..Default::default()
-                }
-            )
-            .unwrap(),
+            names(&LibraryFilter {
+                english_only: true,
+                ..Default::default()
+            }),
             vec!["Western".to_string()],
             "a genre only French films have was still offered under English only"
         );
@@ -1584,13 +1608,62 @@ mod tests {
         )
         .unwrap();
 
+        let names = |k| -> Vec<String> {
+            genres(&conn, k, &LibraryFilter::default())
+                .unwrap()
+                .into_iter()
+                .map(|g| g.name)
+                .collect()
+        };
+        assert_eq!(names(Kind::Movies), vec!["Western"]);
+        assert_eq!(names(Kind::Series), vec!["Crime", "Drama"]);
+    }
+
+    /// Commonest first, like the shelves beside them.
+    ///
+    /// Alphabetical order is what put a full stop at the top of a list of 326 on a
+    /// real panel, 201 of which are on two shows or fewer. The name breaks a tie so
+    /// the list does not reshuffle between keystrokes.
+    #[test]
+    fn genres_are_offered_commonest_first() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+
+        let mut add = |key: &str, genres: &[&str]| {
+            let g: Vec<String> = genres.iter().map(|s| s.to_string()).collect();
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title: key,
+                    match_key: key,
+                    genres: &g,
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap();
+        };
+        add("a", &["Drama", "Crime"]);
+        add("b", &["Drama"]);
+        add("c", &["Drama", "Comedy"]);
+        // Same count as Crime, and sorts after it.
+        add("d", &["Comedy"]);
+
+        let got: Vec<(String, u32)> = genres(&conn, Kind::Series, &LibraryFilter::default())
+            .unwrap()
+            .into_iter()
+            .map(|g| (g.name, g.count))
+            .collect();
         assert_eq!(
-            genres(&conn, Kind::Movies, &LibraryFilter::default()).unwrap(),
-            vec!["Western"]
-        );
-        assert_eq!(
-            genres(&conn, Kind::Series, &LibraryFilter::default()).unwrap(),
-            vec!["Crime", "Drama"]
+            got,
+            vec![
+                ("Drama".to_string(), 3),
+                ("Comedy".to_string(), 2),
+                ("Crime".to_string(), 1),
+            ]
         );
     }
 

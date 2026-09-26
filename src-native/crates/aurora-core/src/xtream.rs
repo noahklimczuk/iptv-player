@@ -221,10 +221,38 @@ pub fn split_genres(raw: Option<&str>) -> Vec<String> {
         return Vec::new();
     }
     raw.split([',', '|', '/'])
-        .map(str::trim)
+        .map(tidy)
         .filter(|g| !is_placeholder(g))
-        .map(str::to_string)
         .collect()
+}
+
+/// One genre, as it should be stored.
+///
+/// A panel's genre field is free text, and on a real one it shows: `. ﺟﺮﻳﻤﺔ دراما`
+/// and `.الرسوم المتحركة` both arrived with a leading full stop, which sorted them to
+/// the top of an alphabetical filter — so the first two entries a viewer saw were
+/// punctuation attached to a genre on one show each.
+///
+/// Trimmed to the first and last letter or digit, whatever the script, and internal
+/// runs of whitespace collapsed. Deliberately not case-folded or translated: `Drama`,
+/// `Drame`, `Dramma` and `دراما` are one genre in four languages on this panel, and
+/// guessing at that mapping would hide a Turkish viewer's genres from them.
+fn tidy(raw: &str) -> String {
+    let trimmed = raw.trim_matches(|c: char| !c.is_alphanumeric());
+    let mut out = String::with_capacity(trimmed.len());
+    let mut gap = false;
+    for c in trimmed.chars() {
+        if c.is_whitespace() {
+            gap = true;
+            continue;
+        }
+        if gap && !out.is_empty() {
+            out.push(' ');
+        }
+        gap = false;
+        out.push(c);
+    }
+    out
 }
 
 /// Whether this is a panel's way of saying it does not know.
@@ -618,6 +646,34 @@ mod tests {
             );
         }
         assert!(split_genres(None).is_empty());
+    }
+
+    /// Exactly what a real panel sent, and what it did.
+    ///
+    /// `. ﺟﺮﻳﻤﺔ دراما` and `.الرسوم المتحركة` both arrived with a full stop stuck to
+    /// the front, and an alphabetical filter therefore opened with two entries that
+    /// were punctuation and one show each, above Drama's eleven thousand.
+    #[test]
+    fn a_genre_is_trimmed_of_whatever_is_stuck_to_it() {
+        assert_eq!(split_genres(Some(". Crime Drama")), vec!["Crime Drama"]);
+        assert_eq!(
+            split_genres(Some(".الرسوم المتحركة")),
+            vec!["الرسوم المتحركة"]
+        );
+        assert_eq!(
+            split_genres(Some("  Action   &   Adventure  ")),
+            vec!["Action & Adventure"]
+        );
+        // Trimming stops at the first letter or digit in any script, so punctuation
+        // that is part of a genre rather than stuck to it survives.
+        assert_eq!(
+            split_genres(Some("Sci-Fi & Fantasy")),
+            vec!["Sci-Fi & Fantasy"]
+        );
+        assert_eq!(
+            split_genres(Some("Comedy , , Drama")),
+            vec!["Comedy", "Drama"]
+        );
     }
 
     /// Ratings arrive as a string on most panels and a number on a few; both are the
