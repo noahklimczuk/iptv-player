@@ -4,9 +4,12 @@ Browse, on a library of 146,000 rows.
 Everything here was found by opening the page against a real subscription rather than
 a fixture:
 
-  * the genre filter was an empty dropdown, because genres come from TMDB enrichment
+  * the genre filter was an empty dropdown, because genres came from TMDB enrichment
     and a viewer may never set a key — while the panel had been filing everything
-    under 202 named shelves the whole time;
+    under 202 named shelves the whole time. Since docs/DECISIONS.md D26 the panel's
+    own genres are kept, which splits this in two: `get_series` sends a genre for
+    27,488 of the 28,529 shows here, and `get_vod_streams` sends none at all, so
+    Series has the filter and Movies still does not;
   * the count read "120+", which is the page size wearing a library's clothes, and
     turned into a number that climbed as you scrolled;
   * there was no way to narrow a hundred thousand rows at all.
@@ -122,9 +125,10 @@ def run(d, ctx):
     d.shot(ctx.shot("searched"))
     print(f"   {biggest[0]!r} narrowed to {narrowed:,}, {needle!r} to {searched:,}")
 
-    # Genres do not exist on this library, so the control must not either.
+    # No film on this panel has a genre — `get_vod_streams` does not send one and
+    # nothing here has been enriched — so the control must stay off this screen.
     assert not d.find_all('[data-testid="select-genre"]'), (
-        "a genre filter is on screen for a library with no genres"
+        "Movies offers a genre filter, but no film in this library has a genre"
     )
 
     # The category picker holds the rest of the 202 shelves and is searchable, because
@@ -144,3 +148,40 @@ def run(d, ctx):
     assert any("ALBANIA" in r for r in narrowed_rows), narrowed_rows
     d.shot(ctx.shot("picker"))
     print(f"   picker: {len(rows)} shelves, 'ALBANIA' narrows to {len(narrowed_rows)}")
+
+    # Series, which does have genres — and must offer its own.
+    #
+    # This is the bug that escaped into the run before this one. `library::genres`
+    # unioned both tables while `categories` was scoped by kind, which did not matter
+    # while nothing had genres at all; the moment shows had them, Movies grew a
+    # dropdown of 28,529 shows' genres and filtering a film by one matched nothing.
+    # So: the filter is here, its contents belong to this half of the library, and
+    # choosing one actually narrows the count.
+    d.click(d.by_text("nav a", "Series", timeout=30))
+    assert d.wait_body(lambda b: "Series" in b, timeout=60)
+    time.sleep(5)
+    picker = d.find_all('[data-testid="select-genre"]')
+    assert picker, (
+        "Series has a genre for almost every show on this panel and offers no filter"
+    )
+
+    shows = ctx.count("series")
+    d.click(picker[0])
+    time.sleep(1)
+    # The first row is the placeholder that clears the filter; the genres follow it.
+    genres = d.js(
+        'return [...document.querySelectorAll("[data-testid=select-row]")]'
+        '  .map((e) => e.textContent.trim());'
+    )
+    assert len(genres) > 6, f"only {len(genres) - 1} genres across {shows:,} shows: {genres}"
+    d.click(d.find_all('[data-testid="select-row"]')[1])
+    filtered = wait_for_count(d, lambda n: 0 < n < shows, timeout=30)
+    assert 0 < filtered < shows, (
+        f"filtering by {genres[1]!r} left {filtered:,} of {shows:,} shows — a genre "
+        f"that matches nothing is what a list taken from the other table looks like"
+    )
+    d.shot(ctx.shot("series-genre"))
+    print(
+        f"   series: {len(genres) - 1} genres, {genres[1]!r} narrows "
+        f"{shows:,} to {filtered:,}"
+    )

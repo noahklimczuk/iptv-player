@@ -401,7 +401,9 @@ pub fn library_browse_facets(
         // `q.library` rather than a second load: the count below is computed through that
         // one, and two reads of the settings table could in principle straddle a change.
         categories: library::categories(&db, kind, &q.library)?,
-        genres: library::genres(&db, &q.library)?,
+        // Scoped by kind as the categories are: Movies offering shows' genres is a
+        // filter that matches nothing (docs/DECISIONS.md D26).
+        genres: library::genres(&db, kind, &q.library)?,
         total: if series {
             library::count_series(&db, &q)?
         } else {
@@ -413,7 +415,15 @@ pub fn library_browse_facets(
 #[tauri::command(async)]
 pub fn library_genres(services: State<'_, Services>) -> Result<Vec<String>> {
     let db = services.db.lock();
-    Ok(library::genres(&db, &filtering::LibraryFilter::load(&db)?)?)
+    let filter = filtering::LibraryFilter::load(&db)?;
+    // Both halves: this one is "every genre in the library". A browse screen wants
+    // only its own kind's and asks `library_browse_facets`, which is where offering
+    // the other half's became a filter that matched nothing.
+    let mut all = library::genres(&db, filtering::Kind::Movies, &filter)?;
+    all.extend(library::genres(&db, filtering::Kind::Series, &filter)?);
+    all.sort();
+    all.dedup();
+    Ok(all)
 }
 
 #[derive(Debug, Deserialize)]

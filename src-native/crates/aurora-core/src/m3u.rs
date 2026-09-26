@@ -245,6 +245,11 @@ fn build_entry(pending: Pending, url: &str, line_no: usize) -> PlaylistEntry {
         is_radio: get("radio").map(|v| is_truthy(&v)).unwrap_or(false),
         catchup,
         http,
+        // An `#EXTINF` line has no agreed attribute for either, so a playlist in this
+        // format contributes neither. They arrive from an Xtream panel instead, which
+        // sends both for every VOD row.
+        rating: None,
+        added_at: None,
         source_line: line_no,
     }
 }

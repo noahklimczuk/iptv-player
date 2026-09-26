@@ -57,6 +57,18 @@ pub struct PlaylistEntry {
     pub is_radio: bool,
     pub catchup: Option<Catchup>,
     pub http: HttpOptions,
+    /// What the provider scores this out of ten, where it says so.
+    ///
+    /// Kept because it is the only rating most libraries will ever have. TMDB
+    /// enrichment needs an API key a viewer may never set, and the panel in
+    /// docs/ROADMAP.md sends one of these for 109,999 of its 122,499 films — all of
+    /// which used to be parsed and then dropped on the floor.
+    pub rating: Option<f32>,
+    /// When the provider says this was added, in unix seconds.
+    ///
+    /// Without it every row imported in the same pass carries the same timestamp, and
+    /// Browse's default "Recently added" sort is ordering by a constant.
+    pub added_at: Option<i64>,
     /// Source line number, for diagnostics on malformed playlists.
     pub source_line: usize,
 }
@@ -78,6 +90,8 @@ impl PlaylistEntry {
             is_radio: false,
             catchup: None,
             http: HttpOptions::default(),
+            rating: None,
+            added_at: None,
             source_line: 0,
         }
     }
