@@ -143,6 +143,44 @@ class Ctx:
         return self._query(f"SELECT count(*) FROM {table}")
 
 
+def _is_transport_error(e):
+    """Whether this is the WebDriver connection dying rather than an assertion."""
+    text = f"{type(e).__name__}: {e}"
+    return any(
+        marker in text
+        for marker in (
+            "Remote end closed connection",
+            "Connection reset by peer",
+            "RemoteDisconnected",
+            "Connection refused",
+            "URLError",
+        )
+    )
+
+
+def restart_driver(procs, stderr_path, github):
+    """Bring `tauri-driver` back up, leaving Xvfb and the fixtures alone."""
+    for p in procs:
+        if "tauri-driver" in " ".join(p.args):
+            try:
+                p.send_signal(signal.SIGTERM)
+                p.wait(timeout=10)
+            except Exception:
+                pass
+    procs = [p for p in procs if "tauri-driver" not in " ".join(p.args)]
+    for name in ("tauri-driver", "WebKitWebDriver"):
+        subprocess.run(["pkill", "-x", name], check=False)
+    time.sleep(2)
+
+    env = dict(os.environ, DISPLAY=DISPLAY, AURORA_UPDATE_API=github.url)
+    log = open(stderr_path, "a")
+    procs.append(subprocess.Popen(
+        ["tauri-driver", "--port", str(DRIVER_PORT)],
+        env=env, stdout=log, stderr=subprocess.STDOUT))
+    time.sleep(3)
+    return procs, stderr_path, github
+
+
 def wait_for_port(port, timeout=20):
     end = time.time() + timeout
     while time.time() < end:
@@ -240,6 +278,29 @@ def main():
                 mod.run(d, ctx)
                 print("   ok")
             except Exception as e:
+                # A WebDriver transport error is the driver or the WebView process
+                # going away, not the app failing an assertion — this run imports a
+                # 140,000-row library into a WebKit that is also holding a grid of
+                # posters, and it happens. Retried once, out loud, and only when the
+                # app's own log shows no panic: a host that died is this suite's whole
+                # reason for existing and must never be retried away.
+                if _is_transport_error(e) and "panicked at" not in ctx.log():
+                    print(f"   driver went away ({type(e).__name__}); restarting it once")
+                    if d:
+                        d.quit()
+                    d = None
+                    procs, stderr_path, github = restart_driver(procs, stderr_path, github)
+                    shutil.rmtree(DATA, ignore_errors=True)
+                    since = os.path.getsize(stderr_path) if os.path.exists(stderr_path) else 0
+                    ctx = Ctx(name, stderr_path, since)
+                    ctx.github = github
+                    try:
+                        d = WD(EXE)
+                        mod.run(d, ctx)
+                        print("   ok (after restarting the driver)")
+                        continue
+                    except Exception as again:
+                        e = again
                 # A scenario with nothing to run against is not a failure. The real
                 # panel needs credentials that belong to a person, not to this
                 # repository, so it sits out a run that does not have them — it says
