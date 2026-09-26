@@ -344,11 +344,14 @@ pub fn player_play(services: State<'_, Services>, args: PlayArgs) -> Result<Play
     // Live goes through the failover path: a channel has several URLs and the first is
     // only a guess. Everything else has exactly one.
     if args.kind == "live" {
-        return services.playback.play_live(args.id, now_unix());
+        return logged("play", services.playback.play_live(args.id, now_unix()));
     }
-    services
-        .playback
-        .play_item(&args.kind, args.id, args.position_secs)
+    logged(
+        "play",
+        services
+            .playback
+            .play_item(&args.kind, args.id, args.position_secs),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -374,25 +377,54 @@ pub fn player_play_catchup(
         .play_catchup(args.channel_id, args.start, args.stop, now_unix())
 }
 
+/// Record a control the viewer pressed, and what came back.
+///
+/// "None of the player controls work" cannot be answered from a log that never
+/// mentions the attempt. Three things produce that same sentence and they have
+/// opposite fixes: the click never reached the host at all, the host ran the command
+/// and the backend refused it, or the command succeeded and the OSD simply never
+/// redrew. From the sofa they are indistinguishable; in the log they are three
+/// different lines, or the absence of one.
+///
+/// The *name* and the outcome, never the arguments. `player.play` carries a resolved
+/// stream URL and those carry credentials on an Xtream line (README C10), so nothing
+/// here formats an argument.
+fn logged(control: &'static str, outcome: Result<PlayerState>) -> Result<PlayerState> {
+    match &outcome {
+        Ok(state) => tracing::info!(
+            control,
+            status = ?state.status,
+            position = state.position_secs,
+            "player control"
+        ),
+        Err(e) => tracing::warn!(control, "player control refused: {e}"),
+    }
+    outcome
+}
+
 #[tauri::command(async)]
 pub fn player_pause(services: State<'_, Services>) -> Result<PlayerState> {
-    let mut p = services.player.lock();
-    p.set_paused(true)?;
-    Ok(p.state())
+    logged("pause", {
+        let mut p = services.player.lock();
+        p.set_paused(true)?;
+        Ok(p.state())
+    })
 }
 
 #[tauri::command(async)]
 pub fn player_resume(services: State<'_, Services>) -> Result<PlayerState> {
-    let mut p = services.player.lock();
-    p.set_paused(false)?;
-    Ok(p.state())
+    logged("resume", {
+        let mut p = services.player.lock();
+        p.set_paused(false)?;
+        Ok(p.state())
+    })
 }
 
 #[tauri::command(async)]
 pub fn player_stop(services: State<'_, Services>) -> Result<PlayerState> {
     // Through the service, so stopping also ends the failover session — otherwise the
     // next dead-stream tick would reconnect a channel the viewer had closed.
-    services.playback.stop()
+    logged("stop", services.playback.stop())
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,15 +438,18 @@ pub struct SeekArgs {
 /// held inside what the buffer holds, and that bound belongs in one place (README §7.6).
 #[tauri::command(async)]
 pub fn player_seek(services: State<'_, Services>, args: SeekArgs) -> Result<PlayerState> {
-    services
-        .playback
-        .seek(args.position_secs, args.relative.unwrap_or(false))
+    logged(
+        "seek",
+        services
+            .playback
+            .seek(args.position_secs, args.relative.unwrap_or(false)),
+    )
 }
 
 /// Jump back to the live edge after pausing or rewinding live TV (README §7.6).
 #[tauri::command(async)]
 pub fn player_back_to_live(services: State<'_, Services>) -> Result<PlayerState> {
-    services.playback.back_to_live()
+    logged("backToLive", services.playback.back_to_live())
 }
 
 #[derive(Debug, Deserialize)]
@@ -425,9 +460,11 @@ pub struct VolumeArgs {
 
 #[tauri::command(async)]
 pub fn player_set_volume(services: State<'_, Services>, args: VolumeArgs) -> Result<PlayerState> {
-    let mut p = services.player.lock();
-    p.set_volume(args.volume)?;
-    Ok(p.state())
+    logged("setVolume", {
+        let mut p = services.player.lock();
+        p.set_volume(args.volume)?;
+        Ok(p.state())
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -438,9 +475,11 @@ pub struct MutedArgs {
 
 #[tauri::command(async)]
 pub fn player_set_muted(services: State<'_, Services>, args: MutedArgs) -> Result<PlayerState> {
-    let mut p = services.player.lock();
-    p.set_muted(args.muted)?;
-    Ok(p.state())
+    logged("setMuted", {
+        let mut p = services.player.lock();
+        p.set_muted(args.muted)?;
+        Ok(p.state())
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -669,4 +708,30 @@ pub fn library_set_series_prefs(
         now_unix(),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aurora_player::{NullBackend, PlayerBackend};
+
+    /// Logging must be observation only.
+    ///
+    /// The whole point of `logged` is that it changes nothing about what the viewer
+    /// gets — a wrapper that swallowed an error, or returned a stale state, would turn
+    /// a diagnostic aid into the very class of bug it was added to find.
+    #[test]
+    fn logging_a_control_does_not_change_what_it_answered() {
+        let state = NullBackend::default().state();
+
+        let ok = logged("pause", Ok(state.clone()));
+        assert_eq!(ok.unwrap(), state, "the state came back altered");
+
+        let err = logged(
+            "pause",
+            Err(crate::error::AppError::Other("mpv said no".into())),
+        );
+        assert!(err.is_err(), "a refusal was swallowed");
+        assert_eq!(err.unwrap_err().to_string(), "mpv said no");
+    }
 }
