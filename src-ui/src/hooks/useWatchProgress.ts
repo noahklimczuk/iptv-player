@@ -6,6 +6,35 @@ import { invoke } from '@/ipc';
 const SAVE_EVERY_MS = 10_000;
 
 /**
+ * Write where this item has got to, if it is the kind of thing worth resuming.
+ *
+ * Exported because closing the player has to flush before it stops: `player.stop`
+ * takes the position back to zero, so a save that runs afterwards has nothing left to
+ * record and the viewer loses their place at exactly the moment they meant to keep it.
+ *
+ * Returns whether anything was written, which the timer uses to avoid rewriting a
+ * paused player every ten seconds.
+ */
+export function saveProgress(p: PlayerState | null, profileId: number): boolean {
+  if (!p) return false;
+  // Live TV has no position worth resuming and no duration to be a fraction of.
+  if (p.isLive || p.itemId == null) return false;
+  if (p.itemKind !== 'movie' && p.itemKind !== 'episode') return false;
+  if (p.durationSecs <= 0 || p.positionSecs <= 0) return false;
+
+  void invoke('progress.save', {
+    profileId,
+    kind: p.itemKind,
+    id: p.itemId,
+    positionSecs: Math.round(p.positionSecs),
+    durationSecs: Math.round(p.durationSecs),
+    // Losing a position is not worth a notification: it is a thing the viewer did not
+    // ask for, and the next tick tries again anyway.
+  }).catch(() => {});
+  return true;
+}
+
+/**
  * Remember where the viewer got to, so Continue Watching has something to continue.
  *
  * `progress.save` was implemented on the host, registered, and given a table with a
@@ -37,24 +66,9 @@ export function useWatchProgress(player: PlayerState | null, profileId: number) 
     const save = () => {
       const p = latest.current;
       if (!p) return;
-      // Live TV has no position worth resuming and no duration to be a fraction of.
-      if (p.isLive || p.itemId == null) return;
-      if (p.itemKind !== 'movie' && p.itemKind !== 'episode') return;
-      if (p.durationSecs <= 0 || p.positionSecs <= 0) return;
-
       const stamp = `${p.itemKind}:${p.itemId}:${Math.round(p.positionSecs)}`;
       if (stamp === written.current) return;
-      written.current = stamp;
-
-      void invoke('progress.save', {
-        profileId,
-        kind: p.itemKind,
-        id: p.itemId,
-        positionSecs: Math.round(p.positionSecs),
-        durationSecs: Math.round(p.durationSecs),
-        // Losing a position is not worth a notification: it is a thing the viewer did
-        // not ask for, and the next tick tries again anyway.
-      }).catch(() => {});
+      if (saveProgress(p, profileId)) written.current = stamp;
     };
 
     const timer = window.setInterval(save, SAVE_EVERY_MS);
@@ -71,17 +85,6 @@ export function useWatchProgress(player: PlayerState | null, profileId: number) 
   const status = player?.status ?? null;
   useEffect(() => {
     if (status === 'playing') return;
-    const p = latest.current;
-    if (!p || p.isLive || p.itemId == null) return;
-    if (p.itemKind !== 'movie' && p.itemKind !== 'episode') return;
-    if (p.durationSecs <= 0 || p.positionSecs <= 0) return;
-
-    void invoke('progress.save', {
-      profileId,
-      kind: p.itemKind,
-      id: p.itemId,
-      positionSecs: Math.round(p.positionSecs),
-      durationSecs: Math.round(p.durationSecs),
-    }).catch(() => {});
+    saveProgress(latest.current, profileId);
   }, [status, profileId]);
 }

@@ -67,6 +67,29 @@ class WD:
     def send(self, eid, s):
         self.r("POST", f"/element/{eid}/value", {"text": s, "value": list(s)})
 
+    def js(self, script, *args):
+        """Run JavaScript in the page and return its value.
+
+        `return` is required, as WebDriver requires. Worth having beyond convenience:
+        it reaches the real Tauri bridge, so a scenario can ask the host a question
+        directly rather than inferring the answer from pixels — which is how the
+        difference between "the host is playing" and "the OSD says nothing is
+        playing" became visible at all.
+        """
+        return self.r("POST", "/execute/sync", {"script": script, "args": list(args)})["value"]
+
+    def invoke(self, command, args=None):
+        """Call a host command over the same bridge the UI uses.
+
+        Command names cross as `module_action` (see `src-ui/src/ipc/index.ts`), and
+        arguments go under `args` because every command takes them as one struct.
+        """
+        return self.js(
+            "const [c, a] = arguments;"
+            " return window.__TAURI_INTERNALS__.invoke(c, a === null ? {} : { args: a });",
+            command, args,
+        )
+
     def by_label(self, label, timeout=15):
         """An input by its `aria-label`. The wizard's fields have no ids."""
         return self.find(f'[aria-label="{label}"]', timeout=timeout)

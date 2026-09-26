@@ -15,7 +15,7 @@ use aurora_ingest::selfupdate;
 use aurora_ingest::updates::{self, AssetKind, UpdateCheck, Updates};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::error::Result;
 use crate::services::Services;
@@ -315,7 +315,7 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
         message: None,
         path: None,
     });
-    let _ = app.emit("update.download", &started);
+    crate::emit(&app, "update.download", &started);
 
     let http = Arc::clone(&services.http);
     let state = Arc::clone(&services.updates);
@@ -332,7 +332,7 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
                     state.advance(received);
                     if last.elapsed() >= PROGRESS_INTERVAL {
                         last = std::time::Instant::now();
-                        let _ = app.emit("update.download", &state.get());
+                        crate::emit(&app, "update.download", &state.get());
                     }
                 });
 
@@ -404,7 +404,7 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
 /// Publish the download's final state and tell the UI. One place, because the failure
 /// paths above each need it and each would otherwise forget the emit.
 fn finish(app: &tauri::AppHandle, state: &Arc<Downloads>, download: Download) {
-    let _ = app.emit("update.download", &state.set(download));
+    crate::emit(app, "update.download", &state.set(download));
 }
 
 /// Whether a name in the updates folder is a downloaded release asset.

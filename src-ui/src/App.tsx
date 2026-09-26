@@ -20,7 +20,7 @@ import { SetupWizard } from '@/features/setup/SetupWizard';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useCommand } from '@/hooks/useCommand';
 import { useEpisodeAids } from '@/hooks/useEpisodeAids';
-import { useWatchProgress } from '@/hooks/useWatchProgress';
+import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { hasVideoSurface, invoke } from '@/ipc';
@@ -92,6 +92,27 @@ export default function App() {
   useWatchProgress(ui.player, profile.active?.id ?? 0);
 
   const profileId = profile.active?.id ?? 0;
+
+  /**
+   * Leave the player, and actually stop what it was playing.
+   *
+   * Six places used to close the overlay, and all six of them only did that:
+   * `setPlayerOpen(false)` hides a `<div>`. The host was never told, so the stream
+   * kept running with nothing on screen to pause it — "the content still plays once
+   * its closed", and on live TV it also held the subscription's one connection open
+   * against a panel that allows a single stream.
+   *
+   * The progress flush goes first because `player.stop` takes the position back to
+   * zero: saving afterwards would record nothing and lose the viewer's place at
+   * exactly the moment they meant to keep it.
+   */
+  const closePlayer = useCallback(() => {
+    if (playerOpen) {
+      saveProgress(useUi.getState().player, profileId);
+      invoke('player.stop').catch(report('Could not stop playback'));
+    }
+    setPlayerOpen(false);
+  }, [playerOpen, profileId]);
 
   const play = useCallback(async (item: CatalogItem, episodeId?: number) => {
     ui.openDetail(null);
@@ -188,11 +209,11 @@ export default function App() {
     onChannelUp: () => zapper.step(1),
     onChannelDown: () => zapper.step(-1),
     onLastChannel: () => zapper.lastChannel(),
-    onGuide: () => { setPlayerOpen(false); navigate('/guide'); },
+    onGuide: () => { closePlayer(); navigate('/guide'); },
     onPalette: () => ui.setPalette(true),
     onBack: () => {
       if (ui.detail) ui.openDetail(null);
-      else if (playerOpen) setPlayerOpen(false);
+      else if (playerOpen) closePlayer();
     },
     onPlayPause: () => {
       const s = ui.player?.status;
@@ -232,8 +253,8 @@ export default function App() {
         .catch(report('Could not change the volume')),
     onFullscreen: () => void document.documentElement.requestFullscreen?.().catch(() => {}),
     onInfo: () => {},
-    onNavigate: (to: string) => { setPlayerOpen(false); navigate(to); },
-  }), [ui, zapper, navigate, playerOpen]);
+    onNavigate: (to: string) => { closePlayer(); navigate(to); },
+  }), [ui, zapper, navigate, playerOpen, closePlayer]);
 
   useHotkeys(handlers, !ui.paletteOpen);
 
@@ -316,7 +337,7 @@ export default function App() {
             key={n.to}
             to={n.to}
             end={n.to === '/'}
-            onClick={() => setPlayerOpen(false)}
+            onClick={closePlayer}
             style={({ isActive }) => ({
               width: 'calc(var(--sidebar-w) - 20px)', padding: 'var(--sp-2) 0',
               display: 'grid', placeItems: 'center', gap: 3, borderRadius: 'var(--r-md)',
@@ -362,8 +383,8 @@ export default function App() {
       {playerOpen && ui.player && (
         <PlayerOverlay
           player={ui.player}
-          onClose={() => setPlayerOpen(false)}
-          onGuide={() => { setPlayerOpen(false); navigate('/guide'); }}
+          onClose={closePlayer}
+          onGuide={() => { closePlayer(); navigate('/guide'); }}
           nextEpisode={episode.aids?.nextEpisode ?? null}
           onPlayNext={episode.aids?.nextEpisode ? episode.playNext : undefined}
         />
