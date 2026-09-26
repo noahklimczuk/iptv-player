@@ -490,8 +490,17 @@ pub fn genres(conn: &Connection, kind: crate::repo::filtering::Kind) -> Result<V
         let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) else {
             continue;
         };
+        // Once per genre per row, however many times the row lists it. `LIKE` asks
+        // whether the column contains the genre, so a show tagged both `Drama` and
+        // `drama` is one show to the filter and was two here — which is the last one
+        // of these the count was out by.
+        let mut seen = std::collections::HashSet::new();
         for g in list.into_iter().filter(|g| !g.trim().is_empty()) {
-            let entry = counts.entry(g.to_ascii_lowercase()).or_default();
+            let key = g.to_ascii_lowercase();
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let entry = counts.entry(key).or_default();
             *entry.0.entry(g).or_default() += n;
             entry.1 += n;
         }
@@ -1168,6 +1177,42 @@ mod tests {
         assert_eq!(got.len(), 1, "three spellings became {} rows", got.len());
         assert_eq!(got[0].count, 4, "the count must be what the filter returns");
         assert_eq!(got[0].name, "Drama", "and the spelling most titles use");
+    }
+
+    /// A show that lists the same genre twice is still one show.
+    ///
+    /// `LIKE` asks whether the column *contains* the genre, so `["Drama","drama"]`
+    /// matches once. Counting per element made it two, and left the picker one ahead
+    /// of what filtering returned — the last of several ways these two numbers had
+    /// of disagreeing.
+    #[test]
+    fn a_row_counts_once_per_genre_however_often_it_lists_it() {
+        use crate::repo::filtering::Kind;
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let g = vec![
+            "Drama".to_string(),
+            "drama".to_string(),
+            "Crime".to_string(),
+        ];
+        upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "a",
+                title: "a",
+                match_key: "a",
+                genres: &g,
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        let got = genres(&conn, Kind::Series).unwrap();
+        let drama = got.iter().find(|c| c.name == "Drama").unwrap();
+        assert_eq!(drama.count, 1, "one show, counted {} times", drama.count);
+        assert_eq!(got.len(), 2, "Drama and Crime, not three rows");
     }
 
     /// Only ASCII, because only ASCII is what `LIKE` folds. Turkish dotted and
