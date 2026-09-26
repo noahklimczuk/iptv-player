@@ -10,6 +10,65 @@ use std::time::Duration;
 use aurora_core::neterr::{ErrorCode, NetFailure};
 use flate2::read::MultiGzDecoder;
 
+/// How much of a response is pulled from the socket per blocking handoff.
+///
+/// Every `read` that reaches the network costs one `block_in_place`, so the buffer
+/// size decides how many of those a download pays. 8 KiB — `BufReader`'s default —
+/// would be a quarter of a million handoffs for a 2 GB guide; 256 KiB is eight
+/// thousand, which is nothing beside the transfer itself.
+const READ_CHUNK: usize = 256 * 1024;
+
+/// Tell the async runtime before blocking on a socket.
+///
+/// Every Tauri command in this app is `#[tauri::command(async)]`, which runs it on the
+/// shared Tokio runtime rather than the main thread — deliberately, because a slow
+/// command on the main thread froze the window. But `reqwest::blocking` then parks
+/// that worker for the length of the request, and a parked worker is one that is
+/// polling nothing else. `providers_refresh` holds one for the 23.7 seconds a real
+/// subscription takes to import.
+///
+/// `block_in_place` is Tokio's answer to exactly this: it hands the worker's queue to
+/// a replacement thread for the duration, so the runtime keeps making progress while
+/// this thread sits in a `recv`. It is also not optional, because reqwest checks. In a
+/// debug build `reqwest::blocking::wait::enter` builds a throwaway runtime and drops
+/// it purely so that blocking from inside an async context panics:
+///
+/// ```text
+/// Cannot drop a runtime in a context where blocking is not allowed.
+///   reqwest::blocking::wait::enter   wait.rs:80   <- #[cfg(debug_assertions)] only
+/// ```
+///
+/// That guard is compiled out of a release build, which is why this went unnoticed:
+/// the shipped binary did not crash, it just used the wrong thread. `tests-host`
+/// against a debug build is what surfaces it (docs/TESTING_THE_HOST.md).
+///
+/// The closure runs on this same thread, so it may borrow freely — that is the reason
+/// for `block_in_place` over `spawn_blocking`, which would need `Send + 'static`.
+fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current() {
+        // `block_in_place` panics on a current-thread runtime. Tauri's is multi-thread
+        // (`tokio::runtime::Runtime::new()`), but a test, or an embedder that called
+        // `tauri::async_runtime::set`, need not be — and off a runtime entirely, which
+        // is where every unit test in this crate calls from, there is nothing to tell.
+        Ok(h) if h.runtime_flavor() == RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
+/// A reader that says it is about to block before it does.
+///
+/// `fetch_reader` hands back a stream, and the download happens as the caller reads
+/// it — so wrapping only the request would cover the handshake and leave the body,
+/// which is the part that takes minutes, blocking a worker unannounced.
+struct Blocking<R>(R);
+
+impl<R: Read> Read for Blocking<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        blocking(|| self.0.read(buf))
+    }
+}
+
 /// Retry schedule from README §6.1: three attempts at 1s, 3s, 7s.
 pub const BACKOFF_SECS: [u64; 3] = [1, 3, 7];
 
@@ -76,9 +135,14 @@ impl HttpClient {
             builder = builder.user_agent(ua.clone());
         }
 
-        let inner = builder
-            .build()
-            .map_err(|e| NetFailure::classify(&e.to_string()))?;
+        // Building the client starts its own background runtime, which is as much a
+        // blocking operation as a request is — `ClientHandle::new` waits for that
+        // thread to come up through the same `wait::timeout`. Aurora builds its client
+        // once at startup, on the main thread, so this has never been the one that
+        // bit; announcing it anyway means a client built from inside a command is not
+        // a new way to reintroduce the bug.
+        let inner =
+            blocking(|| builder.build()).map_err(|e| NetFailure::classify(&e.to_string()))?;
 
         Ok(Self {
             inner,
@@ -147,13 +211,17 @@ impl HttpClient {
             }
         }
 
-        let capped = response.take(self.config.max_bytes);
+        // `Blocking` inside the `BufReader`, not outside it: the buffer is what
+        // decides how often a read actually reaches the socket, and only those reads
+        // need to be announced.
+        let capped =
+            BufReader::with_capacity(READ_CHUNK, Blocking(response.take(self.config.max_bytes)));
         if declared_gzip_file {
             // MultiGzDecoder, not GzDecoder: concatenated gzip members are legal and
             // some providers' EPG dumps are built that way.
-            Ok(Box::new(MultiGzDecoder::new(BufReader::new(capped))))
+            Ok(Box::new(MultiGzDecoder::new(capped)))
         } else {
-            Ok(Box::new(BufReader::new(capped)))
+            Ok(Box::new(capped))
         }
     }
 
@@ -171,7 +239,7 @@ impl HttpClient {
                 (self.sleep)(Duration::from_secs(wait));
             }
 
-            match self.inner.get(url).send() {
+            match blocking(|| self.inner.get(url).send()) {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {
@@ -344,6 +412,82 @@ mod tests {
         let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         e.write_all(data).unwrap();
         e.finish().unwrap()
+    }
+
+    /// Build the same kind of runtime Tauri does: `tokio::runtime::Runtime::new()` is
+    /// multi-threaded with everything enabled, and every Tauri command in this app is
+    /// `#[tauri::command(async)]`, so this is the thread a fetch really runs on.
+    fn on_a_tauri_worker<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async { tokio::spawn(async move { f() }).await.unwrap() })
+    }
+
+    /// The bug the host harness found: fetching from inside a Tauri command panicked.
+    ///
+    /// `reqwest::blocking` parks the calling thread, and reqwest checks that the
+    /// thread is allowed to be parked — `wait::enter` builds a throwaway runtime and
+    /// drops it, which panics with "Cannot drop a runtime in a context where blocking
+    /// is not allowed" if it is not. That check is `#[cfg(debug_assertions)]`, so a
+    /// release build never noticed and shipped this instead: a worker of the shared
+    /// runtime parked for the length of every download, up to the 23.7 seconds a real
+    /// subscription takes to import.
+    ///
+    /// This test runs under `cfg(debug_assertions)` like every `cargo test`, so
+    /// reqwest's own check is live and it is genuinely asserting the fix.
+    #[test]
+    fn fetching_from_inside_an_async_runtime_does_not_panic() {
+        let server = TestServer::always(Reply::ok("#EXTM3U\n"));
+        let url = server.url("/playlist.m3u");
+        let got = on_a_tauri_worker(move || {
+            HttpClient::new(HttpConfig::default())
+                .unwrap()
+                .fetch_string(&url)
+        })
+        .unwrap();
+        assert_eq!(got, "#EXTM3U\n");
+    }
+
+    /// The body is the part that takes minutes, so it has to be announced too.
+    ///
+    /// Wrapping only the request would leave every `read` of the stream blocking a
+    /// worker unannounced — and panicking, since each one reaches `wait::enter` the
+    /// same way. A megabyte is enough to need several trips to the socket rather than
+    /// arriving whole in the first buffer.
+    #[test]
+    fn streaming_a_body_from_inside_an_async_runtime_does_not_panic() {
+        let big = "x".repeat(1024 * 1024);
+        let server = TestServer::always(Reply::ok(big.as_str()));
+        let url = server.url("/guide.xml");
+        let got = on_a_tauri_worker(move || {
+            let mut reader = HttpClient::new(HttpConfig::default())
+                .unwrap()
+                .fetch_reader(&url)
+                .unwrap();
+            let mut out = String::new();
+            reader.read_to_string(&mut out).unwrap();
+            out
+        });
+        assert_eq!(got.len(), big.len());
+    }
+
+    /// Off a runtime there is nothing to tell, and `block_in_place` would panic on a
+    /// current-thread one. Both have to keep working: the ingest tests and the DVR
+    /// scheduler's own thread call straight through.
+    #[test]
+    fn fetching_off_a_runtime_still_works() {
+        let server = TestServer::always(Reply::ok("ok"));
+        assert_eq!(
+            client(&server).fetch_string(&server.url("/x")).unwrap(),
+            "ok"
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let url = server.url("/y");
+        let got = rt.block_on(async { blocking(|| url.len()) });
+        assert_eq!(got, server.url("/y").len());
     }
 
     #[test]

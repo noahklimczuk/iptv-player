@@ -20,6 +20,11 @@ reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "gzip",
 ] }
+# Only for `block_in_place`. `reqwest::blocking` parks whatever thread calls it, and
+# when that thread is one of Tauri's async workers the runtime has to be told so it can
+# put a replacement on the queue. Already in the tree via reqwest, so this costs
+# nothing to build.
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread"] }
 # reqwest's gzip feature only covers Content-Encoding. Providers also serve plain
 # `.xml.gz` *files*, which have to be inflated by hand.
 flate2 = "1"
