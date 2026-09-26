@@ -33,7 +33,16 @@ pub const READY_MARKER: &str = ".ready";
 pub const PREVIOUS_DIR: &str = "previous";
 
 /// The executable a portable build runs from, and which has to end up replaced.
+///
+/// Per platform, because the name is how `stage_zip` decides an archive really is
+/// Aurora and not something else that was served under the right filename. Hardcoding
+/// the Windows spelling meant a portable build anywhere else refused its own release
+/// with "the archive contains no aurora-app.exe" — which is how the update path came
+/// to have no end-to-end test: it could not be driven at all except on Windows.
+#[cfg(windows)]
 pub const APP_EXE: &str = "aurora-app.exe";
+#[cfg(not(windows))]
+pub const APP_EXE: &str = "aurora-app";
 
 fn failure(message: &str, cause: String) -> NetFailure {
     NetFailure {

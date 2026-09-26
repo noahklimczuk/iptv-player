@@ -30,6 +30,7 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests-host"))
 from driver import WD  # noqa: E402
+from fakegithub import FakeGitHub  # noqa: E402
 
 # `AURORA_TEST_EXE=…/target/debug/aurora-app` runs the same scenarios against a debug
 # build. Worth having for one reason: a debug build unwinds where a release build
@@ -127,6 +128,17 @@ class Ctx:
     def channel_count(self):
         return self._query("SELECT count(*) FROM channels")
 
+    def updates_dir(self):
+        """Where a downloaded release lands, beside the library."""
+        return os.path.join(DATA, "updates")
+
+    def downloaded(self):
+        """What is in the updates folder, so a scenario can see what arrived."""
+        try:
+            return sorted(os.listdir(self.updates_dir()))
+        except FileNotFoundError:
+            return []
+
     def count(self, table):
         return self._query(f"SELECT count(*) FROM {table}")
 
@@ -158,14 +170,20 @@ def start_background():
         cwd=FIXTURES, stdout=devnull, stderr=devnull))
     wait_for_port(FIXTURE_PORT)
 
+    # A stand-in for GitHub's releases API. In-process rather than a subprocess,
+    # because a scenario needs to ask it what the app requested.
+    github = FakeGitHub().start()
+
     env = dict(os.environ, DISPLAY=DISPLAY)
+    # Loopback only, which is the only thing the app will accept (see `test_api_base`).
+    env["AURORA_UPDATE_API"] = github.url
     stderr_path = os.path.join(SHOTS, "host-stderr.log")
     log = open(stderr_path, "w")
     procs.append(subprocess.Popen(
         ["tauri-driver", "--port", str(DRIVER_PORT)],
         env=env, stdout=log, stderr=subprocess.STDOUT))
     time.sleep(3)
-    return procs, stderr_path
+    return procs, stderr_path, github
 
 
 def main():
@@ -198,7 +216,7 @@ def main():
             sys.exit(f"no such scenario: {', '.join(unknown)}  (have: {', '.join(names)})")
         names = [n for n in names if n in wanted]
 
-    procs, stderr_path = start_background()
+    procs, stderr_path, github = start_background()
     failures = []
     skipped = []
     try:
@@ -216,6 +234,7 @@ def main():
             print(f"── {name}")
             d = None
             ctx = Ctx(name, stderr_path, since)
+            ctx.github = github
             try:
                 d = WD(EXE)
                 mod.run(d, ctx)
@@ -250,6 +269,7 @@ def main():
                     )
                 time.sleep(1)
     finally:
+        github.stop()
         for p in procs:
             try:
                 p.send_signal(signal.SIGTERM)

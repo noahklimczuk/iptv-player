@@ -143,6 +143,41 @@ fn cached(conn: &aurora_db::rusqlite::Connection) -> Option<UpdateCheck> {
     })
 }
 
+/// A stand-in for GitHub's API, so the update flow can be driven end to end.
+///
+/// `tests-host` runs the real binary against a real server, and the one thing it could
+/// not reach was GitHub — the app bundles Mozilla's roots rather than the system
+/// store, so it cannot go through a TLS-inspecting proxy, and a container without
+/// direct egress can never answer an update check. That left download, digest
+/// verification and staging as the only major path with no end-to-end coverage at all,
+/// and "I click download and it does nothing" is the second report against it.
+///
+/// **Loopback only.** An updater that can be pointed anywhere by an environment
+/// variable is a way to serve somebody a signed-looking binary, because the digest
+/// that verifies the download comes from the same answer that named it. Restricting
+/// it to `127.0.0.1` and `localhost` leaves it useful to a test on this machine and
+/// useless to anyone who is not already running code on it. Anything else is refused
+/// and said out loud, because a silently ignored override is its own confusion.
+fn test_api_base() -> Option<String> {
+    let value = std::env::var("AURORA_UPDATE_API").ok()?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return None;
+    }
+    let loopback = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
+        .iter()
+        .any(|prefix| value.starts_with(prefix));
+    if !loopback {
+        tracing::warn!(
+            "AURORA_UPDATE_API is set to something that is not loopback and has been \
+             ignored; updates are still being checked against GitHub"
+        );
+        return None;
+    }
+    tracing::warn!("checking for updates against {value} instead of GitHub");
+    Some(value)
+}
+
 /// Ask GitHub, then remember both that we asked and what was said.
 ///
 /// The timestamp is written whatever the answer was, including a failure: an offline
@@ -159,7 +194,11 @@ pub fn run(services: &Services, now: i64, force: bool) -> Result<UpdateCheck> {
         }
     }
 
-    let result = Updates::new(services.http.clone()).check(current());
+    let mut client = Updates::new(services.http.clone());
+    if let Some(base) = test_api_base() {
+        client = client.with_api_base_url(base);
+    }
+    let result = client.check(current());
 
     {
         let db = services.db.lock();
@@ -222,11 +261,26 @@ pub fn asset_kind() -> AssetKind {
 
 /// Whether this copy can update itself at all.
 ///
-/// Both kinds can, now. It is false only off Windows, where there is neither an
-/// installer to run nor a `.exe` to swap — which is every developer machine this is
-/// built on, and is why the button has to be able to say so rather than fail late.
+/// Split by kind, because the two halves are not equally platform-bound.
+///
+/// A portable copy unpacks an archive beside itself and swaps the files on the way
+/// back up, and `aurora_ingest::selfupdate` does all of that with `std::fs` — the one
+/// `#[cfg]` in the whole module is the Unix permission bit it sets on the way out.
+/// Renaming a running executable to get it out of the way is a Windows necessity, not
+/// a Windows capability; every other platform allows it too.
+///
+/// An installed copy is genuinely Windows-only: what it runs is the NSIS installer,
+/// and there is no such thing anywhere else.
+///
+/// This used to be `cfg!(windows)` for both, which made the whole download path
+/// unreachable off Windows — so the only end-to-end test of check, download, digest
+/// verification and staging could not be written, and the two reports against that
+/// path had nothing standing between them and a release.
 pub fn can_install() -> bool {
-    cfg!(windows)
+    match asset_kind() {
+        AssetKind::Portable => true,
+        AssetKind::Installer => cfg!(windows),
+    }
 }
 
 /// Where a portable copy lives, which is the folder being replaced.
@@ -317,6 +371,14 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
     });
     crate::emit(&app, "update.download", &started);
 
+    // A loopback stand-in is only ever allowed to serve the asset when it was also
+    // the thing that named it — see `test_api_base`, which refuses anything that is
+    // not loopback in the first place.
+    let origin = if test_api_base().is_some() {
+        updates::AssetOrigin::Loopback
+    } else {
+        updates::AssetOrigin::Releases
+    };
     let http = Arc::clone(&services.http);
     let state = Arc::clone(&services.updates);
     let stage_dir = services
@@ -327,14 +389,20 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
         .name("aurora-update-download".into())
         .spawn(move || {
             let mut last = std::time::Instant::now();
-            let outcome =
-                updates::download_asset(&http, &url, &dest, &expected, &mut |received, _total| {
+            let outcome = updates::download_asset(
+                &http,
+                &url,
+                &dest,
+                &expected,
+                origin,
+                &mut |received, _total| {
                     state.advance(received);
                     if last.elapsed() >= PROGRESS_INTERVAL {
                         last = std::time::Instant::now();
                         crate::emit(&app, "update.download", &state.get());
                     }
-                });
+                },
+            );
 
             let finished = match outcome {
                 Ok(done) => {
@@ -480,7 +548,10 @@ fn refusal(
     }
     if !can_install {
         return Some(
-            "Aurora can only update itself on Windows. This build is for development.".into(),
+            "An installed copy of Aurora can only update itself on Windows, because \
+             what it runs is the Windows installer. A portable copy can, on any \
+             platform."
+                .into(),
         );
     }
     // A recording is a thing that cannot be redone. The update can wait.
