@@ -10,7 +10,7 @@ import { getProgress, invoke } from '@/ipc';
 import { useProfile } from '@/state/profile';
 import { report } from '@/lib/errors';
 import { duration, progressPct, runtime } from '@/lib/format';
-import { Badge, Button, IconButton, ProgressBar, Skeleton } from './Primitives';
+import { Badge, Button, IconButton, ProgressBar, Select, Skeleton } from './Primitives';
 import { Icon } from './Icon';
 
 type Tab = 'episodes' | 'similar' | 'details';
@@ -443,21 +443,13 @@ function Episodes({
   return (
     <div>
       {choices.length > 1 && (
-        <select
-          value={season}
-          onChange={(e) => setSeason(Number(e.target.value))}
-          aria-label="Season"
-          style={{
-            marginBottom: 'var(--sp-4)', padding: '8px 12px',
-            background: 'var(--surface)', color: 'var(--text)',
-            border: '1px solid var(--border-strong)', borderRadius: 'var(--r-md)',
-            fontSize: 'var(--fs-md)', fontWeight: 600,
-          }}
-        >
-          {choices.map((s) => (
-            <option key={s} value={s}>Season {s}</option>
-          ))}
-        </select>
+        <Select
+          label="Season"
+          options={choices.map((s) => ({ value: String(s), label: `Season ${s}` }))}
+          value={String(season)}
+          onChange={(v) => setSeason(Number(v ?? choices[0]))}
+          style={{ marginBottom: 'var(--sp-4)' }}
+        />
       )}
 
       <div style={{ display: 'grid', gap: 'var(--sp-1)' }}>

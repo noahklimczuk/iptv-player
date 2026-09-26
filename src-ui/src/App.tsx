@@ -368,6 +368,17 @@ export default function App() {
           profileName={profile.active.name}
           onSwitchProfile={() => profile.setPicking(true)}
         />
+        {/* Keyed on the path so React remounts the wrapper on every navigation,
+            which is what restarts the entrance animation. Without the key the class
+            is already applied and nothing fades.
+
+            `height: 100%` is load-bearing, not decoration. The pages inside size
+            themselves against their parent, and a wrapper with an auto height lets
+            them grow to their content instead — which gives every virtualised list a
+            scroll container the height of the whole list, so it mounts all of it.
+            The playlist editor went from 28 rows in the DOM to 42, and on a real
+            panel that is twenty thousand. */}
+        <div key={location.pathname} className="aurora-page" style={{ height: '100%' }}>
         <Routes>
           <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
@@ -381,6 +392,7 @@ export default function App() {
             element={<SettingsPage onAddProvider={() => setAddingProvider(true)} />}
           />
         </Routes>
+        </div>
       </main>
 
       {playerOpen && ui.player && (

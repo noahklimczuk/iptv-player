@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   DraftProvider, IngestPhase, IngestProgress, SyncReport, ValidationResult,
 } from '@shared/ipc';
-import { Badge, Button, EmptyState } from '@/components/Primitives';
+import { Badge, Button, EmptyState, FIELD } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { invoke, onIngestProgress } from '@/ipc';
 
@@ -215,11 +215,8 @@ const card = {
   borderRadius: 'var(--r-lg)', padding: 'var(--sp-5)',
 } as const;
 
-const input = {
-  width: '100%', padding: '11px 14px', borderRadius: 'var(--r-md)',
-  border: '1px solid var(--border-strong)', background: 'var(--surface)',
-  color: 'var(--text)', fontSize: 'var(--fs-md)',
-} as const;
+/** One field, defined once. See `FIELD` in Primitives. */
+const input: React.CSSProperties = { ...FIELD, width: '100%', padding: '11px 14px', fontSize: 'var(--fs-md)' };
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -258,7 +255,7 @@ function SourceStep({
   return (
     <div style={card}>
       <Field label="Paste your playlist URL or Xtream address">
-        <textarea
+        <textarea className="aurora-field"
           ref={firstRef}
           value={pasted}
           onChange={(e) => onPaste(e.target.value)}
@@ -321,7 +318,7 @@ function SourceStep({
       </div>
 
       <Field label="Name this provider">
-        <input
+        <input className="aurora-field"
           value={draft.name}
           onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
           placeholder="My subscription"
@@ -333,7 +330,7 @@ function SourceStep({
       {draft.kind === 'xtream' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-3)' }}>
           <Field label="Username">
-            <input
+            <input className="aurora-field"
               value={draft.username ?? ''}
               onChange={(e) => setDraft((d) => ({ ...d, username: e.target.value }))}
               aria-label="Username"
@@ -341,7 +338,7 @@ function SourceStep({
             />
           </Field>
           <Field label="Password">
-            <input
+            <input className="aurora-field"
               type="password"
               value={draft.password ?? ''}
               onChange={(e) => setDraft((d) => ({ ...d, password: e.target.value }))}

@@ -23,8 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowseSort, CatalogItem } from '@shared/ipc';
 import { CatalogCard } from '@/components/CatalogCard';
-import { Icon } from '@/components/Icon';
-import { Button, EmptyState, Skeleton } from '@/components/Primitives';
+import { Button, EmptyState, Select, Skeleton, TextField } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { usePages } from '@/hooks/usePages';
 import { invoke } from '@/ipc';
@@ -146,31 +145,39 @@ export function BrowsePage({
           margin: 'var(--sp-4) 0', flexWrap: 'wrap',
         }}
       >
-        <SearchBox
+        <TextField
+          icon="search"
+          clearable
+          onClear={() => setTyped('')}
           value={typed}
-          onChange={setTyped}
+          onChange={(e) => setTyped(e.target.value)}
           placeholder={mode === 'movies' ? 'Search films…' : 'Search series…'}
+          aria-label={mode === 'movies' ? 'Search films' : 'Search series'}
+          data-testid="browse-search"
+          style={{ width: 220 }}
         />
 
         {/* Genres only when there are any. An empty dropdown labelled "All genres" is
             a control that looks broken and is, on every library without a TMDB key. */}
         {(facets?.genres.length ?? 0) > 0 && (
-          <Picker
+          <Select
             label="Genre"
-            all="All genres"
-            options={facets!.genres.map((name) => ({ name }))}
-            selected={genre}
-            onSelect={setGenre}
+            placeholder="All genres"
+            options={facets!.genres.map((g) => ({ value: g, label: g }))}
+            value={genre}
+            onChange={setGenre}
           />
         )}
 
         {rest.length > 0 && (
-          <Picker
+          <Select
             label="Category"
-            all="All categories"
-            options={shelves}
-            selected={category}
-            onSelect={setCategory}
+            placeholder="All categories"
+            options={shelves.map((c) => ({
+              value: c.name, label: c.name, hint: NUMBER.format(c.count),
+            }))}
+            value={category}
+            onChange={setCategory}
           />
         )}
 
@@ -256,206 +263,6 @@ export function BrowsePage({
         </div>
       )}
     </div>
-  );
-}
-
-function SearchBox({
-  value, onChange, placeholder,
-}: {
-  value: string; onChange: (v: string) => void; placeholder: string;
-}) {
-  return (
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-      <Icon
-        name="search" size={15}
-        style={{
-          position: 'absolute', left: 10, color: 'var(--text-faint)',
-          pointerEvents: 'none',
-        }}
-      />
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        aria-label={placeholder}
-        data-testid="browse-search"
-        style={{
-          padding: '7px 10px 7px 30px', width: 220,
-          background: 'var(--surface)', color: 'var(--text)',
-          border: '1px solid var(--border-strong)', borderRadius: 'var(--r-md)',
-          fontSize: 'var(--fs-sm)',
-        }}
-      />
-      {value && (
-        <button
-          aria-label="Clear search"
-          onClick={() => onChange('')}
-          style={{
-            position: 'absolute', right: 6, display: 'grid', placeItems: 'center',
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: 'var(--text-faint)', padding: 4,
-          }}
-        >
-          <Icon name="close" size={13} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-/**
- * Pick one option out of a long list, by name.
- *
- * A native `<select>` was the obvious thing and is wrong twice over. Two hundred and
- * two options is not a list anybody scrolls, and the control renders as a blank box
- * in the WebView this ships inside — which is why the old genre dropdown appeared as
- * an empty rectangle in every screenshot of this page.
- */
-function Picker({
-  label, all, options, selected, onSelect,
-}: {
-  /** What this filters, for the accessible name. */
-  label: string;
-  /** What the "no filter" row says. */
-  all: string;
-  options: { name: string; count?: number }[];
-  selected?: string;
-  onSelect: (c: string | undefined) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState('');
-  const box = useRef<HTMLDivElement | null>(null);
-
-  // Click anywhere else and it closes, which is the one thing every popover must do
-  // and the one thing hand-rolled ones usually forget.
-  useEffect(() => {
-    if (!open) return undefined;
-    const away = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
-    };
-    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', away);
-    document.addEventListener('keydown', escape);
-    return () => {
-      document.removeEventListener('mousedown', away);
-      document.removeEventListener('keydown', escape);
-    };
-  }, [open]);
-
-  const shown = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    return needle
-      ? options.filter((c) => c.name.toLowerCase().includes(needle))
-      : options;
-  }, [options, filter]);
-
-  return (
-    <div ref={box} style={{ position: 'relative' }}>
-      <Button
-        size="sm"
-        variant={selected ? 'primary' : 'secondary'}
-        icon="chevronDown"
-        onClick={() => { setOpen((o) => !o); setFilter(''); }}
-        data-testid={`browse-picker-${label.toLowerCase()}`}
-        aria-label={label}
-        aria-expanded={open}
-      >
-        {selected ?? all}
-      </Button>
-
-      {open && (
-        <div
-          role="listbox"
-          style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 60,
-            width: 300, maxHeight: 340, overflowY: 'auto',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-strong)',
-            borderRadius: 'var(--r-md)',
-            boxShadow: '0 12px 32px rgb(0 0 0 / 0.5)',
-            padding: 'var(--sp-2)',
-          }}
-        >
-          <input
-            autoFocus
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder={`Filter ${label.toLowerCase()}…`}
-            aria-label={`Filter ${label.toLowerCase()}`}
-            style={{
-              width: '100%', padding: '6px 9px', marginBottom: 'var(--sp-2)',
-              background: 'var(--surface)', color: 'var(--text)',
-              border: '1px solid var(--border-strong)', borderRadius: 'var(--r-sm)',
-              fontSize: 'var(--fs-sm)',
-            }}
-          />
-          <PickerRow
-            active={!selected}
-            onClick={() => { onSelect(undefined); setOpen(false); }}
-          >
-            {all}
-          </PickerRow>
-          {shown.map((c) => (
-            <PickerRow
-              key={c.name}
-              active={selected === c.name}
-              onClick={() => { onSelect(c.name); setOpen(false); }}
-            >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
-              {c.count !== undefined && (
-                <span
-                  style={{
-                    marginLeft: 'auto', paddingLeft: 10, opacity: 0.55,
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {NUMBER.format(c.count)}
-                </span>
-              )}
-            </PickerRow>
-          ))}
-          {shown.length === 0 && (
-            <div
-              style={{
-                padding: 'var(--sp-3)', color: 'var(--text-faint)',
-                fontSize: 'var(--fs-sm)',
-              }}
-            >
-              Nothing matches that.
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PickerRow({
-  active, onClick, children,
-}: {
-  active: boolean; onClick: () => void; children: React.ReactNode;
-}) {
-  return (
-    <button
-      role="option"
-      aria-selected={active}
-      onClick={onClick}
-      data-testid="browse-picker-row"
-      style={{
-        display: 'flex', alignItems: 'center', width: '100%', textAlign: 'left',
-        padding: '7px 9px', borderRadius: 'var(--r-sm)', border: 'none',
-        cursor: 'pointer', fontSize: 'var(--fs-sm)', whiteSpace: 'nowrap',
-        background: active ? 'var(--surface-hover)' : 'transparent',
-        color: active ? 'var(--text)' : 'var(--text-muted)',
-        fontWeight: active ? 700 : 500,
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = active ? 'var(--surface-hover)' : 'transparent';
-      }}
-    >
-      {children}
-    </button>
   );
 }
 

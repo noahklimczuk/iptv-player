@@ -123,19 +123,19 @@ def run(d, ctx):
     print(f"   {biggest[0]!r} narrowed to {narrowed:,}, {needle!r} to {searched:,}")
 
     # Genres do not exist on this library, so the control must not either.
-    assert not d.find_all('[data-testid="browse-picker-genre"]'), (
+    assert not d.find_all('[data-testid="select-genre"]'), (
         "a genre filter is on screen for a library with no genres"
     )
 
     # The category picker holds the rest of the 202 shelves and is searchable, because
     # two hundred options is not a list anybody scrolls.
-    d.click(d.find('[data-testid="browse-picker-category"]'))
-    rows = d.find_all('[data-testid="browse-picker-row"]')
+    d.click(d.find('[data-testid="select-category"]'))
+    rows = d.find_all('[data-testid="select-row"]')
     assert len(rows) > 20, f"the picker offers only {len(rows)} of 202 shelves"
     d.send(d.by_label("Filter category"), "ALBANIA")
     time.sleep(1)
     narrowed_rows = d.js(
-        'return [...document.querySelectorAll("[data-testid=browse-picker-row]")]'
+        'return [...document.querySelectorAll("[data-testid=select-row]")]'
         '  .map((e) => e.textContent.trim());'
     )
     assert len(narrowed_rows) < len(rows), (

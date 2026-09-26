@@ -12,7 +12,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, Programme } from '@shared/ipc';
 import { useDvrMarks } from '@/features/dvr/useDvrMarks';
-import { Badge, Button, EmptyState, Skeleton } from '@/components/Primitives';
+import { Badge, Button, EmptyState, Select, Skeleton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { clockTime, dayLabel, duration } from '@/lib/format';
@@ -257,21 +257,16 @@ function GuideToolbar({
         ))}
       </div>
 
-      <select
-        value={group ?? ''}
-        onChange={(e) => setGroup(e.target.value || undefined)}
-        aria-label="Filter by category"
-        style={{
-          marginLeft: 'auto', padding: '6px 10px', background: 'var(--surface)',
-          color: 'var(--text)', border: '1px solid var(--border-strong)',
-          borderRadius: 'var(--r-md)', fontSize: 'var(--fs-sm)',
-        }}
-      >
-        <option value="">All channels</option>
-        {groups.map((g) => (
-          <option key={g.name} value={g.name}>{g.name} ({g.count})</option>
-        ))}
-      </select>
+      <Select
+        label="Category"
+        placeholder="All channels"
+        options={groups.map((g) => ({
+          value: g.name, label: g.name, hint: String(g.count),
+        }))}
+        value={group}
+        onChange={setGroup}
+        style={{ marginLeft: 'auto' }}
+      />
     </div>
   );
 }

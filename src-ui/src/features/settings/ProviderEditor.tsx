@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { Provider, ProviderCredentials } from '@shared/ipc';
-import { Button } from '@/components/Primitives';
+import { Button, FIELD } from '@/components/Primitives';
 import { invoke } from '@/ipc';
 
 export function ProviderEditor({
@@ -92,20 +92,20 @@ export function ProviderEditor({
       }}
     >
       <Field label="Name">
-        <input value={name} onChange={(e) => setName(e.target.value)} aria-label="Provider name" style={input} />
+        <input className="aurora-field" value={name} onChange={(e) => setName(e.target.value)} aria-label="Provider name" style={input} />
       </Field>
       <Field label="Address">
-        <input value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Provider address" style={input} />
+        <input className="aurora-field" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Provider address" style={input} />
       </Field>
 
       {provider.kind === 'xtream' && (
         <>
           <Field label="Username">
-            <input value={username} onChange={(e) => setUsername(e.target.value)} aria-label="Username" style={input} />
+            <input className="aurora-field" value={username} onChange={(e) => setUsername(e.target.value)} aria-label="Username" style={input} />
           </Field>
           <Field label="Password">
             <div style={{ display: 'flex', gap: 6, flex: 1 }}>
-              <input
+              <input className="aurora-field"
                 type={revealed ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -179,8 +179,5 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const input: React.CSSProperties = {
-  flex: 1, padding: '8px 10px', borderRadius: 'var(--r-sm)',
-  border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-  color: 'var(--text)', fontSize: 'var(--fs-sm)', minWidth: 0,
-};
+/** One field, defined once. See `FIELD` in Primitives. */
+const input: React.CSSProperties = { ...FIELD, flex: 1, minWidth: 0 };

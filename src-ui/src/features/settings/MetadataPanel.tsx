@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { EnrichmentCoverage } from '@shared/ipc';
-import { Badge, Button, ProgressBar } from '@/components/Primitives';
+import { Badge, Button, FIELD, ProgressBar } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke, onArtworkProgress, onMetadataProgress } from '@/ipc';
 import { bytes } from '@/lib/format';
@@ -78,7 +78,7 @@ export function MetadataPanel() {
         <label htmlFor="tmdb-key" style={{ fontSize: 'var(--fs-sm)', minWidth: 90 }}>
           API key
         </label>
-        <input
+        <input className="aurora-field"
           id="tmdb-key"
           type="password"
           value={key}
@@ -312,9 +312,5 @@ function CoverageRow({ label, coverage }: { label: string; coverage: EnrichmentC
   );
 }
 
-const inputStyle: React.CSSProperties = {
-  flex: 1, minWidth: 220, padding: '7px 10px',
-  background: 'var(--surface)', color: 'var(--text)',
-  border: '1px solid var(--border-strong)', borderRadius: 'var(--r-md)',
-  fontSize: 'var(--fs-sm)', fontFamily: 'inherit',
-};
+/** One field, defined once. See `FIELD` in Primitives. */
+const inputStyle: React.CSSProperties = { ...FIELD, flex: 1, minWidth: 220 };

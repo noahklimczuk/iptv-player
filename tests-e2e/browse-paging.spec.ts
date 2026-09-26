@@ -94,7 +94,7 @@ test('searching narrows within the list without leaving the page', async ({ page
   }
 
   // Clearing puts the library back.
-  await page.getByRole('button', { name: 'Clear search' }).click();
+  await page.getByRole('button', { name: 'Clear' }).click();
   await expect
     .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')), {
       timeout: 5_000,
@@ -122,7 +122,7 @@ test('an empty genre filter is not shown at all', async ({ page }) => {
   if (await genre.count() > 0) {
     await genre.click();
     // The "all" row plus at least one real genre.
-    expect(await page.getByTestId('browse-picker-row').count()).toBeGreaterThan(1);
+    expect(await page.getByTestId('select-row').count()).toBeGreaterThan(1);
   }
 });
 
@@ -132,11 +132,11 @@ test('a long category list is searchable rather than a two-hundred-row dropdown'
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
 
-  const picker = page.getByTestId('browse-picker-category');
+  const picker = page.getByTestId('select-category');
   test.skip(await picker.count() === 0, 'this library has few enough shelves to fit in chips');
   await picker.click();
 
-  const rows = page.getByTestId('browse-picker-row');
+  const rows = page.getByTestId('select-row');
   const before = await rows.count();
   expect(before).toBeGreaterThan(1);
 
