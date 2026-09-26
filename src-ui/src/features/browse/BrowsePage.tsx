@@ -128,6 +128,7 @@ export function BrowsePage({
           <CatalogCard
             key={`${item.kind}-${item.id}`}
             item={item} index={i} onOpen={onOpen} onPlay={onPlay}
+            showTitle
           />
         ))}
       </div>

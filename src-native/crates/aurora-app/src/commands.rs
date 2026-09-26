@@ -287,9 +287,13 @@ pub fn library_episodes(
 ) -> Result<Vec<library::EpisodeRow>> {
     {
         let db = services.db.lock();
-        let have = library::episodes_for(&db, args.series_id, args.season)?;
-        if !have.is_empty() {
-            return Ok(have);
+        // Whether to go and ask the panel is a question about the *show*, not about
+        // the season being displayed. Asking per season looks the same for a show with
+        // nothing stored and a show whose season 2 is simply empty — and for a show
+        // whose episodes are all in season 2, the fetch would land them and this would
+        // then filter them all away, every time, for good.
+        if !library::episodes_for(&db, args.series_id, None)?.is_empty() {
+            return Ok(library::episodes_for(&db, args.series_id, args.season)?);
         }
     }
 

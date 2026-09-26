@@ -499,6 +499,21 @@ pub struct EpisodeRow {
     pub url: String,
 }
 
+/// Which show an episode belongs to.
+///
+/// Continue Watching stores progress against the *episode*, but what belongs on the
+/// home screen is the show — one card reading "you are partway through this", not one
+/// card per episode of it.
+pub fn series_of_episode(conn: &Connection, episode_id: i64) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT series_id FROM episodes WHERE id = ?1",
+            params![episode_id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 pub fn episodes_for(
     conn: &Connection,
     series_id: i64,
@@ -591,6 +606,47 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
 #[cfg(test)]
 mod tests {
+    /// Continue Watching stores progress against an episode and shows the *show*, so
+    /// this lookup is what turns one into the other. A wrong answer here puts the
+    /// wrong poster on the home screen.
+    #[test]
+    fn an_episode_names_the_show_it_belongs_to() {
+        let mut conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id, name, kind, base_url, created_at)
+             VALUES (1, 'P', 'm3u', 'http://e.com', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO series (id, provider_id, provider_key, title, match_key, last_seen_at)
+             VALUES (7, 1, 'series:7', 'A Show', 'ashow', 0),
+                    (8, 1, 'series:8', 'Another', 'another', 0)",
+            [],
+        )
+        .unwrap();
+        upsert_episodes(
+            &mut conn,
+            7,
+            &[NewEpisode {
+                season: 2,
+                episode: 4,
+                title: Some("Fourth".into()),
+                url: "u".into(),
+                still: None,
+            }],
+            0,
+        )
+        .unwrap();
+
+        let episode = episodes_for(&conn, 7, None).unwrap()[0].id;
+        assert_eq!(series_of_episode(&conn, episode).unwrap(), Some(7));
+
+        // A progress row outlives the episode a refresh removed, so this has to answer
+        // rather than fail — the caller drops the card.
+        assert_eq!(series_of_episode(&conn, 9_999).unwrap(), None);
+    }
+
     #[test]
     fn stats_on_an_empty_library_are_all_zero() {
         let conn = crate::open_memory().unwrap();

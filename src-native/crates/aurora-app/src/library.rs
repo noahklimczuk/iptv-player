@@ -53,6 +53,14 @@ pub struct Rail {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// How far into each item, keyed `movie:12` / `series:7`.
+    ///
+    /// Only Continue Watching fills this. It rides on the rail rather than on the
+    /// items because a `CatalogItem` is a library row — the same film is the same row
+    /// whether it is in My List or half-watched, and giving it a position would make
+    /// the row mean different things in different places.
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub progress: std::collections::HashMap<String, RailProgress>,
     pub items: Vec<CatalogItem>,
 }
 
@@ -60,6 +68,14 @@ pub struct Rail {
 #[serde(rename_all = "camelCase")]
 pub struct RailsArgs {
     pub profile_id: i64,
+}
+
+/// Where a half-watched item was left.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RailProgress {
+    pub position_secs: i64,
+    pub duration_secs: i64,
 }
 
 /// How many titles a rail carries. More than fits on screen, so sideways scrolling has
@@ -86,7 +102,54 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
 
     let mut rails = Vec::new();
 
-    // My List first: it is the one rail whose contents somebody chose.
+    // Continue Watching first: it is the only rail about what the viewer was already
+    // doing, and the one thing they are most likely to have come back for.
+    //
+    // Progress is stored against the episode but shown against the *show* — one card
+    // saying "you are partway through this", not one per episode of it. Two episodes
+    // of the same series collapse to the furthest-recent, which is the first seen
+    // because the query is newest-first.
+    let mut resumed: Vec<CatalogItem> = Vec::new();
+    let mut resumed_progress = std::collections::HashMap::new();
+    for p in progress::continue_watching(&db, args.profile_id, RAIL_SIZE)? {
+        let item = match p.item_kind {
+            progress::ItemKind::Movie => library::movie(&db, p.item_id)?.map(CatalogItem::Movie),
+            progress::ItemKind::Episode => match library::series_of_episode(&db, p.item_id)? {
+                Some(series_id) => library::series(&db, series_id)?.map(CatalogItem::Series),
+                // The episode was removed by a refresh; its progress row outlives it
+                // by design, and a card for a show that is gone is worse than no card.
+                None => None,
+            },
+            // A channel or a recording is not a library row, so there is nothing here
+            // to put on a poster rail.
+            _ => None,
+        };
+        let Some(item) = item else { continue };
+        let key = catalog_key(&item);
+        if resumed_progress.contains_key(&key) {
+            continue;
+        }
+        resumed_progress.insert(
+            key,
+            RailProgress {
+                position_secs: p.position_secs,
+                duration_secs: p.duration_secs,
+            },
+        );
+        resumed.push(item);
+    }
+    if !resumed.is_empty() {
+        rails.push(Rail {
+            id: "continue".into(),
+            kind: "continueWatching".into(),
+            title: "Continue Watching".into(),
+            reason: None,
+            progress: resumed_progress,
+            items: resumed,
+        });
+    }
+
+    // My List next: it is the one rail whose contents somebody chose.
     let mut mine = Vec::new();
     for (kind, id) in lists::my_list(&db, args.profile_id)? {
         match kind {
@@ -152,8 +215,17 @@ fn push_if_any(rails: &mut Vec<Rail>, id: &str, kind: &str, title: &str, items: 
         kind: kind.into(),
         title: title.into(),
         reason: None,
+        progress: std::collections::HashMap::new(),
         items,
     });
+}
+
+/// The key a rail's progress map is read by, and the one the UI rebuilds per card.
+pub fn catalog_key(item: &CatalogItem) -> String {
+    match item {
+        CatalogItem::Movie(m) => format!("movie:{}", m.id),
+        CatalogItem::Series(s) => format!("series:{}", s.id),
+    }
 }
 
 /* ── My List and favourites ───────────────────────────────────────────────── */
