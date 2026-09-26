@@ -102,7 +102,7 @@ pub fn history(conn: &Connection, profile_id: i64) -> Result<Vec<Watched>> {
         out.push(row?);
     }
 
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    out.sort_by_key(|w| std::cmp::Reverse(w.updated_at));
     out.truncate(HISTORY_LIMIT as usize);
     Ok(out)
 }
