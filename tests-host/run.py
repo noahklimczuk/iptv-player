@@ -200,6 +200,7 @@ def main():
 
     procs, stderr_path = start_background()
     failures = []
+    skipped = []
     try:
         for name in names:
             path = os.path.join(ROOT, "tests-host", "scenarios", f"{name}.py")
@@ -220,6 +221,15 @@ def main():
                 mod.run(d, ctx)
                 print("   ok")
             except Exception as e:
+                # A scenario with nothing to run against is not a failure. The real
+                # panel needs credentials that belong to a person, not to this
+                # repository, so it sits out a run that does not have them — it says
+                # so by raising its own `Skipped`, which is matched by name so that
+                # scenarios need import nothing from here.
+                if type(e).__name__ == "Skipped":
+                    skipped.append((name, e))
+                    print(f"   skipped: {e}")
+                    continue
                 failures.append((name, e))
                 print(f"   FAILED: {e}")
                 if d:
@@ -247,7 +257,8 @@ def main():
                 pass
 
     print()
-    print(f"{len(names) - len(failures)}/{len(names)} passed")
+    ran = len(names) - len(skipped)
+    print(f"{ran - len(failures)}/{ran} passed" + (f", {len(skipped)} skipped" if skipped else ""))
     for name, err in failures:
         print(f"  {name}: {err}")
     sys.exit(1 if failures else 0)

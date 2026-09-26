@@ -67,6 +67,13 @@ class WD:
     def send(self, eid, s):
         self.r("POST", f"/element/{eid}/value", {"text": s, "value": list(s)})
 
+    def by_label(self, label, timeout=15):
+        """An input by its `aria-label`. The wizard's fields have no ids."""
+        return self.find(f'[aria-label="{label}"]', timeout=timeout)
+
+    def clear(self, eid):
+        self.r("POST", f"/element/{eid}/clear", {})
+
     def by_text(self, css, needle, timeout=15):
         """The first element matching `css` whose text contains `needle`."""
         end = time.time() + timeout
