@@ -259,6 +259,7 @@ fn main() {
             commands::library_movies,
             commands::library_series,
             commands::library_genres,
+            commands::library_browse_facets,
             recommend::library_recommended,
             commands::library_episodes,
             commands::library_playback_aids,

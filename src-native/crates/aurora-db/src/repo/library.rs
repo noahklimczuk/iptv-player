@@ -143,24 +143,56 @@ pub enum MovieSort {
     Rating,
 }
 
-/// What a browse page asks for: a sort, a page, an optional genre, and whatever the
-/// library-wide filters are set to (README §7.3, §8.5).
+/// What a browse page asks for: a sort, a page, some optional filters, and whatever
+/// the library-wide filters are set to (README §7.3, §8.5).
 #[derive(Debug, Clone, Default)]
 pub struct BrowseQuery {
     pub sort: MovieSort,
     pub genre: Option<String>,
+    /// The provider's own shelf — `group_title`. On a library without a TMDB key this
+    /// is the only structure there is: 202 categories on the subscription this was
+    /// built against, and not one genre.
+    pub category: Option<String>,
+    /// Narrow by title. Substring rather than the FTS index on purpose: this filters
+    /// a list somebody is already looking at, where the ranked cross-library search
+    /// behind Ctrl-K is a different question with a different answer.
+    pub query: Option<String>,
     pub limit: u32,
     pub offset: u32,
     pub library: crate::repo::filtering::LibraryFilter,
 }
 
-/// Genres are stored as a JSON array, so matching one means matching its text. The
-/// quotes make `"Action"` fail to match `"Action Comedy"`, which a bare LIKE would not.
-fn genre_clause(table: &str, genre: &Option<String>) -> String {
-    match genre {
-        Some(_) => format!(" AND {table}.genres LIKE '%\"' || :genre || '\"%'"),
-        None => String::new(),
+/// The `WHERE` a browse query adds beyond `hidden = 0`, and the parameters it needs.
+///
+/// Built together because they have to agree: a clause with no parameter bound, or a
+/// parameter with no clause, is a runtime error rather than a compile-time one.
+fn browse_filters<'a>(
+    table: &str,
+    q: &'a BrowseQuery,
+) -> (String, Vec<(&'static str, &'a dyn rusqlite::ToSql)>) {
+    let mut sql = String::new();
+    let mut params: Vec<(&'static str, &'a dyn rusqlite::ToSql)> = Vec::new();
+
+    // Genres are stored as a JSON array, so matching one means matching its text. The
+    // quotes make `"Action"` fail to match `"Action Comedy"`, which a bare LIKE would
+    // not.
+    if let Some(genre) = &q.genre {
+        sql.push_str(&format!(
+            " AND {table}.genres LIKE '%\"' || :genre || '\"%'"
+        ));
+        params.push((":genre", genre));
     }
+    if let Some(category) = &q.category {
+        sql.push_str(&format!(" AND {table}.group_title = :category"));
+        params.push((":category", category));
+    }
+    if let Some(query) = &q.query {
+        sql.push_str(&format!(
+            " AND COALESCE({table}.custom_title, {table}.title) LIKE '%' || :query || '%'"
+        ));
+        params.push((":query", query));
+    }
+    (sql, params)
 }
 
 pub fn list_movies(conn: &Connection, q: &BrowseQuery) -> Result<Vec<MovieRow>> {
@@ -170,27 +202,33 @@ pub fn list_movies(conn: &Connection, q: &BrowseQuery) -> Result<Vec<MovieRow>> 
         MovieSort::Year => "year DESC NULLS LAST, title",
         MovieSort::Rating => "rating DESC NULLS LAST, title",
     };
+    let (filters, mut params) = browse_filters("movies", q);
     let sql = format!(
-        "{MOVIE_SELECT} WHERE movies.hidden = 0{}{} ORDER BY {order} LIMIT :limit OFFSET :offset",
+        "{MOVIE_SELECT} WHERE movies.hidden = 0{}{filters} ORDER BY {order} \
+         LIMIT :limit OFFSET :offset",
         q.library.where_sql(crate::repo::filtering::Kind::Movies),
-        genre_clause("movies", &q.genre),
     );
+    params.push((":limit", &q.limit));
+    params.push((":offset", &q.offset));
     let mut stmt = conn.prepare(&sql)?;
-    let rows = match &q.genre {
-        Some(g) => stmt
-            .query_map(
-                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset, ":genre": g },
-                map_movie,
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        None => stmt
-            .query_map(
-                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset },
-                map_movie,
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-    };
+    let rows = stmt
+        .query_map(params.as_slice(), map_movie)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// How many rows a browse query matches, ignoring its page.
+///
+/// So the heading can say "117,508" rather than "120+". The count used to be whatever
+/// had been fetched so far, which on the first page was the page size wearing a
+/// library's clothes — and after that was a number that climbed while you scrolled.
+pub fn count_movies(conn: &Connection, q: &BrowseQuery) -> Result<u32> {
+    let (filters, params) = browse_filters("movies", q);
+    let sql = format!(
+        "SELECT count(*) FROM movies WHERE movies.hidden = 0{}{filters}",
+        q.library.where_sql(crate::repo::filtering::Kind::Movies),
+    );
+    Ok(conn.query_row(&sql, params.as_slice(), |r| r.get(0))?)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -260,26 +298,65 @@ pub fn list_series(conn: &Connection, q: &BrowseQuery) -> Result<Vec<SeriesRow>>
         MovieSort::Year => "year DESC NULLS LAST, title",
         MovieSort::Rating => "rating DESC NULLS LAST, title",
     };
+    let (filters, mut params) = browse_filters("series", q);
     let sql = format!(
-        "{SERIES_SELECT} WHERE series.hidden = 0{}{} ORDER BY {order} LIMIT :limit OFFSET :offset",
+        "{SERIES_SELECT} WHERE series.hidden = 0{}{filters} ORDER BY {order} \
+         LIMIT :limit OFFSET :offset",
         q.library.where_sql(crate::repo::filtering::Kind::Series),
-        genre_clause("series", &q.genre),
     );
+    params.push((":limit", &q.limit));
+    params.push((":offset", &q.offset));
     let mut stmt = conn.prepare(&sql)?;
-    let rows = match &q.genre {
-        Some(g) => stmt
-            .query_map(
-                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset, ":genre": g },
-                map_series,
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        None => stmt
-            .query_map(
-                rusqlite::named_params! { ":limit": q.limit, ":offset": q.offset },
-                map_series,
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?,
+    let rows = stmt
+        .query_map(params.as_slice(), map_series)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// How many series a browse query matches, ignoring its page.
+pub fn count_series(conn: &Connection, q: &BrowseQuery) -> Result<u32> {
+    let (filters, params) = browse_filters("series", q);
+    let sql = format!(
+        "SELECT count(*) FROM series WHERE series.hidden = 0{}{filters}",
+        q.library.where_sql(crate::repo::filtering::Kind::Series),
+    );
+    Ok(conn.query_row(&sql, params.as_slice(), |r| r.get(0))?)
+}
+
+/// One shelf the provider files titles under, and how many are on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Category {
+    pub name: String,
+    pub count: u32,
+}
+
+/// The provider's own categories, biggest first.
+///
+/// The structure a real library actually has. Genres come from TMDB enrichment, which
+/// needs an API key a viewer may never set — so on most libraries the genre filter is
+/// an empty dropdown, while the panel has been filing everything under 202 named
+/// shelves the whole time.
+pub fn categories(conn: &Connection, kind: crate::repo::filtering::Kind) -> Result<Vec<Category>> {
+    let table = match kind {
+        crate::repo::filtering::Kind::Movies => "movies",
+        crate::repo::filtering::Kind::Series => "series",
+        _ => return Ok(Vec::new()),
     };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT group_title, count(*) FROM {table}
+         WHERE hidden = 0 AND group_title IS NOT NULL AND group_title != ''
+         GROUP BY group_title
+         ORDER BY count(*) DESC, group_title"
+    ))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(Category {
+                name: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 

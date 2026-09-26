@@ -165,6 +165,30 @@ export interface Rail {
   items: CatalogItem[];
 }
 
+/** How a browse list is ordered. */
+export type BrowseSort = 'recentlyAdded' | 'title' | 'year' | 'rating';
+
+/** One shelf the provider files titles under, and how many are on it. */
+export interface Category {
+  name: string;
+  count: number;
+}
+
+/**
+ * What a browse page needs before it can draw its filter bar.
+ *
+ * `categories` is the structure a real library actually has: genres come from TMDB
+ * enrichment, which needs an API key a viewer may never set, so on most libraries
+ * `genres` is empty while the panel has been filing everything under named shelves
+ * the whole time.
+ */
+export interface BrowseFacets {
+  categories: Category[];
+  genres: string[];
+  /** The real total for the current filters, not the page size. */
+  total: number;
+}
+
 /** What `library.recommended` returns — the same shape a rail renders from. */
 export interface Recommended {
   /** Named after the viewer's own taste where there is any: "More Sci-fi and Crime". */
@@ -721,8 +745,23 @@ export interface Commands {
     limit: number;
     offset: number;
     genre?: string;
+    category?: string;
+    query?: string;
   }) => Movie[];
-  'library.series': (args: { limit: number; offset: number; genre?: string }) => Series[];
+  'library.series': (args: {
+    limit: number; offset: number; genre?: string;
+    category?: string; query?: string; sort?: BrowseSort;
+  }) => Series[];
+  /**
+   * What a browse page is showing, before it has fetched any of it.
+   *
+   * One call for the shelves, the genres and the real total — three questions the
+   * page has to answer before the first poster arrives, and three round trips if they
+   * are asked separately.
+   */
+  'library.browseFacets': (args: {
+    kind: 'movies' | 'series'; genre?: string; category?: string; query?: string;
+  }) => BrowseFacets;
   'library.episodes': (args: { seriesId: number; season?: number }) => Episode[];
   'library.stats': () => LibraryStats;
   'library.playbackAids': (args: {

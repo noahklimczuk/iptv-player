@@ -104,6 +104,8 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
     let browse = |sort: library::MovieSort| library::BrowseQuery {
         sort,
         genre: None,
+        category: None,
+        query: None,
         limit: RAIL_SIZE,
         offset: 0,
         library: filters,
@@ -215,6 +217,8 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
     let shows = library::list_series(
         &db,
         &library::BrowseQuery {
+            category: None,
+            query: None,
             sort: library::MovieSort::Title,
             genre: None,
             limit: RAIL_SIZE,
