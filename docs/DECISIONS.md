@@ -554,3 +554,23 @@ are not stored, because `credits` is keyed by TMDB person id and a free-text nam
 nowhere to go that would not need a second, weaker identity model. And films get no
 genre, because `get_vod_streams` does not send one — it is in `get_vod_info`, which is
 one request per film, or 122,499 of them.
+
+### What a free-text genre field actually contains
+
+Keeping the genres turned the filter on, and the first run with it on showed why a
+count was never enough. The panel sends **326 distinct genres** across 28,730 shows:
+
+- `Drama` 11,259, `Crime` 4,723, `Comedy` 4,097 — and then `Drame` 2,638, `Dramma`
+  1,429, `دراما` 615. The same genre in six languages, because the subscription
+  carries six. Not merged: a mapping between them would be guesswork, and getting it
+  wrong hides a Turkish viewer's genres from them.
+- `ACTION` and `Action`, two shows each, beside `Action & Adventure`'s 3,732.
+- `. ﺟﺮﻳﻤﺔ دراما` and `.الرسوم المتحركة`, one show each, with a full stop stuck to
+  the front — which, in an alphabetically sorted list, were **the first two entries a
+  viewer saw**.
+- 201 of the 326 are on two shows or fewer. The top 25 cover 91% of all tagging.
+
+So genres are trimmed to their first and last letter or digit on the way in, and the
+filter offers them **commonest first with a count**, exactly as it offers the
+provider's shelves. Order is the difference between a usable control and a wall:
+alphabetical put punctuation above `Drama`.

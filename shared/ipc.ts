@@ -184,7 +184,8 @@ export interface Category {
  */
 export interface BrowseFacets {
   categories: Category[];
-  genres: string[];
+  /** Genres for this kind only, commonest first, counted like the categories. */
+  genres: Category[];
   /** The real total for the current filters, not the page size. */
   total: number;
 }
