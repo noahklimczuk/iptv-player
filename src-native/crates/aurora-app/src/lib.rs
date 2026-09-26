@@ -13,6 +13,7 @@ pub mod playback;
 pub mod playlist;
 pub mod profiles;
 pub mod providers;
+pub mod recommend;
 pub mod series;
 pub mod services;
 pub mod supervise;

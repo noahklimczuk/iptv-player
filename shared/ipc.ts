@@ -152,7 +152,30 @@ export interface Rail {
    * giving the row a position would make it mean different things in different places.
    */
   progress?: Record<string, { positionSecs: number; durationSecs: number }>;
+  /**
+   * Why each item is on this rail, keyed `movie:12` / `series:7`. Recommendations
+   * only.
+   *
+   * Per item rather than per rail because that is the only version anybody believes:
+   * "Because you watched Blade Runner" under one poster and "More Crime" under the
+   * next is the recommender showing its working, where one heading for twenty titles
+   * is a claim about all of them that is true of none.
+   */
+  reasons?: Record<string, string>;
   items: CatalogItem[];
+}
+
+/** What `library.recommended` returns — the same shape a rail renders from. */
+export interface Recommended {
+  /** Named after the viewer's own taste where there is any: "More Sci-fi and Crime". */
+  title: string;
+  items: CatalogItem[];
+  reasons: Record<string, string>;
+  /**
+   * False when there is no watch history yet and this is rating-led rather than
+   * personal, so the screen can say so instead of implying it knows them.
+   */
+  personalised: boolean;
 }
 
 export type CatalogItem =
@@ -692,6 +715,7 @@ export interface Alternate {
 /** The typed command surface. Every UI data need goes through exactly one of these. */
 export interface Commands {
   'library.rails': (args: { profileId: number }) => Rail[];
+  'library.recommended': (args: { profileId: number; limit?: number }) => Recommended;
   'library.movies': (args: {
     sort: 'recentlyAdded' | 'title' | 'year' | 'rating';
     limit: number;

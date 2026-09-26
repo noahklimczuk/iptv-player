@@ -98,6 +98,7 @@ export function Rail({
                 index={i}
                 rank={showRank ? i + 1 : undefined}
                 progress={rail.progress?.[`${item.kind}:${item.id}`] ?? null}
+                reason={rail.reasons?.[`${item.kind}:${item.id}`]}
                 onOpen={onOpen}
                 onPlay={onPlay}
               />

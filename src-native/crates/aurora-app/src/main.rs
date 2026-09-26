@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, library, metadata, now_unix, playlist, profiles, providers,
+    commands, dvr, library, metadata, now_unix, playlist, profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
     timeshift, updates, window,
@@ -259,6 +259,7 @@ fn main() {
             commands::library_movies,
             commands::library_series,
             commands::library_genres,
+            recommend::library_recommended,
             commands::library_episodes,
             commands::library_playback_aids,
             commands::library_record_skip,

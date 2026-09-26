@@ -49,6 +49,14 @@ DISPLAY = ":99"
 FIXTURE_PORT = 8099
 DRIVER_PORT = 4444
 
+# How many times a scenario may be restarted after the WebDriver connection dies.
+#
+# Two, because this happens: WebKit under Xvfb holding a 140,000-row library and a
+# page of remote posters is not robust. Narrow, though — only for transport errors,
+# and only when the app's own log shows no panic. A host that died is what this suite
+# exists to catch and must never be retried away.
+DRIVER_RETRIES = 2
+
 
 class Ctx:
     """What a scenario can ask about the machine outside the window."""
@@ -112,6 +120,21 @@ class Ctx:
         con = sqlite3.connect(f"file:{self.db_path()}?mode=ro", uri=True)
         try:
             return con.execute(sql).fetchone()[0]
+        finally:
+            con.close()
+
+    def rows(self, sql, args=()):
+        """Read from the library directly.
+
+        For the things the IPC deliberately does not expose — a film's provider
+        category, say, which the host uses for recommendations and the UI has no
+        business knowing about. Asserting through the UI where the UI is the thing
+        under test is how the mock/host gap opened in the first place; this is the
+        other direction, and it is the one that checks the work.
+        """
+        con = sqlite3.connect(f"file:{self.db_path()}?mode=ro", uri=True)
+        try:
+            return con.execute(sql, args).fetchall()
         finally:
             con.close()
 
@@ -284,8 +307,17 @@ def main():
                 # posters, and it happens. Retried once, out loud, and only when the
                 # app's own log shows no panic: a host that died is this suite's whole
                 # reason for existing and must never be retried away.
-                if _is_transport_error(e) and "panicked at" not in ctx.log():
-                    print(f"   driver went away ({type(e).__name__}); restarting it once")
+                attempt = 0
+                while (
+                    attempt < DRIVER_RETRIES
+                    and _is_transport_error(e)
+                    and "panicked at" not in ctx.log()
+                ):
+                    attempt += 1
+                    print(
+                        f"   driver went away ({type(e).__name__}); "
+                        f"restarting it ({attempt} of {DRIVER_RETRIES})"
+                    )
                     if d:
                         d.quit()
                     d = None
@@ -297,10 +329,13 @@ def main():
                     try:
                         d = WD(EXE)
                         mod.run(d, ctx)
-                        print("   ok (after restarting the driver)")
-                        continue
+                        print(f"   ok (after restarting the driver {attempt}x)")
+                        e = None
+                        break
                     except Exception as again:
                         e = again
+                if e is None:
+                    continue
                 # A scenario with nothing to run against is not a failure. The real
                 # panel needs credentials that belong to a person, not to this
                 # repository, so it sits out a run that does not have them — it says

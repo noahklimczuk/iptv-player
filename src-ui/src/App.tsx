@@ -110,6 +110,9 @@ export default function App() {
     if (playerOpen) {
       saveProgress(useUi.getState().player, profileId);
       invoke('player.stop').catch(report('Could not stop playback'));
+      // Continue Watching has a new card and the recommendations have changed.
+      // Nothing remounts on the way out of the player, so Home has to be told.
+      useUi.getState().bumpCatalog();
     }
     setPlayerOpen(false);
   }, [playerOpen, profileId]);

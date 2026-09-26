@@ -50,10 +50,17 @@ def run(d, ctx):
     d.click(d.by_text("nav a", "Settings", timeout=30))
     # The check runs on its own eight seconds after launch, but forcing it makes the
     # scenario about the button rather than about the timer.
-    check = d.by_text("button", "Check now", timeout=45)
-    d.js("arguments[0].scrollIntoView({block: 'center'});", {"element-6066-11e4-a52e-4f735466cecf": check})
+    # Scroll by text rather than by handle: React re-renders this panel while the
+    # first check runs, and an element handle taken before that is stale by the time
+    # it is clicked.
+    d.by_text("button", "Check now", timeout=45)
+    d.js(
+        "const b = [...document.querySelectorAll('button')]"
+        "  .find((e) => e.textContent.trim() === 'Check now');"
+        " if (b) b.scrollIntoView({block: 'center'});"
+    )
     time.sleep(1)
-    d.click(check)
+    d.click(d.by_text("button", "Check now", timeout=15))
     found = d.wait_body(lambda b: "99.0.0" in b, timeout=60)
     ctx.assert_no_panic()
     d.shot(ctx.shot("checked"))
@@ -66,6 +73,12 @@ def run(d, ctx):
     )
 
     # The whole report, in one click.
+    d.js(
+        "const b = [...document.querySelectorAll('button')]"
+        "  .find((e) => e.textContent.trim() === 'Download update');"
+        " if (b) b.scrollIntoView({block: 'center'});"
+    )
+    time.sleep(1)
     d.click(d.by_text("button", "Download update", timeout=30))
 
     # "Install and restart" is the only thing that means downloaded *and verified*:

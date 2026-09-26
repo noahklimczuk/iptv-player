@@ -24,6 +24,17 @@ interface UiState {
   banner: { channelId: number; until: number } | null;
   /** Digits typed for direct channel entry (README §7.2). */
   digits: string;
+  /**
+   * Bumped whenever something has happened that the library screens should re-read.
+   *
+   * Home fetches its rails once and keeps them, which is right — they are expensive
+   * and the library does not usually move. But watching something *does* move it:
+   * Continue Watching gains a card and the recommendations change, and neither
+   * appeared until the app was restarted, because closing the player navigates
+   * nowhere and so remounts nothing. A version somewhere central is the cheapest way
+   * for the screens that care to notice.
+   */
+  catalogVersion: number;
 
   setTheme: (t: Theme) => void;
   setDensity: (d: Density) => void;
@@ -35,6 +46,8 @@ interface UiState {
   showBanner: (channelId: number) => void;
   hideBanner: () => void;
   pushDigit: (d: string) => void;
+  /** Say that the library has moved. */
+  bumpCatalog: () => void;
   clearDigits: () => void;
 }
 
@@ -58,6 +71,7 @@ export const useUi = create<UiState>((set, get) => ({
   player: null,
   banner: null,
   digits: '',
+  catalogVersion: 0,
 
   setTheme: (theme) => { applyDom(theme, get().density, get().animations); set({ theme }); },
   setDensity: (density) => { applyDom(get().theme, density, get().animations); set({ density }); },
@@ -74,6 +88,7 @@ export const useUi = create<UiState>((set, get) => ({
     set({ banner: { channelId, until: Date.now() + 5000 } }),
   hideBanner: () => set({ banner: null }),
   pushDigit: (d) => set((s) => ({ digits: (s.digits + d).slice(0, 4) })),
+  bumpCatalog: () => set((s) => ({ catalogVersion: s.catalogVersion + 1 })),
   clearDigits: () => set({ digits: '' }),
 }));
 

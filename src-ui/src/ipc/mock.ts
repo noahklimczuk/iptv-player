@@ -482,6 +482,66 @@ function filterCounts(kind: PlaylistKind): FilterCounts {
 const asMovie = (m: Movie): CatalogItem => ({ kind: 'movie', ...m });
 const asSeries = (s: Series): CatalogItem => ({ kind: 'series', ...s });
 
+/**
+ * What the mock can honestly say about recommendations.
+ *
+ * Not the algorithm — that lives in `aurora_core::recommend`, is 60% genre affinity
+ * with recency decay, rating fit, era and a diversity penalty, and has twenty unit
+ * tests. Reimplementing it here would be the exact mistake this project keeps making:
+ * a mock that agrees with the UI while the host disagrees.
+ *
+ * What this does instead is produce the same *shape* — items plus a per-item reason,
+ * ranked so that something sharing a genre with watch history comes first — so the
+ * screens are developable in a browser. The host decides what anybody actually sees.
+ */
+function buildRecommended(limit: number) {
+  const watched = [...progress.values()]
+    .filter((p) => p.itemKind === 'movie')
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const seen = new Set(watched.map((p) => `movie:${p.itemId}`));
+  const liked = watched
+    .map((p) => visibleMovies().find((m) => m.id === p.itemId))
+    .filter((m): m is NonNullable<typeof m> => !!m);
+  const taste = new Map<string, number>();
+  for (const m of liked) {
+    for (const g of m.genres) taste.set(g, (taste.get(g) ?? 0) + 1 / m.genres.length);
+  }
+
+  const scored = visibleMovies()
+    .filter((m) => !seen.has(`movie:${m.id}`))
+    .map((m) => {
+      const affinity = m.genres.reduce((sum, g) => sum + (taste.get(g) ?? 0), 0);
+      return { m, score: affinity * 3 + (m.rating ?? 0) / 10 };
+    })
+    .sort((a, b) => b.score - a.score || a.m.id - b.m.id)
+    .slice(0, limit);
+
+  const reasons: Record<string, string> = {};
+  for (const { m } of scored) {
+    const strongest = [...m.genres].sort((a, b) => (taste.get(b) ?? 0) - (taste.get(a) ?? 0))[0];
+    const anchorTitle = strongest
+      ? liked.find((l) => l.genres.includes(strongest))?.title
+      : undefined;
+    reasons[`movie:${m.id}`] = anchorTitle
+      ? `Because you watched ${anchorTitle}`
+      : strongest
+        ? `More ${strongest}`
+        : 'Highly rated';
+  }
+
+  const personalised = liked.length > 0;
+  const top = [...taste.entries()].sort((a, b) => b[1] - a[1]).map(([g]) => g);
+  const title = !personalised
+    ? 'Worth a look'
+    : top.length > 1
+      ? `More ${top[0]} and ${top[1]}`
+      : top.length === 1
+        ? `More ${top[0]}`
+        : 'Recommended for you';
+
+  return { title, items: scored.map(({ m }) => asMovie(m)), reasons, personalised };
+}
+
 function buildRails(): Rail[] {
   // The home page is a view of the library, so it is the filtered library it views.
   const shownMovies = visibleMovies();
@@ -541,12 +601,15 @@ function buildRails(): Rail[] {
       items: byRating.slice(0, 10).map(asMovie),
     },
     { id: 'recent', kind: 'recentlyAdded', title: 'Recently Added', items: byAdded.slice(0, 20).map(asMovie) },
-    {
-      id: 'because', kind: 'becauseYouWatched',
-      title: `Because you watched ${shownMovies[3]!.title}`,
-      reason: shownMovies[3]!.title,
-      items: shownMovies.slice(60, 80).map(asMovie),
-    },
+    // Was "Because you watched <the fourth film in the fixture>", which was true of
+    // nothing. Now the same rail the host builds, from the same history.
+    (() => {
+      const r = buildRecommended(24);
+      return {
+        id: 'recommended', kind: 'becauseYouWatched' as const,
+        title: r.title, reasons: r.reasons, items: r.items,
+      };
+    })(),
     {
       id: 'mylist', kind: 'myList', title: 'My List',
       items: [...myList].flatMap((key): CatalogItem[] => {
@@ -999,6 +1062,7 @@ type Handler<K extends CommandName> = (
 
 const handlers: { [K in CommandName]: Handler<K> } = {
   'library.rails': () => buildRails(),
+  'library.recommended': ({ limit }) => buildRecommended(limit ?? 40),
   'library.movies': ({ sort, limit, offset, genre }) => {
     const all = visibleMovies();
     let list = genre ? all.filter((m) => m.genres.includes(genre)) : [...all];
