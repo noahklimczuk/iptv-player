@@ -1723,6 +1723,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       epgMatched: fx.channels.length - 2,
       epgUnmatched: fx.channels.slice(-2).map((c) => c.name),
       warnings: [],
+      // A clean import loses nothing, which is what the host reports too.
+      dropped: { hiddenByRule: 0, kindExcluded: 0, noStreamId: 0, noEpisodeMarker: 0 },
     };
   },
 };
