@@ -227,10 +227,11 @@ impl Taste {
     /// The provider categories they watch most, strongest first.
     ///
     /// Used to *fetch* candidates, not to describe them. A library of 146,000 rows
-    /// cannot be loaded to find twenty, and an arbitrary slice of it — the best-rated
-    /// N, say — need not contain a single title from the shelves this viewer actually
-    /// watches. On a panel that publishes no ratings, which is most of them until
-    /// TMDB enrichment runs, that slice is effectively random.
+    /// cannot be loaded to find twenty, and a slice of it — the best-rated N, say —
+    /// need not contain a single title from the shelves this viewer actually watches.
+    /// That holds however good the ordering is: keeping the provider's own ratings
+    /// (docs/DECISIONS.md D26) made the slice sorted rather than arbitrary, and it is
+    /// still the wrong twenty thousand rows.
     pub fn top_categories(&self, n: usize) -> Vec<String> {
         top(&self.categories, n)
     }

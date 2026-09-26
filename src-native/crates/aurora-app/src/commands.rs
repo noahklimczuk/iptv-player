@@ -365,7 +365,7 @@ pub fn library_browse_facets(
     )?;
     Ok(BrowseFacets {
         categories: library::categories(&db, kind)?,
-        genres: library::genres(&db)?,
+        genres: library::genres(&db, kind)?,
         total: if series {
             library::count_series(&db, &q)?
         } else {
@@ -377,7 +377,14 @@ pub fn library_browse_facets(
 #[tauri::command(async)]
 pub fn library_genres(services: State<'_, Services>) -> Result<Vec<String>> {
     let db = services.db.lock();
-    Ok(library::genres(&db)?)
+    // Both halves: this one is "every genre in the library". A browse screen wants
+    // only its own kind's and asks `library_browse_facets`, which is where offering
+    // the other half's became a filter that matched nothing.
+    let mut all = library::genres(&db, filtering::Kind::Movies)?;
+    all.extend(library::genres(&db, filtering::Kind::Series)?);
+    all.sort();
+    all.dedup();
+    Ok(all)
 }
 
 #[derive(Debug, Deserialize)]

@@ -838,6 +838,9 @@ export interface Commands {
     /** Path the unreadable library was moved to, when startup had to replace it. */
     libraryWasReplaced: string | null;
     credentialsPersist: boolean;
+    /** What is decoding video. `rendersVideo: false` is the whole explanation for an
+     *  empty window — this build was never going to produce a picture. */
+    videoEngine: { name: string; version: string | null; rendersVideo: boolean };
   };
 
   'search.query': (args: { text: string }) => SearchResults;

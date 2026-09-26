@@ -9,20 +9,36 @@ that blocked every provider logo), `progress.save` called only by the mock, a pr
 bar fed from the mock's own memory: each one looked perfect in a browser and was dead
 on a real machine, because the thing under test answered its own questions.
 
-This harness closes that. It builds the actual Tauri binary, runs it under Xvfb against
-a real SQLite database, and drives it over WebDriver. The transport is the real IPC, the
-commands are the real Rust, the library is a real file on disk.
+This harness closes that. It runs the actual Tauri binary against a real SQLite
+database and drives it over WebDriver. The transport is the real IPC, the commands are
+the real Rust, the library is a real file on disk.
 
-What it still cannot show: libmpv. `aurora-player` falls back to `NullBackend` off
-Windows, so video compositing and the Win32 surface remain Windows-only questions. It
-covers everything up to the point where a picture would appear.
+It runs on either platform, and which one matters more than it looks. On Linux it
+drives WebKitGTK under Xvfb, and `aurora-player` is the `NullBackend` — so every
+scenario up to the point where a picture would appear is covered, and the picture
+itself is not. On Windows it drives WebView2, which is what ships, and the backend is
+the real libmpv one. The Win32 child surface and its z-order under a transparent
+WebView2 can only be seen there.
 
-Requires: Xvfb, WebKitWebDriver (`apt install webkit2gtk-driver`) and `tauri-driver`
-(`cargo install tauri-driver`). `run.sh` checks for all three.
+Requires `tauri-driver` (`cargo install tauri-driver`) on both, plus Xvfb and
+WebKitWebDriver (`apt install webkit2gtk-driver`) on Linux, or Microsoft Edge WebDriver
+on Windows. `run.py` checks for whichever set applies; docs/TESTING_THE_HOST.md and
+docs/TESTING_ON_WINDOWS.md say how to get them.
 """
-import base64, json, time, urllib.request, urllib.error
+import base64, json, re, time, urllib.request, urllib.error
 
 BASE = "http://127.0.0.1:4444"
+
+
+def wire_command(name):
+    """The host's name for a command the UI spells in its own way.
+
+    `src-ui/src/ipc/index.ts` sends `library.browseFacets` across as
+    `library_browse_facets`. A name already in the host's spelling has no dots and no
+    capitals, so it passes through untouched.
+    """
+    return re.sub(r"[A-Z]", lambda m: "_" + m.group(0).lower(), name.replace(".", "_"))
+
 
 class WD:
     def __init__(self, exe, data_dir=None):
@@ -81,14 +97,25 @@ class WD:
     def invoke(self, command, args=None):
         """Call a host command over the same bridge the UI uses.
 
-        Command names cross as `module_action` (see `src-ui/src/ipc/index.ts`), and
-        arguments go under `args` because every command takes them as one struct.
+        The name is translated the way the UI translates it, so a scenario can write
+        `app.diagnostics` — what the UI calls it, and what is greppable — and reach
+        `app_diagnostics`, which is what the host registered. Either spelling works.
+        Arguments go under `args` because every command takes them as one struct.
+
+        A refusal is raised carrying what the host actually said. Letting the promise
+        reject instead gives "Could not parse script result" from the driver, which
+        reads like a broken harness and is in fact a command that does not exist.
         """
-        return self.js(
+        got = self.js(
             "const [c, a] = arguments;"
-            " return window.__TAURI_INTERNALS__.invoke(c, a === null ? {} : { args: a });",
-            command, args,
+            " return window.__TAURI_INTERNALS__.invoke(c, a === null ? {} : { args: a })"
+            "   .then((v) => ({ ok: true, value: v === undefined ? null : v }))"
+            "   .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));",
+            wire_command(command), args,
         )
+        if not got.get("ok"):
+            raise AssertionError(f"the host refused {command!r}: {got.get('error')}")
+        return got["value"]
 
     def by_label(self, label, timeout=15):
         """An input by its `aria-label`. The wizard's fields have no ids."""

@@ -73,6 +73,19 @@ export default function App() {
   );
 
   const { data: providers, reload: reloadProviders } = useCommand('providers.list', undefined, []);
+  /**
+   * The viewer asked to get on without setting a provider up.
+   *
+   * Needed because `needsSetup` below is *also* true while no provider exists — the
+   * guard that stops Aurora opening as an empty shell — so dismissing the wizard put
+   * it straight back on screen and "Skip for now" was a button that did nothing. It
+   * looked fine in a browser only because the mock ships with a provider already in
+   * it, so the one case where skipping matters was the one case never tested.
+   *
+   * Deliberately not persisted: *for now* means this run, and the next launch asks
+   * again, which is what the button says.
+   */
+  const [setupSkipped, setSetupSkipped] = useState(false);
   // Settings can open the same wizard first run uses, to add a second provider.
   const [addingProvider, setAddingProvider] = useState(false);
   const { data: channels } = useCommand('channels.list', {}, []);
@@ -272,7 +285,7 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [ui.banner, ui]);
 
-  const needsSetup = !setupDone || providers?.length === 0;
+  const needsSetup = (!setupDone || providers?.length === 0) && !setupSkipped;
   if (needsSetup || addingProvider) {
     return (
       <SetupWizard
@@ -282,6 +295,10 @@ export default function App() {
           setAddingProvider(false);
           // The settings list is stale the moment a provider is added.
           reloadProviders();
+        }}
+        onSkip={() => {
+          setSetupSkipped(true);
+          setAddingProvider(false);
         }}
       />
     );

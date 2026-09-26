@@ -120,6 +120,36 @@ impl LoadOptions {
     }
 }
 
+/// Which video engine is actually running.
+///
+/// A black rectangle has two completely different causes — libmpv never loaded, or it
+/// loaded and the compositing is wrong — and until now the only way to tell them apart
+/// was to find `aurora.log` and read it. That is a fine answer for whoever wrote the
+/// code and no answer at all for the person watching. This is the same fact somewhere
+/// a viewer, a support message and a test can each reach.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Engine {
+    /// `mpv`, or `null` for a build that decodes nothing.
+    pub name: String,
+    /// What the engine says about itself (`mpv 0.40.0`), where it says anything.
+    pub version: Option<String>,
+    /// Whether this engine produces a picture at all. `false` is the entire
+    /// explanation for an empty window: there was never going to be one.
+    pub renders_video: bool,
+}
+
+impl Engine {
+    /// The engine that decodes nothing — `NullBackend`, and every test double.
+    pub fn null() -> Self {
+        Self {
+            name: "null".into(),
+            version: None,
+            renders_video: false,
+        }
+    }
+}
+
 /// Everything the app needs from a video engine. Implemented by `MpvBackend` on Windows
 /// and `NullBackend` everywhere else.
 pub trait PlayerBackend: Send {
@@ -154,6 +184,14 @@ pub trait PlayerBackend: Send {
     fn attach(&mut self, parent: isize, width: u32, height: u32) -> Result<(), PlayerError> {
         let _ = (parent, width, height);
         Ok(())
+    }
+
+    /// Which engine this is — see [`Engine`].
+    ///
+    /// Defaulted rather than required because the honest answer for anything that has
+    /// not overridden it, a test double or a future stub, is that it renders nothing.
+    fn engine(&self) -> Engine {
+        Engine::null()
     }
 
     /// Drain whatever the player has to say and fold it into its state.
@@ -381,6 +419,25 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(probe(&vod.mpv_options()).as_deref(), Some("8000000"));
+    }
+
+    /// The null backend is the answer to "why is there no picture", so it has to
+    /// say so outright rather than leave a caller to infer it from a missing field.
+    #[test]
+    fn the_null_backend_admits_it_renders_nothing() {
+        let engine = NullBackend::default().engine();
+        assert_eq!(engine.name, "null");
+        assert_eq!(engine.version, None);
+        assert!(!engine.renders_video);
+    }
+
+    /// The Settings screen reads these names. A rename here without one there shows
+    /// up as a blank line rather than an error, which is the worst way to find out.
+    #[test]
+    fn the_engine_serialises_with_the_names_the_ui_reads() {
+        let json = serde_json::to_string(&Engine::null()).unwrap();
+        assert!(json.contains(r#""rendersVideo":false"#), "{json}");
+        assert!(json.contains(r#""name":"null""#), "{json}");
     }
 
     #[test]

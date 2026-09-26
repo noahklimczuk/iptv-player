@@ -1297,6 +1297,11 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     dataDir: 'C:\\Users\\You\\AppData\\Local\\Aurora TV',
     libraryWasReplaced: null,
     credentialsPersist: true,
+    // Consistent with the rest of this fiction, which is an installed Windows copy.
+    // The other answer — no engine, no picture — is not mocked on purpose: a mock
+    // that can produce it would be testing itself. `tests-host` on Linux reports it
+    // for real, because there the backend genuinely is the null one.
+    videoEngine: { name: 'mpv', version: 'mpv 0.40.0', rendersVideo: true },
   }),
 
   'search.query': ({ text }) => search(text),

@@ -138,12 +138,15 @@ pub fn already_seen(conn: &Connection, profile_id: i64) -> Result<Vec<(Kind, i64
 ///
 /// The naive version of this — "the best-rated N rows" — is what it started as, and
 /// it does not work on a real subscription. 117,508 films and 28,528 shows cannot all
-/// be loaded to pick twenty, so something has to be sliced off; but a panel that
-/// publishes no ratings (which is all of them until TMDB enrichment has run) makes
-/// that slice effectively arbitrary, and an arbitrary slice of 146,000 rows need not
-/// contain a single title from the shelves this viewer watches. Measured against a
-/// real panel: three films watched off "NL ✪ FILMS [SUB]" (7,578 titles) and not one
-/// of them was in the pool.
+/// be loaded to pick twenty, so something has to be sliced off; and a slice of the
+/// best-rated 146,000 rows need not contain a single title from the shelves this
+/// viewer watches. Measured against a real panel: three films watched off
+/// "NL ✪ FILMS [SUB]" (7,578 titles) and not one of them was in the pool.
+///
+/// That was true when the ratings were all NULL and the ordering was therefore
+/// arbitrary, and it stays true now that the provider's own ratings are kept
+/// (docs/DECISIONS.md D26) — a sorted slice is a *better* slice, and still the wrong
+/// 20,000 rows. What the ratings changed is the ranking, not the retrieval.
 ///
 /// So retrieval is directed by the taste rather than independent of it: each shelf and
 /// genre the viewer actually watches contributes its own best rows, and a smaller
@@ -193,9 +196,10 @@ pub fn candidates(
         }
 
         // And something to discover from, so a viewer is not walled into what they
-        // have already told us. Newest first rather than best-rated: without TMDB
-        // there are no ratings to sort by, and "what arrived most recently" is at
-        // least a real ordering.
+        // have already told us. `ORDER_BY` puts a rating first and the added date
+        // second, and both are real now that the provider's own are kept
+        // (docs/DECISIONS.md D26) — this used to fall through to row order on any
+        // library that had never been enriched, which was most of them.
         let sql = format!(
             "{} WHERE hidden = 0
                AND ( (genres IS NOT NULL AND genres != '' AND genres != '[]')
@@ -439,9 +443,13 @@ mod tests {
         assert_eq!(seen, vec![(Kind::Movie, 1), (Kind::Series, 1)]);
     }
 
-    /// The bug this covers: genres come from TMDB enrichment, which needs an API key.
-    /// Demanding one meant that on a freshly imported library the pool was empty and
-    /// the rail never appeared at all.
+    /// The bug this covers: a film's genres come from TMDB enrichment, which needs an
+    /// API key. Demanding one meant that on a freshly imported library the pool was
+    /// empty and the rail never appeared at all.
+    ///
+    /// Still true for films after D26 — `get_vod_streams` sends no genre, and the
+    /// endpoint that does is one request per film — so the provider's shelf remains
+    /// the only thing a film can be retrieved by on an un-enriched library.
     #[test]
     fn a_row_with_only_a_provider_category_is_still_a_candidate() {
         let conn = seeded();

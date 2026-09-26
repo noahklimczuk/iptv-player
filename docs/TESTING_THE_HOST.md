@@ -24,7 +24,7 @@ commands are the real Rust, and the assertions are about what is on disk afterwa
 ## Running it
 
 ```sh
-npm run build                                      # the UI is embedded at compile time
+pnpm run build                                     # the UI is embedded at compile time
 cargo build --release -p aurora-app --manifest-path src-native/Cargo.toml
 python3 tests-host/run.py                          # all scenarios
 python3 tests-host/run.py starts_up                # one of them
@@ -56,10 +56,14 @@ marker itself.
 
 ## What it cannot show
 
-libmpv. `aurora-player` falls back to `NullBackend` off Windows, so video compositing,
-the Win32 child surface and the `HWND_BOTTOM` ordering stay Windows-only questions.
-The harness covers everything up to the point where a picture would appear — which, as
-it turns out, is where most of the bugs were.
+libmpv — on Linux. `aurora-player` falls back to `NullBackend` here, so video
+compositing, the Win32 child surface and the `HWND_BOTTOM` ordering stay Windows-only
+questions. This covers everything up to the point where a picture would appear —
+which, as it turns out, is where most of the bugs were.
+
+The same nine scenarios run on Windows, where the backend is the real one and a
+picture either appears or does not. `docs/TESTING_ON_WINDOWS.md` is how to get there;
+`tests-host/bootstrap.ps1` does the setting up.
 
 ## What driving it for real found immediately
 

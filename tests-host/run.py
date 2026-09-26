@@ -19,8 +19,8 @@ A `portable.txt` beside the executable then puts both the log and the library in
 """
 import importlib.util
 import os
+import pathlib
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -35,16 +35,26 @@ from fakegithub import FakeGitHub  # noqa: E402
 # `AURORA_TEST_EXE=…/target/debug/aurora-app` runs the same scenarios against a debug
 # build. Worth having for one reason: a debug build unwinds where a release build
 # aborts, so a panic that kills the shipped app can be inspected in a live window here.
+WINDOWS = os.name == "nt"
+
+# The only place the two platforms disagree about what to launch. Everything else
+# below asks `WINDOWS` rather than branching on a path.
+APP_EXE = "aurora-app.exe" if WINDOWS else "aurora-app"
+
 EXE = os.environ.get(
     "AURORA_TEST_EXE",
-    os.path.join(ROOT, "src-native", "target", "release", "aurora-app"),
+    os.path.join(ROOT, "src-native", "target", "release", APP_EXE),
 )
 EXE_DIR = os.path.dirname(EXE)
+# What to kill when a process outlives its session — see `kill()`.
+APP_NAME = os.path.splitext(os.path.basename(EXE))[0]
 # Where `portable_dir()` puts everything: `<exe dir>/data`, holding library.db and
 # aurora.log. Wiped between scenarios.
 DATA = os.path.join(EXE_DIR, "data")
 SHOTS = os.path.join(ROOT, "screenshots", "host")
 FIXTURES = os.path.join(ROOT, "tests-host", "fixtures")
+# Linux only: Windows runs the app on the real desktop, and there has to be one —
+# see docs/TESTING_ON_WINDOWS.md on why a service session will not do.
 DISPLAY = ":99"
 FIXTURE_PORT = 8099
 DRIVER_PORT = 4444
@@ -56,6 +66,68 @@ DRIVER_PORT = 4444
 # and only when the app's own log shows no panic. A host that died is what this suite
 # exists to catch and must never be retried away.
 DRIVER_RETRIES = 2
+
+
+def read_only(path):
+    """A read-only SQLite URI for a path, on either platform.
+
+    `file:{path}?mode=ro` is fine until the path is `C:\\Users\\…`: a URI cannot carry
+    backslashes, and SQLite reads what survives as a relative path that does not
+    exist — so every `count()` in every scenario would raise "unable to open database
+    file" and the harness would look broken rather than the app. `as_uri()` gives
+    `file:///C:/Users/…`, which both platforms accept.
+    """
+    return pathlib.Path(path).absolute().as_uri() + "?mode=ro"
+
+
+def kill(*names):
+    """Stop these by executable name, however this platform spells that.
+
+    Best-effort by design: it is called to clear the way, and a name that was not
+    running is the outcome it wanted anyway.
+    """
+    quiet = dict(check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for name in names:
+        if WINDOWS:
+            subprocess.run(["taskkill", "/F", "/T", "/IM", f"{name}.exe"], **quiet)
+        else:
+            # `-x`, not `-f`: matching the whole command line makes the pattern match
+            # this script's own, and killing your own shell is a confusing way to
+            # discover that.
+            subprocess.run(["pkill", "-x", name], **quiet)
+
+
+def wipe_data(tries=12):
+    """Delete this scenario's library, and be sure it is actually gone.
+
+    `rmtree(..., ignore_errors=True)` is a silent no-op against a file another process
+    still holds open — which on Windows is every file the app has, right until it
+    exits. That would not fail; it would hand the next scenario the last one's
+    library, and "an empty database is a state that only happens once" would quietly
+    stop being true. Exactly the class of bug this suite exists to catch, so it is
+    worth failing loudly over.
+
+    Linux unlinks an open file happily, so the first pass almost always returns and
+    none of the rest of this runs there.
+    """
+    for attempt in range(tries):
+        shutil.rmtree(DATA, ignore_errors=True)
+        if not os.path.exists(DATA):
+            return
+        # Halfway through, stop waiting politely for the last app to exit.
+        if attempt == tries // 2:
+            kill(APP_NAME)
+        time.sleep(0.5)
+
+    left = [
+        os.path.join(root, f)
+        for root, _dirs, files in os.walk(DATA)
+        for f in files
+    ]
+    raise RuntimeError(
+        "could not clear the scenario's library — something still holds it open:\n  "
+        + "\n  ".join(left[:10])
+    )
 
 
 class Ctx:
@@ -117,7 +189,7 @@ class Ctx:
         return os.path.exists(self.db_path())
 
     def _query(self, sql):
-        con = sqlite3.connect(f"file:{self.db_path()}?mode=ro", uri=True)
+        con = sqlite3.connect(read_only(self.db_path()), uri=True)
         try:
             return con.execute(sql).fetchone()[0]
         finally:
@@ -132,7 +204,7 @@ class Ctx:
         under test is how the mock/host gap opened in the first place; this is the
         other direction, and it is the one that checks the work.
         """
-        con = sqlite3.connect(f"file:{self.db_path()}?mode=ro", uri=True)
+        con = sqlite3.connect(read_only(self.db_path()), uri=True)
         try:
             return con.execute(sql, args).fetchall()
         finally:
@@ -181,26 +253,47 @@ def _is_transport_error(e):
     )
 
 
+# What has to be out of the way before tauri-driver can bind the port again. It shells
+# out to the platform's own WebDriver — WebKit's on Linux, Microsoft Edge's for WebView2
+# on Windows — and a stuck one holds the port whichever it is.
+NATIVE_DRIVER = "msedgedriver" if WINDOWS else "WebKitWebDriver"
+
+
+def start_driver(stderr_path, github, append):
+    """tauri-driver, wired to the fake releases API — the only one the app accepts."""
+    env = dict(os.environ, AURORA_UPDATE_API=github.url)
+    if not WINDOWS:
+        env["DISPLAY"] = DISPLAY
+
+    cmd = ["tauri-driver", "--port", str(DRIVER_PORT)]
+    # Microsoft Edge WebDriver has to match the installed WebView2 runtime build, so
+    # the right one is often not the one on PATH. `AURORA_NATIVE_DRIVER` names it.
+    native = os.environ.get("AURORA_NATIVE_DRIVER")
+    if native:
+        cmd += ["--native-driver", native]
+
+    log = open(stderr_path, "a" if append else "w")
+    proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
+    time.sleep(3)
+    return proc
+
+
 def restart_driver(procs, stderr_path, github):
-    """Bring `tauri-driver` back up, leaving Xvfb and the fixtures alone."""
+    """Bring `tauri-driver` back up, leaving the display and the fixtures alone."""
     for p in procs:
         if "tauri-driver" in " ".join(p.args):
             try:
-                p.send_signal(signal.SIGTERM)
+                p.terminate()
                 p.wait(timeout=10)
             except Exception:
                 pass
     procs = [p for p in procs if "tauri-driver" not in " ".join(p.args)]
-    for name in ("tauri-driver", "WebKitWebDriver"):
-        subprocess.run(["pkill", "-x", name], check=False)
+    # The app too: on Windows it holds the library open, and `wipe_data` cannot clear
+    # a scenario that is about to be retried while the last attempt is still running.
+    kill("tauri-driver", NATIVE_DRIVER, APP_NAME)
     time.sleep(2)
 
-    env = dict(os.environ, DISPLAY=DISPLAY, AURORA_UPDATE_API=github.url)
-    log = open(stderr_path, "a")
-    procs.append(subprocess.Popen(
-        ["tauri-driver", "--port", str(DRIVER_PORT)],
-        env=env, stdout=log, stderr=subprocess.STDOUT))
-    time.sleep(3)
+    procs.append(start_driver(stderr_path, github, append=True))
     return procs, stderr_path, github
 
 
@@ -219,12 +312,16 @@ def wait_for_port(port, timeout=20):
 
 
 def start_background():
-    """Xvfb, the fixture provider, and tauri-driver. Returns them for teardown."""
+    """A display, the fixture provider, and tauri-driver. Returns them for teardown."""
     procs = []
     devnull = subprocess.DEVNULL
-    procs.append(subprocess.Popen(
-        ["Xvfb", DISPLAY, "-screen", "0", "1440x900x24"], stdout=devnull, stderr=devnull))
-    time.sleep(2)
+    if not WINDOWS:
+        # Xvfb is how a headless Linux container gets a desktop. Windows has a real one
+        # already — and needs it: see docs/TESTING_ON_WINDOWS.md.
+        procs.append(subprocess.Popen(
+            ["Xvfb", DISPLAY, "-screen", "0", "1440x900x24"],
+            stdout=devnull, stderr=devnull))
+        time.sleep(2)
 
     procs.append(subprocess.Popen(
         [sys.executable, "-m", "http.server", str(FIXTURE_PORT)],
@@ -235,28 +332,41 @@ def start_background():
     # because a scenario needs to ask it what the app requested.
     github = FakeGitHub().start()
 
-    env = dict(os.environ, DISPLAY=DISPLAY)
-    # Loopback only, which is the only thing the app will accept (see `test_api_base`).
-    env["AURORA_UPDATE_API"] = github.url
+    # The app only accepts a loopback update API (see `test_api_base`), which is what
+    # `FakeGitHub` binds — `start_driver` puts it in the environment the app inherits.
     stderr_path = os.path.join(SHOTS, "host-stderr.log")
-    log = open(stderr_path, "w")
-    procs.append(subprocess.Popen(
-        ["tauri-driver", "--port", str(DRIVER_PORT)],
-        env=env, stdout=log, stderr=subprocess.STDOUT))
-    time.sleep(3)
+    procs.append(start_driver(stderr_path, github, append=False))
     return procs, stderr_path, github
 
 
 def main():
     if not os.path.exists(EXE):
+        if WINDOWS:
+            # Building here needs an MSVC toolchain and libmpv's import library, which
+            # is why the usual answer on Windows is to run a release build rather than
+            # make one. `bootstrap.ps1` fetches and unpacks it.
+            sys.exit(
+                f"nothing at {EXE}\n"
+                f"get a build first:  powershell -ExecutionPolicy Bypass "
+                f"-File tests-host\\bootstrap.ps1\n"
+                f"then point AURORA_TEST_EXE at it — see docs/TESTING_ON_WINDOWS.md"
+            )
         sys.exit(
             f"build it first:  cargo build --release -p aurora-app\n"
             f"(nothing at {EXE})"
         )
     print(f"exe: {EXE}")
-    for tool in ("Xvfb", "WebKitWebDriver", "tauri-driver"):
+    doc = "docs/TESTING_ON_WINDOWS.md" if WINDOWS else "docs/TESTING_THE_HOST.md"
+    needed = ["tauri-driver"]
+    if WINDOWS:
+        # Unless one is named outright, in which case it need not be on PATH.
+        if not os.environ.get("AURORA_NATIVE_DRIVER"):
+            needed.append(NATIVE_DRIVER)
+    else:
+        needed += ["Xvfb", NATIVE_DRIVER]
+    for tool in needed:
         if not shutil.which(tool):
-            sys.exit(f"{tool} is not installed — see docs/TESTING_THE_HOST.md")
+            sys.exit(f"{tool} is not installed — see {doc}")
 
     # Portable mode, so the library and the log land somewhere a scenario can read
     # them instead of under this container's XDG data directory.
@@ -289,7 +399,7 @@ def main():
 
             # A fresh library per scenario: an empty database is a state that only
             # happens once, and it is the one that has never been tested.
-            shutil.rmtree(DATA, ignore_errors=True)
+            wipe_data()
             since = os.path.getsize(stderr_path) if os.path.exists(stderr_path) else 0
 
             print(f"── {name}")
@@ -322,7 +432,7 @@ def main():
                         d.quit()
                     d = None
                     procs, stderr_path, github = restart_driver(procs, stderr_path, github)
-                    shutil.rmtree(DATA, ignore_errors=True)
+                    wipe_data()
                     since = os.path.getsize(stderr_path) if os.path.exists(stderr_path) else 0
                     ctx = Ctx(name, stderr_path, since)
                     ctx.github = github
@@ -368,7 +478,7 @@ def main():
         github.stop()
         for p in procs:
             try:
-                p.send_signal(signal.SIGTERM)
+                p.terminate()
             except Exception:
                 pass
 

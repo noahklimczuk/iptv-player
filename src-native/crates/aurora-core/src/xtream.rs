@@ -185,6 +185,57 @@ pub struct SeriesListing {
     pub release_date: Option<String>,
     #[serde(default, deserialize_with = "lenient_vec")]
     pub backdrop_path: Vec<String>,
+    /// Out of ten, as a string on most panels and a number on some.
+    #[serde(default, deserialize_with = "lenient_f32")]
+    pub rating: Option<f32>,
+    /// Comma-separated — `Crime, Drama`. The single most valuable field here: genres
+    /// otherwise come only from TMDB, and 27,661 of the 28,716 shows on the panel in
+    /// docs/ROADMAP.md carry one while a library without an API key has none at all.
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub genre: Option<String>,
+    /// Unix seconds. Stands in for an added date, which `get_series` does not send.
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub last_modified: Option<String>,
+}
+
+impl SeriesListing {
+    /// The genres, split the way panels write them.
+    ///
+    /// Empty rather than `["n/a"]` for the placeholders panels use, because an empty
+    /// list means "unknown" everywhere downstream and a made-up genre would be matched
+    /// against, recommended from and shown to somebody.
+    pub fn genres(&self) -> Vec<String> {
+        split_genres(self.genre.as_deref())
+    }
+}
+
+/// Split a panel's genre string into the list the library stores.
+///
+/// The whole string is checked for a placeholder before anything is split, because
+/// `/` is both a separator panels use (`Comedy/Romance`) and half of the commonest
+/// way they write "nothing here" — and splitting first turns `n/a` into two genres
+/// called "n" and "a".
+pub fn split_genres(raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw else { return Vec::new() };
+    if is_placeholder(raw) {
+        return Vec::new();
+    }
+    raw.split([',', '|', '/'])
+        .map(str::trim)
+        .filter(|g| !is_placeholder(g))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether this is a panel's way of saying it does not know.
+///
+/// Left in, any of these becomes a genre that is matched against, recommended from,
+/// and eventually shown to somebody as though it meant something.
+fn is_placeholder(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "" | "n/a" | "n\\a" | "na" | "none" | "null" | "unknown" | "-" | "--"
+    )
 }
 
 /// `get_series_info` for one show: the seasons and their episodes.
@@ -537,6 +588,68 @@ mod tests {
         assert_eq!(partly.episodes.len(), 1, "the good episode survived");
     }
 
+    /// The panel in docs/ROADMAP.md sends a genre for 27,661 of its 28,716 shows, and
+    /// this is the only genre a library without a TMDB key will ever have.
+    #[test]
+    fn a_shows_genres_are_split_the_way_panels_write_them() {
+        let listing: SeriesListing =
+            parse_json(r#"{"series_id":1,"genre":"Crime, Drama"}"#).unwrap();
+        assert_eq!(listing.genres(), vec!["Crime", "Drama"]);
+
+        // Pipes and slashes turn up as often as commas.
+        assert_eq!(
+            split_genres(Some("Action | Sci-Fi")),
+            vec!["Action", "Sci-Fi"]
+        );
+        assert_eq!(
+            split_genres(Some("Comedy/Romance")),
+            vec!["Comedy", "Romance"]
+        );
+    }
+
+    /// A placeholder is not a genre. Left in, it would be matched against, recommended
+    /// from, and eventually shown to somebody as though it meant something.
+    #[test]
+    fn placeholder_genres_are_not_genres() {
+        for raw in ["", "  ", "n/a", "N/A", "None", "-", ", ,"] {
+            assert!(
+                split_genres(Some(raw)).is_empty(),
+                "{raw:?} should not have become a genre"
+            );
+        }
+        assert!(split_genres(None).is_empty());
+    }
+
+    /// Ratings arrive as a string on most panels and a number on a few; both are the
+    /// same score. `last_modified` stands in for an added date `get_series` omits.
+    #[test]
+    fn a_shows_rating_and_timestamp_survive_either_shape() {
+        let a: SeriesListing =
+            parse_json(r#"{"series_id":1,"rating":"9","last_modified":"1741614903"}"#).unwrap();
+        let b: SeriesListing = parse_json(r#"{"series_id":1,"rating":9}"#).unwrap();
+        assert_eq!(a.rating, Some(9.0));
+        assert_eq!(b.rating, a.rating);
+        assert_eq!(a.last_modified.as_deref(), Some("1741614903"));
+    }
+
+    /// The shape actually observed on the panel, field for field, so a rename upstream
+    /// shows up here rather than as a library that quietly loses its genres.
+    #[test]
+    fn a_real_series_row_keeps_everything_worth_keeping() {
+        let listing: SeriesListing = parse_json(
+            r#"{"num":1,"name":"Some Show","series_id":42,"cover":"c.jpg",
+                "plot":"A plot.","cast":"A, B","director":"D","genre":"Crime, Drama",
+                "releaseDate":"2026-05-07","last_modified":"1741614903","rating":"9",
+                "rating_5based":4.5,"backdrop_path":["b.jpg"],"category_id":"7"}"#,
+        )
+        .unwrap();
+        assert_eq!(listing.series_id, Some(42));
+        assert_eq!(listing.plot.as_deref(), Some("A plot."));
+        assert_eq!(listing.genres(), vec!["Crime", "Drama"]);
+        assert_eq!(listing.rating, Some(9.0));
+        assert_eq!(listing.release_date.as_deref(), Some("2026-05-07"));
+        assert_eq!(listing.backdrop_path, vec!["b.jpg"]);
+    }
     /// An episode that carries its own season disagrees with nothing.
     #[test]
     fn an_episode_that_names_its_own_season_keeps_it() {

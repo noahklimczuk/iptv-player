@@ -508,3 +508,49 @@ signatures stands, and applies to the zip exactly as it does to the installer.
 to end on Linux — staging, the path refusals, applying, rolling back, the partial
 download — which is the point of keeping it out of `#[cfg(windows)]`. But "a running
 `.exe` can be renamed" is the load-bearing claim, and nothing here has yet renamed one.
+
+## D26 — The provider's metadata is kept, and enrichment outranks it
+
+Genres, ratings and plots came from exactly one place: TMDB enrichment. That needs an
+API key, a viewer may never set one, and until they do the library has none of the
+three. Meanwhile the panel had been sending all of it in a response the app already
+downloads, parses and throws away.
+
+Measured on the subscription in `docs/ROADMAP.md`:
+
+| Field | Sent for | Was kept |
+|---|---|---|
+| Film rating | 109,999 of 122,499 | no |
+| Film added-date | 122,499 of 122,499 | no |
+| Show genre | 27,661 of 28,716 | no |
+| Show plot | 27,390 of 28,716 | no |
+| Show rating | 24,182 of 28,716 | no |
+
+Two of those were doing visible damage. Genres are the recommender's heaviest signal
+(`GENRE_WEIGHT` is 0.45), so without a TMDB key the largest term in the score was
+always zero and every recommendation came from the provider's shelf names instead. And
+`added_at` fell back to the time of the import, which meant Browse's default
+"Recently added" order was sorting 117,508 films by a constant.
+
+**The rule: whoever has better data wins, and the panel never undoes enrichment.**
+TMDB's `vote_average` is a better number than a panel's, and TMDB genres are a
+controlled vocabulary while a panel's are free text. So enrichment overwrites what the
+import wrote — it already did, via `COALESCE(?, genres)` — and the import fills only
+what is still empty, via `COALESCE(series.genres, excluded.genres)` on conflict. A
+refresh can therefore never cost a library its enriched metadata, and a library that
+will never be enriched still has something.
+
+No migration: every column already existed and had been waiting for a writer.
+
+Writing them does not stop TMDB from running later. `enrichment::pending` picks work
+from the `enrichment` bookkeeping table — "never attempted, or failed long enough ago
+to retry" — and never looks at whether `rating` or `genres` are filled. What it does
+look at is `ORDER BY added_at DESC`, which until now was the same value for every row
+in a library, so it worked through 117,508 films in row order. With a real date there
+it enriches the newest first, which is where a viewer is looking.
+
+**Two things this deliberately does not do.** Cast and director are sent for shows and
+are not stored, because `credits` is keyed by TMDB person id and a free-text name has
+nowhere to go that would not need a second, weaker identity model. And films get no
+genre, because `get_vod_streams` does not send one — it is in `get_vod_info`, which is
+one request per film, or 122,499 of them.

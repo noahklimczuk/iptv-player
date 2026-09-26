@@ -23,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_EX_STYLE, WS_CHILD, WS_VISIBLE,
 };
 
-use crate::backend::{LoadOptions, PlayerBackend};
+use crate::backend::{Engine, LoadOptions, PlayerBackend};
 use crate::error::{PlaybackError, PlayerError};
 use crate::state::{Aspect, PlaybackStats, PlayerState, PlayerStatus, Track, TrackKind};
 
@@ -559,6 +559,17 @@ impl PlayerBackend for MpvBackend {
 
     fn pump(&mut self, timeout_secs: f64) {
         MpvBackend::pump(self, timeout_secs)
+    }
+
+    fn engine(&self) -> Engine {
+        Engine {
+            name: "mpv".into(),
+            // What libmpv reports for itself, e.g. `mpv 0.40.0`. A backend that exists
+            // at all has already initialised, so this answering is the ordinary case
+            // and `None` would itself be worth seeing.
+            version: self.mpv.get_property::<String>("mpv-version").ok(),
+            renders_video: true,
+        }
     }
 }
 

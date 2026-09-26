@@ -84,6 +84,37 @@ def run(d, ctx):
         f"'Live TV says No channels' report, reproduced. Got {counts}"
     )
 
+    # What the panel sends and the import used to parse and discard — see
+    # docs/DECISIONS.md D26. Read straight out of the library rather than off the
+    # screen, because these are the columns the recommender ranks on and only two of
+    # them are ever drawn.
+    #
+    # The thresholds are deliberately far below the measured coverage (90% of films
+    # rated, 96% of shows with a genre): this is here to catch the field being dropped
+    # again, not to pin the assertion to one subscription's exact numbers.
+    rated, dates, genred, plotted = ctx.rows(
+        """SELECT (SELECT count(*) FROM movies WHERE rating IS NOT NULL),
+                  (SELECT count(DISTINCT added_at) FROM movies),
+                  (SELECT count(*) FROM series WHERE genres IS NOT NULL),
+                  (SELECT count(*) FROM series WHERE overview IS NOT NULL)"""
+    )[0]
+    print(
+        f"   kept: {rated} films rated, {dates} distinct added-dates, "
+        f"{genred} shows with genres, {plotted} with a plot"
+    )
+    assert rated > counts["movies"] // 2, (
+        f"the panel scores most of its films and only {rated} of {counts['movies']} "
+        f"carry one — the import is dropping them again"
+    )
+    assert dates > 100, (
+        f"{counts['movies']} films imported with only {dates} distinct added-dates; "
+        f"'Recently added' is ordering by the time of the import"
+    )
+    assert genred > counts["series"] // 2, (
+        f"only {genred} of {counts['series']} shows have genres. Genres are the "
+        f"recommender's heaviest signal and this panel sends one for almost all of them"
+    )
+
     # Now the screen, which is the half that has been wrong before: a library full of
     # channels that the UI does not show is exactly bug #13.
     d.click(d.by_text("button", "Start watching"))

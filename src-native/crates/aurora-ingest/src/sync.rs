@@ -148,13 +148,21 @@ pub struct Fetched {
 }
 
 /// One show as the provider listed it, owned so it can outlive the HTTP client.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct FetchedSeries {
     provider_key: String,
     title: String,
     year: Option<i32>,
     poster: Option<String>,
     group: Option<String>,
+    /// Everything below is sent by `get_series` and was parsed and discarded until
+    /// now. On the panel in docs/ROADMAP.md that is a genre for 27,661 of 28,716
+    /// shows, a plot for 27,390 and a rating for 24,182 — on a library that, without
+    /// a TMDB key, otherwise has none of the three.
+    rating: Option<f32>,
+    overview: Option<String>,
+    genres: Vec<String>,
+    added_at: Option<i64>,
 }
 
 /// One guide source, parsed and waiting to be written.
@@ -361,7 +369,8 @@ pub fn apply(
                 group: e.group.clone(),
                 url: e.url.clone(),
                 poster: e.logo.clone(),
-                added_at: None,
+                added_at: e.added_at,
+                rating: e.rating,
             }
         })
         .collect();
@@ -393,6 +402,10 @@ pub fn apply(
                 poster: show.poster.as_deref(),
                 group: show.group.as_deref(),
                 quality: None,
+                rating: show.rating,
+                overview: show.overview.as_deref(),
+                genres: &show.genres,
+                added_at: show.added_at,
             },
             options.now_unix,
         )
@@ -421,6 +434,12 @@ pub fn apply(
                 poster: None,
                 group: group.group.as_deref(),
                 quality: group.quality.as_deref(),
+                // An M3U carries none of this: a show here was inferred from episode
+                // filenames, and there is nothing to infer a plot or a genre from.
+                rating: None,
+                overview: None,
+                genres: &[],
+                added_at: None,
             },
             options.now_unix,
         )
@@ -601,6 +620,8 @@ fn xtream_entries(
             entry.kind = MediaKind::Movie;
             entry.logo = s.stream_icon.clone();
             entry.group = s.category_id.as_ref().and_then(|c| cats.get(c).cloned());
+            entry.rating = s.rating;
+            entry.added_at = unix_seconds(s.added.as_deref());
             out.push(entry);
         }
     }
@@ -630,6 +651,11 @@ fn xtream_entries(
                     .category_id
                     .as_ref()
                     .and_then(|c| cats.get(c).cloned()),
+                rating: listing.rating,
+                overview: listing.plot.clone().filter(|p| !p.trim().is_empty()),
+                genres: listing.genres(),
+                // `get_series` sends no added date; this is the nearest thing it has.
+                added_at: unix_seconds(listing.last_modified.as_deref()),
             });
         }
         if !series.is_empty() {
@@ -642,6 +668,18 @@ fn xtream_entries(
     }
 
     Ok(out)
+}
+
+/// A unix timestamp out of the decimal string panels send for `added` and
+/// `last_modified`.
+///
+/// Bounded, because this decides the default order of the Movies screen. A panel that
+/// answers in milliseconds, or with a zero, would otherwise park a film in the year
+/// 58000 or in 1970 and pin it to one end of "Recently added" for good.
+fn unix_seconds(raw: Option<&str>) -> Option<i64> {
+    let n: i64 = raw?.trim().parse().ok()?;
+    // 1990-01-01 to 2100-01-01.
+    (631_152_000..=4_102_444_800).contains(&n).then_some(n)
 }
 
 /// The year out of an Xtream `releaseDate`, which panels write as `2019-04-14`,
@@ -1763,6 +1801,93 @@ mod tests {
         assert_eq!(opts.password, None);
         let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
         assert_eq!(report.channels, 1);
+    }
+
+    /// What a real panel says, and what the import used to throw away.
+    ///
+    /// Measured on the subscription in docs/ROADMAP.md: a rating on 109,999 of its
+    /// 122,499 films and an added date on all 122,499; for shows, a genre on 27,661
+    /// of 28,716, a plot on 27,390 and a rating on 24,182. Every column already
+    /// existed and every field was already parsed — and then dropped, so a library
+    /// with no TMDB key had no genres at all. Genres are the recommender's heaviest
+    /// signal, and "Recently added" was ordering by the timestamp of the import.
+    #[test]
+    fn what_the_panel_says_about_a_film_or_a_show_is_kept() {
+        let server = TestServer::start(|_, req| {
+            let p = &req.path;
+            // Categories first: `get_series` is a prefix of `get_series_categories`.
+            if p.contains("categories") {
+                Reply::ok("[]")
+            } else if p.contains("action=get_vod_streams") {
+                Reply::ok(
+                    r#"[{"stream_id":900,"name":"Inception (2010)",
+                         "container_extension":"mkv","rating":"6.97",
+                         "rating_5based":"3","added":"1784596062"}]"#,
+                )
+            } else if p.contains("action=get_series") {
+                Reply::ok(
+                    r#"[{"series_id":11,"name":"Some Show","genre":"Crime, Drama",
+                         "plot":"A plot.","rating":"9","last_modified":"1741614903",
+                         "releaseDate":"2019-04-14"}]"#,
+                )
+            } else if p.contains("action=get_live_streams") {
+                Reply::ok("[]")
+            } else if p.contains("xmltv.php") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(
+                    r#"{"user_info":{"username":"u","status":"Active",
+                              "max_connections":"2","active_cons":0}}"#,
+                )
+            }
+        });
+
+        let mut conn = db();
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "u".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = Some("p".into());
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(report.movies, 1);
+
+        let (rating, added): (f64, i64) = conn
+            .query_row("SELECT rating, added_at FROM movies", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(rating, 6.97_f32 as f64);
+        assert_eq!(
+            added, 1_784_596_062,
+            "dated by the provider, not by whenever the import happened"
+        );
+
+        let (genres, overview, rating): (String, String, f64) = conn
+            .query_row("SELECT genres, overview, rating FROM series", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(genres, r#"["Crime","Drama"]"#);
+        assert_eq!(overview, "A plot.");
+        assert_eq!(rating, 9.0);
+    }
+
+    /// This decides the default order of the Movies screen, so an implausible answer
+    /// is worth refusing: a zero or a millisecond clock pins a row to one end of
+    /// "Recently added" for good, which is worse than having no date at all.
+    #[test]
+    fn a_providers_timestamp_is_taken_only_when_it_is_plausible() {
+        assert_eq!(unix_seconds(Some("1784596062")), Some(1_784_596_062));
+        assert_eq!(unix_seconds(Some("  1784596062  ")), Some(1_784_596_062));
+        for bad in ["0", "", "n/a", "1784596062000", "-5", "631151999"] {
+            assert_eq!(unix_seconds(Some(bad)), None, "{bad:?} was accepted");
+        }
+        assert_eq!(unix_seconds(None), None);
     }
 
     #[test]

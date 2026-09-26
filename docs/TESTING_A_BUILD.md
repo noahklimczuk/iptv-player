@@ -48,7 +48,9 @@ Three outcomes, and they mean different things:
 - **Video plays, UI floats over it.** The architecture holds. Everything else is
   ordinary bug-fixing from here.
 - **Black rectangle, UI fine.** Either libmpv did not load or the compositing does not
-  work. The log tells you which — see below.
+  work — two different bugs that look identical. **Settings → Diagnostics** says which:
+  it reports the video engine, and a build that says *No video engine loaded* was never
+  going to produce a picture whatever the compositing does.
 - **Video plays but covers the UI, or the UI is opaque where video should be.** The
   layering is wrong. That is a fixable bug, not a dead end.
 
@@ -68,15 +70,21 @@ set AURORA_LOG=debug
 aurora-app.exe
 ```
 
-The line that matters most for a black rectangle:
+Every launch now says which engine it started with, so the log answers the question
+either way:
+
+```
+video engine: libmpv version="mpv 0.40.0"
+```
 
 ```
 libmpv unavailable, falling back to null backend: ...
 ```
 
-If that appears, the video layer never started, and the cause is on the same line —
-usually `libmpv-2.dll` missing from the folder. If it does *not* appear, libmpv loaded
-and the problem is the compositing.
+The second means the video layer never started, and the cause is on the same line —
+usually `libmpv-2.dll` missing from the folder. The first means libmpv loaded and a
+black rectangle is the compositing. **Settings → Diagnostics** shows the same thing
+without going near a file.
 
 ## Pointing it at a real provider
 

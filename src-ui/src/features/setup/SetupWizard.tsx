@@ -30,10 +30,20 @@ const PHASE_LABEL: Record<IngestPhase, string> = {
 
 export function SetupWizard({
   onFinished,
+  onSkip,
   /** True when this is a second provider being added from settings, not first run. */
   additional = false,
 }: {
   onFinished: () => void;
+  /**
+   * Leave without adding anything.
+   *
+   * Separate from `onFinished` because the two are not the same event and were being
+   * treated as though they were: finishing leaves a provider behind, which is what
+   * makes the app open; skipping leaves none, and the caller has to say so or its own
+   * "no provider yet" guard puts the wizard straight back.
+   */
+  onSkip: () => void;
   additional?: boolean;
 }) {
   const [step, setStep] = useState<Step>('source');
@@ -150,7 +160,7 @@ export function SetupWizard({
 
         <div style={{ marginTop: 'var(--sp-5)', textAlign: 'center' }}>
           <button
-            onClick={onFinished}
+            onClick={onSkip}
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
               color: 'var(--text-faint)', fontSize: 'var(--fs-sm)',
