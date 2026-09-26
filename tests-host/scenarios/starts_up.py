@@ -73,7 +73,6 @@ def run(d, ctx):
     body = d.body()
     landed = "Home" in body or "watching" in body.lower()
     assert landed, f"skipping landed nowhere usable; body was {body[:300]!r}"
-    ctx.assert_no_panic()
 
     # Nothing may have panicked on the way up. The host logs panics through
     # `log_panics()`, and a panicked background thread is otherwise invisible.
