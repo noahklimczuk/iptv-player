@@ -10,7 +10,7 @@ import { getProgress, invoke } from '@/ipc';
 import { useProfile } from '@/state/profile';
 import { report } from '@/lib/errors';
 import { duration, progressPct, runtime } from '@/lib/format';
-import { Badge, Button, IconButton, ProgressBar, Skeleton } from './Primitives';
+import { Badge, Button, IconButton, ProgressBar, Select, Skeleton } from './Primitives';
 import { Icon } from './Icon';
 
 type Tab = 'episodes' | 'similar' | 'details';
@@ -186,6 +186,7 @@ function Body({
 }) {
   const isSeries = item.kind === 'series';
   const tabs: Tab[] = isSeries ? ['episodes', 'similar', 'details'] : ['similar', 'details'];
+  const episodes = useEpisodes(item, isSeries);
 
   return (
     <div style={{ padding: 'var(--sp-5) var(--sp-6) var(--sp-6)' }}>
@@ -212,9 +213,17 @@ function Body({
             {!isSeries && item.runtimeMins && (
               <span style={{ color: 'var(--text-muted)' }}>{runtime(item.runtimeMins)}</span>
             )}
+            {/* Counted from the episodes, not from the series row. An import writes
+                the row without a listing — 28,715 requests before the library was
+                usable is not a trade worth making — so the row says nothing about
+                seasons until somebody opens the show and the host fetches them. This
+                used to read `item.seasons`, so a show sat here saying "0 seasons"
+                with its episodes listed directly underneath. */}
             {isSeries && (
               <span style={{ color: 'var(--text-muted)' }}>
-                {item.seasons.length} season{item.seasons.length === 1 ? '' : 's'}
+                {episodes.loading && episodes.seasons.length === 0
+                  ? 'Loading episodes…'
+                  : `${episodes.seasons.length} season${episodes.seasons.length === 1 ? '' : 's'}`}
               </span>
             )}
             {item.quality && <Badge tone={item.quality === '4K' ? 'accent' : 'neutral'}>{item.quality}</Badge>}
@@ -263,7 +272,7 @@ function Body({
         <>
           <PlaybackPrefs seriesId={item.id} />
           <Episodes
-            seriesId={item.id} seasons={item.seasons} season={season} setSeason={setSeason}
+            episodes={episodes} season={season} setSeason={setSeason}
             onPlay={(epId) => onPlay(item, epId)}
           />
         </>
@@ -385,50 +394,62 @@ function PlaybackPrefs({ seriesId }: { seriesId: number }) {
   );
 }
 
-function Episodes({
-  seriesId, seasons, season, setSeason, onPlay,
-}: {
-  seriesId: number; seasons: number[]; season: number;
-  setSeason: (s: number) => void; onPlay: (episodeId: number) => void;
-}) {
-  // `seasons` comes from the series row, which counts the episodes already stored —
-  // so on a show whose listing has never been fetched it is empty, and asking for
-  // "season 1" is a guess. Ask for the whole show until the answer says otherwise:
-  // the host fetches the listing on this call, and a show whose episodes turn out to
-  // be in season 2 would show nothing for ever if this insisted on season 1.
-  const knowsSeasons = seasons.length > 0;
+/** What one show's episodes turned out to be. */
+interface Episodes {
+  all: Episode[];
+  /** The seasons those episodes are actually in, ascending. */
+  seasons: number[];
+  loading: boolean;
+}
+
+/**
+ * Fetch a show's episodes once, for everything on the screen that needs them.
+ *
+ * Deliberately asks for the whole show rather than one season. The series row counts
+ * the episodes already stored, so on a show whose listing has never been fetched it
+ * knows nothing — and the host fetches that listing on this very call. Asking for
+ * "season 1" would be a guess, and a show whose episodes are all in season 2 would
+ * show nothing for ever.
+ */
+function useEpisodes(item: CatalogItem, isSeries: boolean): Episodes {
   const { data, loading } = useCommand(
     'library.episodes',
-    knowsSeasons ? { seriesId, season } : { seriesId },
-    [seriesId, season, knowsSeasons],
+    { seriesId: item.id },
+    [item.id],
+    isSeries,
   );
+  const all = useMemo(() => (isSeries ? (data ?? []) : []), [data, isSeries]);
+  const seasons = useMemo(
+    () => [...new Set(all.map((e: Episode) => e.season))].sort((a, b) => a - b),
+    [all],
+  );
+  return { all, seasons, loading: isSeries && loading };
+}
 
-  // What actually came back, which is the truth about this show even when the row
-  // that described it was written before its episodes existed.
-  const found = useMemo(
-    () => [...new Set((data ?? []).map((e: Episode) => e.season))].sort((a, b) => a - b),
-    [data],
+function Episodes({
+  episodes, season, setSeason, onPlay,
+}: {
+  episodes: Episodes; season: number;
+  setSeason: (s: number) => void; onPlay: (episodeId: number) => void;
+}) {
+  const { seasons: choices, loading } = episodes;
+  // Filtering here rather than asking the host again: the whole show is already in
+  // hand, and a round trip per season change would be a spinner for no reason.
+  const data = useMemo(
+    () => (choices.length > 1 ? episodes.all.filter((e) => e.season === season) : episodes.all),
+    [episodes.all, choices.length, season],
   );
-  const choices = knowsSeasons ? seasons : found;
 
   return (
     <div>
       {choices.length > 1 && (
-        <select
-          value={season}
-          onChange={(e) => setSeason(Number(e.target.value))}
-          aria-label="Season"
-          style={{
-            marginBottom: 'var(--sp-4)', padding: '8px 12px',
-            background: 'var(--surface)', color: 'var(--text)',
-            border: '1px solid var(--border-strong)', borderRadius: 'var(--r-md)',
-            fontSize: 'var(--fs-md)', fontWeight: 600,
-          }}
-        >
-          {choices.map((s) => (
-            <option key={s} value={s}>Season {s}</option>
-          ))}
-        </select>
+        <Select
+          label="Season"
+          options={choices.map((s) => ({ value: String(s), label: `Season ${s}` }))}
+          value={String(season)}
+          onChange={(v) => setSeason(Number(v ?? choices[0]))}
+          style={{ marginBottom: 'var(--sp-4)' }}
+        />
       )}
 
       <div style={{ display: 'grid', gap: 'var(--sp-1)' }}>

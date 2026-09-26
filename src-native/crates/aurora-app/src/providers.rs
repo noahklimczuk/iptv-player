@@ -495,7 +495,7 @@ pub fn providers_refresh(
     // `sync::fetch` is handed no database, so it cannot reintroduce that by accident.
     let emit = |p: Progress| {
         // Best-effort: a dropped progress event must never fail an import.
-        let _ = app.emit("ingest.progress", &p);
+        crate::emit(&app, "ingest.progress", &p);
     };
     let fetched = sync::fetch(&services.http, &options, &rules, emit)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;

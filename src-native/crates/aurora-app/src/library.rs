@@ -61,6 +61,15 @@ pub struct Rail {
     /// the row mean different things in different places.
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub progress: std::collections::HashMap<String, RailProgress>,
+    /// Why each item is here, keyed the same way as `progress`. Only the recommended
+    /// rail fills it.
+    ///
+    /// Per item rather than per rail, because that is the only version anybody
+    /// believes: "Because you watched Blade Runner" under one poster and "More Crime"
+    /// under the next is the recommender showing its working, where a single heading
+    /// for twenty titles is a claim about all of them that is true of none.
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub reasons: std::collections::HashMap<String, String>,
     pub items: Vec<CatalogItem>,
 }
 
@@ -95,6 +104,8 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
     let browse = |sort: library::MovieSort| library::BrowseQuery {
         sort,
         genre: None,
+        category: None,
+        query: None,
         limit: RAIL_SIZE,
         offset: 0,
         library: filters,
@@ -145,6 +156,7 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
             title: "Continue Watching".into(),
             reason: None,
             progress: resumed_progress,
+            reasons: Default::default(),
             items: resumed,
         });
     }
@@ -167,6 +179,23 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
     }
     push_if_any(&mut rails, "my-list", "myList", "My List", mine);
 
+    // Recommended, third: after the two rails about things the viewer already chose,
+    // and ahead of everything that is just "what is in the library". On a fresh
+    // install this is rating-led rather than personal and says so in its heading.
+    let picks =
+        crate::recommend::pick(&db, args.profile_id, crate::now_unix(), RAIL_SIZE as usize)?;
+    if !picks.items.is_empty() {
+        rails.push(Rail {
+            id: "recommended".into(),
+            kind: "becauseYouWatched".into(),
+            title: crate::recommend::heading(&picks),
+            reason: None,
+            progress: Default::default(),
+            reasons: picks.reasons,
+            items: picks.items,
+        });
+    }
+
     let recent = library::list_movies(&db, &browse(library::MovieSort::RecentlyAdded))?;
     push_if_any(
         &mut rails,
@@ -188,6 +217,8 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
     let shows = library::list_series(
         &db,
         &library::BrowseQuery {
+            category: None,
+            query: None,
             sort: library::MovieSort::Title,
             genre: None,
             limit: RAIL_SIZE,
@@ -216,6 +247,7 @@ fn push_if_any(rails: &mut Vec<Rail>, id: &str, kind: &str, title: &str, items: 
         title: title.into(),
         reason: None,
         progress: std::collections::HashMap::new(),
+        reasons: std::collections::HashMap::new(),
         items,
     });
 }

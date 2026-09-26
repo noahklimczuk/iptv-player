@@ -40,6 +40,56 @@ body {
 /* A focus ring that survives being drawn over video and artwork (README §12). */
 :focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--r-md); }
 
+/* ── Controls ──────────────────────────────────────────────────────────────
+   `Button` and `TextField` declare their transitions inline and there was nothing
+   here for them to transition *to*: no hover rule existed anywhere in the app, so
+   every button in it was inert until clicked. On a remote-first interface that is
+   also the only affordance saying which thing is under the pointer. */
+
+.aurora-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.aurora-btn:active:not(:disabled) { transform: translateY(0) scale(0.97); }
+
+/* Per variant, because one rule cannot serve all four. A primary button's background
+   is `--text`, which is nearly white in every theme — brightening it does nothing,
+   so it darkens instead. Ghost and secondary have little or no background to change,
+   so they grow one. */
+.aurora-btn[data-variant='primary']:hover:not(:disabled) { filter: brightness(0.92); }
+.aurora-btn[data-variant='danger']:hover:not(:disabled) { filter: brightness(1.1); }
+.aurora-btn[data-variant='secondary']:hover:not(:disabled),
+.aurora-btn[data-variant='ghost']:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.aurora-field:hover { border-color: var(--text-faint); }
+.aurora-field:focus { outline: none; border-color: var(--accent); }
+.aurora-field::placeholder { color: var(--text-faint); }
+
+/* ── Page transitions ──────────────────────────────────────────────────────
+   Nothing moved between screens: a click on the sidebar swapped one page for
+   another in a single frame, which reads as a jump rather than a navigation. A
+   short fade connects them, well inside the 320ms ceiling the motion tokens set.
+
+   Opacity only, and that is not a stylistic choice. A `transform` on this wrapper
+   makes it a containing block, and the virtualised lists measure their scroll
+   parent as they mount — with a translate applied, Live TV and the playlist editor
+   mounted 42 rows where they should have mounted 28. A page transition must not be
+   able to change how much of a twenty-thousand-row list is in the DOM. */
+
+@keyframes aurora-page-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.aurora-page { animation: aurora-page-in var(--t-base) var(--ease-out) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-page { animation-duration: 1ms; }
+  .aurora-btn:hover:not(:disabled),
+  .aurora-btn:active:not(:disabled) { transform: none; }
+}
+
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 

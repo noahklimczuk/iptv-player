@@ -17,6 +17,7 @@ pub mod model;
 pub mod neterr;
 pub mod parental;
 pub mod pin;
+pub mod recommend;
 pub mod rules;
 pub mod series;
 pub mod sources;

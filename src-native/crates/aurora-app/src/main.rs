@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, library, metadata, now_unix, playlist, profiles, providers,
+    commands, dvr, library, metadata, now_unix, playlist, profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
     timeshift, updates, window,
@@ -53,7 +53,7 @@ const UPDATE_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(8
 /// On its own thread and after a pause, because nothing about this is urgent and the
 /// first seconds after launch belong to getting a picture on screen.
 fn check_for_updates(app: &tauri::AppHandle) {
-    use tauri::{Emitter, Manager};
+    use tauri::Manager;
     let services = app.state::<Services>();
 
     let (automatic, last) = {
@@ -67,7 +67,7 @@ fn check_for_updates(app: &tauri::AppHandle) {
     match updates::run(&services, now_unix(), false) {
         Ok(check) if check.available => {
             tracing::info!(current = %check.current, "a newer build is published");
-            let _ = app.emit("update.available", &check);
+            aurora_app::emit(app, "update.available", &check);
         }
         Ok(_) => tracing::debug!("this is the newest published build"),
         // Never a dialog: failing to reach GitHub is not the viewer's problem and must
@@ -179,7 +179,7 @@ fn main() {
             // the UI's OSD is driven by a `player.state` event, so without this a
             // stream that died leaves the interface showing it playing — and nothing
             // would ever notice a live channel needs rolling to its next source.
-            use tauri::Emitter;
+
             let playback = std::sync::Arc::clone(&playback_handle);
             let player_handle = app.handle().clone();
             std::thread::Builder::new()
@@ -188,7 +188,7 @@ fn main() {
                     std::thread::sleep(PLAYER_TICK);
                     supervised("player", || {
                         if let Some(state) = playback.tick(now_unix()) {
-                            let _ = player_handle.emit("player.state", &state);
+                            aurora_app::emit(&player_handle, "player.state", &state);
                         }
                     });
                 })
@@ -205,8 +205,7 @@ fn main() {
                     // has silently stopped has no symptom until the programme is gone.
                     supervised("DVR", || match scheduler.tick(now_unix()) {
                         Ok(report) if !report.is_empty() => {
-                            use tauri::Emitter;
-                            let _ = handle.emit("dvr.tick", &report);
+                            aurora_app::emit(&handle, "dvr.tick", &report);
                         }
                         Ok(_) => {}
                         Err(e) => tracing::error!("DVR tick failed: {e}"),
@@ -260,6 +259,8 @@ fn main() {
             commands::library_movies,
             commands::library_series,
             commands::library_genres,
+            commands::library_browse_facets,
+            recommend::library_recommended,
             commands::library_episodes,
             commands::library_playback_aids,
             commands::library_record_skip,

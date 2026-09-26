@@ -63,10 +63,36 @@ export function HeroBillboard({
           }}
           style={{ position: 'absolute', inset: 0 }}
         >
-          {item.backdrop && (
+          {/* A backdrop if there is one, the poster blown out behind glass if not.
+              Backdrops come from TMDB enrichment, so on a library without an API key
+              there are none at all — and the most prominent thing on the home screen
+              was a black rectangle four hundred pixels tall. A poster is the wrong
+              shape for this, hence the crop and the blur: what is wanted is colour
+              and motion behind the title, not a legible second copy of the artwork. */}
+          {item.backdrop ? (
             <img
               src={item.backdrop} alt=""
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
+          ) : item.poster ? (
+            <img
+              src={item.poster} alt=""
+              style={{
+                width: '100%', height: '100%', objectFit: 'cover',
+                objectPosition: 'center 22%',
+                filter: 'blur(28px) saturate(1.25) brightness(0.72)',
+                transform: 'scale(1.15)',
+              }}
+            />
+          ) : (
+            // Nothing at all to show. A flat panel rather than a hole: the layout
+            // below it assumes something is here.
+            <div
+              style={{
+                width: '100%', height: '100%',
+                background:
+                  'radial-gradient(120% 90% at 20% 0%, var(--surface) 0%, var(--bg) 70%)',
+              }}
             />
           )}
         </motion.div>

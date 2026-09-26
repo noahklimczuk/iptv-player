@@ -13,7 +13,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { PlaylistEntry, PlaylistKind, PlaylistShow } from '@shared/ipc';
-import { Badge, Button, EmptyState, Skeleton } from '@/components/Primitives';
+import { Badge, Button, EmptyState, FIELD, Select, Skeleton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
@@ -140,34 +140,32 @@ export function PlaylistPage() {
             marginTop: 'var(--sp-3)',
           }}
         >
-          <input
+          <input className="aurora-field"
             value={text}
             onChange={(e) => { setText(e.target.value); setLimit(PAGE); }}
             placeholder="Search this list"
             aria-label="Search this list"
             style={inputStyle}
           />
-          <select
-            value={group}
-            onChange={(e) => { setGroup(e.target.value); setLimit(PAGE); }}
-            aria-label="Filter by group"
-            style={selectStyle}
-          >
-            <option value="">All groups</option>
-            {(groups ?? []).map((g) => (
-              <option key={g.name} value={g.name}>{g.name} ({g.count})</option>
-            ))}
-          </select>
-          <select
+          <Select
+            label="Group"
+            placeholder="All groups"
+            options={(groups ?? []).map((g) => ({
+              value: g.name, label: g.name, hint: String(g.count),
+            }))}
+            value={group || undefined}
+            onChange={(v) => { setGroup(v ?? ''); setLimit(PAGE); }}
+          />
+          <Select
+            label="Show"
+            options={[
+              { value: 'all', label: 'Shown and hidden' },
+              { value: 'visible', label: 'Shown only' },
+              { value: 'hidden', label: 'Hidden only' },
+            ]}
             value={show}
-            onChange={(e) => { setShow(e.target.value as PlaylistShow); setLimit(PAGE); }}
-            aria-label="Show"
-            style={selectStyle}
-          >
-            <option value="all">Shown and hidden</option>
-            <option value="visible">Shown only</option>
-            <option value="hidden">Hidden only</option>
-          </select>
+            onChange={(v) => { setShow((v ?? 'all') as PlaylistShow); setLimit(PAGE); }}
+          />
           <Button
             size="sm"
             variant={duplicatesOnly ? 'primary' : 'secondary'}
@@ -191,7 +189,7 @@ export function PlaylistPage() {
           }}
         >
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-sm)' }}>
-            <input
+            <input className="aurora-field"
               type="checkbox"
               checked={allOnPageSelected}
               aria-label="Select everything listed"
@@ -343,7 +341,7 @@ function Row({
         borderBottom: '1px solid var(--border)', opacity: row.hidden ? 0.45 : 1,
       }}
     >
-      <input
+      <input className="aurora-field"
         type="checkbox"
         checked={selected}
         onChange={onSelect}
@@ -472,7 +470,7 @@ function EditableCell({
   };
 
   return (
-    <input
+    <input className="aurora-field"
       autoFocus
       value={draft}
       aria-label={label}
@@ -491,14 +489,5 @@ function EditableCell({
   );
 }
 
-const inputStyle = {
-  padding: '6px 10px', background: 'var(--surface)', color: 'var(--text)',
-  border: '1px solid var(--border-strong)', borderRadius: 'var(--r-md)',
-  fontSize: 'var(--fs-sm)', minWidth: 220,
-} as const;
-
-const selectStyle = {
-  padding: '6px 10px', background: 'var(--surface)', color: 'var(--text)',
-  border: '1px solid var(--border-strong)', borderRadius: 'var(--r-md)',
-  fontSize: 'var(--fs-sm)',
-} as const;
+/** One field, defined once. See `FIELD` in Primitives. */
+const inputStyle: React.CSSProperties = { ...FIELD, minWidth: 220 };

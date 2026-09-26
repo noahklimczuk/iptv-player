@@ -13,7 +13,7 @@ use aurora_ingest::enrich::{self, Options, Report};
 use aurora_ingest::tmdb::{MetadataClient, TmdbClient, CREDENTIAL_KEY};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::error::Result;
 use crate::services::Services;
@@ -150,10 +150,10 @@ pub fn metadata_run(
 
     enrich_batch(&services.db, &client, &options, now_unix(), |p| {
         // Best effort: a dropped progress event must never fail the pass.
-        let _ = app.emit("metadata.progress", &p);
+        crate::emit(&app, "metadata.progress", &p);
     })
     .inspect(|report| {
-        let _ = app.emit("metadata.done", report);
+        crate::emit(&app, "metadata.done", report);
     })
 }
 
@@ -282,7 +282,7 @@ pub fn artwork_prefetch(
         &services.artwork,
         &urls,
         |p| {
-            let _ = app.emit("artwork.progress", &p);
+            crate::emit(&app, "artwork.progress", &p);
         },
     ))
 }
@@ -338,7 +338,7 @@ pub fn enrich_in_background(app: tauri::AppHandle) {
         let mut total = Report::default();
         for _ in 0..AUTO_MAX_BATCHES {
             let batch = match enrich_batch(&services.db, &client, &options, now_unix(), |p| {
-                let _ = app.emit("metadata.progress", &p);
+                crate::emit(&app, "metadata.progress", &p);
             }) {
                 Ok(r) => r,
                 Err(e) => {
@@ -366,7 +366,7 @@ pub fn enrich_in_background(app: tauri::AppHandle) {
             failed = total.failed,
             "automatic metadata pass finished"
         );
-        let _ = app.emit("metadata.done", &total);
+        crate::emit(&app, "metadata.done", &total);
     });
 }
 

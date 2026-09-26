@@ -379,6 +379,39 @@ function applyFilters<T extends { id: number; quality: string | null; lang?: str
 
 const visibleChannels = (): Channel[] =>
   applyFilters(editedChannels(), 'live', (c) => c.name, () => null);
+/**
+ * The browse filters, applied the way the host applies them.
+ *
+ * `category` is the provider's own shelf — `group_title` — which the fixture library
+ * does not have, because it is built from a list of genres rather than from a panel.
+ * So here a category *is* a genre, and the shelves reported below are genres too.
+ * That is enough to develop the screens against and is not what anybody sees: on a
+ * real library the two are different things and the host is the one that knows.
+ */
+function browseFilter<T extends { title: string; genres: string[] }>(
+  rows: T[],
+  f: { genre?: string; category?: string; query?: string },
+): T[] {
+  let list = [...rows];
+  if (f.genre) list = list.filter((x) => x.genres.includes(f.genre!));
+  if (f.category) list = list.filter((x) => x.genres.includes(f.category!));
+  if (f.query?.trim()) {
+    const needle = f.query.trim().toLowerCase();
+    list = list.filter((x) => x.title.toLowerCase().includes(needle));
+  }
+  return list;
+}
+
+function mockCategories<T extends { genres: string[] }>(rows: T[]) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    for (const g of row.genres) counts.set(g, (counts.get(g) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
 const visibleMovies = (): Movie[] =>
   applyFilters(editedMovies(), 'movies', (m) => m.title, (m) => m.year);
 const visibleSeries = (): Series[] =>
@@ -482,6 +515,66 @@ function filterCounts(kind: PlaylistKind): FilterCounts {
 const asMovie = (m: Movie): CatalogItem => ({ kind: 'movie', ...m });
 const asSeries = (s: Series): CatalogItem => ({ kind: 'series', ...s });
 
+/**
+ * What the mock can honestly say about recommendations.
+ *
+ * Not the algorithm — that lives in `aurora_core::recommend`, is 60% genre affinity
+ * with recency decay, rating fit, era and a diversity penalty, and has twenty unit
+ * tests. Reimplementing it here would be the exact mistake this project keeps making:
+ * a mock that agrees with the UI while the host disagrees.
+ *
+ * What this does instead is produce the same *shape* — items plus a per-item reason,
+ * ranked so that something sharing a genre with watch history comes first — so the
+ * screens are developable in a browser. The host decides what anybody actually sees.
+ */
+function buildRecommended(limit: number) {
+  const watched = [...progress.values()]
+    .filter((p) => p.itemKind === 'movie')
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const seen = new Set(watched.map((p) => `movie:${p.itemId}`));
+  const liked = watched
+    .map((p) => visibleMovies().find((m) => m.id === p.itemId))
+    .filter((m): m is NonNullable<typeof m> => !!m);
+  const taste = new Map<string, number>();
+  for (const m of liked) {
+    for (const g of m.genres) taste.set(g, (taste.get(g) ?? 0) + 1 / m.genres.length);
+  }
+
+  const scored = visibleMovies()
+    .filter((m) => !seen.has(`movie:${m.id}`))
+    .map((m) => {
+      const affinity = m.genres.reduce((sum, g) => sum + (taste.get(g) ?? 0), 0);
+      return { m, score: affinity * 3 + (m.rating ?? 0) / 10 };
+    })
+    .sort((a, b) => b.score - a.score || a.m.id - b.m.id)
+    .slice(0, limit);
+
+  const reasons: Record<string, string> = {};
+  for (const { m } of scored) {
+    const strongest = [...m.genres].sort((a, b) => (taste.get(b) ?? 0) - (taste.get(a) ?? 0))[0];
+    const anchorTitle = strongest
+      ? liked.find((l) => l.genres.includes(strongest))?.title
+      : undefined;
+    reasons[`movie:${m.id}`] = anchorTitle
+      ? `Because you watched ${anchorTitle}`
+      : strongest
+        ? `More ${strongest}`
+        : 'Highly rated';
+  }
+
+  const personalised = liked.length > 0;
+  const top = [...taste.entries()].sort((a, b) => b[1] - a[1]).map(([g]) => g);
+  const title = !personalised
+    ? 'Worth a look'
+    : top.length > 1
+      ? `More ${top[0]} and ${top[1]}`
+      : top.length === 1
+        ? `More ${top[0]}`
+        : 'Recommended for you';
+
+  return { title, items: scored.map(({ m }) => asMovie(m)), reasons, personalised };
+}
+
 function buildRails(): Rail[] {
   // The home page is a view of the library, so it is the filtered library it views.
   const shownMovies = visibleMovies();
@@ -541,12 +634,15 @@ function buildRails(): Rail[] {
       items: byRating.slice(0, 10).map(asMovie),
     },
     { id: 'recent', kind: 'recentlyAdded', title: 'Recently Added', items: byAdded.slice(0, 20).map(asMovie) },
-    {
-      id: 'because', kind: 'becauseYouWatched',
-      title: `Because you watched ${shownMovies[3]!.title}`,
-      reason: shownMovies[3]!.title,
-      items: shownMovies.slice(60, 80).map(asMovie),
-    },
+    // Was "Because you watched <the fourth film in the fixture>", which was true of
+    // nothing. Now the same rail the host builds, from the same history.
+    (() => {
+      const r = buildRecommended(24);
+      return {
+        id: 'recommended', kind: 'becauseYouWatched' as const,
+        title: r.title, reasons: r.reasons, items: r.items,
+      };
+    })(),
     {
       id: 'mylist', kind: 'myList', title: 'My List',
       items: [...myList].flatMap((key): CatalogItem[] => {
@@ -999,9 +1095,9 @@ type Handler<K extends CommandName> = (
 
 const handlers: { [K in CommandName]: Handler<K> } = {
   'library.rails': () => buildRails(),
-  'library.movies': ({ sort, limit, offset, genre }) => {
-    const all = visibleMovies();
-    let list = genre ? all.filter((m) => m.genres.includes(genre)) : [...all];
+  'library.recommended': ({ limit }) => buildRecommended(limit ?? 40),
+  'library.movies': ({ sort, limit, offset, genre, category, query }) => {
+    const list = browseFilter(visibleMovies(), { genre, category, query });
     const cmp: Record<string, (a: Movie, b: Movie) => number> = {
       recentlyAdded: (a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0),
       title: (a, b) => a.title.localeCompare(b.title),
@@ -1011,10 +1107,24 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     list.sort(cmp[sort] ?? cmp.recentlyAdded!);
     return list.slice(offset, offset + limit);
   },
-  'library.series': ({ limit, offset, genre }) => {
-    const all = visibleSeries();
-    const list = genre ? all.filter((s) => s.genres.includes(genre)) : all;
+  'library.series': ({ limit, offset, genre, category, query, sort }) => {
+    const list = browseFilter(visibleSeries(), { genre, category, query });
+    if (sort === 'year') list.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+    else if (sort === 'rating') list.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+    else if (sort === 'recentlyAdded') list.sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
+    else list.sort((a, b) => a.title.localeCompare(b.title));
     return list.slice(offset, offset + limit);
+  },
+  'library.browseFacets': ({ kind, genre, category, query }) => {
+    // Narrowed to the shared shape both lists have, so one implementation covers both
+    // rather than the union defeating it.
+    const all: { title: string; genres: string[] }[] =
+      kind === 'series' ? visibleSeries() : visibleMovies();
+    return {
+      categories: mockCategories(all),
+      genres: [...new Set(all.flatMap((x) => x.genres))].sort(),
+      total: browseFilter(all, { genre, category, query }).length,
+    };
   },
   'library.episodes': ({ seriesId, season }) =>
     fx.episodes.filter((e) => e.seriesId === seriesId && (season == null || e.season === season)),

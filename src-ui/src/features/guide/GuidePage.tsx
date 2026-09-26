@@ -12,7 +12,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, Programme } from '@shared/ipc';
 import { useDvrMarks } from '@/features/dvr/useDvrMarks';
-import { Badge, Button, EmptyState, Skeleton } from '@/components/Primitives';
+import { Badge, Button, EmptyState, Select, Skeleton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { clockTime, dayLabel, duration } from '@/lib/format';
@@ -257,21 +257,16 @@ function GuideToolbar({
         ))}
       </div>
 
-      <select
-        value={group ?? ''}
-        onChange={(e) => setGroup(e.target.value || undefined)}
-        aria-label="Filter by category"
-        style={{
-          marginLeft: 'auto', padding: '6px 10px', background: 'var(--surface)',
-          color: 'var(--text)', border: '1px solid var(--border-strong)',
-          borderRadius: 'var(--r-md)', fontSize: 'var(--fs-sm)',
-        }}
-      >
-        <option value="">All channels</option>
-        {groups.map((g) => (
-          <option key={g.name} value={g.name}>{g.name} ({g.count})</option>
-        ))}
-      </select>
+      <Select
+        label="Category"
+        placeholder="All channels"
+        options={groups.map((g) => ({
+          value: g.name, label: g.name, hint: String(g.count),
+        }))}
+        value={group}
+        onChange={setGroup}
+        style={{ marginLeft: 'auto' }}
+      />
     </div>
   );
 }
@@ -430,6 +425,26 @@ function ProgrammeRow({
         borderBottom: '1px solid var(--border)',
       }}
     >
+      {/* A channel with no guide for this window used to be an empty strip, and a
+          screenful of them reads as the guide having failed to load. On a real
+          subscription this is most of it: EPG coverage measured 42.8% on the panel
+          this was built against, so whichever end of the list you open is likely to
+          be blank. Saying so is the difference between "nothing is on" and "nothing
+          is known". */}
+      {visible.length === 0 && (
+        <div
+          style={{
+            position: 'absolute', inset: '3px 2px 6px 2px',
+            display: 'flex', alignItems: 'center', paddingLeft: 'var(--sp-3)',
+            borderRadius: 'var(--r-sm)',
+            border: '1px dashed var(--border)',
+            color: 'var(--text-faint)', fontSize: 'var(--fs-sm)',
+          }}
+        >
+          No guide data for this channel
+        </div>
+      )}
+
       {visible.map((p) => {
         const left = Math.max(0, xFor(p.start, from));
         const right = xFor(Math.min(p.stop, to), from);

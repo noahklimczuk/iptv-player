@@ -6,7 +6,7 @@
  * The panel says so rather than pretending one number describes the buffer.
  */
 import { useState } from 'react';
-import { Badge, Button } from '@/components/Primitives';
+import { Badge, Button, TextField } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
 import { bytes } from '@/lib/format';
@@ -91,16 +91,12 @@ export function TimeshiftPanel() {
 
       <Row label="Folder" hint="Somewhere fast, and not the disk you are recording to.">
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input
+          <TextField
             value={folder ?? settings.folder}
             onChange={(e) => setFolder(e.target.value)}
             aria-label="Timeshift folder"
             spellCheck={false}
-            style={{
-              width: 300, padding: '6px 10px', borderRadius: 'var(--r-md)',
-              border: '1px solid var(--border-strong)', background: 'var(--surface)',
-              color: 'var(--text)', fontSize: 'var(--fs-sm)',
-            }}
+            style={{ width: 300 }}
           />
           <Button
             size="sm"

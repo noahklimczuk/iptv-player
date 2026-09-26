@@ -145,7 +145,11 @@ test('hiding a channel removes it from Live TV but not from the editor', async (
   // Still in the editor: hiding has to be reversible.
   await openEditor(page);
   await expect(page.getByRole('switch', { name: 'Show Northwind 24' })).toBeVisible();
-  await page.getByRole('combobox', { name: 'Show' }).selectOption('hidden');
+  // The filters are popovers now, not native selects: a `<select>` renders as a blank
+  // rectangle in the WebView this ships inside, and 202 categories is not a list
+  // anybody scrolls.
+  await page.getByRole('button', { name: 'Show' }).click();
+  await page.getByRole('option', { name: 'Hidden only' }).click();
   await expect(page.getByRole('button', { name: 'Name for Northwind 24' })).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/29-playlist-hidden.png` });
 });

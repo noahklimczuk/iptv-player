@@ -174,8 +174,8 @@ export function UpdatePanel() {
                 <span
                   style={{ marginLeft: 10, fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}
                 >
-                  Aurora can only update itself on Windows. This is a development
-                  build.
+                  An installed copy can only update itself on Windows, because what it
+                  runs is the Windows installer. A portable copy can, on any platform.
                 </span>
               </>
             )}

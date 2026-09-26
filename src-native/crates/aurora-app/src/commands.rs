@@ -216,25 +216,43 @@ pub struct MoviesArgs {
     pub limit: u32,
     pub offset: u32,
     pub genre: Option<String>,
+    /// The provider's own shelf. On a library with no TMDB key this is the only
+    /// structure there is, so browsing without it means browsing 117,508 rows in one
+    /// undifferentiated list.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Narrow by title, within whatever else is selected.
+    #[serde(default)]
+    pub query: Option<String>,
 }
 
-fn browse_query(
-    db: &aurora_db::rusqlite::Connection,
-    sort: &str,
+/// Everything a browse page can narrow by, before it becomes a query.
+#[derive(Debug, Default)]
+struct Browse {
+    sort: String,
     genre: Option<String>,
+    category: Option<String>,
+    query: Option<String>,
     limit: u32,
     offset: u32,
-) -> Result<library::BrowseQuery> {
+}
+
+fn browse_query(db: &aurora_db::rusqlite::Connection, b: Browse) -> Result<library::BrowseQuery> {
     Ok(library::BrowseQuery {
-        sort: match sort {
+        sort: match b.sort.as_str() {
             "title" => library::MovieSort::Title,
             "year" => library::MovieSort::Year,
             "rating" => library::MovieSort::Rating,
             _ => library::MovieSort::RecentlyAdded,
         },
-        genre,
-        limit: limit.clamp(1, 500),
-        offset,
+        genre: b.genre,
+        category: b.category,
+        // An empty box is not a filter. Without this, clearing the search field would
+        // match every title containing "", which is all of them — the same answer,
+        // reached the slow way.
+        query: b.query.filter(|q| !q.trim().is_empty()),
+        limit: b.limit.clamp(1, 500),
+        offset: b.offset,
         library: filtering::LibraryFilter::load(db)?,
     })
 }
@@ -245,7 +263,17 @@ pub fn library_movies(
     args: MoviesArgs,
 ) -> Result<Vec<library::MovieRow>> {
     let db = services.db.lock();
-    let q = browse_query(&db, &args.sort, args.genre, args.limit, args.offset)?;
+    let q = browse_query(
+        &db,
+        Browse {
+            sort: args.sort,
+            genre: args.genre,
+            category: args.category,
+            query: args.query,
+            limit: args.limit,
+            offset: args.offset,
+        },
+    )?;
     Ok(library::list_movies(&db, &q)?)
 }
 
@@ -255,6 +283,14 @@ pub struct SeriesArgs {
     pub limit: u32,
     pub offset: u32,
     pub genre: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    /// How the list is ordered. Series used to be locked to A–Z while films had four
+    /// sorts, for no reason anybody could name.
+    #[serde(default)]
+    pub sort: Option<String>,
 }
 
 #[tauri::command(async)]
@@ -263,8 +299,79 @@ pub fn library_series(
     args: SeriesArgs,
 ) -> Result<Vec<library::SeriesRow>> {
     let db = services.db.lock();
-    let q = browse_query(&db, "title", args.genre, args.limit, args.offset)?;
+    let q = browse_query(
+        &db,
+        Browse {
+            sort: args.sort.unwrap_or_else(|| "title".into()),
+            genre: args.genre,
+            category: args.category,
+            query: args.query,
+            limit: args.limit,
+            offset: args.offset,
+        },
+    )?;
     Ok(library::list_series(&db, &q)?)
+}
+
+/// What a browse page is showing, before it has fetched any of it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowseFacetsArgs {
+    /// `"movies"` or `"series"`.
+    pub kind: String,
+    #[serde(default)]
+    pub genre: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+/// The shelves, the genres, and how many rows the current filters actually match.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowseFacets {
+    /// The provider's own categories, biggest first.
+    pub categories: Vec<library::Category>,
+    /// Genres, where TMDB enrichment has produced any. Usually empty.
+    pub genres: Vec<String>,
+    /// The real total for these filters, so the heading is a number rather than
+    /// "120+" — which was the page size wearing a library's clothes.
+    pub total: u32,
+}
+
+#[tauri::command(async)]
+pub fn library_browse_facets(
+    services: State<'_, Services>,
+    args: BrowseFacetsArgs,
+) -> Result<BrowseFacets> {
+    let series = args.kind == "series";
+    let kind = if series {
+        filtering::Kind::Series
+    } else {
+        filtering::Kind::Movies
+    };
+    let db = services.db.lock();
+    let q = browse_query(
+        &db,
+        Browse {
+            sort: String::new(),
+            genre: args.genre,
+            category: args.category,
+            query: args.query,
+            limit: 1,
+            offset: 0,
+        },
+    )?;
+    Ok(BrowseFacets {
+        categories: library::categories(&db, kind)?,
+        genres: library::genres(&db)?,
+        total: if series {
+            library::count_series(&db, &q)?
+        } else {
+            library::count_movies(&db, &q)?
+        },
+    })
 }
 
 #[tauri::command(async)]

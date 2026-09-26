@@ -1,0 +1,11 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="bbc1.uk" tvg-name="BBC One" tvg-logo="http://127.0.0.1:8099/logo.png" group-title="UK Entertainment",BBC One HD
+http://127.0.0.1:8099/live/u/p/101.ts
+#EXTINF:-1 tvg-id="cnn.us" tvg-name="CNN" group-title="News",CNN International
+http://127.0.0.1:8099/live/u/p/102.ts
+#EXTINF:-1 tvg-id="sky.uk" group-title="Sports",Sky Sports Main Event
+http://127.0.0.1:8099/live/u/p/103.ts
+#EXTINF:-1 group-title="Movies",Inception (2010)
+http://127.0.0.1:8099/movie/u/p/900.mkv
+#EXTINF:-1 group-title="Series",Breaking Bad S01E01
+http://127.0.0.1:8099/series/u/p/700.mkv

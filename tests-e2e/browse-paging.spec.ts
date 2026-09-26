@@ -1,16 +1,16 @@
 /**
- * Movies and Series page in; they do not stop at the first request.
+ * Browse pages in, counts honestly, and narrows by the things a real library has.
  *
  * `BrowsePage` asked for `limit: 120, offset: 0` and never asked again, then printed
  * `items.length` beside the heading — so a library of twenty thousand films announced
- * itself as "120" and the 121st could not be reached by scrolling, searching within
- * the page, or any other means. The host commands had taken `limit` and `offset` from
- * the beginning; the second page was simply never requested.
+ * itself as "120" and the 121st could not be reached at all. The host commands had
+ * taken `limit` and `offset` from the beginning; the second page was never requested.
  *
- * The mock library holds more films than one page, so a complete read is more than one
- * request and the count has to move. The assertions are about that movement and about
- * the count agreeing with what is on screen, rather than about a fixture size that is
- * free to change.
+ * Driving the page against a real subscription then showed the rest of it: the genre
+ * dropdown was empty (genres come from TMDB enrichment, which needs a key), the count
+ * climbed while you scrolled, and there was no way to narrow a hundred thousand rows
+ * at all. The count now comes from the host, and the filters are the provider's own
+ * categories.
  */
 import { expect, test } from '@playwright/test';
 
@@ -18,106 +18,151 @@ const SHOTS = 'screenshots';
 /** Must match `PAGE` in `BrowsePage.tsx`: the size of one request. */
 const PAGE = 120;
 
-test('the film count is not the page size, and the rest can be reached', async ({
-  page,
-}) => {
+test('the count is the library, not the page size', async ({ page }) => {
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
 
+  // Counted by the host before a single poster arrives, so it never reads as the page
+  // size and never climbs while you scroll.
   const count = page.getByTestId('browse-count');
-  // Honest while incomplete: "120+" says there are at least this many and more to
-  // come, where a bare "120" claimed to be the whole library.
-  await expect(count).toHaveText('120+');
+  await expect(count).not.toHaveText('');
+  const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
+  expect(total, 'the fixture library is larger than one page').toBeGreaterThan(PAGE);
 
-  // Scrolling to the end brings the rest in, and the count settles on the truth.
+  // The first request really is a page of it.
+  expect(await page.getByTestId('catalog-card').count()).toBe(PAGE);
+
+  // Scrolling brings the rest in, and the count does not move because it was right.
   await page.getByTestId('browse-sentinel').scrollIntoViewIfNeeded();
-  await expect(count).not.toHaveText(/\+$/, { timeout: 10_000 });
-  const total = Number(await count.innerText());
-  expect(total, 'paging should have found more than the first page').toBeGreaterThan(PAGE);
-
-  // The sentinel retires once there is nothing left to fetch, so it cannot sit at the
-  // bottom of a complete list saying "Loading more…" forever.
-  await expect(page.getByTestId('browse-sentinel')).toHaveCount(0);
+  await expect(page.getByTestId('browse-sentinel')).toHaveCount(0, { timeout: 10_000 });
+  expect(await page.getByTestId('catalog-card').count()).toBe(total);
+  expect(Number((await count.innerText()).replace(/[^0-9]/g, ''))).toBe(total);
 
   await page.screenshot({ path: `${SHOTS}/45-browse-paged.png` });
 });
 
-test('a film past the first page is really on the page, not just counted', async ({
-  page,
-}) => {
-  await page.goto('/#/movies');
-  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
-
-  const cards = page.getByTestId('catalog-card');
-  expect(
-    await cards.count(),
-    'the first page should be a page, not the whole library',
-  ).toBe(PAGE);
-
-  const count = page.getByTestId('browse-count');
-  await page.getByTestId('browse-sentinel').scrollIntoViewIfNeeded();
-  await expect(count).not.toHaveText(/\+$/, { timeout: 10_000 });
-
-  // The number beside the heading has to be the number of cards, not a page size:
-  // that equality is the whole bug.
-  const total = Number(await count.innerText());
-  expect(total).toBeGreaterThan(PAGE);
-  expect(await cards.count()).toBe(total);
-});
-
-test('changing the genre starts the list again rather than appending to it', async ({
-  page,
-}) => {
+test('a category narrows the list, and clears again', async ({ page }) => {
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
   const count = page.getByTestId('browse-count');
-  await page.getByTestId('browse-sentinel').scrollIntoViewIfNeeded();
-  await expect(count).not.toHaveText(/\+$/, { timeout: 10_000 });
-  const total = Number(await count.innerText());
+  const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
 
-  // A filtered list is a different list. Pages from the old one must not survive into
-  // it — that is the race the generation counter in `usePages` exists for.
-  const genre = page.getByLabel('Genre');
-  const options = await genre.locator('option').allTextContents();
-  const pick = options.find((o) => o && o !== 'All genres');
-  test.skip(!pick, 'the fixture library has no genres to filter by');
-  await genre.selectOption({ label: pick! });
+  // The first chip after "All" — the biggest shelf in this library.
+  const chips = page.getByTestId('browse-category');
+  await chips.nth(1).click();
 
-  const after = await page.getByTestId('catalog-card').count();
-  expect(after, 'a filtered list should be smaller than the whole library').toBeLessThan(total);
+  await expect
+    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
+    .toBeLessThan(total);
+  const narrowed = Number((await count.innerText()).replace(/[^0-9]/g, ''));
+  expect(narrowed).toBeGreaterThan(0);
+
+  // A filtered list is a different list: pages from the old one must not survive into
+  // it, which is the race the generation counter in `usePages` exists for.
+  await expect
+    .poll(async () => page.getByTestId('catalog-card').count())
+    .toBeLessThanOrEqual(Math.min(narrowed, PAGE));
+
+  await chips.first().click();
+  await expect
+    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
+    .toBe(total);
 });
 
-test('series page in too, and a short library says its real size at once', async ({
-  page,
-}) => {
-  // The mock holds fewer series than one page, so a single request is the whole list:
-  // the count is final immediately and there is no sentinel to scroll to.
+test('searching narrows within the list without leaving the page', async ({ page }) => {
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  const count = page.getByTestId('browse-count');
+  const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
+
+  const title = await page.getByTestId('card-title').first().innerText();
+  const needle = title.split(' ')[0]!;
+  await page.getByTestId('browse-search').fill(needle);
+
+  await expect
+    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')), {
+      timeout: 5_000,
+    })
+    .toBeLessThan(total);
+  expect(Number((await count.innerText()).replace(/[^0-9]/g, ''))).toBeGreaterThan(0);
+
+  // Every card on screen matches what was typed.
+  const titles = await page.getByTestId('card-title').allInnerTexts();
+  expect(titles.length).toBeGreaterThan(0);
+  for (const t of titles) {
+    expect(t.toLowerCase()).toContain(needle.toLowerCase());
+  }
+
+  // Clearing puts the library back.
+  await page.getByRole('button', { name: 'Clear' }).click();
+  await expect
+    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')), {
+      timeout: 5_000,
+    })
+    .toBe(total);
+});
+
+test('series browse has the same controls films do', async ({ page }) => {
+  // Series used to be locked to A–Z while films had four sorts, for no reason anybody
+  // could name.
   await page.goto('/#/series');
   await expect(page.getByRole('heading', { name: 'Series' })).toBeVisible();
-  const count = page.getByTestId('browse-count');
-  await expect(count).not.toHaveText(/\+$/);
-  expect(Number(await count.innerText())).toBe(
-    await page.getByTestId('catalog-card').count(),
-  );
-  await expect(page.getByTestId('browse-sentinel')).toHaveCount(0);
+  await expect(page.getByTestId('browse-count')).not.toHaveText('');
+  await expect(page.getByTestId('browse-search')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Year' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Rating' })).toBeVisible();
 });
 
-test('a browse grid prints the titles, because artwork alone is not a name', async ({
+test('an empty genre filter is not shown at all', async ({ page }) => {
+  // On a library with no TMDB key there are no genres, and a control reading "All
+  // genres" with nothing under it is one that looks broken and is.
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  const genre = page.getByRole('button', { name: 'Genre' });
+  if (await genre.count() > 0) {
+    await genre.click();
+    // The "all" row plus at least one real genre.
+    expect(await page.getByTestId('select-row').count()).toBeGreaterThan(1);
+  }
+});
+
+test('a long category list is searchable rather than a two-hundred-row dropdown', async ({
   page,
 }) => {
-  // A library whose posters are in a script the viewer cannot read is unusable
-  // without the names, and the grid showed the title on hover only — one at a time,
-  // to somebody holding a mouse.
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
 
-  const titles = page.getByTestId('card-title');
-  expect(await titles.count(), 'no titles under the posters').toBe(PAGE);
-  await expect(titles.first()).toBeVisible();
-  await expect(titles.first()).not.toBeEmpty();
+  const picker = page.getByTestId('select-category');
+  test.skip(await picker.count() === 0, 'this library has few enough shelves to fit in chips');
+  await picker.click();
 
-  // The home rails stay as they were: a short row read by its artwork.
-  await page.goto('/#/');
-  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
-  expect(await page.getByTestId('card-title').count()).toBe(0);
+  const rows = page.getByTestId('select-row');
+  const before = await rows.count();
+  expect(before).toBeGreaterThan(1);
+
+  // Typing narrows it, and the "all" row goes with the rest.
+  const name = await rows.nth(1).innerText();
+  await page.getByLabel('Filter category').fill(name.split(/\s+/)[0]!);
+  await expect.poll(async () => rows.count()).toBeLessThan(before);
+
+  // Picking one closes the popover and narrows the library.
+  const count = page.getByTestId('browse-count');
+  const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
+  await rows.last().click();
+  await expect(rows).toHaveCount(0);
+  await expect
+    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
+    .toBeLessThan(total);
+});
+
+test('the count is grouped, so a six-figure library is readable', async ({ page }) => {
+  // `toLocaleString()` produced "117508" under the WebView this ships inside, because
+  // a process with no locale configured groups by nothing.
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  const shown = await page.getByTestId('browse-count').innerText();
+  const value = Number(shown.replace(/[^0-9]/g, ''));
+  if (value >= 1000) {
+    expect(shown, 'a four-figure count needs a separator').toContain(',');
+  }
 });

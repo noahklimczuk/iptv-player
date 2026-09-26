@@ -19,7 +19,7 @@ export interface CardProgress {
 }
 
 export const CatalogCard = memo(function CatalogCard({
-  item, index, progress, onOpen, onPlay, rank, showTitle,
+  item, index, progress, onOpen, onPlay, rank, showTitle, reason,
 }: {
   item: CatalogItem;
   index: number;
@@ -37,6 +37,15 @@ export const CatalogCard = memo(function CatalogCard({
   showTitle?: boolean;
   /** Set for the Top 10 rail's numeral treatment (README §8.2). */
   rank?: number;
+  /**
+   * Why this is being shown — "Because you watched Blade Runner".
+   *
+   * Only recommendations have one, and it is the whole difference between a rail
+   * somebody trusts and a rail of posters that appeared for no stated reason. Shown
+   * under the poster rather than on hover: a reason you have to go looking for is one
+   * nobody reads.
+   */
+  reason?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -157,6 +166,22 @@ export const CatalogCard = memo(function CatalogCard({
         {showTitle && year && (
           <div style={{ padding: '1px 2px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
             {year}
+          </div>
+        )}
+
+        {reason && (
+          <div
+            data-testid="card-reason"
+            title={reason}
+            style={{
+              padding: '4px 2px 0', fontSize: 'var(--fs-xs)',
+              color: 'var(--accent)', fontWeight: 600,
+              // One line: a reason that wraps to three pushes the card below it out of
+              // line, and the rail stops being a row.
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >
+            {reason}
           </div>
         )}
 

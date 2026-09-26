@@ -272,16 +272,49 @@ fn parse_sha256(digest: &str) -> Option<String> {
 /// far below anything that would be a problem.
 pub const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Whether a URL is an asset of this repository's own releases.
+/// Where an asset is allowed to come from.
 ///
-/// The URL comes from GitHub's API rather than from the UI, but it is about to be
+/// Not a bool, because the two cases are not "strict" and "lax" — they are two
+/// different allowlists, and naming them keeps a caller from passing `false` and
+/// meaning nothing in particular.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AssetOrigin {
+    /// This repository's own GitHub release downloads. What a shipped build uses,
+    /// always.
+    #[default]
+    Releases,
+    /// A stand-in on this machine, for `tests-host`. The app only asks for this when
+    /// `AURORA_UPDATE_API` already named a loopback address, so it is not reachable
+    /// from a build nobody is deliberately testing.
+    Loopback,
+}
+
+/// Whether a URL is one this build may download an update from.
+///
+/// The URL comes from the releases API rather than from the UI, but it is about to be
 /// written to disk and executed, so it is checked against the one shape it may have.
 /// The trailing slash in the prefix is load-bearing: without it
 /// `https://github.com.example.invalid/...` and `https://github.com@example.invalid/...`
 /// both pass.
+pub fn is_allowed_asset_url(url: &str, repo: &str, origin: AssetOrigin) -> bool {
+    if url.contains("..") {
+        return false;
+    }
+    match origin {
+        AssetOrigin::Releases => {
+            url.starts_with(&format!("https://github.com/{repo}/releases/download/"))
+        }
+        // Loopback only, and with the port separator, so `http://127.0.0.1.evil/` and
+        // `http://localhost.evil/` are still refused.
+        AssetOrigin::Loopback => ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
+            .iter()
+            .any(|prefix| url.starts_with(prefix)),
+    }
+}
+
+/// Whether a URL is an asset of this repository's own releases.
 pub fn is_release_asset_url(url: &str, repo: &str) -> bool {
-    let prefix = format!("https://github.com/{repo}/releases/download/");
-    url.starts_with(&prefix) && !url.contains("..")
+    is_allowed_asset_url(url, repo, AssetOrigin::Releases)
 }
 
 /// What the release said the installer should be.
@@ -313,6 +346,7 @@ pub fn download_asset(
     url: &str,
     dest: &Path,
     expected: &Expected,
+    origin: AssetOrigin,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<Downloaded, NetFailure> {
     let Some(want_sha) = expected.sha256.as_ref() else {
@@ -322,7 +356,7 @@ pub fn download_asset(
              a browser is the way to install this one.",
         ));
     };
-    if !is_release_asset_url(url, DEFAULT_REPO) {
+    if !is_allowed_asset_url(url, DEFAULT_REPO, origin) {
         return Err(refuse(
             "That download is not from Aurora's releases",
             "The update would have come from somewhere other than this project's own \
@@ -804,6 +838,7 @@ mod tests {
                 bytes: Some(10),
                 sha256: None,
             },
+            AssetOrigin::Releases,
             &mut |_, _| {},
         )
         .unwrap_err();
@@ -823,6 +858,7 @@ mod tests {
                 bytes: Some(1),
                 sha256: Some("b".repeat(64)),
             },
+            AssetOrigin::Releases,
             &mut |_, _| {},
         )
         .unwrap_err();
@@ -1006,5 +1042,63 @@ mod tests {
         let requests = server.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].path, "/repos/owner/repo/releases/latest");
+    }
+}
+
+#[cfg(test)]
+mod asset_origin_tests {
+    use super::*;
+
+    /// The loopback allowance exists for `tests-host` and must not be a way in.
+    /// `http://127.0.0.1.evil.invalid/` and friends are the shapes that matter: the
+    /// port separator is what stops a hostname merely *starting* with a loopback
+    /// address from passing, exactly as the trailing slash does for the GitHub prefix.
+    #[test]
+    fn loopback_means_loopback_and_not_a_hostname_that_starts_like_one() {
+        for url in [
+            "http://127.0.0.1:8100/download/a.zip",
+            "http://localhost:8100/download/a.zip",
+            "http://[::1]:8100/download/a.zip",
+        ] {
+            assert!(
+                is_allowed_asset_url(url, DEFAULT_REPO, AssetOrigin::Loopback),
+                "{url} should be allowed for a loopback test server"
+            );
+        }
+        for url in [
+            "http://127.0.0.1.evil.invalid/a.zip",
+            "http://localhost.evil.invalid/a.zip",
+            "http://127.0.0.1@evil.invalid/a.zip",
+            "https://127.0.0.1:8100/../a.zip",
+            "http://10.0.0.1:8100/a.zip",
+            "https://example.invalid/a.zip",
+        ] {
+            assert!(
+                !is_allowed_asset_url(url, DEFAULT_REPO, AssetOrigin::Loopback),
+                "{url} must be refused even under the loopback allowance"
+            );
+        }
+    }
+
+    /// And the loopback allowance must not leak into the shipped path.
+    #[test]
+    fn a_shipped_build_still_only_accepts_github_releases() {
+        assert!(!is_allowed_asset_url(
+            "http://127.0.0.1:8100/download/a.zip",
+            DEFAULT_REPO,
+            AssetOrigin::Releases
+        ));
+        assert!(is_allowed_asset_url(
+            &format!("https://github.com/{DEFAULT_REPO}/releases/download/v1/a.zip"),
+            DEFAULT_REPO,
+            AssetOrigin::Releases
+        ));
+    }
+
+    /// `Releases` is what a caller gets for free, so a new call site that forgets to
+    /// think about this gets the strict list rather than the lax one.
+    #[test]
+    fn the_default_origin_is_the_strict_one() {
+        assert_eq!(AssetOrigin::default(), AssetOrigin::Releases);
     }
 }

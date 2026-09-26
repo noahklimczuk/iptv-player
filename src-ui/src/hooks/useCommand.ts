@@ -26,15 +26,26 @@ export function useCommand<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
   deps: unknown[] = [],
+  /**
+   * Whether to ask at all. Hooks cannot be called conditionally, so a component that
+   * needs an answer only sometimes — episodes, which exist for a series and not for a
+   * film — would otherwise have to ask a question that makes no sense and then ignore
+   * a failure it caused itself. `loading` is false while disabled, because nothing is.
+   */
+  enabled = true,
 ): State<CommandResult<K>> & { reload: () => void } {
   const [state, setState] = useState<State<CommandResult<K>>>({
-    data: null, loading: true, error: null,
+    data: null, loading: enabled, error: null,
   });
   const [nonce, setNonce] = useState(0);
   const argsRef = useRef(args);
   argsRef.current = args;
 
   useEffect(() => {
+    if (!enabled) {
+      setState({ data: null, loading: false, error: null });
+      return;
+    }
     let live = true;
     setState((s) => ({ ...s, loading: true }));
     invoke(name, argsRef.current)
@@ -49,7 +60,7 @@ export function useCommand<K extends CommandName>(
       });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, nonce, ...deps]);
+  }, [name, nonce, enabled, ...deps]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   return { ...state, reload };

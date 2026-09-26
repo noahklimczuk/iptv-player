@@ -9,3 +9,11 @@ playwright-report/
 screenshots/
 .DS_Store
 *.tsbuildinfo
+
+# The host harness runs a portable copy out of target/ and leaves its library there.
+src-native/target/release/portable.txt
+src-native/target/debug/portable.txt
+screenshots/host/
+
+__pycache__/
+*.pyc
