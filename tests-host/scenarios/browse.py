@@ -189,9 +189,19 @@ def run(d, ctx):
         f"the genre list opens with {offered[0][0]!r}, which starts with punctuation"
     )
 
-    # And the one at the top actually filters.
+    # And the one at the top filters to exactly the number printed beside it.
+    #
+    # Exactly, not roughly: the picker used to list `Drama`, `DRAMA` and `drama` as
+    # three rows while SQLite's `LIKE` — which folds ASCII — treated them as one, so
+    # a filter labelled 11,259 came back with 11,267. Seven genres on this panel have
+    # more than one spelling, and a count that is not what picking it does is a count
+    # worth nothing.
     d.click(d.find_all('[data-testid="select-row"]')[1])
-    filtered = wait_for_count(d, lambda n: 0 < n < shows, timeout=30)
+    filtered = wait_for_count(d, lambda n: n == counts[0], timeout=30)
+    assert filtered == counts[0], (
+        f"the picker says {counts[0]:,} shows carry {offered[0][0]!r} and filtering "
+        f"by it returns {filtered:,}"
+    )
     assert 0 < filtered < shows, (
         f"filtering by {offered[0][0]!r} left {filtered:,} of {shows:,} shows — a "
         f"genre that matches nothing is what a list from the other table looks like"

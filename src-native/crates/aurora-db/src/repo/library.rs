@@ -642,20 +642,40 @@ pub fn genres(
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    // Grouped the way the filter compares, which is the whole point of a count beside
+    // a name: SQLite's `LIKE` folds ASCII and nothing else, so `Drama`, `DRAMA` and
+    // `drama` are one thing to it. Listing them as three rows showed 11,259 beside a
+    // genre that returned 11,267, and put two near-duplicates in the list. Turkish
+    // `Aksiyon` and `AKSİYON` stay apart here because they stay apart there too.
+    //
+    // Keyed by the folded form, holding every spelling seen so the commonest can be
+    // the one displayed.
+    type Spellings = (std::collections::HashMap<String, u32>, u32);
+    let mut counts: std::collections::HashMap<String, Spellings> = std::collections::HashMap::new();
     for (raw, n) in rows {
         // A row whose genres are malformed loses its genres, not the whole filter.
         let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) else {
             continue;
         };
         for g in list.into_iter().filter(|g| !g.trim().is_empty()) {
-            *counts.entry(g).or_default() += n;
+            let entry = counts.entry(g.to_ascii_lowercase()).or_default();
+            *entry.0.entry(g).or_default() += n;
+            entry.1 += n;
         }
     }
 
     let mut out: Vec<Category> = counts
-        .into_iter()
-        .map(|(name, count)| Category { name, count })
+        .into_values()
+        .map(|(spellings, count)| Category {
+            // The spelling most titles use. The name breaks a tie so a library that
+            // writes it both ways does not get a different answer on each call.
+            name: spellings
+                .into_iter()
+                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+                .map(|(name, _)| name)
+                .unwrap_or_default(),
+            count,
+        })
         .collect();
     // Name breaks the tie so the order is stable between calls; a `HashMap` alone
     // would reshuffle equally-common genres on every keystroke in the filter.
@@ -1665,6 +1685,73 @@ mod tests {
                 ("Crime".to_string(), 1),
             ]
         );
+    }
+
+    /// The count beside a genre has to be what picking it returns.
+    ///
+    /// It was not. `Drama`, `DRAMA` and `drama` were three rows in the picker, and
+    /// SQLite's `LIKE` — which folds ASCII — treated them as one, so a filter labelled
+    /// 11,259 came back with 11,267 and two near-duplicate rows sat in the list.
+    /// Measured on a real panel: seven genres had more than one spelling.
+    #[test]
+    fn spellings_the_filter_cannot_tell_apart_are_one_row() {
+        use crate::repo::filtering::Kind;
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+
+        let mut add = |key: &str, genres: &[&str]| {
+            let g: Vec<String> = genres.iter().map(|s| s.to_string()).collect();
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title: key,
+                    match_key: key,
+                    genres: &g,
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap();
+        };
+        add("a", &["Drama"]);
+        add("b", &["Drama"]);
+        add("c", &["DRAMA"]);
+        add("d", &["drama"]);
+
+        let got = genres(&conn, Kind::Series).unwrap();
+        assert_eq!(got.len(), 1, "three spellings became {} rows", got.len());
+        assert_eq!(got[0].count, 4, "the count must be what the filter returns");
+        assert_eq!(got[0].name, "Drama", "and the spelling most titles use");
+    }
+
+    /// Only ASCII, because only ASCII is what `LIKE` folds. Turkish dotted and
+    /// dotless I are different letters to SQLite, so they are different rows here —
+    /// merging them would put a count on a filter that does not return it.
+    #[test]
+    fn folding_stops_where_the_filters_folding_stops() {
+        use crate::repo::filtering::Kind;
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = vec!["Aksiyon".to_string()];
+        let b = vec!["AKSİYON".to_string()];
+        for (key, g) in [("a", &a), ("b", &b)] {
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title: key,
+                    match_key: key,
+                    genres: g,
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap();
+        }
+        assert_eq!(genres(&conn, Kind::Series).unwrap().len(), 2);
     }
 
     /// A hidden row is not on the screen, so its genres are not in the filter either —
