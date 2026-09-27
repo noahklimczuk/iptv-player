@@ -208,6 +208,64 @@ def _is_transport_error(e):
     )
 
 
+# What `keyring` files a secret under on Windows: the target name is `{user}.{service}`,
+# and the service is fixed by `aurora-ingest::credentials`.
+CREDENTIAL_SERVICE = "AuroraTV"
+
+
+def reclaim_credentials(path):
+    """Delete the credential entries belonging to the library at `path`.
+
+    The OS credential store is the one piece of state a scenario touches that `wipe` does
+    not reach: it is per-user and, on Windows, shared by every application the account
+    runs. Deleting the data directory therefore leaves each run's secret behind in
+    Credential Manager with nothing left that references it.
+
+    It must not be tidied up by pattern. That mistake has already been made once here —
+    keys used to be `aurora-provider-{row id}`, every library's first provider was
+    `aurora-provider-1`, and this harness quietly destroyed the password of the copy of
+    Aurora the machine's owner actually uses. So the keys are **read out of the library
+    that is about to be destroyed**, which is the only way to be certain every one of
+    them was created by this suite.
+
+    Best effort throughout: there is no state here worth failing a run over, and a
+    library that was never created has nothing to hand back.
+    """
+    db = os.path.join(path, "library.db")
+    if not os.path.exists(db):
+        return
+    try:
+        con = sqlite3.connect(f"file:{db.replace(os.sep, '/')}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return
+    try:
+        keys = [
+            row[0]
+            for row in con.execute(
+                "SELECT credential_ref FROM providers WHERE credential_ref IS NOT NULL")
+        ]
+    except sqlite3.Error:
+        keys = []
+    finally:
+        con.close()
+
+    for key in keys:
+        # A row can only name an un-namespaced key if this library predates namespacing,
+        # which a library this harness just made cannot. Refuse it rather than risk it.
+        if not key.startswith("aurora-") or key.count("-") < 3:
+            print(f"   leaving {key!r} alone: not a key this suite would have made")
+            continue
+        target = f"{key}.{CREDENTIAL_SERVICE}"
+        if WINDOWS:
+            subprocess.run(
+                ["cmdkey", f"/delete:{target}"],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(
+                ["secret-tool", "clear", "service", CREDENTIAL_SERVICE, "username", key],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def wipe(path):
     """Empty a directory, and be sure it is actually gone.
 
@@ -381,7 +439,9 @@ def main():
             spec.loader.exec_module(mod)
 
             # A fresh library per scenario: an empty database is a state that only
-            # happens once, and it is the one that has never been tested.
+            # happens once, and it is the one that has never been tested. Its secrets go
+            # back before it does — they outlive the directory otherwise.
+            reclaim_credentials(DATA)
             wipe(DATA)
             since = os.path.getsize(stderr_path) if os.path.exists(stderr_path) else 0
 
@@ -415,6 +475,7 @@ def main():
                         d.quit()
                     d = None
                     procs, stderr_path, github = restart_driver(procs, stderr_path, github)
+                    reclaim_credentials(DATA)
                     wipe(DATA)
                     since = os.path.getsize(stderr_path) if os.path.exists(stderr_path) else 0
                     ctx = Ctx(name, stderr_path, since)
