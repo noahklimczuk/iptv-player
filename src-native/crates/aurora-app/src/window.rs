@@ -223,10 +223,10 @@ pub fn resolve_playback(
 /// app layer holding a `Box<dyn PlayerBackend>` that did not expose it. Both halves
 /// are connected now.
 ///
-/// **UNVERIFIED on real hardware.** This is the Phase 0 spike (docs/ROADMAP.md): it
-/// compiles for `x86_64-pc-windows-msvc` and has never met a display. Everything here
-/// fails soft — a window that cannot be attached to leaves the app running with no
-/// picture and a line in the log, rather than refusing to start.
+/// **Verified on real hardware** (`AUDIT/test-report.md` §11): the surface is created,
+/// ends up last in the window's z-order, and video reaches the screen behind the UI.
+/// Everything here still fails soft — a window that cannot be attached to leaves the app
+/// running with no picture and a line in the log, rather than refusing to start.
 #[cfg(windows)]
 pub fn attach_video_surface(
     window: &tauri::WebviewWindow,

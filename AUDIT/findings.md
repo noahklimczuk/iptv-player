@@ -42,6 +42,11 @@ commit and the test that would catch a regression.
 | F-27 | High | ui | A host failure renders as an empty state: "you have no channels" | Fixed |
 | F-28 | High | ci | The Rust advisory step audits nothing and skips the four steps after it, journeys included | Fixed |
 | F-29 | High | deps | `quick-xml` 0.36 carries two high-severity advisories reachable from a provider's guide | Fixed |
+| F-30 | High | player | A stream that will not open leaves the player `Loading` for ever: the event pump stops at the first error | Fixed |
+| F-31 | Medium | player | `cache-dir` is not an mpv option, so the timeshift buffer goes to mpv's folder and the budget is never enforced | Fixed |
+| F-32 | Low | ci | `clippy -D warnings` has never linted the `#[cfg(windows)]` code, and does not pass on it | Fixed |
+| F-33 | Low | build | `option_env!("AURORA_TMDB_KEY")` is untracked, so a warm cache can ship the previous key | Fixed |
+| F-34 | High | player | Without `libmpv-2.dll` the app dies in the loader with no window, no log and no message; the `NullBackend` fallback is unreachable | Fixed |
 
 ---
 
@@ -830,3 +835,217 @@ failure this audit kept finding in the project — and F-28 is this audit commit
 The pattern is now three for three: F-24 (three functions called from nowhere), F-09
 and F-12 (invisible behind the mock transport), and now a CI step that ran, reported,
 and checked nothing.
+
+---
+
+## F-30 — High — A stream that will not open leaves the player loading for ever
+
+**Found by running it on Windows.** Nothing off Windows has an mpv that can fail.
+
+**Where.** `crates/aurora-player/src/mpv.rs`, `MpvBackend::pump`.
+
+**What.** The drain loop was written as:
+
+```rust
+while let Some(Ok(event)) = ctx.wait_event(timeout_secs) {
+```
+
+`while let` stops the moment the pattern does not match, so a single `Err` ended the
+drain — and took every event still queued behind it with it.
+
+An `Err` is not the unusual case. It is how a dead stream arrives. libmpv2 reads the
+error code off `MPV_EVENT_END_FILE` before it builds an `Event`:
+
+```rust
+mpv_event_id::EndFile => {
+    let end_file = unsafe { *(event.data as *mut mpv_event_end_file) };
+    if let Err(e) = mpv_err((), end_file.error) {
+        Some(Err(e))                       // ← a file that failed to open
+    } else {
+        Some(Ok(Event::EndFile(end_file.reason as _)))
+    }
+}
+```
+
+So `Event::EndFile(MPV_END_FILE_REASON_ERROR)` — the arm the code handled — is close to
+unreachable, and the arm it did not handle is the one that fires. The status stayed at
+whatever the load set, `state.error` stayed `None`, no `Error` status was ever published,
+and the failover in README §7.14 was never triggered, because the event that would have
+triggered it was the event that stopped the loop.
+
+Reproduced against a channel whose URL refuses every connection:
+
+```
+statuses seen: ['loading'], error=None
+a channel whose URL refuses every connection left the player reporting 'loading'
+for 45s, with error=None
+```
+
+**And underneath it, a second bug of the same kind.** The error branch described the
+failure by reading an `error-string` property:
+
+```rust
+.get_property::<String>("error-string").unwrap_or_else(|_| "unknown".into())
+```
+
+mpv has no `error-string` property — confirmed against libmpv v0.41, which answers
+`MPV_ERROR_PROPERTY_NOT_FOUND`. The read could never succeed, so every playback error
+this application has ever produced was classified from the literal word `"unknown"`.
+
+**Fix.** The loop matches on the `Result` and turns an `Err` into a new `Drained::Failed`
+variant; `fail()` records the message and sets `PlayerStatus::Error` in one place. The
+failure is only treated as a playback failure when something was meant to be playing,
+because libmpv2 reports a refused command through the same channel. The `error-string`
+read is gone.
+
+What this does not fix: mpv's error text is coarse — `mpv_error_string` says "loading
+failed", not the HTTP status underneath — so `classify` still lands most failures on the
+generic message. Putting "403" in front of it means capturing mpv's log stream
+(`mpv_request_log_messages`), which is a larger change than this one.
+
+**Regression test.** `tests-host/scenarios/stream_failure.py`, which asserts both halves:
+that the dead channel reaches `error` with something to show, and that a working channel
+tuned *afterwards* still plays — the pump not having stopped.
+
+**It also explains a test that could only ever have passed without video.**
+`tests-host/scenarios/player_controls.py` read the player's status from the
+`player control` log line, which records the status **at the moment the command was
+issued**. `NullBackend` has nothing to load, so that is already `Playing`; mpv's `play`
+returns while still `Loading`. Against a real panel the scenario failed with
+`('play', 'loading')` and went on failing when its timeout was raised to 60 seconds. It
+now polls `player_state`.
+
+---
+
+## F-31 — Medium — The timeshift buffer is written to mpv's directory, not the viewer's
+
+**Where.** `crates/aurora-player/src/backend.rs`, `LoadOptions::mpv_options`.
+
+**What.** Every tune of a buffered live channel logged:
+
+```
+WARN aurora_player::mpv: mpv rejected cache-dir: Raw(-8)
+```
+
+`Raw(-8)` is `MPV_ERROR_PROPERTY_NOT_FOUND`. mpv has no `cache-dir`; the option is
+`demuxer-cache-dir`. Asked directly:
+
+```
+           cache-dir: set_property=property not found  set_option=option not found  option-info=None
+   demuxer-cache-dir: set_property=success             set_option=success           option-info='demuxer-cache-dir'
+```
+
+`cache-on-disk=yes` beside it was accepted, so the buffer was written — to mpv's own
+default directory rather than the folder the viewer chose. Three consequences, none of
+which announce themselves:
+
+- A portable copy kept state outside itself, against README §13.
+- `timeshift::bytes_on_disk` measured the app's empty folder, so the budget in README
+  §7.6 was never enforced against anything.
+- Uninstalling leaves the buffer behind, in a directory the app never names.
+
+**Fix.** The option is emitted under the name mpv has. The unit test asserts both the new
+name and that the old one is *not* emitted, so a rename back is a failing test rather
+than a warning in a log nobody reads.
+
+---
+
+## F-32 — Low — Clippy has never linted the Windows-only code
+
+**Where.** CI's `core` job runs `cargo clippy --workspace --all-targets -- -D warnings`
+on Linux. `crates/aurora-player/src/mpv.rs` is `#![cfg(windows)]`, so none of it is
+compiled there, and the Windows job runs `cargo check` rather than clippy.
+
+**What.** Run on Windows, it fails: `type_complexity` on a compile-time assertion. The
+assertion was one of four `const _: Option<…> = None;` lines whose stated purpose was to
+silence unused-import warnings "for the resize/message plumbing the host wires up".
+Nothing wires it up — resizing goes through `SetWindowPos` — so `WPARAM`, `LPARAM`,
+`LRESULT`, `RECT` and `HashMap` were simply unused imports, and the workaround was
+hiding that rather than serving it.
+
+**Fix.** The imports and the four `const _` lines are gone. Worth adding to CI's Windows
+job so it cannot come back.
+
+---
+
+## F-33 — Low — A warm build can ship the previous TMDB key
+
+**Where.** `crates/aurora-app/build.rs`, and `metadata::BUILT_IN_KEY`.
+
+**What.** The key is `option_env!("AURORA_TMDB_KEY")`, read at compile time. Cargo does
+not track environment variables a macro reads, so with a warm target directory —
+`Swatinem/rust-cache` in CI, or any local rebuild — `aurora-app` is not recompiled when
+the secret changes, and the binary keeps whatever key the last compile saw. Rotating a
+leaked key and merging would appear to work and change nothing.
+
+**Fix.** `build.rs` emits `cargo:rerun-if-env-changed=AURORA_TMDB_KEY`.
+
+---
+
+## F-34 — High — Without libmpv the app dies silently, and the fallback it documents cannot run
+
+**Found by item 1b's step 4**, which asks what a *failed* update leaves behind.
+
+**Where.** `crates/aurora-player/src/lib.rs`, `create_backend`, and the link itself.
+
+**What.** The code reads as though a missing or unusable libmpv degrades gracefully:
+
+```rust
+match mpv::MpvBackend::new() {
+    Ok(b) => return Box::new(b),
+    Err(e) => tracing::error!("libmpv unavailable, falling back to null backend: {e}"),
+}
+```
+
+It cannot. `libmpv2-sys` links against `mpv.lib`, which makes `libmpv-2.dll` a
+**load-time import**: the Windows loader resolves it before `main` runs, so there is no
+point at which `MpvBackend::new` is reached to fail. Measured, with the DLL moved aside:
+
+```
+alive: False   exit: 3221225781 (0xC0000135, STATUS_DLL_NOT_FOUND)
+aurora.log grew: 0 bytes
+stdout/stderr: ''
+```
+
+No window, no log line, no dialog. The same thing happens when the DLL is merely
+*unreadable* rather than absent — holding it open with an exclusive handle, which is
+what a scanner or a backup agent does, ends the process with `0xC0000043`
+(`STATUS_SHARING_VIOLATION`) inside three seconds.
+
+Why it matters beyond a developer forgetting a file:
+
+- The DLL is 120 MB of decoder. Antivirus quarantining it, or a partially-extracted
+  portable zip, turns the app into an icon that does nothing when clicked.
+- It is the failure mode of a *broken update*. Item 1b's whole concern is that "a failed
+  update must never be why somebody's television stops working" — and the one file whose
+  loss is unrecoverable is the one that produces no diagnostic at all.
+- Every instruction this project gives for diagnosing a bad start ("the log says which
+  step failed") is unusable here, because there is no log.
+
+**Fix.** Delay-loaded, so the failure is a value rather than a loader error.
+`aurora-app/build.rs` emits `/DELAYLOAD:libmpv-2.dll` and `delayimp.lib` — from the
+*binary's* build script, since `rustc-link-arg` from a library applies to that library's
+own artifact and not to the link that matters — and `MpvBackend::new` now calls
+`LoadLibraryW` before it touches a single mpv symbol, returning `Err` when the DLL will
+not load. The fallback that was always written is now reachable.
+
+Measured after the change, with the DLL renamed aside:
+
+```
+survived 14s: True
+INFO  aurora_app: Aurora TV 0.11.1 starting, data in ...
+ERROR aurora_player: libmpv unavailable, falling back to null backend: libmpv could not
+      be initialised: libmpv-2.dll could not be loaded. It must sit beside
+      aurora-app.exe; a scanner holding it open will do this too.
+INFO  aurora_app::window: video surface attached width=1440 height=900
+```
+
+The app starts, draws its interface, and says what is wrong — instead of exiting with
+`0xC0000135` and writing nothing anywhere.
+
+**And playback still works through the delay-loaded import**, which is the thing a change
+like this can quietly break: `video_surface` and `stream_failure` both pass against the
+delay-loaded binary, with mpv decoding 1920x1080 at 60fps and 94.7% of the window moving.
+
+**Regression test.** Rename `libmpv-2.dll` aside and launch: the app must start and log
+`libmpv unavailable`, rather than exiting with `0xC0000135`.

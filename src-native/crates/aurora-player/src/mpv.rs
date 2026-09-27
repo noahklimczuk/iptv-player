@@ -4,20 +4,25 @@
 //! mpv renders into a child HWND of the Tauri window, positioned *behind* the WebView2
 //! so the React UI composites on top of live video. See docs/ARCHITECTURE.md.
 //!
-//! IMPORTANT: this module compiles on Windows in CI but has NOT been run against a real
-//! display or a real stream — that is the Phase 0 spike in docs/ROADMAP.md, which needs
-//! a Windows machine. Treat every timing claim here as unverified until then.
+//! Run against a real display and a real stream on Windows 11 with libmpv v0.41:
+//! 1920x1080 H.264 at 60fps, `hwdec=d3d11va-copy`, composited behind the WebView2, with
+//! the surface following a resize. `AUDIT/test-report.md` §11 has the numbers and
+//! `tests-host/scenarios/video_surface.py` is the regression test.
+//!
+//! What that run has *not* covered: a provider's own stream end to end, catch-up,
+//! recording, and anything about a second monitor or a per-monitor DPI change. Timing
+//! claims are measured on one machine against a public CDN — one zap came in at 1.91s
+//! against the 1.5s budget in README §16.
 
 #![cfg(windows)]
 
-use std::collections::HashMap;
 use std::ffi::c_void;
 
 use aurora_core::markers::Chapter;
 use aurora_core::timeshift::{Budget, Reading};
 use libmpv2::mpv_node::MpvNode;
 use libmpv2::{events::Event, Mpv};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SW_SHOW,
     WINDOW_EX_STYLE, WS_CHILD, WS_VISIBLE,
@@ -26,6 +31,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::backend::{LoadOptions, PlayerBackend};
 use crate::error::{PlaybackError, PlayerError};
 use crate::state::{Aspect, PlaybackStats, PlayerState, PlayerStatus, Track, TrackKind};
+
+/// The runtime libmpv, by the name the import library was built against. `mpv.lib` is
+/// generated from the DLL's own export table with `/name:` set to it, so this string and
+/// the import table always agree.
+const LIBMPV_DLL: &str = "libmpv-2.dll";
+
+/// Whether libmpv can actually be loaded, asked before anything needs it.
+fn libmpv_loadable() -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::LibraryLoader::LoadLibraryW;
+
+    let wide: Vec<u16> = LIBMPV_DLL
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // Safety: a null-terminated wide string that outlives the call. A handle that comes
+    // back is deliberately not freed — the process is about to use the library.
+    unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())).is_ok() }
+}
 
 /// mpv's end-file reason for a playback error.
 const MPV_END_FILE_REASON_ERROR: u32 = 4;
@@ -37,6 +61,11 @@ enum Drained {
     FileLoaded,
     EndFile(u32),
     Property(String),
+    /// mpv reported an error rather than an event. This is how a stream that will not
+    /// open reaches us: libmpv2 turns an end-file carrying an error code into `Err`
+    /// before `Event::EndFile` is ever constructed, so the most important thing the
+    /// player can be told arrives down the arm that used to end the loop.
+    Failed(String),
 }
 
 /// A live stream being kept on disk so it can be rewound (README §7.6).
@@ -75,6 +104,18 @@ unsafe impl Send for MpvBackend {}
 
 impl MpvBackend {
     pub fn new() -> Result<Self, PlayerError> {
+        // Ask for the DLL before touching a single mpv symbol. With `/DELAYLOAD` set on
+        // the binary (see `aurora-app/build.rs`), nothing has been resolved yet, so this
+        // is the one place where "libmpv is not usable" can still be turned into a
+        // value. Without it the process is already dead: a load-time import that cannot
+        // be resolved ends it in the loader, before `main`, with nothing written
+        // anywhere (F-34).
+        if !libmpv_loadable() {
+            return Err(PlayerError::Init(format!(
+                "{LIBMPV_DLL} could not be loaded. It must sit beside aurora-app.exe; \
+                 a scanner holding it open will do this too."
+            )));
+        }
         let mpv = Mpv::with_initializer(|init| {
             // Hardware decoding first, software fallback — README C4.
             init.set_property("hwdec", "d3d11va-copy,dxva2-copy,auto-safe,no")?;
@@ -167,6 +208,20 @@ impl MpvBackend {
         Ok(())
     }
 
+    /// Record a playback failure, in the one place that decides what one looks like.
+    ///
+    /// The text is whatever mpv said, which is coarse: `mpv_error_string` gives
+    /// "loading failed" and not the HTTP status underneath it, so `classify` has little
+    /// to go on and most failures land on the generic message. Telling a viewer the
+    /// stream is dead is still the difference between that and a spinner that never
+    /// stops. Getting "403" in front of `classify` means capturing mpv's log stream
+    /// (`mpv_request_log_messages`), which is a larger change than this one.
+    fn fail(&mut self, message: &str) {
+        tracing::warn!("playback failed: {message}");
+        self.state.error = Some(PlaybackError::classify(message));
+        self.state.status = PlayerStatus::Error;
+    }
+
     /// Pump mpv's event queue. Called from a dedicated thread by the app layer; every
     /// interesting transition is folded into `self.state` for the UI to mirror.
     pub fn pump(&mut self, timeout_secs: f64) {
@@ -176,13 +231,21 @@ impl MpvBackend {
         let drained = {
             let ctx = self.mpv.event_context_mut();
             let mut out: Vec<Drained> = Vec::new();
-            while let Some(Ok(event)) = ctx.wait_event(timeout_secs) {
+            // `while let Some(Ok(event))` ended the drain on the first `Err` and threw
+            // away every event queued behind it — and an `Err` is exactly how a dead
+            // stream arrives (see `Drained::Failed`). A channel whose URL refused every
+            // connection therefore sat at `Loading` for as long as anyone was willing to
+            // wait: no error, no status change, and no failover, because the event that
+            // would have triggered one was the event that stopped the loop. Reproduced
+            // in `tests-host/scenarios/stream_failure.py`.
+            while let Some(event) = ctx.wait_event(timeout_secs) {
                 out.push(match event {
-                    Event::StartFile => Drained::StartFile,
-                    Event::FileLoaded => Drained::FileLoaded,
-                    Event::EndFile(reason) => Drained::EndFile(reason),
-                    Event::PropertyChange { name, .. } => Drained::Property(name.to_string()),
-                    _ => continue,
+                    Ok(Event::StartFile) => Drained::StartFile,
+                    Ok(Event::FileLoaded) => Drained::FileLoaded,
+                    Ok(Event::EndFile(reason)) => Drained::EndFile(reason),
+                    Ok(Event::PropertyChange { name, .. }) => Drained::Property(name.to_string()),
+                    Ok(_) => continue,
+                    Err(e) => Drained::Failed(e.to_string()),
                 });
             }
             out
@@ -197,16 +260,36 @@ impl MpvBackend {
                     self.refresh_tracks();
                 }
                 Drained::EndFile(reason) => {
-                    // MPV_END_FILE_REASON_ERROR.
+                    // MPV_END_FILE_REASON_ERROR. A file that ends *because* of an error
+                    // normally reaches us as `Drained::Failed` instead, since libmpv2
+                    // reads the error code off the event first; this arm remains for the
+                    // case where mpv gives the reason without one.
+                    //
+                    // It used to read an `error-string` property to describe the
+                    // failure. mpv has no such property — confirmed against libmpv
+                    // v0.41, where it answers MPV_ERROR_PROPERTY_NOT_FOUND — so the read
+                    // always failed and every playback error in the app's history was
+                    // classified from the literal word "unknown".
                     if reason == MPV_END_FILE_REASON_ERROR {
-                        let raw = self
-                            .mpv
-                            .get_property::<String>("error-string")
-                            .unwrap_or_else(|_| "unknown".into());
-                        self.state.error = Some(PlaybackError::classify(&raw));
-                        self.state.status = PlayerStatus::Error;
+                        self.fail("playback stopped with an error");
                     } else {
                         self.state.status = PlayerStatus::Idle;
+                    }
+                }
+                Drained::Failed(message) => {
+                    // Only when something was meant to be on. libmpv2 reports a refused
+                    // command through the same `Err`, and a command that was refused is
+                    // not a stream that died.
+                    if matches!(
+                        self.state.status,
+                        PlayerStatus::Loading | PlayerStatus::Playing | PlayerStatus::Buffering
+                    ) {
+                        self.fail(&message);
+                    } else {
+                        tracing::debug!(
+                            "mpv reported {message} while {:?}; not a playback failure",
+                            self.state.status
+                        );
                     }
                 }
                 Drained::Property(name) => match name.as_str() {
@@ -571,10 +654,3 @@ impl Drop for MpvBackend {
         }
     }
 }
-
-// Silence unused-import warnings for items kept for the resize/message plumbing the
-// host wires up (see docs/ARCHITECTURE.md).
-const _: Option<fn(HWND, u32, WPARAM, LPARAM) -> LRESULT> = None;
-const _: Option<RECT> = None;
-const _: Option<HashMap<String, String>> = None;
-const _: Option<*mut c_void> = None;

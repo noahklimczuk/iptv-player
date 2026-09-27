@@ -4,13 +4,43 @@ What is left for a person, in the order it blocks 1.0. Everything still open her
 needs a Windows machine, a paid account, a certificate, or a decision — none of which
 this audit could supply.
 
-Items 6 and 8 are **done**. Item 1's code is done and only its *verification* is left.
-Items 2, 3, 4 and 5 are blocking and untouched; 7, 9 and 10 are the difference between
-shipping and shipping well.
+Items 1, 6 and 8 are **done**: item 1 was run on a Windows machine and is reported in
+`AUDIT/test-report.md` §11, with one number outside its budget. Item 3 is **mostly
+answered** — a real subscription imported and drew — with catch-up, recording and logos
+still open. Items 2, 4 and 5 are blocking and untouched; 1b, 7, 9 and 10 are the
+difference between shipping and shipping well.
 
 ---
 
-## 1. Run the Phase 0 spike — **blocking, and everything else is downstream**
+## 1. Run the Phase 0 spike — **done**
+
+**Run on Windows 11 with libmpv v0.41, and it works.** The full account is in
+`AUDIT/test-report.md` §11; the four questions this item asked, in order:
+
+1. **Video renders behind the UI, not in a window of its own.** The process has one
+   top-level window; mpv's surface is a `STATIC` `WS_CHILD` of it, last of two children
+   in z-order. 95.4% of a sampled grid over the middle of the window changed between two
+   desktop captures 1.2s apart — a still window measures 0.0% — with mpv reporting
+   `1920x1080 H.264 60fps hwDecoder=d3d11va-copy`.
+2. **The UI receives input while video plays underneath.** A click on the OSD changes
+   what is on screen.
+3. **Resizing does not tear the two apart.** After a resize the client area is
+   `1220x740` and the video surface is `1220x740`.
+4. **Zap time is 1.91s, against the 1.5s budget in README §16.** One measurement, on one
+   machine, against a public CDN rather than a provider — so it is reported rather than
+   asserted, but it is outside the budget and it is the first real number there has been.
+
+The fallback — a native XAML/WinUI shell — is not needed. `tests-host/scenarios/
+video_surface.py` is the regression test, and it runs from
+`python tests-host/run.py video_surface` with a playlist in `AURORA_TEST_STREAM_M3U`.
+
+Two things this run found that only a run could: mpv has no `cache-dir` option, so the
+timeshift buffer had been going to mpv's own folder rather than the viewer's (fixed),
+and `clippy -D warnings` had never linted the `#[cfg(windows)]` code and did not pass on
+it (fixed). Both are in `AUDIT/test-report.md` §12.
+
+<details>
+<summary>What this item said before it was run</summary>
 
 **The wiring is done.** It was the gap that made every other question unanswerable:
 three things were written and called from nowhere, so a run would have shown no video
@@ -29,7 +59,7 @@ not have — so CI's Windows job is the first thing that will compile `window.rs
 `main.rs`. Expect to fix a compile error or two there before anything runs.
 
 What remains is the part only a machine can do. Run `cargo tauri dev` on Windows with
-`mpv-2.dll` beside the exe and confirm:
+`libmpv-2.dll` beside the exe and confirm:
 
 1. Video renders *behind* the UI, not in a separate window.
 2. The UI receives input while video plays underneath.
@@ -50,14 +80,51 @@ whatever the load set.
 If there is no picture, the log says which step failed: look for `video surface
 ready`, `no video surface: …`, or `no main window at setup`.
 
-## 1b. Test the portable self-update — **new, and unproven**
+</details>
+
+## 1b. Test the portable self-update — **done, and it found something**
 
 A portable copy now updates itself instead of being sent to a browser (D25): it
 downloads the zip, verifies the digest, unpacks it, and swaps its own files in at the
 next launch. The staging, the path refusals, the apply and the rollback are all tested
 on Linux, because none of it is `#[cfg(windows)]` — it is `std::fs` throughout.
 
-**What is not tested is the claim it rests on:** that Windows lets you rename a
+**Run on Windows, and the claim holds.** A portable copy of 0.11.0 was given a staged
+0.11.1 and relaunched; it renamed its own running `.exe`, applied the update and came
+back as the new version:
+
+```
+   old exe 13,589,504   new exe 12,845,056
+   [first run] it says it is version 0.11.0
+   staged: ['.ready', 'aurora-app.exe']
+   [after staging] it now says it is version 0.11.1
+   log: INFO aurora_app::updates: a staged update was applied before launch: applied 1 files
+   previous/      : ['aurora-app.exe']
+   staged/ gone   : True
+   [third run] previous/ still there: False
+```
+
+So steps 1 to 3 below are answered: the swap works, `previous/` holds the old build, and
+the launch after that forgets it.
+
+**Step 4 — breaking it on purpose — found F-34 instead.** Holding `libmpv-2.dll` open
+with an exclusive handle, the way a scanner does, does not exercise the rollback at all:
+the process never reaches its own code. libmpv is a load-time import, so the Windows
+loader ends it with `0xC0000043` (sharing violation) — and with the DLL absent
+altogether, `0xC0000135` — in both cases with **no window, no log and no message**. The
+`NullBackend` fallback that `create_backend` appears to offer cannot run.
+
+That matters most precisely here, where this item is looking: the one file whose loss a
+bad update cannot recover from is also the one whose loss the app cannot report. The fix
+is to delay-load it so the failure becomes a value; see F-34.
+
+The staged update is not lost, which is the good half: with the lock released, the next
+launch applied it and came back as 0.11.1. A refused apply leaves a working copy behind
+and retries, rather than rolling forward into a broken install.
+
+The original wording of this item follows, since its steps are still the right ones:
+
+> **What is not tested is the claim it rests on:** that Windows lets you rename a
 running `.exe`. It does, and it is how every self-updating Windows application works,
 but nothing here has done it. On the machine from item 1:
 
@@ -67,7 +134,7 @@ but nothing here has done it. On the machine from item 1:
 3. Check `data\updates\previous\` holds the old files, and that they are gone after
    the launch *after* that.
 4. **Then break it on purpose** — make the install folder read-only, or hold
-   `mpv-2.dll` open — and confirm the rollback leaves a working copy of the old
+   `libmpv-2.dll` open — and confirm the rollback leaves a working copy of the old
    version and a line in `aurora.log` saying why. That is the path that matters; a
    failed update must never be why somebody's television stops working.
 
@@ -93,10 +160,11 @@ checksum. It does.
 
 Several things can only be answered with an account:
 
-- **Series.** F-04 is fixed — an Xtream panel's `get_series` listings are now written
-  instead of counted — so the Series screen should populate on the panel that used to
-  show 28,693 series found and nothing in it. Confirm the count, the artwork, and that
-  opening a show says its episodes are still to come rather than looking broken.
+- **Series. Answered.** A real panel imported **22,121 channels, 117,587 films and
+  28,529 series**, and Live TV, Movies and Series all drew — so F-04 holds outside a
+  fixture, and "Live TV says No channels" does not reproduce. Opening a show lists its
+  episodes (6 on the one opened); `episodes` is 0 straight after an import because they
+  are fetched when a show is opened. Artwork is still unconfirmed — that needs item 7.
 - **Catch-up (F-23, deferred).** `xtream_url` formats its timestamp in UTC; panels read
   it in their own local time, and `server_info.timezone` said `Europe/Paris` on the one
   panel probed — two hours out. `timeshift.php` 404s there, so it cannot be fixed
@@ -117,9 +185,45 @@ for 1.0 and say so on the release page, or find/build an ARM64 libmpv first.
 
 ---
 
-## 5. Installer, upgrade, uninstall
+## 5. Installer, upgrade, uninstall — **upgrade done; install and uninstall need an admin**
 
-None of this could run here. On a clean Windows VM:
+**What was run.** Both bundlers produce what they should: an NSIS `.exe` (37.3 MB) and an
+MSI (50.9 MB), and each carries `aurora-app.exe`, `libmpv-2.dll`, `LICENSE`,
+`licenses\GPL-3.0.txt`, `licenses\LGPL-2.1.txt` and `THIRD-PARTY-NOTICES.md` — so
+item 8's obligation travels with the binary in both. (The NSIS build names the licence
+`LICENSE.txt` and the MSI names it `LICENSE`; harmless, since Settings -> About reads
+only `THIRD-PARTY-NOTICES.md`, which both spell the same way.)
+
+**The upgrade bullet is answered.** A 0.11.1 build was installed over an existing
+0.11.0 with a real library behind it — 22,121 channels, 117,510 films, 28,529 series and
+453,072 programmes, imported from a live panel — plus a favourite and a watch position
+seeded first, because both tables were empty and an upgrade cannot be shown to preserve
+what is not there:
+
+```
+  ok channels           22,121 ->   22,121      ok epg_programmes    453,072 ->  453,072
+  ok movies            117,510 ->  117,510      ok providers               1 ->        1
+  ok series             28,528 ->   28,528      ok settings                5 ->        5
+  ok episodes              143 ->      143      ok favorites               1 ->        1
+                                                ok watch_progress          1 ->        1
+  favourite : ('channel', 'US * QVC HD')     watch progress : ('movie', 1, 421, 5400)
+  schema user_version: 8 (unchanged - this version pair needs no migration)
+```
+
+Nothing was lost, and the new build opened the existing library without the recovery
+path firing.
+
+**What still needs an administrator.** The machine this ran on has a standard user
+account, and Tauri's NSIS build requests elevation before it parses `/CURRENTUSER`, so
+every silent install attempt ended in `The operation was canceled by the user` — UAC
+asking for credentials that a standard user does not have. The MSI installs per-user
+without elevation (`msiexec /i ... /qn MSIINSTALLPERUSER=1 ALLUSERS=2`, exit 0, into
+`%LOCALAPPDATA%\Programs\Aurora TV` with an HKCU uninstall entry), which is how the
+upgrade above was done — but the per-machine NSIS path, the Start-menu integration it
+creates, and the uninstall are all still unrun. **They need an admin account**, not
+another machine.
+
+Still to do, then, on a clean Windows VM with administrator rights:
 
 - Install the NSIS build. Check Start-menu entry, uninstall entry, file associations if
   any.
@@ -180,7 +284,7 @@ the portable zip, and shown in Settings → About — which reads them from besi
 executable, so what is on screen is what shipped.
 
 **The one thing still on a person:** the notices say libmpv is LGPL-2.1+ *or* GPL-2+
-"depending how the `mpv-2.dll` in this build was compiled", because the release
+"depending how the `libmpv-2.dll` in this build was compiled", because the release
 workflow *discovers* the shinchiro archive rather than pinning one and those builds
 may or may not enable GPL-only components. Aurora is GPL-3.0-or-later so either is
 compatible — but the release notes should record which archive was used, and if you

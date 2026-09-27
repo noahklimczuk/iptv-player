@@ -91,7 +91,19 @@ impl LoadOptions {
             Some(ts) => {
                 o.push(("cache".into(), "yes".into()));
                 o.push(("cache-on-disk".into(), "yes".into()));
-                o.push(("cache-dir".into(), ts.dir.to_string_lossy().into_owned()));
+                // `demuxer-cache-dir`, not `cache-dir`: mpv has no option by the
+                // latter name, so it was refused on every tune — "mpv rejected
+                // cache-dir: Raw(-8)", which is MPV_ERROR_PROPERTY_NOT_FOUND —
+                // and the buffer went to mpv's own default directory instead of
+                // the one the viewer chose. That made a portable copy keep state
+                // outside itself, and `timeshift::bytes_on_disk` measure an empty
+                // folder, so the budget was never enforced against anything.
+                // Confirmed against libmpv v0.41: `option-info/cache-dir` is
+                // absent, `option-info/demuxer-cache-dir` is not.
+                o.push((
+                    "demuxer-cache-dir".into(),
+                    ts.dir.to_string_lossy().into_owned(),
+                ));
                 o.push(("demuxer-max-back-bytes".into(), ts.budget.bytes.to_string()));
                 o.push(("demuxer-max-bytes".into(), FORWARD_CACHE_BYTES.to_string()));
                 // An HTTP live stream announces itself unseekable, and mpv believes it.
@@ -517,7 +529,10 @@ mod tests {
             "an HTTP live stream calls itself unseekable; the cache is what makes \
              rewinding possible"
         );
-        assert!(option(&opts, "cache-dir").is_some_and(|d| d.contains("aurora-timeshift")));
+        assert!(option(&opts, "demuxer-cache-dir").is_some_and(|d| d.contains("aurora-timeshift")));
+        // The name mpv does not have. Asserted so that a rename back is a test
+        // failure rather than a warning in a log nobody reads.
+        assert!(option(&opts, "cache-dir").is_none());
     }
 
     #[test]

@@ -39,6 +39,31 @@ apt-get install -y xvfb webkit2gtk-driver          # Xvfb + WebKitWebDriver
 cargo install tauri-driver --locked                # the Tauri WebDriver shim
 ```
 
+### On Windows
+
+The same harness runs on Windows, which is where it can finally see the half described
+under *What it cannot show* below. Three things differ and `run.py` handles all of them:
+there is already a desktop so no Xvfb is started, `tauri-driver` is pointed at
+msedgedriver rather than WebKitWebDriver, and a file that is still open cannot be
+deleted — so the per-scenario wipe retries and then says so, instead of silently handing
+the next scenario the previous one's library.
+
+```powershell
+cargo install tauri-driver --locked
+# msedgedriver must match the WebView2 runtime the app loads. Check the runtime's
+# version under "C:\Program Files (x86)\Microsoft\EdgeWebView\Application" and fetch
+# the matching driver:
+#   https://msedgedriver.microsoft.com/<version>/edgedriver_win64.zip
+$env:AURORA_MSEDGEDRIVER = "C:\tools\msedgedriver.exe"   # unless it is on PATH
+python tests-host/run.py
+```
+
+`libmpv-2.dll` has to be beside `aurora-app.exe`, and **not in the way that
+`create_backend` suggests**: libmpv is a load-time import, so without the DLL the Windows
+loader ends the process with `0xC0000135` before `main` runs. No window, no log, no
+message — the `NullBackend` fallback never gets the chance to happen (F-34). If a run
+produces nothing at all, check that the DLL is there before looking anywhere else.
+
 ### Why the release build
 
 Two reasons, and both matter.
@@ -54,12 +79,38 @@ that console goes nowhere. A release build logs to `aurora.log` beside its data,
 `src-native/target/release/data`, where a scenario can open them. `run.py` writes that
 marker itself.
 
-## What it cannot show
+## What it cannot show, off Windows
 
 libmpv. `aurora-player` falls back to `NullBackend` off Windows, so video compositing,
 the Win32 child surface and the `HWND_BOTTOM` ordering stay Windows-only questions.
 The harness covers everything up to the point where a picture would appear — which, as
 it turns out, is where most of the bugs were.
+
+**On Windows it shows them too.** `tests-host/scenarios/video_surface.py` answers the
+three questions in `AUDIT/release-checklist.md` item 1 without a person looking at the
+screen, because each is a fact about the machine rather than about a screenshot — and a
+WebDriver capture is no use for any of them, since it photographs a transparent WebView
+over nothing at all. `tests-host/winprobe.py` asks the desktop instead:
+
+| Question | How it is answered |
+| --- | --- |
+| Video renders *behind* the UI | One top-level window of any size for the process, with mpv's `STATIC` surface a `WS_CHILD` of it and last in z-order |
+| Frames actually reach the screen | Two desktop captures 1.2s apart, compared over the middle of the window — measured at 95% of a sampled grid moving |
+| The UI still takes input over it | A click on the OSD that changes what is on screen |
+| The surfaces stay together | The child's rectangle after the window is resized |
+| Anything is being decoded at all | mpv's own `resolution`, `videoCodec`, `fps` and `hwDecoder`, read back through `player_state` |
+
+It needs a playlist to play, which this repository does not carry — every fixture host
+in the tree is `example.com` or a loopback address, and a public test stream is neither.
+So it skips unless it is given one:
+
+```powershell
+$env:AURORA_TEST_STREAM_M3U = "http://127.0.0.1:8123/streams.m3u"
+python tests-host/run.py video_surface
+```
+
+The captures land in `screenshots/host/` as PNGs, which is worth looking at even when it
+passes: a frame of the stream, with no OSD over it, is the whole of Phase 0 in one file.
 
 ## What driving it for real found immediately
 

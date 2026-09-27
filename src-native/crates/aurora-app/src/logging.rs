@@ -118,7 +118,7 @@ pub struct About {
 
 /// The licence notices, and enough about this build to report a bug against it.
 ///
-/// The notices are a legal obligation, not a nicety: the shipped `mpv-2.dll` is
+/// The notices are a legal obligation, not a nicety: the shipped `libmpv-2.dll` is
 /// LGPL (or GPL, depending how it was built) and carries FFmpeg with it, and both
 /// require that their terms travel with the binary and be findable by the person
 /// holding it. A file in a repository nobody has cloned does not satisfy that; a

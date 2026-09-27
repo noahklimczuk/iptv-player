@@ -42,6 +42,30 @@ def controls(ctx):
     return out
 
 
+def wait_for_status(d, want, timeout=60):
+    """Poll the host for what it is doing *now*, until that is one of `want`.
+
+    Deliberately `player_state` rather than the log, and this is the whole difference
+    between a real backend and `NullBackend`. The `player control` line records the
+    status **at the moment the command was issued** — which for `NullBackend` is already
+    `Playing`, because it has nothing to load, and for mpv is always `Loading`, because
+    opening a stream is asynchronous and `play` returns long before a frame does. Read
+    from the log, this scenario could only ever pass on the platform that has no video.
+
+    Polling, rather than sleeping, for the same reason: a real panel's stream takes
+    longer to open than the fixture's, and how much longer is not this suite's to guess.
+    """
+    want = (want,) if isinstance(want, str) else tuple(want)
+    end = time.time() + timeout
+    status = None
+    while time.time() < end:
+        status = (d.invoke("player_state") or {}).get("status")
+        if status in want:
+            return status
+        time.sleep(0.3)
+    return status
+
+
 def run(d, ctx):
     if not (URL and USER and PASS):
         raise Skipped("no panel credentials in the environment")
@@ -76,14 +100,14 @@ def run(d, ctx):
 
     # The overlay is up once its own Back button is, which no other screen has.
     d.find('[aria-label="Back"]', timeout=30)
-    time.sleep(2)
+    status = wait_for_status(d, "playing")
     d.shot(ctx.shot("playing"))
     ctx.assert_no_panic()
 
-    played = controls(ctx)
-    assert played, "nothing reached the host: no 'player control' line in the log"
-    assert played[-1][1] == "playing", (
-        f"the host should be playing after Play; its last word was {played[-1]}"
+    assert controls(ctx), "nothing reached the host: no 'player control' line in the log"
+    assert status == "playing", (
+        f"the host never started playing: it is {status!r}, and the controls it has "
+        f"answered are {controls(ctx)}"
     )
 
     # Pause. The button is labelled from the host's status, so it flipping to "Play" is
@@ -119,6 +143,7 @@ def run(d, ctx):
         "closing the player never asked the host to stop — this is 'the content still "
         f"plays once its closed'. The host was asked for {[c for c, _ in after]}"
     )
-    assert after[-1][1] in ("idle", "stopped"), (
-        f"the player is still {after[-1][1]} after being closed"
+    stopped = wait_for_status(d, ("idle", "stopped"), timeout=20)
+    assert stopped in ("idle", "stopped"), (
+        f"the player is still {stopped!r} after being closed"
     )

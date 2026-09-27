@@ -32,12 +32,33 @@ sys.path.insert(0, os.path.join(ROOT, "tests-host"))
 from driver import WD  # noqa: E402
 from fakegithub import FakeGitHub  # noqa: E402
 
+# Windows is what this project ships, and the only host where `aurora-player` compiles
+# libmpv in at all, so the harness runs there too. It differs in three places: there is
+# already a desktop, so no Xvfb; the WebView is WebView2, so `tauri-driver` drives it
+# through msedgedriver rather than WebKitWebDriver; and a file that is still open cannot
+# be deleted, which is what `wipe` is for.
+WINDOWS = sys.platform == "win32"
+
+if WINDOWS:
+    # A Windows console encodes in the system code page — cp1252 here — which has no
+    # box-drawing characters and no `★`. Reconfiguring is the fix rather than
+    # removing them: scenarios print what a provider actually called a channel, and a
+    # real panel names them "US ★ QVC HD".
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
 # `AURORA_TEST_EXE=…/target/debug/aurora-app` runs the same scenarios against a debug
 # build. Worth having for one reason: a debug build unwinds where a release build
 # aborts, so a panic that kills the shipped app can be inspected in a live window here.
 EXE = os.environ.get(
     "AURORA_TEST_EXE",
-    os.path.join(ROOT, "src-native", "target", "release", "aurora-app"),
+    os.path.join(
+        ROOT, "src-native", "target", "release",
+        "aurora-app.exe" if WINDOWS else "aurora-app",
+    ),
 )
 EXE_DIR = os.path.dirname(EXE)
 # Where `portable_dir()` puts everything: `<exe dir>/data`, holding library.db and
@@ -48,6 +69,12 @@ FIXTURES = os.path.join(ROOT, "tests-host", "fixtures")
 DISPLAY = ":99"
 FIXTURE_PORT = 8099
 DRIVER_PORT = 4444
+
+# What `tauri-driver` shells out to. On Linux that is WebKitWebDriver, which apt puts on
+# PATH and the shim finds by itself. On Windows it is msedgedriver, whose build has to
+# match the WebView2 runtime the app loads — so it is named rather than guessed, and
+# `AURORA_MSEDGEDRIVER` points at a copy that is not on PATH.
+NATIVE_DRIVER = os.environ.get("AURORA_MSEDGEDRIVER", "msedgedriver")
 
 # How many times a scenario may be restarted after the WebDriver connection dies.
 #
@@ -181,6 +208,73 @@ def _is_transport_error(e):
     )
 
 
+def wipe(path):
+    """Empty a directory, and be sure it is actually gone.
+
+    `rmtree(..., ignore_errors=True)` is a trap on Windows: a file another process still
+    holds open cannot be deleted, and ignoring that hands the next scenario the
+    *previous* scenario's library instead of the empty one it means to test — which is
+    the one state that only happens once. So retry briefly, because an app that has just
+    been told to quit is on its way out, and say so if it never lets go.
+    """
+    for _ in range(120):
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(path):
+            return
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"{path} could not be emptied after 30s. Either an earlier aurora-app is still "
+        "running, or something else holds a handle on it — a tree under OneDrive or a "
+        "real-time virus scanner will both do this to a directory that was written a "
+        "moment ago, and neither lets go on demand. A build tree does not belong in a "
+        "synced folder."
+    )
+
+
+def kill_strays():
+    """Kill a driver, or the app, left behind by a session that died mid-scenario.
+
+    The app matters more on Windows than on Linux: an exe that is still running holds
+    `data\\library.db` open, so the next scenario cannot be given the empty library it
+    is testing (see `wipe`). It is killed **by path**, not by name — the person running
+    this may well have their own installed copy of Aurora open, and a harness that
+    closes somebody's television is not an acceptable way to free a port.
+    """
+    for name in ("tauri-driver", "WebKitWebDriver", "msedgedriver"):
+        if WINDOWS:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", f"{name}.exe"],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["pkill", "-x", name], check=False)
+    if WINDOWS:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-Process -ErrorAction SilentlyContinue"
+             " | Where-Object { $_.Path -eq $env:AURORA_KILL_PATH }"
+             " | Stop-Process -Force"],
+            check=False, env=dict(os.environ, AURORA_KILL_PATH=os.path.abspath(EXE)),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(["pkill", "-f", EXE], check=False)
+
+
+def driver_cmd():
+    cmd = ["tauri-driver", "--port", str(DRIVER_PORT)]
+    if WINDOWS:
+        cmd += ["--native-driver", NATIVE_DRIVER]
+    return cmd
+
+
+def driver_env(github):
+    env = dict(os.environ)
+    if not WINDOWS:
+        env["DISPLAY"] = DISPLAY
+    # Loopback only, which is the only thing the app will accept (see `test_api_base`).
+    env["AURORA_UPDATE_API"] = github.url
+    return env
+
+
 def restart_driver(procs, stderr_path, github):
     """Bring `tauri-driver` back up, leaving Xvfb and the fixtures alone."""
     for p in procs:
@@ -191,15 +285,12 @@ def restart_driver(procs, stderr_path, github):
             except Exception:
                 pass
     procs = [p for p in procs if "tauri-driver" not in " ".join(p.args)]
-    for name in ("tauri-driver", "WebKitWebDriver"):
-        subprocess.run(["pkill", "-x", name], check=False)
+    kill_strays()
     time.sleep(2)
 
-    env = dict(os.environ, DISPLAY=DISPLAY, AURORA_UPDATE_API=github.url)
     log = open(stderr_path, "a")
     procs.append(subprocess.Popen(
-        ["tauri-driver", "--port", str(DRIVER_PORT)],
-        env=env, stdout=log, stderr=subprocess.STDOUT))
+        driver_cmd(), env=driver_env(github), stdout=log, stderr=subprocess.STDOUT))
     time.sleep(3)
     return procs, stderr_path, github
 
@@ -222,9 +313,12 @@ def start_background():
     """Xvfb, the fixture provider, and tauri-driver. Returns them for teardown."""
     procs = []
     devnull = subprocess.DEVNULL
-    procs.append(subprocess.Popen(
-        ["Xvfb", DISPLAY, "-screen", "0", "1440x900x24"], stdout=devnull, stderr=devnull))
-    time.sleep(2)
+    # Windows has a desktop already; Xvfb is how Linux gets one.
+    if not WINDOWS:
+        procs.append(subprocess.Popen(
+            ["Xvfb", DISPLAY, "-screen", "0", "1440x900x24"],
+            stdout=devnull, stderr=devnull))
+        time.sleep(2)
 
     procs.append(subprocess.Popen(
         [sys.executable, "-m", "http.server", str(FIXTURE_PORT)],
@@ -235,14 +329,10 @@ def start_background():
     # because a scenario needs to ask it what the app requested.
     github = FakeGitHub().start()
 
-    env = dict(os.environ, DISPLAY=DISPLAY)
-    # Loopback only, which is the only thing the app will accept (see `test_api_base`).
-    env["AURORA_UPDATE_API"] = github.url
     stderr_path = os.path.join(SHOTS, "host-stderr.log")
     log = open(stderr_path, "w")
     procs.append(subprocess.Popen(
-        ["tauri-driver", "--port", str(DRIVER_PORT)],
-        env=env, stdout=log, stderr=subprocess.STDOUT))
+        driver_cmd(), env=driver_env(github), stdout=log, stderr=subprocess.STDOUT))
     time.sleep(3)
     return procs, stderr_path, github
 
@@ -254,8 +344,10 @@ def main():
             f"(nothing at {EXE})"
         )
     print(f"exe: {EXE}")
-    for tool in ("Xvfb", "WebKitWebDriver", "tauri-driver"):
-        if not shutil.which(tool):
+    needed = ("tauri-driver", NATIVE_DRIVER) if WINDOWS else (
+        "Xvfb", "WebKitWebDriver", "tauri-driver")
+    for tool in needed:
+        if not (shutil.which(tool) or os.path.isfile(tool)):
             sys.exit(f"{tool} is not installed — see docs/TESTING_THE_HOST.md")
 
     # Portable mode, so the library and the log land somewhere a scenario can read
@@ -277,6 +369,7 @@ def main():
             sys.exit(f"no such scenario: {', '.join(unknown)}  (have: {', '.join(names)})")
         names = [n for n in names if n in wanted]
 
+    kill_strays()
     procs, stderr_path, github = start_background()
     failures = []
     skipped = []
@@ -289,7 +382,7 @@ def main():
 
             # A fresh library per scenario: an empty database is a state that only
             # happens once, and it is the one that has never been tested.
-            shutil.rmtree(DATA, ignore_errors=True)
+            wipe(DATA)
             since = os.path.getsize(stderr_path) if os.path.exists(stderr_path) else 0
 
             print(f"── {name}")
@@ -322,7 +415,7 @@ def main():
                         d.quit()
                     d = None
                     procs, stderr_path, github = restart_driver(procs, stderr_path, github)
-                    shutil.rmtree(DATA, ignore_errors=True)
+                    wipe(DATA)
                     since = os.path.getsize(stderr_path) if os.path.exists(stderr_path) else 0
                     ctx = Ctx(name, stderr_path, since)
                     ctx.github = github
@@ -371,6 +464,11 @@ def main():
                 p.send_signal(signal.SIGTERM)
             except Exception:
                 pass
+        # `tauri-driver` spawns the native driver, which spawns the app. Killing the
+        # shim on Windows does not take its children with it, and a stray driver holds
+        # port 4444 against the next run.
+        if WINDOWS:
+            kill_strays()
 
     print()
     ran = len(names) - len(skipped)

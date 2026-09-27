@@ -301,18 +301,228 @@ in the shipped Windows binary.
 
 ## 10. What could not be verified here, and why
 
-Honest list. Everything below needs a Windows machine with `mpv-2.dll`, or a real
+Honest list. Everything below needs a Windows machine with libmpv, or a real
 subscription, and no amount of work in this container changes that.
 
-| Claim | Why not |
+**Most of it has since been run on one — see §11.** The rows are left as they were
+written, because what a container could not answer is worth keeping beside the answers;
+the right-hand column says where each one went.
+
+| Claim | Why not | Since |
+|---|---|---|
+| Video decodes and composites behind the WebView | Phase 0. The wiring is **done** (F-24): `attach`, `pump` and `attach_video_surface` are called, the window is transparent, and the OSD no longer paints over the video. `aurora-player` type-checks for `x86_64-pc-windows-msvc`; `aurora-app` could not be cross-checked here because rustls's `ring` needs an MSVC C compiler, so CI's Windows job compiles `window.rs` and `main.rs` first. Nothing has met a display. Item 1 of the checklist. | **Answered (§11)** — 1920x1080 H.264 at 60fps, `hwdec=d3d11va-copy`, composited behind the UI. |
+| The commands really do run off the main thread | The macro path is proven (`ExecutionContext::Blocking` vs `sync_threadpool` in `tauri-macros-2.6.3`) and pinned by a test, but "the window stays responsive during a 24-second refresh" is an observation somebody has to make on Windows. | Partly: the window drew and took clicks throughout a 22,121-channel import (§11). |
+| A recording survives a real provider's stream | The recorder has only met the test server. | Still open. |
+| Catch-up works on a real panel | The probe in `docs/ROADMAP.md` found `timeshift.php` 404s on the one panel available, so F-23 (the UTC/local timezone bug) cannot be fixed against evidence. | Still open. |
+| TMDB's real responses | Parsed from the documented shape, never called with a key. | Still open. |
+| Artwork served from the cache | `assetProtocol` is still not enabled; the UI renders remote URLs. The CSP now allows `asset:` so the swap is one config flag away. | Still open (checklist item 7). |
+| The licence notices reach a viewer | The files are bundled and Settings → About reads them from beside the executable, which is verified against the mock; whether the packaged `.exe` really has them beside it needs the installer to have run. | Still open (checklist item 5). |
+| The installer, upgrade and uninstall | No Windows runner here. | Still open (checklist item 5). |
+| High-DPI, multi-monitor, per-monitor DPI | Needs the real shell. | **Answered for two monitors at different scale factors** (§11); a single window moved between them keeps its surface and its picture. Fullscreen and a live DPI change while playing are still unrun. |
+| Media keys | Needs the real shell. | **Not a verification question — they are not implemented.** `useHotkeys.ts` binds `k`, `j`, `l`, `f`, `g`, `i` and the arrows; nothing anywhere binds `MediaPlayPause` or registers a global shortcut. No machine would have shown this working. |
+| Screen-reader behaviour | Roles, names and tab order are in place and asserted where they can be; an actual NVDA/Narrator pass is a human job. | Still a human job. |
+
+---
+
+## 11. The Windows pass
+
+Everything in §1–§9 was run in a Linux container. This section is a different machine:
+the one this ships for, with a display, a GPU and libmpv. It is what closes item 1 of
+`AUDIT/release-checklist.md`, which every other open question was downstream of.
+
+```
+Windows 11 Home 26200           rustc 1.98.1 (MSVC)       pnpm 10.34.5
+VS Build Tools 17.14            MSVC 14.44.35207          Windows SDK 10.0.26100
+WebView2 runtime 153.0.4234.48  msedgedriver 153.0.4234.48
+libmpv v0.41.0-1078-g35af06172  (mpv-dev-x86_64-20260926-git-35af06172b.7z)
+```
+
+That archive name is the thing item 8 asks to record per release. Its DLL is called
+`libmpv-2.dll` — not `mpv-2.dll`, which is what `docs/BUILDING.md` and the checklist
+both called it. CI globs for `*mpv*.dll` and reads the name back off the file, so CI was
+right and the prose was wrong.
+
+One trap worth writing down, because CI cannot hit it: `vswhere -latest -products *`
+resolved to **SQL Server Management Studio**, which is installed through the Visual
+Studio installer and has no C compiler in it. Selecting the toolchain by
+`-requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64` is what finds the Build
+Tools on a developer machine.
+
+### The link that had never happened
+
+```
+$ cargo build --release -p aurora-app        # the committed profile, LTO and all
+    Finished `release` profile [optimized] target(s) in 7m 02s
+-rwxr-xr-x  12811264  aurora-app.exe
+```
+
+Zero warnings. The checklist said to expect "a compile error or two" the first time
+`window.rs` and `main.rs` met a Windows compiler. There were none.
+
+### The suites, on Windows
+
+| Suite | Result |
 |---|---|
-| Video decodes and composites behind the WebView | Phase 0. The wiring is **done** (F-24): `attach`, `pump` and `attach_video_surface` are called, the window is transparent, and the OSD no longer paints over the video. `aurora-player` type-checks for `x86_64-pc-windows-msvc`; `aurora-app` could not be cross-checked here because rustls's `ring` needs an MSVC C compiler, so CI's Windows job compiles `window.rs` and `main.rs` first. Nothing has met a display. Item 1 of the checklist. |
-| The commands really do run off the main thread | The macro path is proven (`ExecutionContext::Blocking` vs `sync_threadpool` in `tauri-macros-2.6.3`) and pinned by a test, but "the window stays responsive during a 24-second refresh" is an observation somebody has to make on Windows. |
-| A recording survives a real provider's stream | The recorder has only met the test server. |
-| Catch-up works on a real panel | The probe in `docs/ROADMAP.md` found `timeshift.php` 404s on the one panel available, so F-23 (the UTC/local timezone bug) cannot be fixed against evidence. |
-| TMDB's real responses | Parsed from the documented shape, never called with a key. |
-| Artwork served from the cache | `assetProtocol` is still not enabled; the UI renders remote URLs. The CSP now allows `asset:` so the swap is one config flag away. |
-| The licence notices reach a viewer | The files are bundled and Settings → About reads them from beside the executable, which is verified against the mock; whether the packaged `.exe` really has them beside it needs the installer to have run. |
-| The installer, upgrade and uninstall | No Windows runner here. |
-| High-DPI, multi-monitor, per-monitor DPI, media keys | Needs the real shell. |
-| Screen-reader behaviour | Roles, names and tab order are in place and asserted where they can be; an actual NVDA/Narrator pass is a human job. |
+| `cargo test --workspace --all-targets` | **871 passed**, 0 failed, 3 ignored (the soak tests) |
+| `cargo fmt --all --check` | clean |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean **after** the fix in §12 — it had never run against this code |
+| `cargo audit` | **0 vulnerabilities**, 7 informational warnings |
+| Playwright journeys | **114 passed** (1.3m), Windows Chromium |
+| Vitest | 14 passed |
+| `scripts/version.test.mjs` | 14 passed |
+
+### The host harness, against the real binary
+
+`tests-host/run.py` runs on Windows now (`docs/TESTING_THE_HOST.md`): no Xvfb,
+msedgedriver behind `tauri-driver`, and a per-scenario wipe that fails loudly rather
+than silently handing the next scenario the previous library. Against a real
+subscription:
+
+| Scenario | What it found |
+|---|---|
+| `starts_up`, `first_run_import`, `update_download` | pass |
+| `real_panel` | **22,121 channels, 117,587 films, 28,529 series** imported; Live TV, Movies and Series all drew. "Live TV says No channels" does not reproduce, and F-04's series listings are written rather than counted. |
+| `browse` | 203 shelves over 117,587 films; the filters narrow correctly |
+| `recommendations` | 24 cards carrying a reason, ranked in 0.09s |
+| `series_episodes` | 28,529 shows, 6 episodes after opening one — they are fetched on open, which is why `episodes` is 0 immediately after an import |
+| `tour` | all eight screens drew |
+
+Credentials are redacted against a real panel too —
+`player_api.php?username=***&password=***` — which is F-15 holding outside a test.
+
+### Item 1, in numbers
+
+`tests-host/scenarios/video_surface.py` asks the desktop rather than the WebView, since
+a WebDriver capture photographs a transparent WebView over nothing at all:
+
+| Question | Answer |
+|---|---|
+| Is anything being decoded? | `1920x1080`, `H.264 / AVC`, `60fps`, `hwDecoder=d3d11va-copy`, `bufferSecs=8.0` — mpv's own numbers, read back through `player_state` |
+| Is video *behind* the UI? | One top-level window for the process; mpv's `STATIC` surface is a `WS_CHILD` of it and **last of 2 children** in z-order |
+| Does it reach the screen? | **95.4%** of a sampled grid over the middle of the window changed between two captures 1.2s apart. Two captures of a still window measure 0.0%. |
+| Does the UI take input over it? | A click on the OSD changes what is on screen |
+| Do the surfaces stay together? | After a resize: client `1220x740`, surface `1220x740` |
+| Zap time | **1.91s**, and 1.96s and 2.13s on re-runs, against the 1.5s budget in README §16 |
+| Two monitors, and a scale change | Moved to a second display of a different scale factor, the surface follows exactly — client `1442x902`, surface `1442x902` — and video keeps reaching the screen (16.2% of the middle moving) |
+
+The captures are in `screenshots/host/`, and `video_surface-playing-1.png` is a frame of
+the stream with its timecode running — Phase 0, in one file.
+
+**Zap is over budget.** 1.91s is one measurement, on one machine, against a public CDN
+rather than a provider — so the scenario reports it rather than failing on it. It is
+still the first real number this project has had, and it is outside the budget the
+project set itself.
+
+---
+
+## 12. What running it on Windows found
+
+Six things, none of which any suite in §1–§9 could have caught.
+
+**0. Without libmpv, the app dies in the loader and says nothing** (F-34, now fixed).
+Found by
+asking what a *failed* update leaves behind. `create_backend` reads as though a missing
+libmpv degrades to `NullBackend` with a line in the log; it cannot, because `mpv.lib`
+makes the DLL a load-time import and the loader runs before `main`. Measured with the
+DLL moved aside:
+
+```
+alive: False   exit: 3221225781 (0xC0000135, STATUS_DLL_NOT_FOUND)
+aurora.log grew: 0 bytes
+stdout/stderr: ''
+```
+
+Holding it open with an exclusive handle — what a virus scanner does — ends the process
+the same way with `0xC0000043`. No window, no log, no message, and every instruction
+this project gives for diagnosing a bad start begins "the log says which step failed".
+The fix is to delay-load it so the failure becomes a value the existing fallback can
+report.
+
+**1. A stream that will not open leaves the player loading for ever** (F-30). The worst
+of them, and the most ordinary thing that happens to an IPTV player. The event pump
+drained with `while let Some(Ok(event))`, which stops at the first `Err` and discards
+everything queued behind it — and an `Err` is exactly how a dead stream arrives, because
+libmpv2 reads the error code off the end-file event before it builds an `Event`. So the
+status stayed where the load left it, no error was ever published, and the failover in
+README §7.14 never fired. Reproduced against a URL that refuses every connection:
+
+```
+statuses seen: ['loading'], error=None
+```
+
+Underneath it, the error branch described failures by reading an `error-string`
+property, which mpv does not have — so every playback error in this application's
+history was classified from the literal word "unknown". Both fixed, with
+`tests-host/scenarios/stream_failure.py` as the regression test.
+
+**2. `cache-dir` is not an mpv option, so the timeshift buffer was never where it was
+meant to be.** Every tune of a buffered live channel logged `mpv rejected cache-dir:
+Raw(-8)` — `MPV_ERROR_PROPERTY_NOT_FOUND`. Asked directly, libmpv v0.41 has no
+`cache-dir` at all:
+
+```
+           cache-dir: set_property=property not found  set_option=option not found  option-info=None
+   demuxer-cache-dir: set_property=success             set_option=success           option-info='demuxer-cache-dir'
+```
+
+`cache-on-disk=yes` was accepted and the directory beside it refused, so mpv buffered
+into its own default folder rather than the one the viewer chose: a portable copy kept
+state outside itself, and `timeshift::bytes_on_disk` measured an empty directory, so the
+budget was never enforced against anything. Fixed in `aurora-player/src/backend.rs`,
+with a test that also asserts the name mpv does not have is no longer emitted.
+
+**3. Clippy fails on the Windows-only code, because it had never seen it.** `mpv.rs`
+carried four `const _: Option<…> = None;` lines whose stated purpose was to silence
+unused-import warnings "for the resize/message plumbing the host wires up". Nothing
+wires it up — resizing goes through `SetWindowPos` — so `WPARAM`, `LPARAM`, `LRESULT`,
+`RECT` and `HashMap` were simply unused, and the workaround was hiding that rather than
+serving it. Imports and workaround both removed.
+
+**4. `option_env!("AURORA_TMDB_KEY")` is not tracked by cargo.** With a warm target
+directory, the key compiled in is whatever the last build happened to see — so rotating
+the secret can leave the old one in the binary with nothing to say so. `build.rs` now
+emits `cargo:rerun-if-env-changed=AURORA_TMDB_KEY`.
+
+**5. `player_controls` could only ever have passed on a platform with no video.** It
+read the player's status out of the `player control` log line, which records the status
+**at the moment the command was issued**. `NullBackend` has nothing to load, so that is
+already `Playing`; mpv's `play` returns while still `Loading`, because opening a stream
+is asynchronous. Against a real panel it failed with `('play', 'loading')` and went on
+failing when the timeout was raised to 60 seconds — it was not slow, it was asking the
+wrong question. It now polls `player_state` for what the host is doing *now*.
+
+And one thing about the machine rather than the code: this checkout lives under OneDrive,
+whose cloud placeholders deny `rmdir` on a directory written moments ago. That breaks the
+harness's per-scenario wipe, and it means every build artefact under `target/` is being
+synced. `CARGO_TARGET_DIR` belongs somewhere outside it.
+
+---
+
+## 13. The portable self-update (checklist item 1b)
+
+The claim the whole in-app update path rests on — that Windows lets a program rename its
+own running `.exe` — had never been tested, because none of it is `#[cfg(windows)]` and
+Linux proves nothing about it. A portable copy of 0.11.0, given a staged 0.11.1:
+
+```
+   old exe 13,589,504   new exe 12,845,056
+   [first run]       it says it is version 0.11.0
+   staged:           ['.ready', 'aurora-app.exe']
+   [after staging]   it now says it is version 0.11.1
+   log:              a staged update was applied before launch: applied 1 files
+   previous/         ['aurora-app.exe']
+   staged/ gone      True
+   [third run]       previous/ still there: False
+```
+
+The swap works, the rollback copy is kept, and the launch after that forgets it — which
+is exactly the lifecycle the checklist describes.
+
+Two things worth recording beyond the pass. Applying an update **restarts the app**, so
+anything driving it has to kill by path rather than by PID — the process that comes back
+is not the one that was started, and the first attempt at this test was blocked by its
+own orphan. And a refused apply does not roll forward into a broken install: with the
+staged update unappliable, the old copy kept running, and the next launch after the
+obstruction cleared applied it successfully.
+
+Step 4 of that item — break it on purpose — is what found F-34, above.
