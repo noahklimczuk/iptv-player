@@ -8,10 +8,54 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// Where the per-library namespace is kept once it has been made.
+const NAMESPACE_KEY: &str = "credentials.namespace";
+
 /// The opaque handle persisted in `providers.credential_ref`. Knowing it reveals
 /// nothing; it is only a key into the OS store.
-pub fn credential_ref(provider_id: i64) -> String {
-    format!("aurora-provider-{provider_id}")
+///
+/// **The namespace is the whole point.** This used to be `aurora-provider-{id}`, and a
+/// provider id is a SQLite row id that starts at 1 in every new library. The credential
+/// store is not per-library, though, and on Windows it is not even per-application: it
+/// is one Credential Manager for the whole user account. So two copies of Aurora on one
+/// account — an installed one and a portable one, say — both call their first provider
+/// `aurora-provider-1` and write to the same entry. Deleting the provider in one, or
+/// failing to save one, took the *other* copy's password with it, leaving a provider
+/// row that lists fine and cannot authenticate: it disappears with no error that says
+/// why, because as far as the app is concerned it simply has no password.
+///
+/// It is worth being plain that this is not a leak. The namespace is random and means
+/// nothing; it exists so that two libraries name different entries.
+pub fn credential_ref(namespace: &str, provider_id: i64) -> String {
+    format!("aurora-{namespace}-provider-{provider_id}")
+}
+
+/// This library's namespace, made once and then kept.
+///
+/// Random rather than derived from the data directory, because a portable copy that is
+/// moved is still the same library and must keep its passwords. Stored in `settings`,
+/// so it travels with the library it belongs to.
+///
+/// Providers saved before this existed keep working untouched: their key is recorded in
+/// `providers.credential_ref` and every read and delete goes through that column, so an
+/// old `aurora-provider-1` is still found under exactly that name.
+pub fn namespace(conn: &aurora_db::rusqlite::Connection) -> Result<String, CredentialError> {
+    use aurora_db::repo::settings;
+
+    if let Some(existing) = settings::get::<String>(conn, NAMESPACE_KEY)
+        .map_err(|e| CredentialError::Backend(e.to_string()))?
+    {
+        if !existing.is_empty() {
+            return Ok(existing);
+        }
+    }
+
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).map_err(|e| CredentialError::Backend(e.to_string()))?;
+    let made: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    settings::set(conn, NAMESPACE_KEY, &made)
+        .map_err(|e| CredentialError::Backend(e.to_string()))?;
+    Ok(made)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -196,9 +240,34 @@ mod tests {
 
     #[test]
     fn credential_refs_are_stable_and_reveal_nothing() {
-        assert_eq!(credential_ref(7), credential_ref(7));
-        assert_ne!(credential_ref(7), credential_ref(8));
-        assert!(!credential_ref(7).contains("password"));
+        assert_eq!(credential_ref("ab12", 7), credential_ref("ab12", 7));
+        assert_ne!(credential_ref("ab12", 7), credential_ref("ab12", 8));
+        assert!(!credential_ref("ab12", 7).contains("password"));
+    }
+
+    #[test]
+    fn two_libraries_never_name_the_same_entry() {
+        // The bug this exists for. Provider ids start at 1 in every library, and the
+        // credential store is one per user account — so before namespacing, a second
+        // copy of Aurora wrote its first provider's password over the first copy's, and
+        // deleting a provider in one silently took the other's password with it.
+        assert_ne!(credential_ref("ab12", 1), credential_ref("cd34", 1));
+    }
+
+    #[test]
+    fn a_namespace_is_made_once_and_then_kept() {
+        let conn = aurora_db::open_memory().unwrap();
+        let first = namespace(&conn).unwrap();
+        assert_eq!(first.len(), 16, "eight random bytes as hex");
+        assert_eq!(
+            namespace(&conn).unwrap(),
+            first,
+            "it must not move under a library"
+        );
+
+        // And a different library gets a different one, which is the whole point.
+        let other = aurora_db::open_memory().unwrap();
+        assert_ne!(namespace(&other).unwrap(), first);
     }
 
     #[test]

@@ -226,7 +226,11 @@ fn save_provider(
             r.get(0)
         })
         .map_err(aurora_db::DbError::from)?;
-    let key = credential_ref(next_id);
+    // Namespaced, because the row id alone is shared with every other library on this
+    // account — see `credential_ref`.
+    let namespace =
+        aurora_ingest::credentials::namespace(db).map_err(|e| AppError::Other(e.to_string()))?;
+    let key = credential_ref(&namespace, next_id);
 
     if let Some(password) = &password {
         store
@@ -355,11 +359,25 @@ pub fn providers_update(services: State<'_, Services>, args: UpdateArgs) -> Resu
         return Err(AppError::Other(format!("no provider {id}")));
     }
 
-    let key = credential_ref(id);
+    // What this provider's secret is filed under now, which for a provider saved
+    // before namespacing is the old un-namespaced name.
+    let previous: Option<String> = db
+        .query_row(
+            "SELECT credential_ref FROM providers WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(aurora_db::DbError::from)?;
+    let namespace =
+        aurora_ingest::credentials::namespace(&db).map_err(|e| AppError::Other(e.to_string()))?;
+    let key = credential_ref(&namespace, id);
     match draft.password {
         None => {}
         Some(p) if p.is_empty() => {
             let _ = services.credentials.delete(&key);
+            if let Some(old) = previous.as_deref().filter(|old| *old != key) {
+                let _ = services.credentials.delete(old);
+            }
             db.execute(
                 "UPDATE providers SET credential_ref = NULL WHERE id = ?1",
                 params![id],
@@ -376,6 +394,11 @@ pub fn providers_update(services: State<'_, Services>, args: UpdateArgs) -> Resu
                 params![id, key],
             )
             .map_err(aurora_db::DbError::from)?;
+            // The row now points at the namespaced key, so anything left under the old
+            // one is a secret nothing references — exactly what README C10 forbids.
+            if let Some(old) = previous.as_deref().filter(|old| *old != key) {
+                let _ = services.credentials.delete(old);
+            }
         }
     }
     Ok(true)
@@ -586,9 +609,9 @@ mod tests {
     #[test]
     fn a_stored_credential_comes_back_as_itself() {
         let store = MemoryStore::default();
-        store.set(&credential_ref(7), "hunter2").unwrap();
+        store.set(&credential_ref("ns", 7), "hunter2").unwrap();
         assert_eq!(
-            stored_password(&store, Some(credential_ref(7)))
+            stored_password(&store, Some(credential_ref("ns", 7)))
                 .unwrap()
                 .as_deref(),
             Some("hunter2")
@@ -601,7 +624,7 @@ mod tests {
         // Manager disagrees. Importing anyway signs in with nothing and the panel gets
         // blamed for the empty answer.
         let store = MemoryStore::default();
-        let err = stored_password(&store, Some(credential_ref(7)))
+        let err = stored_password(&store, Some(credential_ref("ns", 7)))
             .unwrap_err()
             .to_string();
         assert!(err.contains("could not read"), "{err}");
@@ -685,8 +708,9 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(stored.as_deref(), Some(credential_ref(id).as_str()));
-        assert_eq!(store.get(&credential_ref(id)).unwrap(), "hunter2");
+        let ns = aurora_ingest::credentials::namespace(&db).unwrap();
+        assert_eq!(stored.as_deref(), Some(credential_ref(&ns, id).as_str()));
+        assert_eq!(store.get(&credential_ref(&ns, id)).unwrap(), "hunter2");
     }
 
     /// The bug: the row went in first, so a credential store that refused left a
@@ -720,8 +744,9 @@ mod tests {
 
         assert!(save_provider(&db, &store, bad, 100).is_err());
         assert_eq!(provider_count(&db), 0);
+        let ns = aurora_ingest::credentials::namespace(&db).unwrap();
         assert!(
-            store.get(&credential_ref(1)).is_err(),
+            store.get(&credential_ref(&ns, 1)).is_err(),
             "a secret was left under a key no provider references"
         );
     }
@@ -741,7 +766,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, None);
-        assert!(store.get(&credential_ref(id)).is_err());
+        let ns = aurora_ingest::credentials::namespace(&db).unwrap();
+        assert!(store.get(&credential_ref(&ns, id)).is_err());
     }
 
     #[test]
@@ -753,8 +779,9 @@ mod tests {
         let b = save_provider(&db, &store, draft("Two", Some("second")), 100).unwrap();
 
         assert_ne!(a, b);
-        assert_eq!(store.get(&credential_ref(a)).unwrap(), "first");
-        assert_eq!(store.get(&credential_ref(b)).unwrap(), "second");
+        let ns = aurora_ingest::credentials::namespace(&db).unwrap();
+        assert_eq!(store.get(&credential_ref(&ns, a)).unwrap(), "first");
+        assert_eq!(store.get(&credential_ref(&ns, b)).unwrap(), "second");
     }
 
     #[test]
