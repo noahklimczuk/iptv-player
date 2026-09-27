@@ -137,8 +137,17 @@ back as the new version:
    [third run] previous/ still there: False
 ```
 
-So steps 1 to 3 below are answered: the swap works, `previous/` holds the old build, and
-the launch after that forgets it.
+So steps 1 to 3 below are answered: the swap works, and the old build is kept as a
+rollback copy.
+
+One correction to step 3's expectation, from watching it happen. `previous/` does not
+survive until "the launch after that": `apply_staged_update` calls `forget_previous` at
+the top of *every* launch, and applying an update relaunches immediately — so the copy
+lives from the swap until the new version starts, and no longer. That is the intended
+reading of the comment there ("the new version started is the only evidence worth
+waiting for"), and it means the rollback window is the apply itself. Measuring it from
+outside is a race; an early version of this test only saw the file because it looked
+before the relaunch got there.
 
 **Step 4 — breaking it on purpose — found F-34 instead.** Holding `libmpv-2.dll` open
 with an exclusive handle, the way a scanner does, does not exercise the rollback at all:
@@ -170,6 +179,43 @@ but nothing here has done it. On the machine from item 1:
    `libmpv-2.dll` open — and confirm the rollback leaves a working copy of the old
    version and a line in `aurora.log` saying why. That is the path that matters; a
    failed update must never be why somebody's television stops working.
+
+## 1c. The in-app update no longer runs the installer
+
+An installed copy used to update itself by downloading the 39 MB NSIS installer and
+running it. For the person this was built for that is not an update path at all: they
+are a standard user, so Windows does not prompt for consent but for administrator
+*credentials* they do not have. An installed copy simply could not update itself.
+
+It now swaps its own files, the way a portable copy always has — no installer, no
+SmartScreen warning on an unsigned build, no elevation. The choice is made by probing
+whether this process can write to the folder it is running from, rather than by how the
+copy got there: a per-user install can, a per-machine install in Program Files cannot,
+and for that one the installer — which *can* ask for elevation — is still the only way
+up.
+
+Two things that had to be handled, both found by running it:
+
+- **The pre-launch swap refused outright for an installed copy**, because the data
+  directory "is the only one knowable this early" and only a portable copy's is. It is
+  knowable now: each launch records the path beside the executable, and a copy with no
+  record falls back to the platform rule, with a contract test keeping the bundle
+  identifier in step with `tauri.conf.json`. Without that fallback, a copy installed
+  before this change would download an update, stage it, and never apply it — worse than
+  the installer it replaced.
+- **The portable archive carries `portable.txt`**, which is not a file but the switch
+  that tells Aurora to keep its library beside the executable. Unpacking it into an
+  installed copy would move the library out from under the viewer on the next launch: an
+  empty Aurora, and their real database still on disk where nothing is looking. An
+  installed copy takes the archive's binaries and not its marker.
+
+Verified both ways: an installed copy swapped its exe, kept its data in
+`%LOCALAPPDATA%`, and did not gain a `portable.txt`; a portable copy still swaps and
+relaunches as before.
+
+What it costs: an installed copy updated this way leaves the installer's registry entry
+describing the version it replaced. The uninstaller still works — it removes the folder
+— but Add/Remove Programs shows the old number until the installer itself is next run.
 
 ## 2. Code signing — **blocking for anything a stranger installs**
 

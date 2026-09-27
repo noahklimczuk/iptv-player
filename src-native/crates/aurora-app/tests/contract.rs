@@ -320,3 +320,18 @@ fn the_window_is_transparent_so_video_can_show_through() {
         );
     }
 }
+
+/// The updater has to know where the data lives before Tauri exists to tell it, so it
+/// carries its own copy of the bundle identifier. If the two drift, a copy with no
+/// `data-dir.txt` would look for its staged update in a folder nothing writes to, and
+/// the update would silently never apply.
+#[test]
+fn the_updaters_bundle_identifier_matches_the_manifest() {
+    let conf: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+    assert_eq!(
+        conf["identifier"].as_str(),
+        Some(aurora_app::updates::BUNDLE_IDENTIFIER),
+        "tauri.conf.json's identifier and updates::BUNDLE_IDENTIFIER must agree"
+    );
+}
