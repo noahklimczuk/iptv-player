@@ -768,6 +768,9 @@ fn reindex(db: &mut Connection, _provider_id: i64) -> aurora_db::Result<()> {
             ))
         })? {
             let (id, t, year) = row?;
+            // Indexed under the name the library paints, not the provider's — searching
+            // for "Saladin" should find "EN Saladin the Victorious".
+            let t = aurora_core::lang::strip_language_prefix(&t).unwrap_or(t);
             rows.push(("movie".into(), id, t, year.map(|y| y.to_string())));
         }
 
@@ -781,6 +784,7 @@ fn reindex(db: &mut Connection, _provider_id: i64) -> aurora_db::Result<()> {
             ))
         })? {
             let (id, t, year) = row?;
+            let t = aurora_core::lang::strip_language_prefix(&t).unwrap_or(t);
             rows.push(("series".into(), id, t, year.map(|y| y.to_string())));
         }
     }

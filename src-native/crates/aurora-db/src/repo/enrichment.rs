@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::repo::filtering::{Kind as FilterKind, LibraryFilter};
+use crate::repo::settings;
 
 /// What kind of title a row refers to. Polymorphic like `watch_progress`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +146,38 @@ pub fn pending(
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// How the app turns a stored title into a search. Bump it when that changes.
+///
+/// A `nomatch` is a permanent answer — `pending` re-asks `failed` rows and never
+/// `nomatch` ones, deliberately, because asking TMDB the same question every refresh
+/// forever is how a library of 117,510 films burns its rate limit on 100,000 answers
+/// nobody is waiting for.
+///
+/// That is only sound while the question stays the same. When it changes, every previous
+/// "no" was an answer to a question that is no longer being asked, and keeping them means
+/// the improvement reaches nothing that already exists.
+///
+/// Version 2 stopped sending the provider's language tag. `FR I, Robot` was searched
+/// verbatim, and TMDB has never heard of it; of 60 sampled titles this library had
+/// recorded as `nomatch`, 0 could be found under the provider's string and 59 under the
+/// stripped one.
+pub const QUERY_VERSION: i64 = 2;
+const KEY_QUERY_VERSION: &str = "enrichment.query_version";
+
+/// Forget the "nothing matched" answers, if they were answers to a different question.
+///
+/// Only `nomatch`. A `matched` row holds real metadata that is still correct, and
+/// throwing it away would re-download artwork for everything.
+pub fn forget_stale_nomatches(conn: &Connection) -> Result<usize> {
+    let seen: i64 = settings::get_or(conn, KEY_QUERY_VERSION, 0)?;
+    if seen == QUERY_VERSION {
+        return Ok(0);
+    }
+    let cleared = conn.execute("DELETE FROM enrichment WHERE state = 'nomatch'", [])?;
+    settings::set(conn, KEY_QUERY_VERSION, &QUERY_VERSION)?;
+    Ok(cleared)
 }
 
 /// Record that a title was searched and nothing matched, or that the attempt failed.
@@ -499,6 +532,45 @@ mod tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    /// A recorded "nothing matched" is permanent, and it has to stop being permanent
+    /// when the question changes — otherwise a better query reaches nothing that already
+    /// exists, which on this library is 16,561 titles.
+    #[test]
+    fn a_no_match_recorded_under_an_older_query_is_asked_again() {
+        let conn = db();
+        let found = movie(&conn, "m1", "The Matrix", Some(1999));
+        let missed = movie(&conn, "m2", "FR I, Robot", Some(2004));
+        mark(&conn, ItemKind::Movie, found, State::Matched, 0).unwrap();
+        mark(&conn, ItemKind::Movie, missed, State::NoMatch, 0).unwrap();
+
+        // Nothing to ask about while the answers are current.
+        assert!(!pending(&conn, ItemKind::Movie, 10, 0)
+            .unwrap()
+            .iter()
+            .any(|p| p.id == missed));
+
+        // A library that last ran under an older way of asking.
+        settings::set(&conn, KEY_QUERY_VERSION, &(QUERY_VERSION - 1)).unwrap();
+        assert_eq!(forget_stale_nomatches(&conn).unwrap(), 1);
+
+        let ids: Vec<i64> = pending(&conn, ItemKind::Movie, 10, 0)
+            .unwrap()
+            .iter()
+            .map(|p| p.id)
+            .collect();
+        assert!(
+            ids.contains(&missed),
+            "the missed title was not asked again"
+        );
+        assert!(
+            !ids.contains(&found),
+            "a title that already has its metadata was thrown away too"
+        );
+
+        // And once is enough: a second launch clears nothing.
+        assert_eq!(forget_stale_nomatches(&conn).unwrap(), 0);
     }
 
     fn person(id: i64, name: &str) -> Person {

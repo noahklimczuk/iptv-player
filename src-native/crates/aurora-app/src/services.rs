@@ -68,6 +68,14 @@ impl Services {
             Err(e) => tracing::warn!("could not classify the library: {e}"),
         }
 
+        // A "nothing matched" recorded under an older way of asking is not evidence
+        // about the current one. See `enrichment::QUERY_VERSION`.
+        match aurora_db::repo::enrichment::forget_stale_nomatches(&db) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("{n} titles will be looked up again: the query changed"),
+            Err(e) => tracing::warn!("could not clear stale metadata answers: {e}"),
+        }
+
         let http = HttpClient::new(HttpConfig::default())
             .map_err(|e| crate::AppError::Other(e.message))?;
 

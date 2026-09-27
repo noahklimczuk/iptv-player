@@ -5,6 +5,7 @@
 //! once, record the answer whatever it is, stop when the budget is spent. Nothing here
 //! retries forever and nothing asks the same question twice.
 
+use aurora_core::lang;
 use aurora_core::tmdb::{self, Query};
 use aurora_db::repo::enrichment::{self, Artwork, ItemKind, State};
 use aurora_db::rusqlite::Connection;
@@ -126,7 +127,14 @@ pub fn plan(db: &Connection, options: &Options, now: i64) -> aurora_db::Result<V
 /// title, and holding the single writer connection across them would stall every other
 /// command, including the DVR scheduler deciding whether a recording is due.
 pub fn fetch_one(client: &dyn MetadataClient, work: &Work) -> Outcome {
-    let query = Query::new(&work.item.title, work.item.year);
+    // The stored title still carries the provider's language tag, and TMDB has never
+    // heard of "FR I, Robot". Asking under the tag is why 671 titles matched and 16,561
+    // did not: see `aurora_core::lang::strip_language_prefix`.
+    let searchable = lang::strip_language_prefix(&work.item.title);
+    let query = Query::new(
+        searchable.as_deref().unwrap_or(&work.item.title),
+        work.item.year,
+    );
     let candidates = match client.search(kind_of(work.kind), &query.title, query.year) {
         Ok(c) => c,
         Err(e) => {
