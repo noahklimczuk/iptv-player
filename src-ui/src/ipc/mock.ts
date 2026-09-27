@@ -1148,6 +1148,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       unmatched: fx.channels.slice(-2).map((c) => c.name),
     },
   }),
+  // The real host derives these from mpv's chapter list. There is no mpv here, so
+  // there are no chapters to derive from: the fixtures already carry whatever markers
+  // a journey needs, and this reports that it wrote none. Present so that the contract
+  // is answerable in a browser at all — an unanswered command rejects, and the caller
+  // in `useEpisodeAids` is deliberately sequenced *before* the fetch it guards.
+  'library.syncChapters': () => 0,
+
   'library.playbackAids': ({ episodeId }): PlaybackAids => {
     const ep = fx.episodes.find((e) => e.id === episodeId);
     const duration = (ep?.runtimeMins ?? 45) * 60;

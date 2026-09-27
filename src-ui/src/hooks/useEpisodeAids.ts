@@ -50,15 +50,27 @@ export function useEpisodeAids(
     if (fetchedFor.current === episodeId) return;
     fetchedFor.current = episodeId;
     setDismissed(null);
-    invoke('library.playbackAids', {
-      profileId,
-      episodeId,
-      durationSecs: duration,
-    })
-      .then(setAids)
-      // Not fatal: these drive Skip Intro and Up Next, and a show without them is
-      // simply a show you scrub yourself.
-      .catch(report('Could not load this episode\u2019s skip markers'));
+    const args = { profileId, episodeId, durationSecs: duration };
+    // Chapters first, then ask what there is.
+    //
+    // `library.playbackAids` only reports markers that are already stored, and
+    // `library.syncChapters` is the only thing that stores the ones derived from the
+    // file's own chapter list. It was implemented on the host, registered, and called
+    // from nowhere — so `skip_markers` was empty on every real library and Skip Intro
+    // could never appear, however many chapters the file had. Same shape as the
+    // `progress.save` bug above it.
+    //
+    // Sequenced rather than run alongside: the point is that the write lands before the
+    // read. A failure is not fatal — a file with no chapters is the normal case, and
+    // then there is simply nothing to skip — so the aids are fetched either way.
+    void invoke('library.syncChapters', args)
+      .catch(() => {})
+      .then(() =>
+        invoke('library.playbackAids', args)
+          .then(setAids)
+          // Not fatal: these drive Skip Intro and Up Next, and a show without them is
+          // simply a show you scrub yourself.
+          .catch(report('Could not load this episode\u2019s skip markers')));
   }, [episodeId, duration, profileId]);
 
   const activeMarker = useMemo(() => {

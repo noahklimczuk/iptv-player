@@ -775,6 +775,21 @@ export interface Commands {
     episodeId: number;
     durationSecs: number;
   }) => PlaybackAids;
+  /**
+   * Derive skip markers from the loaded file's chapter list and store them. Returns how
+   * many were written.
+   *
+   * Called before `library.playbackAids` for an episode, because that command only
+   * reports what is already stored — and this is the only thing that puts
+   * chapter-derived markers there. The host has answered it since markers were built;
+   * it was never declared here, so nothing ever asked, and `skip_markers` stayed empty
+   * on every real library. Skip Intro therefore never appeared.
+   */
+  'library.syncChapters': (args: {
+    profileId: number;
+    episodeId: number;
+    durationSecs: number;
+  }) => number;
   'library.recordSkip': (args: {
     episodeId: number;
     kind: MarkerKind;
