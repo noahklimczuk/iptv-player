@@ -67,6 +67,21 @@ const TOKENS: &[(&str, &str)] = &[
     // Singapore broadcasts in English, so this one *keeps* content rather than hiding it.
     ("sg", "en"), // "SG * MEWATCH LIVE 2 HD"
     ("singapore", "en"),
+    // Quebec. This one was not merely unknown, it was **wrong**: 601 films prefixed
+    // "QFR " were being filed as English, because their group is "CA * QUEBEC NOEL" and
+    // `CA` is Canada is English. The prefix says otherwise and the prefix wins, so long
+    // as it is read at all — which is why `bare_prefix` had to grow past two letters.
+    ("qfr", "fr"),
+    ("quebec", "fr"),
+    // Ex-Yugoslavia, which is how this panel groups 1,454 films and shows: a region,
+    // not a language. Mapped to Serbian because something has to be picked and the
+    // filter's question is only ever "is this English".
+    ("exyu", "sr"),
+    ("yugoslavia", "sr"),
+    ("twn", "zh"), // "TWN * FORMOSA TV" — Taiwan.
+    ("taiwan", "zh"),
+    ("afg", "ps"), // "AFG * BAHAR TV HD" — Afghanistan.
+    ("afghanistan", "ps"),
     // Arabic. "AR" is Arabic in playlists; Argentina arrives as "ARG".
     ("ar", "ar"),
     ("ara", "ar"),
@@ -438,9 +453,12 @@ fn script_language(text: &str) -> Option<&'static str> {
 const AMBIGUOUS_BARE: &[&str] = &[
     "am", "an", "as", "at", "be", "by", "do", "go", "he", "hi", "if", "in", "is", "it", "me", "my",
     "no", "of", "on", "or", "so", "to", "up", "us", "we",
+    // Three letters, and the only one in the table that also opens English titles:
+    // "CAN You Ever Forgive Me?". The rest — "ARA", "ENG", "QFR", "EXYU" — are not words.
+    "can",
 ];
 
-/// A two-letter code at the start of a name with nothing but a space after it.
+/// A two-to-four letter code at the start of a name with nothing but a space after it.
 ///
 /// `title::split_country_prefix` requires a separator — that is what stops "BBC One"
 /// from losing its "BBC" — and it is right to. But a real subscription writes 1,088 of
@@ -450,21 +468,27 @@ const AMBIGUOUS_BARE: &[&str] = &[
 /// collapsing, still goes through `split_country_prefix` and is unchanged.
 fn bare_prefix(name: &str) -> Option<String> {
     let trimmed = name.trim_start();
-    let mut chars = trimmed.char_indices();
-    let (_, first) = chars.next()?;
-    let (_, second) = chars.next()?;
-    let (rest_at, separator) = chars.next()?;
-    if !first.is_ascii_alphabetic() || !second.is_ascii_alphabetic() {
-        return None;
+    let mut letters = String::new();
+    let mut rest_at = None;
+    for (at, ch) in trimmed.char_indices() {
+        if ch.is_ascii_alphabetic() && letters.len() < 4 {
+            letters.push(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            rest_at = Some(at);
+        }
+        break;
     }
-    if !separator.is_whitespace() {
+    let rest_at = rest_at?;
+    if letters.len() < 2 {
         return None;
     }
     // Something has to be left over, or the name *is* the code.
     if trimmed[rest_at..].trim().is_empty() {
         return None;
     }
-    let code = format!("{first}{second}").to_lowercase();
+    let code = letters.to_lowercase();
     if AMBIGUOUS_BARE.contains(&code.as_str()) {
         return None;
     }
@@ -625,12 +649,33 @@ mod tests {
     }
 
     #[test]
+    fn a_longer_bare_prefix_counts_too() {
+        // Three and four letters, with nothing but a space — which is how this panel
+        // writes 601 Quebec films and 1,454 ex-Yugoslav ones.
+        assert_eq!(d("QFR Last Christmas").as_deref(), Some("fr"));
+        assert_eq!(d("EXYU A Room of My Own").as_deref(), Some("sr"));
+    }
+
+    #[test]
+    fn a_prefix_in_the_name_beats_a_country_in_the_group() {
+        // The bug this is really about. "CA * QUEBEC NOEL" reads as Canada, which reads
+        // as English, and 601 French films were filed as English because of it. The name
+        // is the better evidence and `detect` already prefers it — once it can see it.
+        assert_eq!(
+            detect("QFR Last Christmas", Some("CA \u{272a} QUEBEC NOEL"), None).as_deref(),
+            Some("fr"),
+        );
+    }
+
+    #[test]
     fn a_bare_prefix_never_swallows_the_start_of_an_english_title() {
         // The whole reason the bare form is restricted. Each of these opens with two
         // letters that are also a language code, and each is an English-language title.
         assert_eq!(d("IT Crowd"), None);
         assert_eq!(d("NO Country for Old Men"), None);
         assert_eq!(d("IN Bruges"), None);
+        // Three letters, same trap.
+        assert_eq!(d("CAN You Ever Forgive Me?"), None);
         // And a code with nothing after it is a name, not a prefix.
         assert_eq!(d("EN"), None);
     }
