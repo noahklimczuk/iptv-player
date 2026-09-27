@@ -993,6 +993,12 @@ export interface Commands {
   'metadata.rematch': (args: { kind: 'movie' | 'series'; id: number }) => void;
 
   'artwork.status': () => ArtworkCacheStatus;
+  /**
+   * Which of these remote image URLs are already in the local cache, as URLs the
+   * WebView can load — `null` for any that are not, meaning "use the remote one".
+   * Answered for a whole grid at once; a page paints a hundred posters.
+   */
+  'artwork.local': (args: { urls: string[] }) => (string | null)[];
   /** Download the library's artwork into the local cache, then evict to the budget. */
   'artwork.prefetch': (args: { limit?: number }) => ArtworkPrefetchReport;
   /** Empty the cache. Always safe — the library keeps the remote URLs. */
