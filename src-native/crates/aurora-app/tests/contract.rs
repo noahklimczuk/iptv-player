@@ -115,6 +115,48 @@ fn the_host_registers_every_command_the_contract_declares() {
     );
 }
 
+#[test]
+fn the_contract_declares_every_command_the_host_registers() {
+    let root = repo_root();
+    let contract = std::fs::read_to_string(root.join("shared/ipc.ts")).expect("shared/ipc.ts");
+    let main = std::fs::read_to_string(root.join("src-native/crates/aurora-app/src/main.rs"))
+        .expect("main.rs");
+
+    // The other direction, which is the one that went wrong. A command the UI can call
+    // and the host cannot answer is a visible error; a command the host answers and the
+    // contract does not mention is *silence*, and silence is what `library.syncChapters`
+    // got. It was written, registered, given a table and a derivation — and never
+    // declared, so no caller could be written against it and none was. `skip_markers`
+    // was empty on every real library and Skip Intro never appeared, with nothing
+    // failing anywhere to say why.
+    let declared: Vec<String> = declared_commands(&contract)
+        .iter()
+        .map(|d| to_command_name(d))
+        .collect();
+    let registered = registered_commands(&main);
+    assert!(
+        registered.len() > 70,
+        "only parsed {} commands from the handler — the scan is broken",
+        registered.len()
+    );
+
+    let undeclared: Vec<_> = registered
+        .iter()
+        .filter(|r| !declared.contains(r))
+        .collect();
+
+    assert!(
+        undeclared.is_empty(),
+        "the host answers these and the contract does not declare them, so nothing in \
+         the UI can call them:\n  {}",
+        undeclared
+            .iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
 /// The field names of one `export interface` in the contract.
 ///
 /// Field lines end in a semicolon; the doc comments around them do not, which is enough
