@@ -10,6 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::repo::filtering::{Kind as FilterKind, LibraryFilter};
 
 /// What kind of title a row refers to. Polymorphic like `watch_progress`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,14 +94,47 @@ pub fn pending(
     limit: u32,
     retry_failed_before: i64,
 ) -> Result<Vec<Pending>> {
+    // Only what the viewer could actually see, in the order they are likely to see it.
+    //
+    // This used to be `ORDER BY added_at DESC, id` over the whole table, which sounds
+    // like "newest first" and is not: an import stamps every row with the same
+    // `added_at`, so it collapses to row order — the provider's catalogue order. On a
+    // 117,510-film subscription that meant working from row 1, and row 1 of that
+    // catalogue is 298 Arabic football fixtures. Every one of them cost a TMDB call and
+    // came back `nomatch`, because they are not films. Films: 298 attempted, 0 matched.
+    // Shows, which happen to sit at the front of their own table: 250 attempted, 228
+    // matched. The matcher was never the problem; what it was pointed at was.
+    //
+    // So: the library filter first, because a row the viewer has hidden — or that
+    // "English only" is keeping off their screen — is a row worth no requests at all.
+    // It is read per call, so turning a filter off brings its titles back into scope.
+    let filter = LibraryFilter::load(conn)?;
+    let visible = filter.where_sql(match kind {
+        ItemKind::Movie => FilterKind::Movies,
+        ItemKind::Series => FilterKind::Series,
+    });
+    let table = kind.table();
     let sql = format!(
-        "SELECT t.id, t.title, t.year FROM {} t
-         LEFT JOIN enrichment e ON e.item_kind = ?1 AND e.item_id = t.id
-         WHERE e.item_id IS NULL
-            OR (e.state = 'failed' AND e.attempted_at < ?2)
-         ORDER BY t.added_at DESC, t.id
-         LIMIT ?3",
-        kind.table()
+        "SELECT {table}.id, {table}.title, {table}.year FROM {table}
+         LEFT JOIN enrichment e ON e.item_kind = ?1 AND e.item_id = {table}.id
+         WHERE {table}.hidden = 0{visible}
+           AND (e.item_id IS NULL
+                OR (e.state = 'failed' AND e.attempted_at < ?2))
+         ORDER BY
+           -- Anything the viewer has already reached for. A handful of rows, and the
+           -- ones whose overview and cast they are most likely to open.
+           CASE WHEN EXISTS (SELECT 1 FROM favorites f
+                              WHERE f.item_kind = ?1 AND f.item_id = {table}.id)
+                  OR EXISTS (SELECT 1 FROM watch_progress w
+                              WHERE w.item_kind = ?1 AND w.item_id = {table}.id)
+                THEN 0 ELSE 1 END,
+           -- Then whatever carries a year. It is the cheapest evidence there is that a
+           -- row is a film rather than a fixture list: `Inception (2010)` has one and
+           -- `AR الأرجنتين Vs اسبانيا` does not.
+           CASE WHEN {table}.year IS NULL THEN 1 ELSE 0 END,
+           {table}.added_at DESC,
+           {table}.id
+         LIMIT ?3"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params![kind.as_str(), retry_failed_before, limit], |r| {
@@ -823,6 +857,112 @@ mod tests {
             .unwrap();
         assert_eq!(people, 3);
         assert_eq!(titles_for_person(&conn, 6384).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_title_the_viewer_cannot_see_is_not_worth_a_request() {
+        let conn = db();
+        let english = movie(&conn, "m1", "Inception", Some(2010));
+        let french = movie(&conn, "m2", "Amelie", Some(2001));
+        conn.execute(
+            "UPDATE movies SET lang_code = 'en' WHERE id = ?1",
+            params![english],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE movies SET lang_code = 'fr' WHERE id = ?1",
+            params![french],
+        )
+        .unwrap();
+
+        let ids = |conn: &Connection| -> Vec<i64> {
+            pending(conn, ItemKind::Movie, 10, 0)
+                .unwrap()
+                .iter()
+                .map(|p| p.id)
+                .collect()
+        };
+
+        // With nothing filtered, both are fair game.
+        assert!(ids(&conn).contains(&french));
+
+        LibraryFilter {
+            english_only: true,
+            hide_duplicates: false,
+            hide_untagged: false,
+        }
+        .save(&conn)
+        .unwrap();
+
+        let offered = ids(&conn);
+        assert!(offered.contains(&english));
+        assert!(
+            !offered.contains(&french),
+            "a title the viewer has filtered away still cost a metadata request"
+        );
+    }
+
+    #[test]
+    fn a_hidden_title_is_not_worth_a_request_either() {
+        let conn = db();
+        let shown = movie(&conn, "m1", "Inception", Some(2010));
+        let buried = movie(&conn, "m2", "Whatever", Some(2001));
+        conn.execute(
+            "UPDATE movies SET hidden = 1 WHERE id = ?1",
+            params![buried],
+        )
+        .unwrap();
+
+        let offered: Vec<i64> = pending(&conn, ItemKind::Movie, 10, 0)
+            .unwrap()
+            .iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(offered, vec![shown]);
+    }
+
+    #[test]
+    fn a_year_is_what_separates_a_film_from_a_fixture_list() {
+        // The regression this ordering exists for. Row order put the provider's sports
+        // listings first — 298 of them, 298 requests, nothing matched — because they
+        // happened to be at the front of the catalogue. A year is the cheapest evidence
+        // that a row is a film at all.
+        let conn = db();
+        let fixture = movie(&conn, "m1", "AR Argentina Vs Spain", None);
+        let film = movie(&conn, "m2", "Inception", Some(2010));
+
+        let offered: Vec<i64> = pending(&conn, ItemKind::Movie, 10, 0)
+            .unwrap()
+            .iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(
+            offered,
+            vec![film, fixture],
+            "the film has to be asked about before the fixture list, whatever order they              were imported in"
+        );
+    }
+
+    #[test]
+    fn what_the_viewer_has_already_reached_for_comes_first() {
+        let conn = db();
+        let favourite = movie(&conn, "m1", "Some Show They Like", None);
+        let film = movie(&conn, "m2", "Inception", Some(2010));
+        conn.execute(
+            "INSERT INTO favorites (profile_id, list_name, item_kind, item_id, sort_order, added_at)
+             VALUES (1,'Favorites','movie',?1,0,0)",
+            params![favourite],
+        )
+        .unwrap();
+
+        let offered: Vec<i64> = pending(&conn, ItemKind::Movie, 10, 0)
+            .unwrap()
+            .iter()
+            .map(|p| p.id)
+            .collect();
+        // Even without a year, which would otherwise put it last.
+        assert_eq!(offered.first(), Some(&favourite), "{offered:?}");
+        assert!(offered.contains(&film));
     }
 
     #[test]

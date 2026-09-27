@@ -19,9 +19,10 @@ const KEY_HIDE_UNTAGGED: &str = "filter.hide_untagged";
 /// Bumped when classification changes, so an existing library is re-read rather than
 /// silently keeping whatever the previous build decided.
 ///
+/// 3: `QFR`, `EXYU`, `TWN` and `AFG`, and a bare prefix may be up to four letters.
 /// 2: `aurora_core::lang` learned the codes a real subscription used (`SW`, `BE`, `MT`,
 /// `CH`, `HT`, `SU`, `SG`, `ID`) and how to read a bare two-letter prefix.
-pub const CLASSIFIER_VERSION: i64 = 2;
+pub const CLASSIFIER_VERSION: i64 = 3;
 const KEY_CLASSIFIER_VERSION: &str = "filter.classifier_version";
 
 /// Which list a query is about. Not a string, so no caller can put one into SQL.
