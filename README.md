@@ -12,33 +12,36 @@ This repository holds two things:
 
 | | |
 |---|---|
-| Core domain logic (parsers, matching, rules, skip markers, parental, DVR, metadata matching, timeshift window) | ✅ built, 246 tests |
-| Persistence (SQLite, migrations, FTS5 search, profiles, recordings, credits) | ✅ built, 196 tests |
-| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 161 tests |
+| Core domain logic (parsers, matching, rules, skip markers, parental, DVR, metadata matching, timeshift window) | ✅ built, 288 tests |
+| Persistence (SQLite, migrations, FTS5 search, profiles, recordings, credits) | ✅ built, 224 tests |
+| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 213 tests |
 | Playback state machine + error taxonomy | ✅ built, 21 tests |
-| libmpv / Win32 compositing backend | ⚠️ written, compiles for Windows, **not yet wired into the window or run** — see the Phase 0 caveat in `docs/ROADMAP.md` |
-| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 82 E2E journeys |
+| libmpv / Win32 compositing backend | ✅ **run on Windows 11**: 1920x1080 H.264 at 60fps with `d3d11va-copy`, composited behind the transparent WebView2, surface following the window on resize. `AUDIT/test-report.md` §11 |
+| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 114 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
-| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, 61 tests |
+| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, and on Windows, 116 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
 | DVR: scheduling, series rules, conflicts, reminders, recordings library | ✅ built and tested; never pointed at a real provider |
-| TMDB enrichment: matching, artwork, cast and crew | ✅ built and tested; never called against the real API |
+| TMDB enrichment: matching, artwork, cast and crew | ✅ built and tested; the live API was checked to carry every field the parser reads (overview, posters, backdrops, runtime, rating, genres, credits, images, release dates), but the app's own enrichment has not been run end to end against it |
 | Artwork disk cache: download, evict, manage | ✅ built and tested; the UI does not read from it yet |
 | Catch-up playback (§7.5) | ✅ built and tested; the URL builder has never met a real provider |
 | Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
 | Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
-| Timeshift / pause live TV (§7.6) | ✅ built and tested; rides mpv's own on-disk cache rather than a buffer of ours (D21), so it has never met a real stream |
+| Timeshift / pause live TV (§7.6) | ⚠️ built and tested, and the first real run found the buffer was going to mpv's own directory rather than the viewer's — mpv has no `cache-dir` option (F-31). Fixed; the rewind itself has still not been exercised against a provider |
 | Provider passwords in Windows Credential Manager (C10) | ✅ built and tested; the store was a keyring stub until v0.6.2 — no password was ever written, which is why importing failed on every real panel |
-| Series from an Xtream panel | ❌ the listings are fetched and discarded; the Series screen is empty on a real subscription — see `docs/ROADMAP.md` |
-| Stream failover: demote a dead source, roll to the next (§7.14) | ✅ built and tested; never seen a real stream drop |
-| Windows installer + portable build from CI | ✅ built on every merge to main; the app itself has still never been run |
+| Series from an Xtream panel | ✅ fixed (F-04) and confirmed on a real subscription: 28,529 series imported alongside 22,121 channels and 117,587 films, and the Series screen drew |
+| Stream failover: demote a dead source, roll to the next (§7.14) | ⚠️ built and tested, and it had never fired: a stream that fails to open reached the player as an error the event pump discarded, so nothing was ever demoted (F-30). Fixed and covered by `tests-host/scenarios/stream_failure.py` |
+| Windows installer + portable build from CI | ✅ built on every merge to main, and the app has now been run — the installer, upgrade and uninstall are still unverified (`AUDIT/release-checklist.md` item 5) |
 | Versioned releases: patch for a fix, minor for a feature (§23) | ✅ derived from the commit subjects at build time; never seen a real release yet |
 | Update check and install from GitHub releases (§23) | ✅ built and tested; downloads the installer and verifies it against the SHA-256 GitHub publishes, then runs it. Not signature-verified — §18 wants a signing key that does not exist yet (D17) |
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
-from what merely compiles. In particular the Phase 0 compositing spike — video behind a
-transparent WebView2 — has never been run on real hardware, and everything about the
-playback experience depends on it.
+from what merely compiles. The Phase 0 compositing spike — video behind a transparent
+WebView2, which everything about the playback experience depends on — **has now been run
+on real hardware and works**; `AUDIT/test-report.md` §11 has the numbers, and §12 has the
+five things that only running it could find. What is still unverified is the shape of a
+release rather than of the app: the installer, an upgrade over an older version, an
+uninstall, code signing, and catch-up and recording against a provider.
 
 - `docs/ARCHITECTURE.md` — how the pieces fit together
 - `docs/BUILDING.md` — what builds on which platform, and how to run it
@@ -121,7 +124,7 @@ These are the hard walls. A build that violates any of them is a failed build.
 |---|---|---|
 | Shell / native host | **Rust + Tauri 2** (or **C# / .NET 9 + WinUI 3**) | Owns the top-level HWND, window chrome, tray, hotkeys, file system, and the media layer. |
 | UI | **React 18 + TypeScript 5 + Vite**, rendered in **WebView2** | The Netflix-grade UI work (rails, hover previews, transitions, EPG grid) is dramatically faster to build and polish in a web layer. |
-| Media engine | **libmpv** (bundled `mpv-2.dll`), embedded | The single best choice: handles every container/codec IPTV throws at it, has a clean C API, hardware decode, and battle-tested stream resilience. `libVLC`/LibVLCSharp is the sanctioned alternative. |
+| Media engine | **libmpv** (bundled `libmpv-2.dll`), embedded | The single best choice: handles every container/codec IPTV throws at it, has a clean C API, hardware decode, and battle-tested stream resilience. `libVLC`/LibVLCSharp is the sanctioned alternative. |
 | Compositing | **libmpv renders into a child HWND positioned *behind* a WebView2 with a transparent background.** The entire UI (including all player controls) lives in the web layer and floats over live video. | This is the key architectural trick that satisfies C2 + C3 while keeping a modern UI. Validate it in Phase 0 with a spike before anything else is built. |
 | State | Zustand or Redux Toolkit + TanStack Query | Deliberately boring. |
 | Styling | Tailwind CSS + Framer Motion (or equivalent) | Motion is a first-class requirement, not decoration. |

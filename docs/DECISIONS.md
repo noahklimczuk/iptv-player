@@ -362,10 +362,18 @@ buffer means. The options are properties of one long-lived mpv handle rather tha
 arguments to one file, so turning the buffer off has to be *said* on the next load
 (`demuxer-max-back-bytes=0`) and not merely left unsaid, or a channel tuned afterwards
 would inherit it. Changing the size applies at the next tune, because re-loading to resize
-a cache would black out whatever is on. And none of it has been run: like everything
-downstream of the Phase 0 spike, the mpv side compiles for Windows and has never met a
-real stream, so `aurora_core::timeshift`'s bound on the window is the honest one and
-mpv's own `demuxer-cache-state` is read only as a refinement where it answers.
+a cache would black out whatever is on.
+
+**Run on Windows, and one option name was wrong.** mpv rejected `cache-dir` on every
+tune of a buffered channel: it has no such option — the name is `demuxer-cache-dir`
+(F-31). `cache-on-disk=yes` beside it was accepted, so the decision above worked exactly
+as designed except for where the bytes went: mpv's own default directory rather than the
+folder the viewer chose. That is the one part of this decision Aurora does not delegate
+to mpv — the arithmetic reads the folder to know how much is on disk, so the budget was
+being enforced against an empty directory, and a portable copy was keeping state outside
+itself. Fixed; the rewind itself still has not been exercised against a provider's
+stream, so `aurora_core::timeshift`'s bound on the window remains the honest one and
+mpv's `demuxer-cache-state` is read only as a refinement where it answers.
 
 ## D13 — Deferred from this pass
 

@@ -81,7 +81,7 @@ MSVC on Windows.
 | `tauri` | 2.11.6 | 93 commands, **all declared `#[tauri::command]` without `async`** — see §7 |
 | `rusqlite` | 0.32 (bundled SQLite) | one writer connection, no read pool |
 | `reqwest` | blocking, rustls | gzip on, redirect limit 5 |
-| `libmpv2` / `libmpv2-sys` | Windows only | links `mpv.lib`, needs `mpv-2.dll` beside the exe |
+| `libmpv2` / `libmpv2-sys` | Windows only | links `mpv.lib`, needs `libmpv-2.dll` beside the exe |
 | `argon2` | 0.5 | PIN hashing |
 | `keyring` | Windows only | Credential Manager |
 | `react-router-dom` | 6.30.6 | **advisory GHSA open-redirect, fixed only in 7.18** |

@@ -10,13 +10,13 @@ reachable from Settings → About.
 ## libmpv — the part that decodes the video
 
 Aurora does not implement playback. It hands a URL to **libmpv**, which is shipped
-beside the executable as `mpv-2.dll` (or carried inside the installer), and which in
+beside the executable as `libmpv-2.dll` (or carried inside the installer), and which in
 turn contains **FFmpeg** and a number of codec and protocol libraries.
 
 **libmpv is licensed under the GNU Lesser General Public License, version 2.1 or
 later** — or, when built with GPL-only components enabled, under the **GNU General
 Public License, version 2 or later**. Which of the two applies depends on how the
-`mpv-2.dll` in *this* build was compiled; the release notes for each build record
+`libmpv-2.dll` in *this* build was compiled; the release notes for each build record
 which archive it was taken from. Aurora itself is GPL-3.0-or-later, which is
 compatible with both.
 
@@ -28,7 +28,7 @@ The full text of the LGPL-2.1 is in `licenses/LGPL-2.1.txt`; the GPL-3.0 is in
 The LGPL requires that a user be able to replace the library with their own modified
 version. Aurora satisfies this the simplest way there is: **libmpv is linked
 dynamically and shipped as a separate file.** Replacing it means replacing
-`mpv-2.dll` beside `aurora-app.exe` — no rebuilding of Aurora, no toolchain, no
+`libmpv-2.dll` beside `aurora-app.exe` — no rebuilding of Aurora, no toolchain, no
 permission needed.
 
 This is a deliberate constraint on the build, not an accident of it. **libmpv must not
@@ -619,4 +619,4 @@ Only the runtime dependencies are listed: the build tooling is not shipped.
 The dependency tables come from `cargo metadata` and `package.json`. Anything in the
 prose above is a decision, not a derivation, and should be re-read rather than
 regenerated when the build changes — particularly the paragraph about which licence
-the bundled `mpv-2.dll` falls under.
+the bundled `libmpv-2.dll` falls under.

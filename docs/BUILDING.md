@@ -56,8 +56,20 @@ nothing you edit shows up.
 You need:
 - **Rust** stable, MSVC toolchain (`x86_64-pc-windows-msvc`)
 - **WebView2 runtime** (preinstalled on Windows 11; the installer bootstraps it on 10)
-- **libmpv** — `mpv-2.dll` plus its import library. Point `MPV_SOURCE` at the SDK
+- **libmpv** — `libmpv-2.dll` plus its import library. Point `MPV_SOURCE` at the SDK
   directory before building. The DLL must ship next to `aurora-app.exe`.
+
+  The name comes from the archive rather than from this project: the shinchiro
+  `mpv-dev-x86_64-*` builds CI fetches ship `libmpv-2.dll`, and the import library is
+  generated from that file's own export table with `/name:` set to it — so whatever the
+  DLL is called is what the exe will look for at runtime. The archive ships a GNU-style
+  `libmpv.dll.a` that `link.exe` cannot read, which is why `mpv.lib` is built rather
+  than shipped.
+
+  On a developer machine, find the toolchain with
+  `vswhere -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -latest`, not
+  `vswhere -latest -products *` — the latter happily returns SQL Server Management
+  Studio, which is installed by the Visual Studio installer and has no C compiler.
 
 ## Developing the UI without Windows
 

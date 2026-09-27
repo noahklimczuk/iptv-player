@@ -191,12 +191,25 @@ Two things it found that are not fine:
   XMLTV holds 4,851 channels, and many ids on the panel's channels appear nowhere in it.
   13% of the library has a guide, not 43%.
 
-## The Phase 0 caveat
+## The Phase 0 caveat — lifted
 
-README §21 requires the compositing spike to be proven before anything else is built.
-That needs a Windows machine with WebView2 and `mpv-2.dll`; this was built on Linux. The
-backend exists (`aurora-player/src/mpv.rs`) and type-checks for `x86_64-pc-windows-msvc`,
-but **compiling is not proving**.
+README §21 requires the compositing spike to be proven before anything else is built. It
+has now been run on Windows 11 with WebView2 153 and libmpv v0.41, and it works: video
+decodes with `d3d11va-copy` and composites behind the UI, the UI still takes input over
+it, and the surface follows a resize. The numbers are in `AUDIT/test-report.md` §11 and
+`tests-host/scenarios/video_surface.py` keeps them honest.
+
+One measurement missed its budget: a channel change took 1.91s against the 1.5s in
+README §16. And the run found that mpv has no `cache-dir` option, so the timeshift buffer
+had been landing in mpv's own directory rather than the viewer's — fixed, and §12 of the
+report explains it.
+
+What follows is the caveat as it stood, which is worth keeping for the reasoning about
+what "wired" meant:
+
+> That needed a Windows machine with WebView2 and `libmpv-2.dll`; the audit was done on
+> Linux. The backend existed (`aurora-player/src/mpv.rs`) and type-checked for
+> `x86_64-pc-windows-msvc`, but **compiling is not proving**.
 
 Three things the spike needed were written and never called, so a run would have shown
 no video for reasons that have nothing to do with compositing. **They are wired now**
