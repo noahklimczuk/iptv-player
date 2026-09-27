@@ -43,7 +43,11 @@ export function FilterPanel() {
     [filters],
   );
 
-  const current = filters.data ?? { englishOnly: false, hideDuplicates: false };
+  const current = filters.data ?? {
+    englishOnly: false,
+    hideDuplicates: false,
+    hideUntagged: false,
+  };
 
   return (
     <div>
@@ -53,6 +57,13 @@ export function FilterPanel() {
         checked={current.englishOnly}
         disabled={pending}
         onChange={(englishOnly) => void set({ ...current, englishOnly })}
+      />
+      <Toggle
+        label="Also hide anything untagged"
+        hint="Most playlists label only some of what they carry, so the filter above keeps whatever the provider did not tag. Turn this on to hide that too — the counts below say how much it is. On a playlist that tags nothing, it is everything."
+        checked={current.englishOnly && current.hideUntagged}
+        disabled={pending || !current.englishOnly}
+        onChange={(hideUntagged) => void set({ ...current, hideUntagged })}
       />
       <Toggle
         label="Collapse duplicates"

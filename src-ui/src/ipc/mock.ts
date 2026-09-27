@@ -302,7 +302,11 @@ export function onIngestProgress(fn: (p: IngestProgress) => void) {
 
 /* ── Playlist edits and library filters (README §7.3) ──────────────────────── */
 
-let filters: LibraryFilters = { englishOnly: false, hideDuplicates: false };
+let filters: LibraryFilters = {
+  englishOnly: false,
+  hideDuplicates: false,
+  hideUntagged: false,
+};
 
 /** One viewer edit. `null` means the override was cleared. */
 interface Edit {
@@ -358,7 +362,11 @@ function applyFilters<T extends { id: number; quality: string | null; lang?: str
   yearOf: (t: T) => number | null,
 ): T[] {
   let out = items.filter((t) => !isHidden(kind, t.id, 'hidden' in t ? !!t.hidden : false));
-  if (filters.englishOnly) out = out.filter((t) => !t.lang || t.lang === 'en');
+  if (filters.englishOnly) {
+    out = filters.hideUntagged
+      ? out.filter((t) => t.lang === 'en')
+      : out.filter((t) => !t.lang || t.lang === 'en');
+  }
   if (!filters.hideDuplicates) return out;
 
   const eligible = out;
@@ -494,7 +502,7 @@ function matchingRows(q: RowQuery): PlaylistEntry[] {
 function filterCounts(kind: PlaylistKind): FilterCounts {
   const rows = allRows(kind).filter((r) => !r.hidden);
   const before = filters;
-  filters = { englishOnly: false, hideDuplicates: true };
+  filters = { englishOnly: false, hideDuplicates: true, hideUntagged: false };
   const kept =
     kind === 'live'
       ? visibleChannels().length

@@ -673,6 +673,12 @@ export interface LibraryFilters {
   englishOnly: boolean;
   /** Show one entry per title — the highest-quality copy of it. */
   hideDuplicates: boolean;
+  /**
+   * Also hide what could not be identified, which is what "only English" usually means.
+   * Only has an effect with `englishOnly` on, and what it costs is `FilterCounts.untagged`
+   * — on a playlist that tags nothing, that is everything.
+   */
+  hideUntagged: boolean;
 }
 
 /** What each filter would hide, so the settings screen can say before it is turned on. */

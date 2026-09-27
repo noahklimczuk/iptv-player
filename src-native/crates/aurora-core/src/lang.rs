@@ -48,6 +48,25 @@ const TOKENS: &[(&str, &str)] = &[
     ("ca", "en"),
     ("can", "en"),
     ("canada", "en"),
+    // Codes a real 22,121-channel subscription used that this table did not have.
+    // Every one of these left content in the "unknown" bucket, which "English only"
+    // keeps — so a viewer asking for English kept getting Swedish, Flemish and Maltese
+    // television. The channel that proves each one is named beside it.
+    //
+    // Where a country has more than one broadcast language, this follows the channels
+    // the panel actually carried rather than the constitution.
+    ("sw", "sv"), // "SW * SVT1 4K" — Sweden. ISO 639 says Swahili; no playlist means it.
+    ("mt", "mt"), // "MT * TVM HD" — Malta.
+    ("be", "nl"), // "BE * VRT 1 FHD" — Flemish. Belgium's French channels arrive as "FR".
+    ("ch", "de"), // "CH * SRF INFO HD" — the Swiss channels here are the German ones.
+    ("ht", "fr"), // "HT * Tropical Groove" — Haiti.
+    ("su", "nl"), // "SU * BRASA MUSIC" — Suriname.
+    ("id", "id"), // "ID A Letter to My Youth" — Indonesia. "IND" is already India.
+    ("indonesia", "id"),
+    ("indonesian", "id"),
+    // Singapore broadcasts in English, so this one *keeps* content rather than hiding it.
+    ("sg", "en"), // "SG * MEWATCH LIVE 2 HD"
+    ("singapore", "en"),
     // Arabic. "AR" is Arabic in playlists; Argentina arrives as "ARG".
     ("ar", "ar"),
     ("ara", "ar"),
@@ -410,10 +429,55 @@ fn script_language(text: &str) -> Option<&'static str> {
 ///
 /// Deliberately not every word — `"The German Doctor"` is an English-language film, and
 /// a bare word in the middle of a title proves nothing.
+/// Two-letter codes that are also how an English title begins.
+///
+/// The trap that decides the rule below: "IT Crowd", "NO Country for Old Men", "US Open
+/// Tennis", "IN Bruges". Refusing these costs a missed classification, which leaves the
+/// entry visible; accepting them would hide an English title under a filter the viewer
+/// believes they understand. The first is recoverable and the second is not.
+const AMBIGUOUS_BARE: &[&str] = &[
+    "am", "an", "as", "at", "be", "by", "do", "go", "he", "hi", "if", "in", "is", "it", "me", "my",
+    "no", "of", "on", "or", "so", "to", "up", "us", "we",
+];
+
+/// A two-letter code at the start of a name with nothing but a space after it.
+///
+/// `title::split_country_prefix` requires a separator — that is what stops "BBC One"
+/// from losing its "BBC" — and it is right to. But a real subscription writes 1,088 of
+/// its films as `EN Final Spain Vs Argentina` and `ID A Letter to My Youth`, with no
+/// separator at all, and every one of them came back with no language. This reads that
+/// shape for the language question only: the match key, and therefore duplicate
+/// collapsing, still goes through `split_country_prefix` and is unchanged.
+fn bare_prefix(name: &str) -> Option<String> {
+    let trimmed = name.trim_start();
+    let mut chars = trimmed.char_indices();
+    let (_, first) = chars.next()?;
+    let (_, second) = chars.next()?;
+    let (rest_at, separator) = chars.next()?;
+    if !first.is_ascii_alphabetic() || !second.is_ascii_alphabetic() {
+        return None;
+    }
+    if !separator.is_whitespace() {
+        return None;
+    }
+    // Something has to be left over, or the name *is* the code.
+    if trimmed[rest_at..].trim().is_empty() {
+        return None;
+    }
+    let code = format!("{first}{second}").to_lowercase();
+    if AMBIGUOUS_BARE.contains(&code.as_str()) {
+        return None;
+    }
+    Some(code)
+}
+
 fn tagged_tokens(name: &str) -> Vec<String> {
     let mut out = Vec::new();
     if let (_, Some(code)) = title::split_country_prefix(name) {
         out.push(code.to_lowercase());
+    }
+    if let Some(code) = bare_prefix(name) {
+        out.push(code);
     }
     let mut segment = String::new();
     let mut inside = false;
@@ -550,6 +614,46 @@ mod tests {
             Some("fr")
         );
         assert_eq!(detect("Rai 1", Some("Italia"), None).as_deref(), Some("it"));
+    }
+
+    #[test]
+    fn a_bare_two_letter_prefix_counts_when_it_cannot_be_english() {
+        // A real panel writes its films this way, with no separator at all.
+        assert_eq!(d("EN Final Spain Vs Argentina").as_deref(), Some("en"));
+        assert_eq!(d("ID A Letter to My Youth").as_deref(), Some("id"));
+        assert_eq!(d("SW Bad Neighbours").as_deref(), Some("sv"));
+    }
+
+    #[test]
+    fn a_bare_prefix_never_swallows_the_start_of_an_english_title() {
+        // The whole reason the bare form is restricted. Each of these opens with two
+        // letters that are also a language code, and each is an English-language title.
+        assert_eq!(d("IT Crowd"), None);
+        assert_eq!(d("NO Country for Old Men"), None);
+        assert_eq!(d("IN Bruges"), None);
+        // And a code with nothing after it is a name, not a prefix.
+        assert_eq!(d("EN"), None);
+    }
+
+    #[test]
+    fn the_codes_a_real_panel_used_are_known_now() {
+        // Each of these left content unclassified, which "English only" then kept.
+        assert_eq!(d("SW \u{2605} SVT1 4K").as_deref(), Some("sv"));
+        assert_eq!(d("MT \u{2605} TVM HD").as_deref(), Some("mt"));
+        assert_eq!(d("BE \u{2605} VRT 1 FHD").as_deref(), Some("nl"));
+        assert_eq!(d("CH \u{2605} SRF INFO HD").as_deref(), Some("de"));
+        // Singapore broadcasts in English, so this one keeps the channel.
+        assert_eq!(d("SG \u{2605} MEWATCH LIVE 2 HD").as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn a_bare_prefix_does_not_change_the_match_key() {
+        // Duplicate collapsing goes through `split_country_prefix`, which is untouched:
+        // whatever this does to the language, two copies still have to agree on a key.
+        assert_eq!(
+            title::match_key("EN Final Spain Vs Argentina"),
+            title::match_key("EN Final Spain Vs Argentina"),
+        );
     }
 
     #[test]

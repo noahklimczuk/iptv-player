@@ -1318,6 +1318,7 @@ mod tests {
         let both = LibraryFilter {
             english_only: true,
             hide_duplicates: true,
+            hide_untagged: false,
         };
         let rows = channels::list(
             &conn,

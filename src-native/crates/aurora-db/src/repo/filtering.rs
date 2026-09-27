@@ -15,9 +15,13 @@ use crate::repo::settings;
 
 const KEY_ENGLISH_ONLY: &str = "filter.english_only";
 const KEY_HIDE_DUPLICATES: &str = "filter.hide_duplicates";
+const KEY_HIDE_UNTAGGED: &str = "filter.hide_untagged";
 /// Bumped when classification changes, so an existing library is re-read rather than
 /// silently keeping whatever the previous build decided.
-pub const CLASSIFIER_VERSION: i64 = 1;
+///
+/// 2: `aurora_core::lang` learned the codes a real subscription used (`SW`, `BE`, `MT`,
+/// `CH`, `HT`, `SU`, `SG`, `ID`) and how to read a bare two-letter prefix.
+pub const CLASSIFIER_VERSION: i64 = 2;
 const KEY_CLASSIFIER_VERSION: &str = "filter.classifier_version";
 
 /// Which list a query is about. Not a string, so no caller can put one into SQL.
@@ -62,6 +66,21 @@ pub struct LibraryFilter {
     pub english_only: bool,
     /// Show one entry per title, the best copy of it.
     pub hide_duplicates: bool,
+    /// Hide what could not be identified at all, as well as what was identified as
+    /// something else. Off by default, and deliberately separate from `english_only`.
+    ///
+    /// The two are different questions. "Hide other languages" is safe everywhere: a
+    /// playlist that tags nothing loses nothing. "Only English" is the stricter thing a
+    /// viewer usually means, and on a playlist with no tags at all it empties the
+    /// library — which is why it cannot simply be what `english_only` does.
+    ///
+    /// Whether it is safe is a property of the library, not of the code, and the
+    /// settings screen already knows the number: `FilterCounts::untagged` is exactly
+    /// what this hides. On the subscription this was built against that is 1,774 of
+    /// 22,121 channels, and the strict reading leaves 7,417 — which is what the viewer
+    /// asked for. On a playlist that tags nothing it would be all of them, and the
+    /// screen says so before the switch is touched.
+    pub hide_untagged: bool,
 }
 
 impl LibraryFilter {
@@ -69,12 +88,14 @@ impl LibraryFilter {
         Ok(Self {
             english_only: settings::get_or(conn, KEY_ENGLISH_ONLY, false)?,
             hide_duplicates: settings::get_or(conn, KEY_HIDE_DUPLICATES, false)?,
+            hide_untagged: settings::get_or(conn, KEY_HIDE_UNTAGGED, false)?,
         })
     }
 
     pub fn save(&self, conn: &Connection) -> Result<()> {
         settings::set(conn, KEY_ENGLISH_ONLY, &self.english_only)?;
         settings::set(conn, KEY_HIDE_DUPLICATES, &self.hide_duplicates)?;
+        settings::set(conn, KEY_HIDE_UNTAGGED, &self.hide_untagged)?;
         Ok(())
     }
 
@@ -89,9 +110,7 @@ impl LibraryFilter {
         let t = kind.table();
         let mut out = String::new();
         if self.english_only {
-            out.push_str(&format!(
-                " AND ({t}.lang_code IS NULL OR {t}.lang_code = 'en')"
-            ));
+            out.push_str(&self.language_clause(t));
         }
         if self.hide_duplicates {
             let year = if kind.has_year() {
@@ -102,9 +121,9 @@ impl LibraryFilter {
             // The inner search carries the same language rule: a Spanish copy must not
             // suppress the English one when English-only is on.
             let lang = if self.english_only {
-                " AND (dup.lang_code IS NULL OR dup.lang_code = 'en')"
+                self.language_clause("dup")
             } else {
-                ""
+                String::new()
             };
             out.push_str(&format!(
                 " AND NOT EXISTS (SELECT 1 FROM {t} dup
@@ -115,6 +134,19 @@ impl LibraryFilter {
             ));
         }
         out
+    }
+
+    /// The language condition for one table alias, in whichever reading is in force.
+    ///
+    /// One function because the duplicate subquery has to ask exactly the same question
+    /// as the outer one: a copy the viewer cannot see must not be allowed to suppress
+    /// the copy they can.
+    fn language_clause(&self, alias: &str) -> String {
+        if self.hide_untagged {
+            format!(" AND {alias}.lang_code = 'en'")
+        } else {
+            format!(" AND ({alias}.lang_code IS NULL OR {alias}.lang_code = 'en')")
+        }
     }
 }
 
@@ -150,6 +182,7 @@ pub fn counts(conn: &Connection, kind: Kind) -> Result<FilterCounts> {
     let only_dupes = LibraryFilter {
         english_only: false,
         hide_duplicates: true,
+        hide_untagged: false,
     };
     let kept: i64 = conn.query_row(
         &format!(
@@ -412,18 +445,28 @@ mod tests {
     const OFF: LibraryFilter = LibraryFilter {
         english_only: false,
         hide_duplicates: false,
+        hide_untagged: false,
     };
     const ENGLISH: LibraryFilter = LibraryFilter {
         english_only: true,
         hide_duplicates: false,
+        hide_untagged: false,
     };
     const DUPES: LibraryFilter = LibraryFilter {
         english_only: false,
         hide_duplicates: true,
+        hide_untagged: false,
     };
     const BOTH: LibraryFilter = LibraryFilter {
         english_only: true,
         hide_duplicates: true,
+        hide_untagged: false,
+    };
+    /// What a viewer means by "only English": nothing else, and nothing unidentified.
+    const STRICT: LibraryFilter = LibraryFilter {
+        english_only: true,
+        hide_duplicates: false,
+        hide_untagged: true,
     };
 
     #[test]
@@ -445,6 +488,40 @@ mod tests {
         assert!(kept.contains(&"UK | BBC One".to_string()));
         assert!(!kept.contains(&"FR | TF1".to_string()));
         assert!(!kept.contains(&"AR | MBC 1".to_string()));
+    }
+
+    #[test]
+    fn the_strict_reading_hides_what_could_not_be_identified() {
+        let conn = seeded();
+        let kept = names(&conn, Kind::Live, &STRICT);
+        // What `ENGLISH` keeps out of caution, this drops on purpose.
+        assert!(!kept.contains(&"CNN".to_string()), "{kept:?}");
+        assert!(!kept.contains(&"Discovery".to_string()), "{kept:?}");
+        // And what is positively English still stays.
+        assert!(kept.contains(&"UK | BBC One".to_string()), "{kept:?}");
+        assert!(!kept.contains(&"FR | TF1".to_string()));
+    }
+
+    #[test]
+    fn strict_and_lenient_are_the_same_question_in_the_duplicate_subquery() {
+        // A copy the viewer cannot see must not suppress the copy they can — which only
+        // holds if the inner search asks whatever the outer one asked.
+        let strict = STRICT.where_sql(Kind::Movies);
+        assert!(!strict.contains("lang_code IS NULL"), "{strict}");
+        let lenient = ENGLISH.where_sql(Kind::Movies);
+        assert!(lenient.contains("lang_code IS NULL"), "{lenient}");
+
+        let both_strict = LibraryFilter {
+            english_only: true,
+            hide_duplicates: true,
+            hide_untagged: true,
+        }
+        .where_sql(Kind::Movies);
+        assert_eq!(
+            both_strict.matches("lang_code = 'en'").count(),
+            2,
+            "the outer query and the duplicate subquery must agree: {both_strict}"
+        );
     }
 
     #[test]
@@ -661,6 +738,7 @@ mod tests {
         let f = LibraryFilter {
             english_only: true,
             hide_duplicates: true,
+            hide_untagged: false,
         };
         f.save(&conn).unwrap();
         assert_eq!(LibraryFilter::load(&conn).unwrap(), f);
