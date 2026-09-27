@@ -751,7 +751,15 @@ fn reindex(db: &mut Connection, _provider_id: i64) -> aurora_db::Result<()> {
             rows.push(("channel".into(), id, name, group));
         }
 
-        let mut stmt = db.prepare("SELECT id, title, year FROM movies")?;
+        // The same precedence the lists display by: what the viewer renamed it to, then
+        // what TMDB says it is called, then the provider's filing string. Searching for
+        // a film by the name on its card is the whole point, and before this the index
+        // held neither the renamed title nor the canonical one.
+        //
+        // Enrichment does not reindex, so a title matched since the last refresh is
+        // searchable by its old name until the next one.
+        let mut stmt =
+            db.prepare("SELECT id, COALESCE(custom_title, tmdb_title, title), year FROM movies")?;
         for row in stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
@@ -763,7 +771,8 @@ fn reindex(db: &mut Connection, _provider_id: i64) -> aurora_db::Result<()> {
             rows.push(("movie".into(), id, t, year.map(|y| y.to_string())));
         }
 
-        let mut stmt = db.prepare("SELECT id, title, year FROM series")?;
+        let mut stmt =
+            db.prepare("SELECT id, COALESCE(custom_title, tmdb_title, title), year FROM series")?;
         for row in stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,

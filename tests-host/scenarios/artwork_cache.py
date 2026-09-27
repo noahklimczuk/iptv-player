@@ -97,9 +97,46 @@ def run(d, ctx):
 
     # Enrichment, which is a separate question and worth answering while we are here:
     # TMDB had never been called with a real key from this application.
-    report = d.invoke("metadata_run", {"batch": ENRICH_BATCH, "movies": True}) or {}
+    report = d.invoke(
+        "metadata_run", {"batch": ENRICH_BATCH, "movies": True, "series": True}
+    ) or {}
     print(f"   enriched: {report}")
     ctx.assert_no_panic()
+
+    # While the enrichment is fresh: the canonical title. A provider files a film under
+    # a string with the language, the group and the quality folded in; TMDB knows what it
+    # is called. Enrichment fetched that and threw it away until now.
+    import sqlite3
+    con = sqlite3.connect(f"file:///{ctx.db_path().replace(chr(92), '/')}?mode=ro", uri=True)
+    stored = 0
+    for table in ("movies", "series"):
+        # Both, because which of the two a batch reaches is up to the planner: asking
+        # only about films is how the first version of this check reported "no canonical
+        # titles" while 81 shows had one.
+        n = con.execute(
+            f"SELECT count(*) FROM {table} WHERE tmdb_title IS NOT NULL").fetchone()[0]
+        taglines = con.execute(
+            f"SELECT count(*) FROM {table} WHERE tagline IS NOT NULL").fetchone()[0]
+        stored += n
+        print(f"   {table:7}: {n} carry a canonical title, {taglines} a tagline")
+        for was, now in con.execute(
+            f"SELECT title, tmdb_title FROM {table}"
+            " WHERE tmdb_title IS NOT NULL AND tmdb_title <> title LIMIT 2"
+        ):
+            print(f"      {was[:52]!r} -> {now!r}")
+        # Whatever it is called, a list has to paint the canonical one.
+        mismatched = con.execute(
+            f"SELECT count(*) FROM {table} WHERE tmdb_title IS NOT NULL"
+            " AND custom_title IS NULL"
+            " AND COALESCE(custom_title, tmdb_title, title) <> tmdb_title"
+        ).fetchone()[0]
+        assert mismatched == 0, (
+            f"{mismatched} {table} rows have a canonical title that the lists would not show"
+        )
+    con.close()
+    assert stored > 0, (
+        f"enrichment reported {report} but stored no canonical name for anything"
+    )
 
     # Now the cache itself. Deliberately *not* `artwork_prefetch`: it takes an unordered
     # LIMIT from a table of 117,587 rows, so it caches an arbitrary few dozen posters

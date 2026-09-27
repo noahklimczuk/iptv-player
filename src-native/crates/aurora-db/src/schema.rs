@@ -497,6 +497,30 @@ CREATE INDEX idx_movies_lang   ON movies(lang_code);
 CREATE INDEX idx_series_lang   ON series(lang_code);
 "#,
     },
+    Migration {
+        version: 9,
+        name: "canonical_titles",
+        sql: r#"
+-- What a title is actually called, as TMDB has it.
+--
+-- A provider's title is a filing string, not a name: a real subscription carries
+-- "EN Final Spain Vs Argentina", "NL * FILMS [SUB] Bad Neighbours" and
+-- "AR ..." with the language, the group and the quality all folded in. Enrichment
+-- already fetches the canonical one and threw it away, writing only the overview, the
+-- artwork and the ratings.
+--
+-- Kept *beside* the provider's title rather than replacing it, because the original is
+-- still what `match_key` is built from, what duplicate collapsing compares, and what
+-- the playlist editor is editing. Display order is `custom_title` (what the viewer
+-- renamed it to), then `tmdb_title`, then `title`.
+ALTER TABLE movies ADD COLUMN tmdb_title     TEXT;
+ALTER TABLE movies ADD COLUMN original_title TEXT;
+ALTER TABLE movies ADD COLUMN tagline        TEXT;
+ALTER TABLE series ADD COLUMN tmdb_title     TEXT;
+ALTER TABLE series ADD COLUMN original_title TEXT;
+ALTER TABLE series ADD COLUMN tagline        TEXT;
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 8;
+pub const LATEST_VERSION: u32 = 9;
