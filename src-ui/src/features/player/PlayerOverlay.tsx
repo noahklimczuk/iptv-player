@@ -63,6 +63,9 @@ export function PlayerOverlay({
   const behind = behindLive(player);
   // Whether there is a real video surface behind this overlay.
   const hosted = hasVideoSurface();
+  // ...and whether it currently has anything on it. Not the same question: see
+  // `showingPicture`.
+  const picture = showingPicture(player);
 
   return (
     <div
@@ -70,12 +73,18 @@ export function PlayerOverlay({
       onClick={bump}
       style={{
         position: 'fixed', inset: 0, zIndex: 150,
-        // The one place in the app that must let the window through. Under a native
-        // host, mpv is rendering into a child window *behind* the WebView2, and
-        // anything painted here covers it — which is the difference between an OSD
-        // floating over live video and a gradient with buttons on it. In a browser
-        // there is nothing behind, so it paints its own backdrop instead.
-        background: hosted
+        // The one place in the app that must let the window through — but only while
+        // there is something to let through. Under a native host mpv renders into a
+        // child window *behind* the WebView2, and anything painted here covers it,
+        // which is the difference between an OSD floating over live video and a
+        // gradient with buttons on it.
+        //
+        // Keyed on `showingPicture` and not on `hosted`, because the two come apart
+        // exactly when it matters. A tune takes a second or two to open a stream, and
+        // for that second mpv has no frame — so a transparent overlay was a hole
+        // through to the desktop, with the OSD floating over the viewer's wallpaper.
+        // The same held for a stream that failed, and for the moment after stopping.
+        background: picture
           ? 'transparent'
           : 'radial-gradient(ellipse at center, #10101a 0%, #05050a 100%)',
         cursor: visible ? 'default' : 'none',
@@ -266,6 +275,101 @@ export function PlayerOverlay({
   );
 }
 
+/**
+ * Statuses in which mpv has a frame on the surface behind the page.
+ *
+ * `buffering` counts: mpv holds the last frame while it refills, so the picture is
+ * still there. `loading` does not — the stream is being opened and there is nothing
+ * behind the page but the desktop.
+ */
+const HAS_A_FRAME: ReadonlySet<PlayerState['status']> = new Set([
+  'playing',
+  'paused',
+  'buffering',
+]);
+
+/**
+ * Whether anything is actually being drawn behind the page right now.
+ *
+ * `hasVideoSurface()` answers "is there a surface at all", which is a property of the
+ * build and the platform. This answers "is there a picture on it", which changes
+ * several times a minute — and it is the second question that decides whether the app
+ * may make itself transparent.
+ */
+export function showingPicture(player: PlayerState | null): boolean {
+  return !!player && hasVideoSurface() && HAS_A_FRAME.has(player.status);
+}
+
+/**
+ * A range input that seeks when you let go of it, rather than on every value it passes
+ * through on the way.
+ *
+ * Both scrub bars used to be controlled inputs bound straight to the host's reported
+ * position, seeking from `onChange`. Two things went wrong with that, and together they
+ * are what "scrubbing is broken" means:
+ *
+ * 1. **Every intermediate value was a seek.** Dragging from one end to the other sent
+ *    dozens of them, each a real seek in mpv, each throwing away the demuxer's work.
+ * 2. **The handle fought back.** The value came from `player.positionSecs`, which only
+ *    moves when the host's heartbeat reports it. Between ticks React re-rendered with
+ *    the *old* position, so the handle snapped back under the pointer until a seek
+ *    landed — and then jumped again.
+ *
+ * So: while a drag is in progress the handle shows what the viewer is doing, one seek
+ * is sent when they let go, and the host's own position is ignored until it agrees with
+ * where it was sent — or until it is clear it never will.
+ */
+function SeekBar({
+  min, max, value, label, accent, onCommit,
+}: {
+  min: number;
+  max: number;
+  value: number;
+  label: string;
+  accent: string;
+  onCommit: (seconds: number) => void;
+}) {
+  const [dragged, setDragged] = useState<number | null>(null);
+  const committedAt = useRef(0);
+
+  useEffect(() => {
+    if (dragged === null || committedAt.current === 0) return;
+    const arrived = Math.abs(value - dragged) <= SEEK_SETTLED_SECS;
+    const gaveUp = Date.now() - committedAt.current > SEEK_SETTLE_TIMEOUT_MS;
+    if (arrived || gaveUp) {
+      setDragged(null);
+      committedAt.current = 0;
+    }
+  }, [value, dragged]);
+
+  const commit = () => {
+    if (dragged === null || committedAt.current !== 0) return;
+    committedAt.current = Date.now();
+    onCommit(dragged);
+  };
+
+  return (
+    <input
+      type="range"
+      min={min}
+      max={max}
+      value={dragged ?? value}
+      aria-label={label}
+      onChange={(e) => setDragged(Number(e.target.value))}
+      onPointerUp={commit}
+      onLostPointerCapture={commit}
+      onKeyUp={commit}
+      onBlur={commit}
+      style={{ flex: 1, accentColor: accent }}
+    />
+  );
+}
+
+/** How close the host has to get before its position is believed again. */
+const SEEK_SETTLED_SECS = 2;
+/** And how long to wait before believing it anyway. A seek can be refused. */
+const SEEK_SETTLE_TIMEOUT_MS = 4000;
+
 function Scrubber({ player }: { player: PlayerState }) {
   // A buffered live stream has a real span to scrub through; an unbuffered one has
   // nothing behind the live edge, and a bar that cannot move is not offered.
@@ -297,13 +401,14 @@ function Scrubber({ player }: { player: PlayerState }) {
       >
         {duration(player.positionSecs)}
       </span>
-      <input
-        type="range" min={0} max={Math.max(1, player.durationSecs)}
+      <SeekBar
+        min={0}
+        max={Math.max(1, player.durationSecs)}
         value={player.positionSecs}
-        aria-label="Seek"
-        onChange={(e) => invoke('player.seek', { positionSecs: Number(e.target.value) })
-          .catch(report('Could not seek'))}
-        style={{ flex: 1, accentColor: 'var(--accent)' }}
+        label="Seek"
+        accent="var(--accent)"
+        onCommit={(positionSecs) =>
+          void invoke('player.seek', { positionSecs }).catch(report('Could not seek'))}
       />
       <span
         style={{
@@ -345,14 +450,14 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
       </span>
 
       <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
-        <input
-          type="range"
-          min={Math.floor(w.startSecs)} max={Math.ceil(w.liveSecs)} value={w.positionSecs}
-          aria-label="Timeshift"
-          onChange={(e) =>
-            invoke('player.seek', { positionSecs: Number(e.target.value) })
-              .catch(report('Could not seek'))}
-          style={{ flex: 1, accentColor: atLive ? 'var(--live)' : 'var(--accent)' }}
+        <SeekBar
+          min={Math.floor(w.startSecs)}
+          max={Math.ceil(w.liveSecs)}
+          value={w.positionSecs}
+          label="Timeshift"
+          accent={atLive ? 'var(--live)' : 'var(--accent)'}
+          onCommit={(positionSecs) =>
+            void invoke('player.seek', { positionSecs }).catch(report('Could not seek'))}
         />
         {/* The live edge itself, so the end of the track reads as "now" rather than as
             the end of a recording. */}

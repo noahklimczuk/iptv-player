@@ -24,7 +24,14 @@ async function playFirstEpisode(page: Page) {
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
 }
 
-/** Move the playhead with the OSD scrubber. */
+/**
+ * Move the playhead with the OSD scrubber, the way a person does: drag, then let go.
+ *
+ * The release is the half that matters. The scrubber seeks on `pointerup` rather than
+ * on every value it passes through, because seeking on `change` sent a seek for every
+ * pixel of a drag and let the handle snap back to the host's last reported position in
+ * between. A test that only dispatches `change` is describing the bug, not the bar.
+ */
 async function seekTo(page: Page, seconds: number) {
   const slider = page.getByRole('slider', { name: 'Seek' });
   await slider.evaluate((el, value) => {
@@ -35,6 +42,7 @@ async function seekTo(page: Page, seconds: number) {
     )!.set!;
     setter.call(input, String(value));
     input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
   }, seconds);
 }
 

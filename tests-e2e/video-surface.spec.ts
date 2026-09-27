@@ -64,6 +64,31 @@ test('with a surface behind it, nothing in the shell paints over the video', asy
   await page.screenshot({ path: `${SHOTS}/44-video-surface-clear.png` });
 });
 
+test('with a surface but no picture on it, the shell is not a hole', async ({ page }) => {
+  // The other half of the same rule, and the one that was wrong. A surface exists from
+  // startup; a *picture* does not. Between pressing play and the first frame — a second
+  // or two on a real stream — and again after a stream stops or fails, there is nothing
+  // behind the page, so a transparent shell shows the desktop with the OSD floating on
+  // top of it.
+  await page.goto('/?video#/live');
+  await play(page);
+  expect(isSeeThrough(await background(page, 'app-shell'))).toBe(true);
+
+  // Stop, which leaves the overlay up with nothing behind it.
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __auroraInvoke?: (c: string, a: unknown) => Promise<unknown>;
+    };
+    return w.__auroraInvoke!('player.stop', undefined);
+  });
+
+  await expect
+    .poll(async () => isSeeThrough(await background(page, 'app-shell')), {
+      message: 'the shell stayed transparent with no picture behind it',
+    })
+    .toBe(false);
+});
+
 test('the OSD is still usable with the chrome out of the way', async ({ page }) => {
   await page.goto('/?video#/live');
   await play(page);
