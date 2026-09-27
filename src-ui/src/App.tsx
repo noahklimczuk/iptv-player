@@ -13,7 +13,7 @@ import { LivePage } from '@/features/live/LivePage';
 import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
 import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
-import { PlayerOverlay, behindLive } from '@/features/player/PlayerOverlay';
+import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { ProfilePicker } from '@/features/profiles/ProfilePicker';
 import { SetupWizard } from '@/features/setup/SetupWizard';
@@ -23,7 +23,7 @@ import { useEpisodeAids } from '@/hooks/useEpisodeAids';
 import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
-import { hasVideoSurface, invoke } from '@/ipc';
+import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
@@ -302,7 +302,11 @@ export default function App() {
   // The overlay is `position: fixed; inset: 0`, so hiding the chrome costs nothing
   // that is visible. `display: none` rather than unmounting keeps the page's state
   // and scroll position for when playback stops.
-  const videoBehind = playerOpen && hasVideoSurface();
+  //
+  // `showingPicture` rather than `hasVideoSurface`: the surface exists from startup, but
+  // for the second or two a tune takes to open a stream there is nothing on it, and a
+  // transparent shell in that moment is a hole through to the desktop.
+  const videoBehind = playerOpen && showingPicture(ui.player);
 
   return (
     <div

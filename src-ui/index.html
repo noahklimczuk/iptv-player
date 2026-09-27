@@ -12,7 +12,30 @@
     />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- The window is transparent so the mpv surface can show through it (README
+           §2.1), and the app shell paints its own opaque background. Until React has
+           rendered there is no shell, so that transparency is a hole straight through
+           to the desktop: Aurora launched as a floating title bar over whatever was
+           behind it. This is painted by the browser before a line of script runs, and
+           React replaces it on its first render.
+
+           Inline, and in literal colours rather than tokens, because the stylesheet
+           that defines those tokens is itself a request that has not finished yet. -->
+      <div
+        id="boot"
+        style="position:fixed;inset:0;background:#0b0b0f;display:grid;
+               place-items:center;gap:18px;grid-auto-flow:row;
+               font-family:'Segoe UI Variable Display','Segoe UI',system-ui,sans-serif"
+      >
+        <div
+          style="width:56px;height:56px;border-radius:13px;display:grid;
+                 place-items:center;font-weight:800;font-size:26px;color:#fff;
+                 background:linear-gradient(135deg,#6c5ce7,#00cec9)"
+        >A</div>
+        <div style="color:#6b6b78;font-size:13px;letter-spacing:.02em">Starting Aurora…</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
