@@ -277,6 +277,21 @@ impl From<SearchResult> for Candidate {
 #[derive(Debug, Deserialize)]
 struct Details {
     id: i64,
+    /// A film is a `title`, a show is a `name`. Both shapes arrive here.
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    original_title: Option<String>,
+    #[serde(default)]
+    original_name: Option<String>,
+    #[serde(default)]
+    release_date: Option<String>,
+    #[serde(default)]
+    first_air_date: Option<String>,
+    #[serde(default)]
+    tagline: Option<String>,
     #[serde(default)]
     overview: Option<String>,
     #[serde(default)]
@@ -432,8 +447,17 @@ impl Details {
                 .and_then(|l| l.file_path)
         });
 
+        // Before the fields are moved into the struct below.
+        let year = year_of(self.release_date.as_deref())
+            .or_else(|| year_of(self.first_air_date.as_deref()));
+        let said = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+
         Metadata {
             tmdb_id: self.id,
+            title: said(self.title.or(self.name)),
+            original_title: said(self.original_title.or(self.original_name)),
+            year,
+            tagline: said(self.tagline),
             overview: self.overview.filter(|o| !o.trim().is_empty()),
             poster_path: self.poster_path,
             backdrop_path: self.backdrop_path,
@@ -601,7 +625,9 @@ mod tests {
     #[test]
     fn details_map_every_field_the_library_stores() {
         let server = TestServer::always(Reply::ok(
-            br#"{"id":603,"overview":"A hacker learns the truth.",
+            br#"{"id":603,"title":"The Matrix","original_title":"The Matrix",
+                 "release_date":"1999-03-30","tagline":"Welcome to the Real World.",
+                 "overview":"A hacker learns the truth.",
                  "poster_path":"/p.jpg","backdrop_path":"/b.jpg","runtime":136,
                  "vote_average":8.2,
                  "genres":[{"name":"Action"},{"name":"Science Fiction"}],
@@ -620,6 +646,11 @@ mod tests {
         let meta = client(&server).details(Kind::Movie, 603).unwrap();
 
         assert_eq!(meta.tmdb_id, 603);
+        // What it is actually called, which is the point of asking TMDB at all.
+        assert_eq!(meta.title.as_deref(), Some("The Matrix"));
+        assert_eq!(meta.original_title.as_deref(), Some("The Matrix"));
+        assert_eq!(meta.tagline.as_deref(), Some("Welcome to the Real World."));
+        assert_eq!(meta.year, Some(1999));
         assert_eq!(meta.runtime_mins, Some(136));
         assert_eq!(meta.rating, Some(8.2));
         assert_eq!(meta.genres, vec!["Action", "Science Fiction"]);

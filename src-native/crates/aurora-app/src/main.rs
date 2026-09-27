@@ -87,9 +87,11 @@ fn check_for_updates(app: &tauri::AppHandle) {
 /// launched, and this process is the old one.
 fn take_staged_update() -> bool {
     // Where the data lives has to be worked out before `Services`, because this runs
-    // before anything is built. A portable copy is the only one that stages an update,
-    // and it is the only one whose data directory is knowable this early.
-    let Some(data_dir) = aurora_app::portable_dir() else {
+    // before anything is built. A portable copy knows by definition; an installed one
+    // is told by the last launch, which wrote the path beside the executable. Before
+    // that existed this refused outright for an installed copy, which is why an
+    // installed copy could only ever update itself by running the installer.
+    let Some(data_dir) = updates::data_dir_before_tauri() else {
         return false;
     };
     if !updates::apply_staged_update(&data_dir) {
@@ -134,6 +136,9 @@ fn main() {
                     .app_local_data_dir()
                     .map_err(|e| format!("no data dir: {e}"))?,
             };
+
+            // So the next launch can find a staged update before Tauri exists.
+            updates::remember_data_dir(&data_dir);
 
             init_logging(&data_dir);
             // After the subscriber exists, so the hook has somewhere to write. Before

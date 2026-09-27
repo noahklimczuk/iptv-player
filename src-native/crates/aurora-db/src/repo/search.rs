@@ -453,6 +453,7 @@ mod tests {
         crate::repo::filtering::LibraryFilter {
             english_only: true,
             hide_duplicates: false,
+            hide_untagged: false,
         }
         .save(&conn)
         .unwrap();

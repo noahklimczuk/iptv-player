@@ -162,8 +162,16 @@ pub fn save(
                    rating        = COALESCE(?6, rating),
                    certification = COALESCE(?7, certification),
                    genres        = COALESCE(?8, genres),
-                   tmdb_id       = ?9,
-                   runtime_mins  = COALESCE(?10, runtime_mins)
+                   tmdb_id        = ?9,
+                   runtime_mins   = COALESCE(?10, runtime_mins),
+                   tmdb_title     = COALESCE(?11, tmdb_title),
+                   original_title = COALESCE(?12, original_title),
+                   tagline        = COALESCE(?13, tagline),
+                   -- The provider's year wins where it has one. TMDB's is better
+                   -- evidence, but `year` is half of the duplicate key: rewriting it
+                   -- here would split a pair of copies the moment one of them was
+                   -- enriched and the other was not.
+                   year           = COALESCE(year, ?14)
                  WHERE id = ?1",
                 params![
                     item_id,
@@ -176,6 +184,10 @@ pub fn save(
                     genres,
                     meta.tmdb_id,
                     meta.runtime_mins,
+                    meta.title,
+                    meta.original_title,
+                    meta.tagline,
+                    meta.year,
                 ],
             )?;
         }
@@ -189,7 +201,11 @@ pub fn save(
                    rating        = COALESCE(?6, rating),
                    certification = COALESCE(?7, certification),
                    genres        = COALESCE(?8, genres),
-                   tmdb_id       = ?9
+                   tmdb_id        = ?9,
+                   tmdb_title     = COALESCE(?10, tmdb_title),
+                   original_title = COALESCE(?11, original_title),
+                   tagline        = COALESCE(?12, tagline),
+                   year           = COALESCE(year, ?13)
                  WHERE id = ?1",
                 params![
                     item_id,
@@ -201,6 +217,10 @@ pub fn save(
                     meta.certification,
                     genres,
                     meta.tmdb_id,
+                    meta.title,
+                    meta.original_title,
+                    meta.tagline,
+                    meta.year,
                 ],
             )?;
         }
@@ -458,6 +478,10 @@ mod tests {
     fn sample_metadata() -> Metadata {
         Metadata {
             tmdb_id: 603,
+            title: Some("The Matrix".into()),
+            original_title: Some("The Matrix".into()),
+            tagline: Some("Welcome to the Real World.".into()),
+            year: Some(1999),
             overview: Some("A hacker learns the truth.".into()),
             runtime_mins: Some(136),
             rating: Some(8.2),
@@ -553,6 +577,118 @@ mod tests {
         assert_eq!(credits[0].role.as_deref(), Some("Neo"));
         assert!(credits[0].is_cast);
         assert!(!credits[2].is_cast);
+    }
+
+    #[test]
+    fn the_canonical_title_is_stored_and_is_what_a_list_shows() {
+        let mut conn = db();
+        // What a real panel files it under: the language, the group and the quality all
+        // folded into the name.
+        let id = movie(
+            &conn,
+            "m1",
+            "EN * FILMS [SUB] The Matrix 1999 4K",
+            Some(1999),
+        );
+        save(
+            &mut conn,
+            ItemKind::Movie,
+            id,
+            &sample_metadata(),
+            &artwork(),
+            0.9,
+            10,
+        )
+        .unwrap();
+
+        let (provider, tmdb, tagline, original): (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT title, tmdb_title, tagline, original_title FROM movies WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        // The provider's string is still there: it is what `match_key` is built from and
+        // what the playlist editor edits.
+        assert_eq!(provider, "EN * FILMS [SUB] The Matrix 1999 4K");
+        assert_eq!(tmdb.as_deref(), Some("The Matrix"));
+        assert_eq!(tagline.as_deref(), Some("Welcome to the Real World."));
+        assert_eq!(original.as_deref(), Some("The Matrix"));
+
+        // And it is what a list paints.
+        let shown: String = conn
+            .query_row(
+                "SELECT COALESCE(custom_title, tmdb_title, title) FROM movies WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(shown, "The Matrix");
+
+        // A name the viewer chose themselves still beats both.
+        conn.execute(
+            "UPDATE movies SET custom_title = 'Matrix, The' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let shown: String = conn
+            .query_row(
+                "SELECT COALESCE(custom_title, tmdb_title, title) FROM movies WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(shown, "Matrix, The");
+    }
+
+    #[test]
+    fn a_year_the_provider_gave_is_not_overwritten_by_tmdb() {
+        // `year` is half of the duplicate key. Rewriting it here would split a pair of
+        // copies the moment one was enriched and the other was not.
+        let mut conn = db();
+        let id = movie(&conn, "m1", "The Matrix", Some(1998));
+        save(
+            &mut conn,
+            ItemKind::Movie,
+            id,
+            &sample_metadata(),
+            &artwork(),
+            0.9,
+            10,
+        )
+        .unwrap();
+        let year: Option<i64> = conn
+            .query_row("SELECT year FROM movies WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(year, Some(1998));
+
+        // But a title the provider gave no year for takes TMDB's.
+        let blank = movie(&conn, "m2", "The Matrix", None);
+        save(
+            &mut conn,
+            ItemKind::Movie,
+            blank,
+            &sample_metadata(),
+            &artwork(),
+            0.9,
+            10,
+        )
+        .unwrap();
+        let year: Option<i64> = conn
+            .query_row(
+                "SELECT year FROM movies WHERE id = ?1",
+                params![blank],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(year, Some(1999));
     }
 
     #[test]

@@ -245,17 +245,53 @@ fn status(services: &Services, check: UpdateCheck) -> UpdateStatus {
 
 /// How this copy of the app replaces itself.
 ///
-/// The distinction is not cosmetic. Running the NSIS installer over a portable copy
-/// installs into Program Files and leaves the folder the viewer is actually running
-/// untouched — two installations, neither updated. And unzipping the portable archive
-/// over an installed copy would leave the installer's own registry entries describing
-/// a version that is no longer there. Each kind of copy has exactly one right answer,
-/// and `Release::asset` refuses rather than substituting the other.
+/// **Swap the files where they stand whenever that is possible, and run the installer
+/// only when it is not.** This used to be decided by how the copy got here — portable
+/// copies swapped, installed copies ran the NSIS installer — and that is the wrong
+/// question. Running the installer means a 39 MB download instead of the binaries, a
+/// SmartScreen warning on an unsigned build, and a UAC prompt. For a standard user that
+/// last one is not a prompt but a wall: Windows asks for administrator *credentials*
+/// they do not have, so an installed copy could not update itself at all. Swapping the
+/// files needs none of that.
+///
+/// So the question is whether this process — which has no elevation and is never going
+/// to ask for any — can write to the folder it is running from. A per-user install can.
+/// A per-machine install in Program Files cannot, and for that one the installer, which
+/// *can* ask for elevation, is still the only way up.
+///
+/// A portable copy always swaps, whether or not the probe succeeds. Running the NSIS
+/// build over one installs into Program Files and leaves the folder the viewer is
+/// actually running untouched — two installations, neither updated — so a failed swap
+/// that rolls back is strictly better than an installer that succeeds somewhere else.
+///
+/// What this costs: an installed copy updated by swapping leaves the installer's
+/// registry entry describing the version it replaced. The uninstaller still works — it
+/// removes the folder — but Add/Remove Programs shows the old number until the next
+/// time the installer itself is run.
 pub fn asset_kind() -> AssetKind {
-    if crate::portable_dir().is_some() {
+    if crate::portable_dir().is_some() || install_dir_is_writable() {
         AssetKind::Portable
     } else {
         AssetKind::Installer
+    }
+}
+
+/// Whether this copy can replace its own files in place.
+///
+/// A probe rather than a guess. "Is it under Program Files" is not the question and
+/// neither is "was there an installer": what matters is whether a write succeeds, and
+/// the only way to know that is to try one.
+fn install_dir_is_writable() -> bool {
+    let Some(dir) = install_dir() else {
+        return false;
+    };
+    let probe = dir.join(".aurora-write-probe");
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -280,6 +316,85 @@ pub fn can_install() -> bool {
     match asset_kind() {
         AssetKind::Portable => true,
         AssetKind::Installer => cfg!(windows),
+    }
+}
+
+/// Where the last launch kept its data, written beside the executable so that the
+/// *next* launch can find a staged update before Tauri exists to resolve paths.
+///
+/// A portable copy has always been able to work this out on its own — its data sits
+/// beside the exe by definition. An installed one could not, which is why the pre-launch
+/// swap used to refuse to run for it, and why an installed copy had no way to update
+/// itself except the installer.
+///
+/// Recording the path rather than recomputing it matters: this has to be the *same*
+/// directory Tauri hands the app, not this code's best guess at what
+/// `app_local_data_dir` would return. A guess that drifts would leave the swap looking
+/// in an empty folder and the update never applying, silently.
+pub const DATA_DIR_MARKER: &str = "data-dir.txt";
+
+/// Remember where the data is, for the next launch's pre-Tauri swap.
+///
+/// Best effort. It writes beside the executable, which is exactly the place a copy must
+/// be able to write to for the swap to be possible at all — so a failure here means the
+/// swap was never going to happen, and the installer is the path that copy takes.
+pub fn remember_data_dir(data_dir: &std::path::Path) {
+    let Some(dir) = install_dir() else { return };
+    let marker = dir.join(DATA_DIR_MARKER);
+    if std::fs::read_to_string(&marker).is_ok_and(|kept| kept.trim() == data_dir.to_string_lossy())
+    {
+        return;
+    }
+    if let Err(e) = std::fs::write(&marker, data_dir.to_string_lossy().as_bytes()) {
+        tracing::debug!("could not record the data directory for the updater: {e}");
+    }
+}
+
+/// Where a staged update will be, worked out without Tauri.
+///
+/// The portable marker first, because that is definitive; then what the last launch
+/// recorded. `None` means this copy has never run, and a copy that has never run has
+/// nothing staged.
+pub fn data_dir_before_tauri() -> Option<std::path::PathBuf> {
+    if let Some(dir) = crate::portable_dir() {
+        return Some(dir);
+    }
+    if let Some(dir) = install_dir() {
+        if let Ok(text) = std::fs::read_to_string(dir.join(DATA_DIR_MARKER)) {
+            let path = std::path::PathBuf::from(text.trim());
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+    }
+    // No marker: a copy that was installed before this existed, or one whose first run
+    // could not write beside itself. Without this fallback such a copy would download an
+    // update, stage it, and then never apply it — a worse outcome than the installer it
+    // replaced. So work the directory out the way Tauri does, and let the contract test
+    // keep the identifier honest.
+    local_data_dir().map(|d| d.join(BUNDLE_IDENTIFIER))
+}
+
+/// The identifier Tauri builds `app_local_data_dir` from.
+///
+/// Duplicated from `tauri.conf.json` because this is needed before Tauri exists to be
+/// asked. `tests/contract.rs` fails if the two ever disagree.
+pub const BUNDLE_IDENTIFIER: &str = "tv.aurora.player";
+
+/// Where this platform keeps per-user application data.
+fn local_data_dir() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
+            })
     }
 }
 
@@ -548,9 +663,9 @@ fn refusal(
     }
     if !can_install {
         return Some(
-            "An installed copy of Aurora can only update itself on Windows, because \
-             what it runs is the Windows installer. A portable copy can, on any \
-             platform."
+            "This copy of Aurora is installed somewhere it cannot write to, so it \
+             updates by running the Windows installer — which this build can only do \
+             on Windows."
                 .into(),
         );
     }
@@ -645,7 +760,18 @@ pub fn apply_staged_update(data_dir: &std::path::Path) -> bool {
     // waiting for, and this line running at all is that evidence.
     selfupdate::forget_previous(&previous);
 
-    let Some(staged) = selfupdate::staged(&updates_dir.join(selfupdate::STAGE_DIR)) else {
+    let stage_dir = updates_dir.join(selfupdate::STAGE_DIR);
+    // The portable archive carries `portable.txt`, and that file is not a file: it is
+    // the switch that tells Aurora to keep its library beside the executable. Unpacking
+    // it into an installed copy would move the library out from under the viewer on the
+    // next launch — an empty Aurora, and their real database still on disk somewhere
+    // nothing is looking. An installed copy takes the archive's binaries and not its
+    // marker.
+    if crate::portable_dir().is_none() {
+        let _ = std::fs::remove_file(stage_dir.join("portable.txt"));
+    }
+
+    let Some(staged) = selfupdate::staged(&stage_dir) else {
         return false;
     };
     let Some(install_dir) = install_dir() else {
@@ -1105,12 +1231,27 @@ mod tests {
     }
 
     #[test]
-    fn a_platform_that_cannot_update_itself_says_so_rather_than_failing_late() {
+    fn a_copy_that_cannot_update_itself_says_so_rather_than_failing_late() {
         let reason =
             refusal(&ready(Some(PathBuf::from("/tmp/x.exe"))), true, false, 0).expect("a refusal");
-        assert!(reason.contains("only update itself on Windows"), "{reason}");
+        // The refusal is about *this copy*, not about the platform: a copy that can
+        // write where it stands swaps its own files on any platform, and only one that
+        // cannot is left needing the Windows installer.
+        assert!(reason.contains("cannot write to"), "{reason}");
         // Notably *not* the old message, which told a portable copy to go to a browser.
         assert!(!reason.contains("release page"), "{reason}");
+    }
+
+    #[test]
+    fn a_copy_that_can_write_where_it_stands_takes_the_archive_not_the_installer() {
+        // The test binary runs out of a folder it can write to, which is the case this
+        // is about: a 39 MB installer, a SmartScreen warning and a UAC prompt, all to
+        // replace two files that are right there. The prompt in particular is not a
+        // prompt for a standard user — Windows asks for credentials they do not have —
+        // so this is the difference between updating and not being able to.
+        assert!(install_dir_is_writable(), "the test binary's own folder");
+        assert_eq!(asset_kind(), AssetKind::Portable);
+        assert!(can_install());
     }
 
     #[test]

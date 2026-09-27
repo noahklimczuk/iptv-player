@@ -210,6 +210,14 @@ pub struct Credit {
 #[serde(rename_all = "camelCase")]
 pub struct Metadata {
     pub tmdb_id: i64,
+    /// What it is actually called, which is not what a provider files it under.
+    pub title: Option<String>,
+    /// The title in its own language, for anything not originally English.
+    pub original_title: Option<String>,
+    /// TMDB's release year, which is better evidence than a year parsed out of a
+    /// filename — providers put the wrong one in constantly, and some put none at all.
+    pub year: Option<i32>,
+    pub tagline: Option<String>,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
     pub backdrop_path: Option<String>,

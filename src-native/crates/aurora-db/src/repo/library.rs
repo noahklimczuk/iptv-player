@@ -89,7 +89,10 @@ pub fn upsert_movies(
 /// The stream URL is deliberately absent. It carries the provider's username and
 /// password in the path, and the renderer has no use for it: playback is resolved on
 /// the host (README C10).
-const MOVIE_SELECT: &str = "SELECT movies.id, COALESCE(custom_title, title), year, quality,
+const MOVIE_SELECT: &str = "SELECT movies.id,
+       -- What the viewer called it, then what it is actually called, then what the
+       -- provider filed it under. See migration 9.
+       COALESCE(custom_title, tmdb_title, title), year, quality,
                                    poster, backdrop, overview, runtime_mins, rating,
                                    genres, certification, added_at, logo_art, lang_code,
                                    (SELECT group_concat(p.name, char(31))
@@ -251,7 +254,8 @@ pub struct SeriesRow {
     pub lang: Option<String>,
 }
 
-const SERIES_SELECT: &str = "SELECT series.id, COALESCE(custom_title, title), year, quality,
+const SERIES_SELECT: &str = "SELECT series.id,
+       COALESCE(custom_title, tmdb_title, title), year, quality,
                                     poster, backdrop, logo_art, overview, rating,
                                     certification, genres, added_at, lang_code,
                                     (SELECT group_concat(p.name, char(31))
