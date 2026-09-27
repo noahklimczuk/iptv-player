@@ -47,6 +47,7 @@ commit and the test that would catch a regression.
 | F-32 | Low | ci | `clippy -D warnings` has never linted the `#[cfg(windows)]` code, and does not pass on it | Fixed |
 | F-33 | Low | build | `option_env!("AURORA_TMDB_KEY")` is untracked, so a warm cache can ship the previous key | Fixed |
 | F-34 | High | player | Without `libmpv-2.dll` the app dies in the loader with no window, no log and no message; the `NullBackend` fallback is unreachable | Fixed |
+| F-35 | Medium | artwork | Prefetching an unordered `LIMIT` caches an arbitrary subset, so the cache never holds what is on screen | Fixed |
 
 ---
 
@@ -1049,3 +1050,41 @@ delay-loaded binary, with mpv decoding 1920x1080 at 60fps and 94.7% of the windo
 
 **Regression test.** Rename `libmpv-2.dll` aside and launch: the app must start and log
 `libmpv unavailable`, rather than exiting with `0xC0000135`.
+
+---
+
+## F-35 — Medium — The artwork cache never held what was on screen
+
+**Found by wiring the cache up and looking at the result** (checklist item 7).
+
+**Where.** `aurora-db::repo::enrichment::artwork_urls`, as used by `artwork_prefetch`.
+
+**What.** The prefetch asks for artwork like this:
+
+```sql
+SELECT url FROM ( SELECT poster AS url FROM movies UNION … ) WHERE url IS NOT NULL LIMIT ?1
+```
+
+No `ORDER BY`, and no relationship to anything a viewer is looking at. On a subscription
+with 117,587 films that takes an arbitrary few dozen rows out of a hundred thousand, so
+the odds that any of them are on the screen being painted are close to zero. Measured on
+the first run against a real panel: **39 files cached, 117 images on the Movies page,
+not one of them served from disk.**
+
+Raising the limit is not a fix. At roughly 100 KB a poster, caching that library whole is
+about 11 GB — an order of magnitude past any cache budget worth setting, and most of it
+downloaded for titles nobody will ever scroll past.
+
+**Fix.** The cache warms on view. `artwork.local` answers with what is on disk and
+starts fetching what is not, on its own thread, bounded per call, deduplicated against
+what is already in flight, and reporting through the `artwork.progress` events the UI
+already subscribes to. A screen's first visit paints from the network exactly as it
+always did and warms as it goes; the second visit comes off the disk.
+
+`artwork_prefetch` is left as it is. It is still the right thing for "fill the cache
+before a journey with no connection", which is what it was written for — it was simply
+never going to be what made a browse grid fast.
+
+**Regression test.** `tests-host/scenarios/artwork_cache.py` opens a screen on a real
+library and asserts the cache grew *and* that the images on that screen are being served
+from it: 45 → 181 files, 117 of 117 images local, none broken.

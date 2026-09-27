@@ -4,6 +4,39 @@ What is left for a person, in the order it blocks 1.0. Everything still open her
 needs a Windows machine, a paid account, a certificate, or a decision — none of which
 this audit could supply.
 
+---
+
+## What this is for, which decides half of the list
+
+**Aurora is a private application with one user.** It is not going to be published, sold
+or recommended. The repository stays public so that CI can build it and the in-app
+updater can reach `/releases/latest` without a token — but nobody is being asked to
+install it.
+
+That is a scoping decision, not a shortcut, and it retires four items outright:
+
+| Item | Why it is closed |
+|---|---|
+| **2. Code signing** | SmartScreen warns the person who built the app, on a machine that already trusts it. The updater's digest check defends the download; the publisher is the same person as the user. **Accepted, not fixed** — revisit the moment anyone else is asked to install this. |
+| **4. ARM64** | No ARM64 machine to run it on. Already **won't fix** (F-26). |
+| **9. Store listing** | Not going to a store. |
+| **10. Privacy note** | Written for a release page that has no audience. The facts remain true and are recorded in `docs/DECISIONS.md`. |
+
+And it reduces two more:
+
+- **5. Installer, upgrade, uninstall** — the **upgrade** half is what a single user
+  actually exercises, and it is done and verified below. Per-machine installation, the
+  Start-menu integration and the uninstall sweep are what matters to a stranger; they
+  are left open but are not blocking anything.
+- **8. Third-party licences** — the notices are bundled and shown, which satisfies the
+  obligation, and it *does* still apply: the releases are public, so builds are being
+  distributed whether or not anyone is invited to take one.
+
+What is **not** retired is everything about whether the app works: items 1, 1b, 3, 6 and
+7. A private audience is not a lower standard, it is a smaller one.
+
+---
+
 Items 1, 6 and 8 are **done**: item 1 was run on a Windows machine and is reported in
 `AUDIT/test-report.md` §11, with one number outside its budget. Item 3 is **mostly
 answered** — a real subscription imported and drew — with catch-up, recording and logos
@@ -263,18 +296,46 @@ advisory fails the job without taking the test results with it.
 Worth adding later: `cargo deny`, which would police the licence question in item 8
 automatically rather than by anyone remembering to.
 
-## 7. Turn on the artwork cache
+## 7. Turn on the artwork cache — **done**
 
-`aurora-ingest::artwork` downloads, evicts and reports; the UI still renders remote
-TMDB URLs, so every poster is fetched from the network on each paint. Closing it needs:
+Both steps are in, and a third the plan did not anticipate.
 
-1. `assetProtocol` enabled in `tauri.conf.json`, scoped to the artwork folder.
-2. The image components swapped to `artwork::asset_url(...)` **with a fallback to the
-   remote URL**, so a misconfigured protocol degrades to today's behaviour rather than
-   breaking every image.
+1. `assetProtocol` is enabled, and the folder is granted **at startup** rather than in
+   `tauri.conf.json` — a portable copy keeps its artwork beside the exe and an installed
+   one under `%LOCALAPPDATA%`, and no single path in the manifest is both.
+2. The image components go through `useAssetSrc`, which starts from the remote URL and
+   only replaces it once the host confirms a local copy — so a cold cache, an ungranted
+   scope or a failed call all degrade to exactly what shipped before.
+3. **Prefetching does not work at this size, so the cache warms on view.** This is the
+   part that had to be run to be found: `artwork_prefetch` takes an unordered `LIMIT`
+   from a table holding 117,587 rows, so it caches an arbitrary few dozen posters, and
+   the screens a viewer actually opens are essentially never among them. Measured on the
+   first attempt: **39 files cached, 117 images on screen, no overlap at all.** Caching
+   the whole library is not the answer either — at roughly 100 KB a poster that is some
+   11 GB. So `artwork.local` now fetches what a screen asked for and did not have,
+   on its own thread, reporting through the `artwork.progress` events the UI already
+   listens to.
 
-The CSP already allows `asset:` and `http://asset.localhost` (F-12), so that half is
-done. Neither step is verifiable without running the app.
+Verified against a live panel:
+
+```
+   cache before: 45 files
+   first look : 117 images, 1 from the cache (a cold cache should be near zero)
+   cache after: 45 -> 181 files, 26,751,383 bytes
+   images     : 117 total, 117 from the cache (41 of them fetched so far - the rest are
+                lazy and below the fold), 0 from the network, 0 broken
+   example    : http://asset.localhost/C:/…/artwork/2bf6d0 (600x900)
+```
+
+That last line settles something `artwork::asset_url` had flagged as unverified since it
+was written: the WebView does serve that URL form, with `/` and `:` left unencoded where
+Tauri's own `convertFileSrc` would percent-encode them.
+
+The regression test is `tests-host/scenarios/artwork_cache.py`, and it judges only
+images the browser actually fetched — `Poster` sets `loading="lazy"`, so a grid of a
+hundred cards leaves most of them unrequested, and counting those as broken is how an
+earlier version of that test accused the asset protocol of failing on 76 images it had
+never asked for.
 
 ## 8. Third-party licences — **done, with one thing to record per release**
 

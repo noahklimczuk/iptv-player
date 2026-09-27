@@ -526,3 +526,60 @@ staged update unappliable, the old copy kept running, and the next launch after 
 obstruction cleared applied it successfully.
 
 Step 4 of that item — break it on purpose — is what found F-34, above.
+
+---
+
+## 14. The artwork cache, on a real library (checklist item 7)
+
+`aurora-ingest::artwork` had downloaded, evicted and reported since it was written, and
+nothing read from it: every poster in the library was fetched from the network on each
+paint. Turning it on needed three things, and only two of them were in the plan.
+
+**What the plan had.** `assetProtocol` enabled — with the folder granted at startup
+rather than in the manifest, since a portable copy keeps its artwork beside the exe and
+an installed one under `%LOCALAPPDATA%` — and image components that prefer a local copy
+while always starting from the remote URL, so nothing can be worse than it was.
+
+**What only running it could show.** Prefetching cannot work at this size (F-35). The
+first attempt cached 39 posters and painted 117 images with **no overlap at all**,
+because `artwork_prefetch` takes an unordered `LIMIT` from a 117,587-row table. So the
+cache warms on view instead: a screen asks for what it needs, gets what is on disk, and
+the host fetches the rest on its own thread.
+
+Against a live panel:
+
+```
+   cache before: 45 files
+   first look : 117 images, 1 from the cache (a cold cache should be near zero)
+   cache after: 45 -> 181 files, 26,751,383 bytes
+   images     : 117 total, 117 from the cache (41 of them fetched so far - the rest are
+                lazy and below the fold), 0 from the network, 0 broken
+   example    : http://asset.localhost/C:/…/artwork/2bf6d0 (600x900)
+```
+
+Three things worth keeping from that run beyond the pass:
+
+- **The asset protocol serves the URL form this project builds.** `artwork::asset_url`
+  leaves `/` and `:` unencoded where Tauri's own `convertFileSrc` percent-encodes the
+  whole path; its comment had said "nothing has run the app to confirm the WebView
+  serves it". It does — that example decoded at 600x900.
+- **TMDB was called with a real key for the first time**, matching 39 of 80 titles from
+  the panel's catalogue and returning posters that were then downloaded and displayed.
+  The row in §10 that read "parsed from the documented shape, never called with a key"
+  is closed.
+- **Asking the mock a question it cannot answer cost two journeys.** The first version
+  of the hook ran its effect and its IPC call for every card in every grid, including in
+  a browser — where there is no host, no cache and nothing the answer could ever be but
+  "no". That was enough extra settling time to make the end-to-end suite flaky: 114/114
+  before the change, 113/114 after it, with a *different* test failing each run
+  (`browse-paging`, then `continue-watching`). Both were verified as pre-existing-clean
+  by reverting the change and re-running — 114/114 — rather than by assuming. The hook
+  now returns the remote URL immediately when `isNativeHost()` is false, which is both
+  the fix and the honest behaviour, and the suite is back to 114/114.
+- **`loading="lazy"` makes most of a grid unmeasurable.** Of 117 cached images only 41
+  had been fetched; the rest sat below the fold with `naturalWidth === 0` because the
+  browser had never asked for them. An earlier version of the scenario counted those as
+  broken and accused the asset protocol of failing on 76 images it had never requested —
+  which is a good reminder that `naturalWidth` alone does not distinguish "broken" from
+  "not asked for yet". The test now judges only images whose `complete` is true.
+

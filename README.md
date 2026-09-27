@@ -22,8 +22,8 @@ This repository holds two things:
 | Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, and on Windows, 116 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
 | DVR: scheduling, series rules, conflicts, reminders, recordings library | ✅ built and tested; never pointed at a real provider |
-| TMDB enrichment: matching, artwork, cast and crew | ✅ built and tested; the live API was checked to carry every field the parser reads (overview, posters, backdrops, runtime, rating, genres, credits, images, release dates), but the app's own enrichment has not been run end to end against it |
-| Artwork disk cache: download, evict, manage | ✅ built and tested; the UI does not read from it yet |
+| TMDB enrichment: matching, artwork, cast and crew | ✅ built and tested, and run against the real API with a real key: 39 of 80 titles matched from a live panel's catalogue, and the posters they returned were downloaded and displayed |
+| Artwork disk cache: download, evict, manage | ✅ built, tested, and **read from** — screens warm the cache as they are opened and serve posters off disk on the next paint. Verified on a 117,587-film library: one screen took the cache from 45 to 181 files and served all 117 of its images locally |
 | Catch-up playback (§7.5) | ✅ built and tested; the URL builder has never met a real provider |
 | Playlist editor: rename, renumber, regroup, hide, bulk edit (§7.3) | ✅ built and tested |
 | Library filters: English only, collapse quality duplicates (§7.3) | ✅ built and tested across live TV, the guide, movies, series, the home rails and search |
