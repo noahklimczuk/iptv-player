@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react';
 import type { CatalogItem } from '@shared/ipc';
 import { runtime } from '@/lib/format';
 import { useUi } from '@/state/ui';
+import { fallBackToRemote, useAssetSrc } from '@/hooks/useAssetSrc';
+
 import { Badge, Button, IconButton } from './Primitives';
 
 const TRAILER_DELAY_MS = 2000;
@@ -28,6 +30,10 @@ export function HeroBillboard({
   const hoverPreviews = useUi((s) => s.hoverPreviews);
 
   const item = items[index];
+  // Asked for unguarded, and before the `!item` return below: hooks cannot be called
+  // conditionally, and `items` is empty on the first paint of a cold library.
+  const backdrop = useAssetSrc(item?.backdrop);
+  const poster = useAssetSrc(item?.poster);
 
   useEffect(() => {
     setTrailer(false);
@@ -69,14 +75,16 @@ export function HeroBillboard({
               was a black rectangle four hundred pixels tall. A poster is the wrong
               shape for this, hence the crop and the blur: what is wanted is colour
               and motion behind the title, not a legible second copy of the artwork. */}
-          {item.backdrop ? (
+          {backdrop ? (
             <img
-              src={item.backdrop} alt=""
+              src={backdrop} alt=""
+              onError={(e) => fallBackToRemote(e, item.backdrop)}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
-          ) : item.poster ? (
+          ) : poster ? (
             <img
-              src={item.poster} alt=""
+              src={poster} alt=""
+              onError={(e) => fallBackToRemote(e, item.poster)}
               style={{
                 width: '100%', height: '100%', objectFit: 'cover',
                 objectPosition: 'center 22%',

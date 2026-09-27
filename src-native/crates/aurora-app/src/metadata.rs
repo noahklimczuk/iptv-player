@@ -253,6 +253,107 @@ pub fn artwork_status(services: State<'_, Services>) -> Result<ArtworkStatus> {
     })
 }
 
+/// How many images one screen may start downloading. A grid paints about a hundred;
+/// this is a little more than that, so a page warms in one pass without a fast scroll
+/// turning into thousands of requests to somebody else's image host.
+const WARM_AT_ONCE: usize = 128;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalArgs {
+    pub urls: Vec<String>,
+}
+
+/// Which of these images are on disk, as URLs the WebView can load — and start
+/// fetching the ones that are not.
+///
+/// Answers for a whole grid in one call rather than one per poster: a browse page paints
+/// a hundred cards, and a hundred round trips would cost more than the downloads they
+/// are meant to avoid.
+///
+/// **It warms on view, because prefetching cannot work at this size.**
+/// `artwork_prefetch` takes an unordered `LIMIT` from a table that held 117,587 rows on
+/// the subscription this was tested against, so it caches an arbitrary few dozen posters
+/// and the pages a viewer actually opens are almost never among them — measured: 39
+/// files cached, 117 images on screen, no overlap at all. Caching every poster instead
+/// is not an option either; at roughly 100 KB each that library is some 11 GB, well past
+/// any sane budget. What works is caching what is looked at: the first visit to a screen
+/// paints from the network exactly as it always did, and warms the cache as it goes, so
+/// the second visit comes off the disk.
+///
+/// Fetching happens on its own thread and reports through `artwork.progress`, which the
+/// UI already listens to — so nothing here blocks the grid, and the page swaps its
+/// images over as the answers land.
+///
+/// `None` means "use the remote URL". A cold cache, a scope that was not granted, or a
+/// failure in here all degrade to precisely the behaviour that shipped before any of
+/// this existed (checklist item 7).
+#[tauri::command(async)]
+pub fn artwork_local(
+    app: tauri::AppHandle,
+    services: State<'_, Services>,
+    args: LocalArgs,
+) -> Result<Vec<Option<String>>> {
+    let cache = &services.artwork;
+    let mut missing: Vec<String> = Vec::new();
+
+    let answers = args
+        .urls
+        .iter()
+        .map(|url| {
+            if url.is_empty() {
+                return None;
+            }
+            if cache.contains(url) {
+                return Some(artwork::asset_url(&cache.path_for(url)));
+            }
+            missing.push(url.clone());
+            None
+        })
+        .collect();
+
+    // Only what nothing else is already downloading, and only so many at once: a viewer
+    // scrolling quickly can ask about thousands of posters in a few seconds, and every
+    // one of them is a request to somebody else's image host.
+    let to_warm: Vec<String> = {
+        let mut warming = services.warming.lock();
+        missing
+            .into_iter()
+            .filter(|url| warming.insert(url.clone()))
+            .take(WARM_AT_ONCE)
+            .collect()
+    };
+
+    if !to_warm.is_empty() {
+        let http = Arc::clone(&services.http);
+        let cache = Arc::clone(&services.artwork);
+        let warming = Arc::clone(&services.warming);
+        let handle = app.clone();
+        std::thread::Builder::new()
+            .name("aurora-artwork".into())
+            .spawn(move || {
+                let report = artwork::prefetch_urls(&http, &cache, &to_warm, |p| {
+                    crate::emit(&handle, "artwork.progress", &p);
+                });
+                tracing::debug!(
+                    downloaded = report.downloaded,
+                    failed = report.failed,
+                    "warmed artwork for a screen"
+                );
+                let mut warming = warming.lock();
+                for url in &to_warm {
+                    warming.remove(url);
+                }
+            })
+            // A thread that will not start is not a reason to fail the screen; the
+            // images are already loading from the network.
+            .map_err(|e| tracing::warn!("could not warm artwork: {e}"))
+            .ok();
+    }
+
+    Ok(answers)
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrefetchArgs {

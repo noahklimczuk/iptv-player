@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode,
 } from 'react';
+import { fallBackToRemote, useAssetSrc } from '@/hooks/useAssetSrc';
+
 import { Icon, type IconName } from './Icon';
 
 /* ── Button ───────────────────────────────────────────────────────────────── */
@@ -186,6 +188,8 @@ export function EmptyState({
 export function Poster({
   src, alt, radius = 'var(--r-md)', ratio = 2 / 3,
 }: { src: string | null; alt: string; radius?: string; ratio?: number }) {
+  // From disk when the cache holds it, from the provider when it does not.
+  const resolved = useAssetSrc(src);
   return (
     <div
       style={{
@@ -193,9 +197,10 @@ export function Poster({
         background: 'var(--surface)', borderRadius: radius, overflow: 'hidden',
       }}
     >
-      {src ? (
+      {resolved ? (
         <img
-          src={src} alt={alt} loading="lazy" decoding="async"
+          src={resolved} alt={alt} loading="lazy" decoding="async"
+          onError={(e) => fallBackToRemote(e, src)}
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
         />
       ) : (

@@ -330,8 +330,11 @@ pub fn prefetch(
 /// `asset://localhost/...` elsewhere. Building the string here rather than in the UI
 /// keeps the UI from having to know the cache exists at all.
 ///
-/// **Unverified on hardware.** The format is from Tauri's documentation; nothing has run
-/// the app to confirm the WebView serves it (docs/ROADMAP.md).
+/// **Verified on hardware.** The WebView serves this form: an `<img>` given
+/// `http://asset.localhost/C:/…/artwork/2bf6d0` decoded at 600x900 on Windows 11
+/// (`AUDIT/test-report.md` §14). Worth stating because the path here keeps its `/` and
+/// `:` unencoded where Tauri's own `convertFileSrc` percent-encodes the lot; both
+/// decode to the same path, and this is the one that was actually run.
 pub fn asset_url(path: &Path) -> String {
     let encoded = urlencode_path(&path.to_string_lossy());
     if cfg!(any(windows, target_os = "android")) {

@@ -26,6 +26,9 @@ pub struct Services {
     /// Downloaded posters and backdrops. Deletable at any time — the library stores
     /// remote URLs, so this is only an accelerator.
     pub artwork: Arc<artwork::Cache>,
+    /// Artwork being fetched right now, so two screens asking for the same poster in
+    /// the same second cost one download rather than two.
+    pub warming: Arc<Mutex<std::collections::HashSet<String>>>,
     /// The update installer being fetched, if any (docs/DECISIONS.md D17).
     pub updates: Arc<crate::updates::Downloads>,
     pub data_dir: PathBuf,
@@ -88,6 +91,7 @@ impl Services {
                 data_dir.clone(),
             )),
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
+            warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             updates: Arc::new(crate::updates::Downloads::default()),
             dvr: Arc::new(
                 crate::dvr::Dvr::new(Arc::clone(&db), Arc::new(StreamRecorder), folder)

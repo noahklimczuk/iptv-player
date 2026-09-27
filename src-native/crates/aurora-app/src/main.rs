@@ -149,6 +149,24 @@ fn main() {
             );
 
             let services = Services::new(data_dir)?;
+
+            // Let the WebView read the artwork cache off disk (README §12, checklist
+            // item 7). The scope is granted here rather than in `tauri.conf.json`
+            // because the folder depends on where the app keeps its data: beside the
+            // exe for a portable copy, under %LOCALAPPDATA% for an installed one, and
+            // no single path in the manifest is both. Failing to grant it is not worth
+            // refusing to start over — every image falls back to its remote URL, which
+            // is what shipped before this existed.
+            {
+                use tauri::Manager;
+                let folder = services.artwork.dir().to_path_buf();
+                if let Err(e) = app.asset_protocol_scope().allow_directory(&folder, true) {
+                    tracing::warn!(
+                        "artwork will be fetched from the network every time: {folder:?} \
+                         could not be granted to the asset protocol: {e}"
+                    );
+                }
+            }
             let scheduler = std::sync::Arc::clone(&services.dvr);
             let playback_handle = std::sync::Arc::clone(&services.playback);
             let player_backend = std::sync::Arc::clone(&services.player);
@@ -305,6 +323,7 @@ fn main() {
             metadata::artwork_status,
             metadata::artwork_prefetch,
             metadata::artwork_clear,
+            metadata::artwork_local,
             playlist::library_filters,
             playlist::library_set_filters,
             playlist::library_filter_counts,

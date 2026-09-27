@@ -1641,6 +1641,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     mockCredits.delete(`${kind}:${id}`);
   },
 
+  'artwork.local': ({ urls }: { urls: string[] }): (string | null)[] =>
+    urls.map(() => null),
   'artwork.status': (): ArtworkCacheStatus => ({
     folder: 'C:\\Users\\You\\AppData\\Local\\Aurora TV\\artwork',
     files: artworkFiles,

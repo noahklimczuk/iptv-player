@@ -19,7 +19,7 @@ thiserror.workspace = true
 tracing.workspace = true
 time.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 parking_lot = "0.12"
 
 # ShellExecuteW, to open the releases page in the viewer's browser. Same version the
