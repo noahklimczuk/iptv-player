@@ -362,10 +362,11 @@ function ConcurrencyRow({
       </div>
       <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
         {value === 1
-          ? 'One at a time. Slowest, and the gentlest on your connection.'
+          ? 'One at a time — about a tenth of the speed, and the gentlest on your '
+            + 'connection.'
           : `Waits for ${value} answers at once instead of one. The request rate is `
             + 'capped separately, so this shortens the wait rather than asking TMDB for '
-            + 'more.'}
+            + 'more — which is why the gain flattens out above about four.'}
       </div>
     </div>
   );

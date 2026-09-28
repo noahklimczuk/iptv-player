@@ -35,7 +35,22 @@ pub const DEFAULT_BATCH: u32 = 50;
 /// The ceiling is not this number. `TmdbClient::throttle` paces request *starts* 25 ms
 /// apart however many threads are asking, which is about 40 a second and deliberately
 /// below what TMDB will tolerate. Concurrency hides the latency; it does not raise the
-/// rate. Eight is enough to keep that pacer saturated on a normal connection.
+/// rate.
+///
+/// Measured against the real service, 120 titles at a time:
+///
+/// | at once | titles/second |
+/// |---------|---------------|
+/// | 1       |  9.44         |
+/// | 4       | 23.22         |
+/// | 8       | 23.40         |
+/// | 16      | 23.71         |
+///
+/// So the gain is 2.5x and it is spent by four. That is the pacer, not the machine: those
+/// 120 titles cost 196 requests, and 40 a second divided by 1.63 requests per title is
+/// 24.5 titles a second — which is what the plateau is. The default is eight rather than
+/// four only as headroom for a slower link, where each lookup takes longer and more of
+/// them have to be outstanding to keep the pacer busy.
 pub const DEFAULT_CONCURRENCY: u32 = 8;
 
 /// The range the setting is clamped to. One is "as it used to be"; the upper end is far

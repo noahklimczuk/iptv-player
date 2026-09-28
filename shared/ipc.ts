@@ -1111,6 +1111,17 @@ export interface Events {
   'toast': { level: 'info' | 'success' | 'warning' | 'error'; message: string };
   /** Enrichment progress, so a long metadata pass is never a frozen spinner. */
   'metadata.progress': { done: number; total: number };
+  /**
+   * How far the episode-listing sweep has got.
+   *
+   * Seasons are counted from stored episodes, and an import writes shows without them —
+   * so this is what turns "0 seasons" on every card into a real number. One request per
+   * show is the only way: the panel's series list carries no season information.
+   */
+  'series.listings': { done: number; total: number };
+  'series.listingsDone': {
+    asked: number; listed: number; episodes: number; failed: number;
+  };
   'metadata.done': MetadataReport;
   'artwork.progress': { done: number; total: number };
   /** What one DVR tick changed, so the recordings page stays live (README §7.7). */

@@ -241,11 +241,19 @@ export const CatalogCard = memo(function CatalogCard({
                       {item.certification}
                     </span>
                   )}
-                  <span>
-                    {isSeries
-                      ? `${item.seasons.length} season${item.seasons.length === 1 ? '' : 's'}`
-                      : runtime(item.runtimeMins)}
-                  </span>
+                  {/* Nothing at all for a show whose listing has not been fetched
+                      yet. `seasons` is counted from the episodes table, and an import
+                      writes the show without its episodes — one request per show is
+                      28,741 of them before the library is usable — so the count is
+                      unknown until somebody opens it or the background sweep reaches it.
+                      This said "0 seasons", which is a confident wrong answer: every
+                      show on a freshly imported library claimed to have none. */}
+                  {isSeries && item.seasons.length > 0 && (
+                    <span>
+                      {item.seasons.length} season{item.seasons.length === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {!isSeries && <span>{runtime(item.runtimeMins)}</span>}
                 </div>
 
                 <div

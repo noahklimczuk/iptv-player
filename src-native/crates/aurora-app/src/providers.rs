@@ -565,6 +565,13 @@ pub fn providers_refresh(
     // background and cannot fail the refresh; with no key set it does nothing at all.
     crate::metadata::enrich_in_background(app.clone());
 
+    // And the episode listings, for the same reason. An import writes each show without
+    // them, so the seasons count on every card was zero until somebody opened the show
+    // by hand — seven of 28,553 on the library this was measured against. The panel's
+    // series list carries no season information, so one request per show is the only
+    // way there is.
+    crate::series::sweep_in_background(app.clone());
+
     Ok(report)
 }
 
