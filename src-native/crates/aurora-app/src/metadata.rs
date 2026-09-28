@@ -4,6 +4,7 @@
 //! backup, and never in an export. Commands here deal in "is a key set", never in the
 //! key itself — nothing ever sends it back to the UI.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use aurora_db::repo::enrichment::{self, Coverage, CreditRow, ItemKind};
@@ -32,6 +33,52 @@ pub struct MetadataStatus {
     pub key_is_persistent: bool,
     pub movies: Coverage,
     pub series: Coverage,
+    /// How many titles are looked up at once, and the range the control allows.
+    pub concurrency: u32,
+    pub concurrency_min: u32,
+    pub concurrency_max: u32,
+}
+
+/// Where the concurrency setting lives.
+const CONCURRENCY_KEY: &str = "metadata.concurrency";
+
+/// How many lookups this library wants in flight, clamped to what the code supports.
+///
+/// Clamped on read rather than only on write, so a value edited into the settings table
+/// by hand — or left behind by a build with a different range — cannot ask for eight
+/// hundred threads.
+pub fn concurrency(conn: &Connection) -> u32 {
+    aurora_db::repo::settings::get_or(conn, CONCURRENCY_KEY, enrich::DEFAULT_CONCURRENCY)
+        .unwrap_or(enrich::DEFAULT_CONCURRENCY)
+        .clamp(
+            *enrich::CONCURRENCY_RANGE.start(),
+            *enrich::CONCURRENCY_RANGE.end(),
+        )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConcurrencyArgs {
+    pub concurrency: u32,
+}
+
+/// Choose how hard a metadata pass leans on TMDB.
+///
+/// A setting rather than a constant because the right answer depends on the connection
+/// and on how much of the machine the viewer wants this using while they watch something.
+/// Returns what was actually stored, which is the clamped value.
+#[tauri::command(async)]
+pub fn metadata_set_concurrency(
+    services: State<'_, Services>,
+    args: ConcurrencyArgs,
+) -> Result<u32> {
+    let wanted = args.concurrency.clamp(
+        *enrich::CONCURRENCY_RANGE.start(),
+        *enrich::CONCURRENCY_RANGE.end(),
+    );
+    let db = services.db.lock();
+    aurora_db::repo::settings::set(&db, CONCURRENCY_KEY, &wanted)?;
+    Ok(wanted)
 }
 
 #[tauri::command(async)]
@@ -43,6 +90,9 @@ pub fn metadata_status(services: State<'_, Services>) -> Result<MetadataStatus> 
         key_is_persistent: services.credentials.is_persistent(),
         movies: enrichment::coverage(&db, ItemKind::Movie)?,
         series: enrichment::coverage(&db, ItemKind::Series)?,
+        concurrency: concurrency(&db),
+        concurrency_min: *enrich::CONCURRENCY_RANGE.start(),
+        concurrency_max: *enrich::CONCURRENCY_RANGE.end(),
     })
 }
 
@@ -146,6 +196,7 @@ pub fn metadata_run(
         batch: args.batch.unwrap_or(enrich::DEFAULT_BATCH),
         movies: args.movies.unwrap_or(true),
         series: args.series.unwrap_or(true),
+        concurrency: concurrency(&services.db.lock()),
     };
 
     enrich_batch(&services.db, &client, &options, now_unix(), |p| {
@@ -164,12 +215,23 @@ pub fn metadata_run(
 /// connection for the whole pass would stall every other command — including the DVR
 /// scheduler thread, which takes the same lock to decide whether a recording is due.
 /// Pressing "Fetch metadata" must not cost someone a recording.
+///
+/// **Several titles at once.** This asked for one answer before posing the next question,
+/// and that was the entire cost: a batch of 50 took 3.9 seconds against a real panel,
+/// almost all of it spent waiting. Over a 117,602-film library that is 2.6 hours for one
+/// pass. Nothing needed to be sequential — `fetch_one` touches the network and nothing
+/// else, which is a separation this file already relied on — so the workers share the
+/// queue and the rate limit inside `TmdbClient` decides the throughput, as it should.
+///
+/// The lock is still taken once per title and still never held across a request. It is
+/// taken from several threads now rather than one, which is what `parking_lot::Mutex` is
+/// for; what matters for the DVR is how long it is held, and that has not changed.
 pub fn enrich_batch(
     db: &Mutex<Connection>,
     client: &dyn MetadataClient,
     options: &Options,
     now: i64,
-    mut on_progress: impl FnMut(enrich::Progress),
+    on_progress: impl Fn(enrich::Progress) + Sync,
 ) -> Result<Report> {
     let work = {
         let db = db.lock();
@@ -177,21 +239,55 @@ pub fn enrich_batch(
     };
 
     let total = work.len();
-    let mut report = Report::default();
-    for (done, item) in work.iter().enumerate() {
-        on_progress(enrich::Progress { done, total });
+    on_progress(enrich::Progress { done: 0, total });
+    if work.is_empty() {
+        return Ok(Report::default());
+    }
 
-        // No lock held across this.
-        let outcome = enrich::fetch_one(client, item);
+    // The queue, what came back, and the first thing that went wrong. `done` counts
+    // finished titles rather than started ones, so the progress bar never claims more
+    // than has actually been written.
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let report = Mutex::new(Report::default());
+    let failure: Mutex<Option<crate::AppError>> = Mutex::new(None);
 
-        {
-            let mut db = db.lock();
-            enrich::apply(&mut db, item, &outcome, now)?;
+    std::thread::scope(|scope| {
+        for _ in 0..options.workers(work.len()) {
+            scope.spawn(|| {
+                loop {
+                    // A database error stops the pass; one title that would not resolve
+                    // does not, and never did — `fetch_one` reports that as an outcome.
+                    if failure.lock().is_some() {
+                        return;
+                    }
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = work.get(i) else { return };
+
+                    let outcome = enrich::fetch_one(client, item);
+
+                    {
+                        let mut db = db.lock();
+                        if let Err(e) = enrich::apply(&mut db, item, &outcome, now) {
+                            *failure.lock() = Some(e.into());
+                            return;
+                        }
+                    }
+                    enrich::tally(&mut report.lock(), &outcome);
+                    on_progress(enrich::Progress {
+                        done: done.fetch_add(1, Ordering::Relaxed) + 1,
+                        total,
+                    });
+                }
+            });
         }
-        enrich::tally(&mut report, &outcome);
+    });
+
+    if let Some(e) = failure.into_inner() {
+        return Err(e);
     }
     on_progress(enrich::Progress { done: total, total });
-    Ok(report)
+    Ok(report.into_inner())
 }
 
 #[derive(Debug, Deserialize)]
@@ -434,6 +530,7 @@ pub fn enrich_in_background(app: tauri::AppHandle) {
             batch: enrich::DEFAULT_BATCH,
             movies: true,
             series: true,
+            concurrency: concurrency(&services.db.lock()),
         };
 
         let mut total = Report::default();
@@ -581,6 +678,87 @@ mod tests {
 
     /// The regression guard for the bug this structure exists to prevent.
     ///
+    /// Several titles really are in flight at once.
+    ///
+    /// Compared against the same work at `concurrency: 1` rather than against a fixed
+    /// number of milliseconds, so the assertion means the same thing on a slow machine as
+    /// on a fast one, and so it fails if the setting is ever quietly ignored.
+    ///
+    /// This is the whole point of the change: a batch of 50 against a real panel took 3.9
+    /// seconds, nearly all of it waiting, which is 2.6 hours for a 117,602-film library.
+    #[test]
+    fn titles_are_looked_up_several_at_a_time() {
+        let client = SlowClient {
+            delay: std::time::Duration::from_millis(50),
+        };
+
+        let run = |concurrency: u32| {
+            let db = seeded(12);
+            let started = std::time::Instant::now();
+            let report = enrich_batch(
+                &db,
+                &client,
+                &Options {
+                    series: false,
+                    concurrency,
+                    ..Default::default()
+                },
+                1_000,
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(report.no_match, 12, "every title was looked up");
+            started.elapsed()
+        };
+
+        let sequential = run(1);
+        let concurrent = run(6);
+        assert!(
+            concurrent * 2 < sequential,
+            "six at a time took {concurrent:?} against {sequential:?} one at a time, \
+             which is not the difference being asked for"
+        );
+    }
+
+    /// Progress never claims more than has been written.
+    ///
+    /// It counts finished titles rather than started ones, which matters more now that
+    /// several are in flight: counting starts would run the bar to 100% while six lookups
+    /// were still outstanding.
+    #[test]
+    fn progress_counts_what_is_finished_and_never_overshoots() {
+        let db = seeded(9);
+        let client = SlowClient {
+            delay: std::time::Duration::from_millis(5),
+        };
+        let seen = Mutex::new(Vec::new());
+
+        enrich_batch(
+            &db,
+            &client,
+            &Options {
+                series: false,
+                concurrency: 4,
+                ..Default::default()
+            },
+            1_000,
+            |p| seen.lock().push((p.done, p.total)),
+        )
+        .unwrap();
+
+        let seen = seen.into_inner();
+        assert!(!seen.is_empty(), "nothing reported progress");
+        for (done, total) in &seen {
+            assert_eq!(*total, 9, "the total moved");
+            assert!(*done <= 9, "progress reported {done} of 9");
+        }
+        assert_eq!(
+            seen.last(),
+            Some(&(9, 9)),
+            "the pass never reported finishing"
+        );
+    }
+
     /// The DVR scheduler runs on its own thread and takes this same lock every ten
     /// seconds to decide whether a recording is due. If enrichment held it across its
     /// network calls, pressing "Fetch metadata" would stall the scheduler for the

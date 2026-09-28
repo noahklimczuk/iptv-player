@@ -627,6 +627,16 @@ export interface MetadataStatus {
   keyIsPersistent: boolean;
   movies: EnrichmentCoverage;
   series: EnrichmentCoverage;
+  /**
+   * How many titles are looked up at once, with the range the control allows.
+   *
+   * The throughput ceiling is not this number: the client paces request starts 25ms
+   * apart however many threads are asking. Concurrency hides the latency of each
+   * lookup, which is what made a pass take hours.
+   */
+  concurrency: number;
+  concurrencyMin: number;
+  concurrencyMax: number;
 }
 
 export interface MetadataReport {
@@ -1011,6 +1021,8 @@ export interface Commands {
   'metadata.status': () => MetadataStatus;
   /** Null clears the stored key. The key is never read back. */
   'metadata.setKey': (args: { key: string | null }) => void;
+  /** Returns what was stored, which is the value clamped to the allowed range. */
+  'metadata.setConcurrency': (args: { concurrency: number }) => number;
   /** Enrich one batch and report what happened. Call again to continue. */
   'metadata.run': (args: {
     batch?: number;

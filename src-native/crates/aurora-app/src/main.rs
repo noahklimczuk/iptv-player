@@ -323,6 +323,7 @@ fn main() {
             dvr::dvr_storage,
             metadata::metadata_status,
             metadata::metadata_set_key,
+            metadata::metadata_set_concurrency,
             metadata::metadata_run,
             metadata::metadata_credits,
             metadata::metadata_rematch,

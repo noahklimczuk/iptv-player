@@ -5,15 +5,17 @@
  * back, so the field shows whether one is set, not what it is. Offering to reveal it
  * would mean keeping it somewhere this screen could reach.
  */
-import { useEffect, useState } from 'react';
-import type { EnrichmentCoverage } from '@shared/ipc';
+import { useCallback, useEffect, useState } from 'react';
+import type { EnrichmentCoverage, MetadataStatus } from '@shared/ipc';
 import { Badge, Button, FIELD, ProgressBar } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke, onArtworkProgress, onMetadataProgress } from '@/ipc';
+import { report } from '@/lib/errors';
 import { bytes } from '@/lib/format';
 
 export function MetadataPanel() {
   const [nonce, setNonce] = useState(0);
+  const bump = useCallback(() => setNonce((n) => n + 1), []);
   const { data: status } = useCommand('metadata.status', undefined, [nonce]);
 
   const [key, setKey] = useState('');
@@ -131,6 +133,8 @@ export function MetadataPanel() {
           <CoverageRow label="Series" coverage={status.series} />
         </div>
       )}
+
+      {status?.hasKey && <ConcurrencyRow status={status} onChanged={bump} />}
 
       <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center', flexWrap: 'wrap' }}>
         <Button
@@ -287,6 +291,85 @@ function ArtworkCachePanel() {
 
 const pendingOf = (c: EnrichmentCoverage) =>
   Math.max(0, c.total - c.matched - c.noMatch - c.failed);
+
+/**
+ * How many titles are looked up at once.
+ *
+ * Worth exposing because the right answer is not a property of the code. Looking one
+ * title up at a time is what made a pass take 2.6 hours on a 117,602-film library, and
+ * the fix is to stop waiting for each answer before asking the next question — but how
+ * many is too many depends on the connection, and on how much of the machine somebody
+ * wants this using while they are watching something.
+ *
+ * The number it does *not* control is the request rate: the client paces request starts
+ * 25ms apart whatever this says, so raising it hides latency rather than leaning harder
+ * on TMDB. Which is why the copy below talks about waiting, not about speed limits.
+ */
+function ConcurrencyRow({
+  status, onChanged,
+}: {
+  status: MetadataStatus;
+  onChanged: () => void;
+}) {
+  const [value, setValue] = useState(status.concurrency);
+  const [saving, setSaving] = useState(false);
+
+  const commit = useCallback(
+    async (next: number) => {
+      setSaving(true);
+      try {
+        setValue(await invoke('metadata.setConcurrency', { concurrency: next }));
+        onChanged();
+      } catch (e: unknown) {
+        report('Could not change how many titles are looked up at once')(e);
+        setValue(status.concurrency);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [onChanged, status.concurrency],
+  );
+
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      <label
+        htmlFor="metadata-concurrency"
+        style={{ fontSize: 'var(--fs-sm)', fontWeight: 600 }}
+      >
+        Titles looked up at once
+      </label>
+      <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'center' }}>
+        <input
+          id="metadata-concurrency"
+          type="range"
+          min={status.concurrencyMin}
+          max={status.concurrencyMax}
+          value={value}
+          disabled={saving}
+          aria-label="Titles looked up at once"
+          onChange={(e) => setValue(Number(e.target.value))}
+          onPointerUp={() => void commit(value)}
+          onKeyUp={() => void commit(value)}
+          style={{ flex: 1, maxWidth: 260, accentColor: 'var(--accent)' }}
+        />
+        <span
+          style={{
+            fontVariantNumeric: 'tabular-nums', fontWeight: 700, minWidth: '2.5ch',
+          }}
+        >
+          {value}
+        </span>
+      </div>
+      <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+        {value === 1
+          ? 'One at a time. Slowest, and the gentlest on your connection.'
+          : `Waits for ${value} answers at once instead of one. The request rate is `
+            + 'capped separately, so this shortens the wait rather than asking TMDB for '
+            + 'more.'}
+      </div>
+    </div>
+  );
+}
 
 function CoverageRow({ label, coverage }: { label: string; coverage: EnrichmentCoverage }) {
   const { total, matched, noMatch, failed } = coverage;

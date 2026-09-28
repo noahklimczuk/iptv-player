@@ -1007,6 +1007,8 @@ function findConflicts(maxConcurrent: number): RecordingConflict[] {
    the presence of but never the value of. ─────────────────────────────────── */
 
 let metadataKey: string | null = 'demo-key-not-a-real-one';
+/** Mirrors `enrich::DEFAULT_CONCURRENCY`; the host clamps, so this does too. */
+let metadataConcurrency = 8;
 type EnrichState = 'matched' | 'nomatch' | 'failed';
 const enriched = new Map<string, EnrichState>();
 const mockCredits = new Map<string, CreditEntry[]>();
@@ -1148,6 +1150,11 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       unmatched: fx.channels.slice(-2).map((c) => c.name),
     },
   }),
+  'metadata.setConcurrency': ({ concurrency }) => {
+    metadataConcurrency = Math.min(32, Math.max(1, Math.round(concurrency)));
+    return metadataConcurrency;
+  },
+
   'library.item': ({ kind, id }) => {
     if (kind === 'movie') {
       const m = fx.movies.find((x) => x.id === id);
@@ -1618,6 +1625,9 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     keyIsPersistent: false,
     movies: enrichmentCoverage('movie'),
     series: enrichmentCoverage('series'),
+    concurrency: metadataConcurrency,
+    concurrencyMin: 1,
+    concurrencyMax: 32,
   }),
 
   'metadata.setKey': ({ key }) => {
