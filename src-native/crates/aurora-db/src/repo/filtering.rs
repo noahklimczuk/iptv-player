@@ -22,7 +22,7 @@ const KEY_HIDE_UNTAGGED: &str = "filter.hide_untagged";
 /// 3: `QFR`, `EXYU`, `TWN` and `AFG`, and a bare prefix may be up to four letters.
 /// 2: `aurora_core::lang` learned the codes a real subscription used (`SW`, `BE`, `MT`,
 /// `CH`, `HT`, `SU`, `SG`, `ID`) and how to read a bare two-letter prefix.
-pub const CLASSIFIER_VERSION: i64 = 3;
+pub const CLASSIFIER_VERSION: i64 = 4;
 const KEY_CLASSIFIER_VERSION: &str = "filter.classifier_version";
 
 /// Which list a query is about. Not a string, so no caller can put one into SQL.
@@ -287,8 +287,10 @@ fn reclassify_channels(conn: &mut Connection) -> Result<usize> {
 
     let tx = conn.transaction()?;
     {
-        let mut update =
-            tx.prepare("UPDATE channels SET lang_code = ?2, quality_rank = ?3 WHERE id = ?1")?;
+        let mut update = tx.prepare(
+            "UPDATE channels SET lang_code = ?2, quality_rank = ?3, match_key = ?4
+             WHERE id = ?1",
+        )?;
         for (id, name, group, language, quality) in &rows {
             let code = lang::detect(name, group.as_deref(), language.as_deref());
             // A channel that never advertised a quality may still spell it in its name.
@@ -296,7 +298,13 @@ fn reclassify_channels(conn: &mut Connection) -> Result<usize> {
                 .clone()
                 .or_else(|| title::detect_quality(name))
                 .or_else(|| group.as_deref().and_then(title::detect_quality));
-            update.execute(params![id, code, title::quality_rank(quality.as_deref())])?;
+            // See `reclassify_vod`: the key is recomputed because what derives it changed.
+            update.execute(params![
+                id,
+                code,
+                title::quality_rank(quality.as_deref()),
+                title::match_key(name),
+            ])?;
         }
     }
     tx.commit()?;
@@ -319,7 +327,8 @@ fn reclassify_vod(conn: &mut Connection, kind: Kind) -> Result<usize> {
     let tx = conn.transaction()?;
     {
         let mut update = tx.prepare(&format!(
-            "UPDATE {t} SET lang_code = ?2, quality = ?3, quality_rank = ?4 WHERE id = ?1"
+            "UPDATE {t} SET lang_code = ?2, quality = ?3, quality_rank = ?4, match_key = ?5
+             WHERE id = ?1"
         ))?;
         for (id, name, group, quality) in &rows {
             let code = lang::detect(name, group.as_deref(), None);
@@ -329,11 +338,17 @@ fn reclassify_vod(conn: &mut Connection, kind: Kind) -> Result<usize> {
                 .clone()
                 .or_else(|| title::detect_quality(name))
                 .or_else(|| group.as_deref().and_then(title::detect_quality));
+            // Recomputed, not left alone. The key is derived from the title, and what
+            // the derivation reads has changed: a bare language tag now comes off it, so
+            // a library written by an older build holds keys that no longer group the way
+            // this build would group them. Leaving them would mean the duplicate fix
+            // reached only what is imported from now on.
             update.execute(params![
                 id,
                 code,
                 quality,
-                title::quality_rank(quality.as_deref())
+                title::quality_rank(quality.as_deref()),
+                title::match_key(name),
             ])?;
         }
     }
@@ -344,6 +359,85 @@ fn reclassify_vod(conn: &mut Connection, kind: Kind) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The duplicate that was showing twice, and the reason a re-key is needed.
+    ///
+    /// An older build derived the key without taking a bare language tag off the title,
+    /// so the two ways this panel writes one film ended up under different keys and
+    /// duplicate collapsing never saw them as the same thing. Fixing the derivation is
+    /// only half of it: the keys are *stored*, so a library that already exists keeps the
+    /// old ones until something recomputes them.
+    #[test]
+    fn reclassify_regroups_copies_an_older_build_keyed_differently() {
+        let mut conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+
+        // Written the way a build before this one wrote them: the starred form lost its
+        // code, the spaced form kept it.
+        for (key, title, quality) in [
+            ("m1", "EN \u{2605}My Penguin Friend", "HD"),
+            ("m2", "EN My Penguin Friend", "FHD"),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (provider_id, provider_key, title, match_key, year,
+                                     quality, url, added_at, last_seen_at)
+                 VALUES (1,?1,?2,?3,2024,?4,'https://example.com/m.mkv',0,0)",
+                params![key, title, old_style_key(title), quality],
+            )
+            .unwrap();
+        }
+
+        let keys: Vec<String> = conn
+            .prepare("SELECT match_key FROM movies ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_ne!(keys[0], keys[1], "the fixture is not reproducing the bug");
+
+        reclassify(&mut conn).unwrap();
+
+        let keys: Vec<String> = conn
+            .prepare("SELECT match_key FROM movies ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(keys[0], keys[1], "reclassify left the old keys in place");
+
+        // And the filter now shows one card rather than two.
+        let filter = LibraryFilter {
+            hide_duplicates: true,
+            ..Default::default()
+        };
+        let shown: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM movies WHERE movies.hidden = 0{}",
+                    filter.where_sql(Kind::Movies)
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(shown, 1, "both copies are still on screen");
+    }
+
+    /// How the key was derived before a bare tag was read: the separated form only.
+    fn old_style_key(name: &str) -> String {
+        let (base, _) = aurora_core::title::split_country_prefix(name);
+        base.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
 
     /// A library with the shapes that matter: an untagged English channel, tagged
     /// foreign ones, and the same title at three qualities.

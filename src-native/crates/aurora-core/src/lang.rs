@@ -585,11 +585,24 @@ pub fn strip_language_prefix(name: &str) -> Option<String> {
             return Some(rest);
         }
     }
-    // Then the bare form, which has no separator at all: "EN Saladin the Victorious".
+    // Then the bare form, which has no separator at all.
+    strip_bare_language_prefix(name).map(str::to_string)
+}
+
+/// The bare half of [`strip_language_prefix`]: a known code with nothing after it but a
+/// space. `"EN Saladin the Victorious"` -> `"Saladin the Victorious"`.
+///
+/// Separate because `title::match_key` needs exactly this half and not the other. It
+/// already removes a *separated* prefix, and removes it whether or not the code is one
+/// anybody recognises -- deliberately, because an over-eager key still groups the right
+/// things and "NBC * Sports" losing its "NBC" costs nothing. This half has to be
+/// stricter: with no separator to go on, stripping an unknown code would take the "BBC"
+/// off "BBC One".
+pub fn strip_bare_language_prefix(name: &str) -> Option<&str> {
     let code = bare_prefix(name)?;
     lookup(&code)?;
     let trimmed = name.trim_start();
-    let rest = trimmed.get(code.len()..)?.trim().to_string();
+    let rest = trimmed.get(code.len()..)?.trim();
     (!rest.is_empty()).then_some(rest)
 }
 
@@ -807,13 +820,24 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_prefix_does_not_change_the_match_key() {
-        // Duplicate collapsing goes through `split_country_prefix`, which is untouched:
-        // whatever this does to the language, two copies still have to agree on a key.
+    fn the_two_ways_a_panel_writes_one_film_agree_on_a_key() {
+        // This replaces a test that compared `match_key("EN Final Spain Vs Argentina")`
+        // with itself and therefore could not fail. What it meant to check is below, and
+        // the answer turned out to be the duplicate the library was showing twice.
+        //
+        // The panel writes one film both ways. With the star glued onto the title the
+        // separated form matched and the code came off; with a space after it, nothing
+        // matched, so the keys differed and the two copies never collapsed.
         assert_eq!(
-            title::match_key("EN Final Spain Vs Argentina"),
-            title::match_key("EN Final Spain Vs Argentina"),
+            title::match_key("EN \u{2605}My Penguin Friend"),
+            title::match_key("EN My Penguin Friend"),
         );
+        assert_eq!(title::match_key("EN My Penguin Friend"), "mypenguinfriend");
+
+        // And the reason this half has to be strict about which codes it knows: a name
+        // that merely begins with three letters keeps them.
+        assert_eq!(title::match_key("BBC One"), "bbcone");
+        assert_ne!(title::match_key("BBC One"), title::match_key("One"));
     }
 
     #[test]
