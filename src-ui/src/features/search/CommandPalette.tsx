@@ -158,7 +158,14 @@ export function CommandPalette({
               const offset = GROUPS.slice(0, GROUPS.indexOf(g))
                 .reduce((n, gg) => n + results[gg.key].length, 0);
               return (
-                <div key={g.key} style={{ marginBottom: 'var(--sp-2)' }}>
+                <div
+                  key={g.key}
+                  // So a journey can click a result of a known kind: picking the first
+                  // button in the dialog picks whatever group happens to be first, which
+                  // is usually a channel.
+                  data-testid={`palette-group-${g.key}`}
+                  style={{ marginBottom: 'var(--sp-2)' }}
+                >
                   <div
                     style={{
                       display: 'flex', alignItems: 'center', gap: 6,

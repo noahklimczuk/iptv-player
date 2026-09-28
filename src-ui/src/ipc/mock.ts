@@ -1148,6 +1148,15 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       unmatched: fx.channels.slice(-2).map((c) => c.name),
     },
   }),
+  'library.item': ({ kind, id }) => {
+    if (kind === 'movie') {
+      const m = fx.movies.find((x) => x.id === id);
+      return m ? { kind: 'movie' as const, ...m } : null;
+    }
+    const s = fx.series.find((x) => x.id === id);
+    return s ? { kind: 'series' as const, ...s } : null;
+  },
+
   // The real host derives these from mpv's chapter list. There is no mpv here, so
   // there are no chapters to derive from: the fixtures already carry whatever markers
   // a journey needs, and this reports that it wrote none. Present so that the contract

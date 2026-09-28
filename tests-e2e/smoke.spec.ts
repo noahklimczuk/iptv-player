@@ -158,6 +158,33 @@ test('command palette searches across every content kind', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/10-search.png` });
 });
 
+test('picking a film in the palette opens that film', async ({ page }) => {
+  // The palette found the right title and then navigated to the Movies page, throwing
+  // `hit.refId` away — so the answer to "open this" was a page of everything, which
+  // reads as the title not being there at all.
+  await page.goto('/#/');
+  await settle(page, 600);
+  await page.keyboard.press('Control+k');
+
+  const dialog = page.getByRole('dialog', { name: 'Search' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('textbox').fill('the');
+  await page.waitForTimeout(400);
+
+  // A film specifically, and what it is called, so the sheet that opens can be checked
+  // against it rather than against "something opened". Scoped to the Movies group: the
+  // first button in the dialog belongs to whichever group comes first, usually a channel.
+  const movies = dialog.locator('[data-testid="palette-group-movies"]');
+  await expect(movies).toBeVisible();
+  const hit = movies.getByRole('button').first();
+  const picked = (await hit.innerText()).split('\n')[0]!.trim();
+  await hit.click();
+
+  const sheet = page.getByRole('dialog', { name: picked });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('button', { name: /^(Play|Resume from)/ })).toBeVisible();
+});
+
 test('movies browse grid filters and sorts', async ({ page }) => {
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();

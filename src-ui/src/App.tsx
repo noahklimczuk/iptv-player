@@ -203,9 +203,21 @@ export default function App() {
       return;
     }
     if (hit.kind === 'movie' || hit.kind === 'series') {
-      navigate(hit.kind === 'movie' ? '/movies' : '/series');
+      // Open the thing that was found. This used to `navigate('/movies')` and drop
+      // `hit.refId` on the floor, so searching for a film and picking it produced a page
+      // of every film — which reads as "it isn't there" rather than as a bug.
+      void invoke('library.item', { kind: hit.kind, id: hit.refId })
+        .then((item) => {
+          if (item) {
+            ui.openDetail(item);
+            return;
+          }
+          // The row went away between the search and the pick — a refresh can do that.
+          navigate(hit.kind === 'movie' ? '/movies' : '/series');
+        })
+        .catch(report('Could not open that'));
     }
-  }, [channels, navigate, tune]);
+  }, [channels, navigate, tune, ui]);
 
   const handlers = useMemo(() => ({
     onDigit: (d: string) => ui.pushDigit(d),
