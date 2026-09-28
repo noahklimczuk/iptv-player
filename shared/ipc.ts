@@ -769,6 +769,14 @@ export interface Commands {
     kind: 'movies' | 'series'; genre?: string; category?: string; query?: string;
   }) => BrowseFacets;
   'library.episodes': (args: { seriesId: number; season?: number }) => Episode[];
+  /**
+   * One film or show by id, for opening something that was found rather than browsed to.
+   *
+   * Ignores the library filter on purpose: search can surface a title that "English only"
+   * or duplicate collapsing keeps off the browse pages, and refusing to open what was
+   * just found would be the same bug somewhere else.
+   */
+  'library.item': (args: { kind: 'movie' | 'series'; id: number }) => CatalogItem | null;
   'library.stats': () => LibraryStats;
   'library.playbackAids': (args: {
     profileId: number;

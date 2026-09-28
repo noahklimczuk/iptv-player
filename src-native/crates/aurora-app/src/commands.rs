@@ -703,6 +703,45 @@ pub struct EpisodePlaybackAids {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ItemArgs {
+    pub kind: String,
+    pub id: i64,
+}
+
+/// One library row, tagged the way the interface's `CatalogItem` is.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Item {
+    Movie(library::MovieRow),
+    Series(library::SeriesRow),
+}
+
+/// One film or show by id.
+///
+/// Search needs this and had nothing to use: picking a film in the command palette ran
+/// `navigate('/movies')` and threw the id away, so the answer to "open this" was "here is
+/// a page of everything". A search that finds the right title and then does not open it is
+/// worse than one that finds nothing, because it looks like the title is not there.
+///
+/// Deliberately ignores the library filter. Search can surface a title that "English only"
+/// or duplicate collapsing keeps off the browse pages, and refusing to open what was just
+/// found would be the same bug in a different place.
+#[tauri::command(async)]
+pub fn library_item(services: State<'_, Services>, args: ItemArgs) -> Result<Option<Item>> {
+    let db = services.db.lock();
+    Ok(match args.kind.as_str() {
+        "movie" => library::movie(&db, args.id)?.map(Item::Movie),
+        "series" => library::series(&db, args.id)?.map(Item::Series),
+        other => {
+            return Err(crate::AppError::Other(format!(
+                "library.item does not know the kind {other:?}"
+            )))
+        }
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AidsArgs {
     pub profile_id: i64,
     pub episode_id: i64,
