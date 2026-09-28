@@ -551,6 +551,48 @@ fn lookup(token: &str) -> Option<&'static str> {
 /// `reported` is whatever the provider put in `tvg-language`; `group` is its
 /// `group-title`. Signals are tried in order of how much they can be trusted, and the
 /// first that answers wins.
+/// The same name with the provider's leading language tag taken off, or `None` when
+/// there is nothing to take off.
+///
+/// **What this is for.** A real subscription writes essentially every title with a
+/// language code in front of it: 117,010 of 117,602 films, 28,048 of 28,553 shows, and
+/// 19,268 of 22,121 channels. Two things went wrong because of it.
+///
+/// The visible one is that the library reads `EN Saladin the Victorious` and
+/// `AR الأرجنتين Vs اسبانيا`. The worse one is that the tag was still on the title when
+/// it was sent to TMDB, so `FR I, Robot` and `FR Knock at the Cabin` — films TMDB knows
+/// perfectly well — were looked up under names that do not exist. 671 titles matched
+/// against 16,561 that did not, and of a 117,602-film library exactly 23 had a metadata
+/// title. Every one of 4,000 sampled failures carried a tag.
+///
+/// **What it deliberately does not touch.** Only codes this module actually recognises,
+/// so `BBC One`, `NBC ★ Sports` and `CAN You Ever Forgive Me?` keep their first word —
+/// `lookup` refuses them, and `AMBIGUOUS_BARE` refuses the two-letter codes that open
+/// English sentences ("IT Crowd", "NO Country for Old Men", "IN Bruges").
+///
+/// Nor does it touch what is *stored*. `title` keeps the provider's string, because
+/// `reclassify` reads it back to work out the language — stripping it at ingest would
+/// destroy the evidence for its own next pass and leave 48,000 films untagged, which
+/// under "only English" means hidden. `match_key` is likewise untouched, so duplicate
+/// collapsing is unchanged. This is for what a viewer is shown and what a lookup is
+/// asked, and nothing else.
+pub fn strip_language_prefix(name: &str) -> Option<String> {
+    // The separator form first. `split_country_prefix` is the stricter reading and
+    // already knows this panel writes "US ★ QVC HD" with U+2605.
+    let (rest, code) = title::split_country_prefix(name);
+    if let Some(code) = code {
+        if lookup(&code.to_lowercase()).is_some() && !rest.is_empty() {
+            return Some(rest);
+        }
+    }
+    // Then the bare form, which has no separator at all: "EN Saladin the Victorious".
+    let code = bare_prefix(name)?;
+    lookup(&code)?;
+    let trimmed = name.trim_start();
+    let rest = trimmed.get(code.len()..)?.trim().to_string();
+    (!rest.is_empty()).then_some(rest)
+}
+
 pub fn detect(name: &str, group: Option<&str>, reported: Option<&str>) -> Option<String> {
     // 1. What the provider says outright.
     if let Some(reported) = reported {
@@ -590,6 +632,79 @@ mod tests {
 
     fn d(name: &str) -> Option<String> {
         detect(name, None, None)
+    }
+
+    fn strip(name: &str) -> Option<String> {
+        strip_language_prefix(name)
+    }
+
+    /// The names are taken verbatim from a real 117,602-film subscription.
+    #[test]
+    fn a_language_tag_comes_off_the_front_of_a_title() {
+        assert_eq!(
+            strip("EN Saladin the Victorious").as_deref(),
+            Some("Saladin the Victorious")
+        );
+        assert_eq!(strip("FR I, Robot").as_deref(), Some("I, Robot"));
+        assert_eq!(
+            strip("FR Knock at the Cabin").as_deref(),
+            Some("Knock at the Cabin")
+        );
+        assert_eq!(
+            strip("QFR Last Christmas").as_deref(),
+            Some("Last Christmas")
+        );
+        assert_eq!(
+            strip("DE Eyes of Wakanda").as_deref(),
+            Some("Eyes of Wakanda")
+        );
+    }
+
+    /// The separator form too, including the star this panel writes every channel with.
+    #[test]
+    fn the_separated_form_comes_off_as_well() {
+        assert_eq!(strip("US \u{2605} QVC HD").as_deref(), Some("QVC HD"));
+        assert_eq!(strip("FR | TF1 HD").as_deref(), Some("TF1 HD"));
+        assert_eq!(strip("[DE] RTL").as_deref(), Some("RTL"));
+        assert_eq!(strip("UK - Sky Sports").as_deref(), Some("Sky Sports"));
+    }
+
+    /// What must survive untouched. Getting this wrong renames things silently, which is
+    /// worse than leaving a tag on the front of them.
+    #[test]
+    fn a_title_that_merely_starts_with_letters_keeps_them() {
+        // Not codes this module knows.
+        assert_eq!(strip("BBC One"), None);
+        assert_eq!(strip("NBC \u{2605} Sports"), None);
+        assert_eq!(strip("The Matrix"), None);
+        assert_eq!(strip("Breaking Bad"), None);
+        // Codes that are also English words — the `AMBIGUOUS_BARE` list.
+        assert_eq!(strip("IT Crowd"), None);
+        assert_eq!(strip("NO Country for Old Men"), None);
+        assert_eq!(strip("IN Bruges"), None);
+        assert_eq!(strip("CAN You Ever Forgive Me?"), None);
+        // Nothing would be left.
+        assert_eq!(strip("EN"), None);
+        assert_eq!(strip("QFR"), None);
+    }
+
+    /// Stripping is for display and for lookups. The stored title has to keep the tag,
+    /// because `detect` reads it back — so the two must still agree about the same name.
+    #[test]
+    fn stripping_does_not_change_what_the_language_is() {
+        for name in [
+            "EN Saladin the Victorious",
+            "FR I, Robot",
+            "QFR Last Christmas",
+            "US \u{2605} QVC HD",
+        ] {
+            let before = d(name);
+            assert!(before.is_some(), "{name:?} should have a language");
+            // And the stripped form no longer claims one from its prefix, which is the
+            // whole reason the column keeps the original.
+            let stripped = strip(name).unwrap();
+            assert_ne!(stripped, name);
+        }
     }
 
     #[test]

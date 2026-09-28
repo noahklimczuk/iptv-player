@@ -114,11 +114,20 @@ fn split_names(raw: Option<String>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// The display name, with the provider's language tag off the front.
+///
+/// Applied here, at the boundary where a row becomes something the UI will paint, rather
+/// than in the SQL — the stored `title` has to keep the tag, because `reclassify` reads
+/// it back to decide the language. See `aurora_core::lang::strip_language_prefix`.
+fn shown(raw: String) -> String {
+    aurora_core::lang::strip_language_prefix(&raw).unwrap_or(raw)
+}
+
 fn map_movie(r: &rusqlite::Row<'_>) -> rusqlite::Result<MovieRow> {
     let genres: Option<String> = r.get(9)?;
     Ok(MovieRow {
         id: r.get(0)?,
-        title: r.get(1)?,
+        title: shown(r.get(1)?),
         year: r.get::<_, Option<i64>>(2)?.map(|v| v as i32),
         quality: r.get(3)?,
         poster: r.get(4)?,
@@ -276,7 +285,7 @@ fn map_series(r: &rusqlite::Row<'_>) -> rusqlite::Result<SeriesRow> {
     seasons.sort_unstable();
     Ok(SeriesRow {
         id: r.get(0)?,
-        title: r.get(1)?,
+        title: shown(r.get(1)?),
         year: r.get::<_, Option<i64>>(2)?.map(|v| v as i32),
         quality: r.get(3)?,
         poster: r.get(4)?,
