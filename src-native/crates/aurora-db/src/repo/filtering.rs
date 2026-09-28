@@ -439,6 +439,57 @@ mod tests {
             .collect()
     }
 
+    /// Enough films, sharing enough match keys, that which index the planner picks for
+    /// the duplicate subquery actually matters.
+    fn many_films(conn: &Connection, count: i64) {
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'Provider One','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO movies (provider_id, provider_key, title, match_key, year,
+                                     quality, quality_rank, lang_code, url, last_seen_at,
+                                     added_at)
+                 VALUES (1, ?1, ?2, ?3, 2020, 'HD', ?4, 'en', 'http://example.com', 0, ?5)",
+            )
+            .unwrap();
+        for i in 0..count {
+            // Three copies of each title, so the duplicate clause has real work to do.
+            let key = format!("film{}", i / 3);
+            stmt.execute(params![format!("m{i}"), key.clone(), key, i % 3, i])
+                .unwrap();
+        }
+    }
+
+    /// Opening a library analyses it, so an installation that already exists is fixed
+    /// by launching rather than by re-importing.
+    ///
+    /// This guards the *call*, which is the thing at risk; why it matters is on
+    /// `aurora_db::analyze`, with the measurements. Deliberately not a query-plan
+    /// assertion — the mis-plan needs a real library to reproduce, and a synthetic table
+    /// picks the right index with or without statistics, so such a test would have
+    /// passed before this fix as well as after it.
+    #[test]
+    fn opening_a_library_analyses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+
+        let conn = crate::open(&path).unwrap();
+        many_films(&conn, 60);
+        drop(conn);
+
+        // Reopened, because the first open created the file and this is the path every
+        // launch after it takes.
+        let conn = crate::open(&path).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM sqlite_stat1", [], |r| r.get(0))
+            .expect("sqlite_stat1 should exist once ANALYZE has run");
+        assert!(rows > 0, "the library was opened and never analysed");
+    }
+
     /// A library with the shapes that matter: an untagged English channel, tagged
     /// foreign ones, and the same title at three qualities.
     fn seeded() -> Connection {

@@ -21,7 +21,7 @@ use std::ffi::c_void;
 use aurora_core::markers::Chapter;
 use aurora_core::timeshift::{Budget, Reading};
 use libmpv2::mpv_node::MpvNode;
-use libmpv2::{events::Event, Mpv};
+use libmpv2::{events::Event, Format, Mpv};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SW_SHOW,
@@ -155,6 +155,39 @@ impl MpvBackend {
             Ok(())
         })
         .map_err(|e| PlayerError::Init(e.to_string()))?;
+
+        // mpv reports a property change only for properties it has been *asked* to
+        // report, and it had never been asked for one. `pump` has an arm for each of
+        // these three and not one of them could fire, so:
+        //
+        //   * `position_secs` and `duration_secs` stayed 0.0 for the whole life of the
+        //     process. That is the cause of three separate complaints. Continue Watching
+        //     was always empty, because `saveProgress` refuses to write without both and
+        //     so nothing was ever written — `watch_progress` had zero rows on a library
+        //     with 117,510 films. Up Next never appeared, because it fires on how close
+        //     the position is to the end and there was no end. The scrub bar had nothing
+        //     to draw and nowhere to seek from.
+        //   * `Buffering` was unreachable, so a stalled stream looked like a playing one
+        //     that had simply stopped moving.
+        //
+        // Nothing in the repository could have caught it: the browser journeys answer
+        // from `src-ui/src/ipc/mock.ts`, which reports a tidy duration and a position
+        // that advances, and this file is `#![cfg(windows)]` so CI never even compiles
+        // it. `tests-host/scenarios/resume.py` is the regression test, and it fails
+        // against a real panel without this.
+        //
+        // Registered on the handle rather than per load, because `mpv_observe_property`
+        // outlives a file: re-registering on each `loadfile` would stack duplicate
+        // observers for every zap.
+        for (name, format) in [
+            ("time-pos", Format::Double),
+            ("duration", Format::Double),
+            ("paused-for-cache", Format::Flag),
+        ] {
+            mpv.event_context()
+                .observe_property(name, format, 0)
+                .map_err(|e| PlayerError::Init(format!("mpv refused to report {name}: {e}")))?;
+        }
 
         Ok(Self {
             mpv,

@@ -521,6 +521,11 @@ pub fn apply(
     // once here rather than per paint (README §7.3). Doing it after everything is
     // written, rather than per upsert, means one pass and one definition of the answer.
     aurora_db::repo::filtering::reclassify(db).map_err(db_failure)?;
+    // An import rewrites the library wholesale, so the planner's statistics are now
+    // about a table that no longer exists. Re-measured here because this is the only
+    // moment the row counts change by six figures — and because a stale estimate costs
+    // the browse queries a factor of two thousand (`aurora_db::analyze`).
+    aurora_db::analyze(db).map_err(db_failure)?;
 
     on_progress(Progress {
         phase: Phase::Done,
@@ -1155,6 +1160,35 @@ mod tests {
 
         let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
         assert_eq!(report.epg_programmes, 1, "{report:?}");
+    }
+
+    /// An import leaves the query planner some statistics.
+    ///
+    /// An import rewrites the library wholesale, so whatever the planner last measured
+    /// describes a table that no longer exists — and on a real library a stale or absent
+    /// estimate costs the browse queries a factor of two thousand. See
+    /// `aurora_db::analyze` for the measurements.
+    #[test]
+    fn an_import_leaves_the_planner_some_statistics() {
+        let server = TestServer::always(Reply::ok(PLAYLIST));
+        let mut conn = db();
+        let opts = SyncOptions::new(
+            1,
+            SourceKind::M3u {
+                url: server.url("/playlist.m3u"),
+            },
+            1_705_320_000,
+        );
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM sqlite_stat1", [], |r| r.get(0))
+            .expect("sqlite_stat1 should exist once an import has analysed the library");
+        assert!(
+            rows > 0,
+            "the import never analysed what it had just written"
+        );
     }
 
     /// A guide that fails must not fail the refresh: the library is still usable

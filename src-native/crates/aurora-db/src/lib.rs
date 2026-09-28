@@ -23,6 +23,11 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     let conn = Connection::open(path)?;
     configure(&conn)?;
     migrate::run(&conn)?;
+    // A library that predates `analyze` being called at all — every library that
+    // already exists — gets its statistics here, once. See `analyze`.
+    if !has_statistics(&conn)? {
+        analyze(&conn)?;
+    }
     Ok(conn)
 }
 
@@ -44,6 +49,51 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA cache_size = -65536;", // 64 MiB page cache
     )?;
     Ok(())
+}
+
+/// Give the query planner the statistics it needs to choose between indexes.
+///
+/// **Without this the library is unusable at real scale, and nothing about the schema
+/// or the queries looks wrong.** SQLite has no `sqlite_stat1` until `ANALYZE` has been
+/// run, and with no statistics it guesses index selectivity from a fixed table of
+/// assumptions. Those guesses were catastrophically wrong here.
+///
+/// The browse queries hide duplicates with
+/// `NOT EXISTS (SELECT 1 FROM movies dup WHERE dup.match_key = movies.match_key AND …
+/// (dup.quality_rank > … OR (dup.quality_rank = … AND dup.id < …)))`, and there is an
+/// index built precisely for it: `idx_movies_dupe(match_key, quality_rank DESC, id)`.
+/// Un-analysed, SQLite resolved the tie-break branch through `idx_movies_lang`
+/// instead — `lang_code = 'en' AND rowid < ?`, which on an English-only filter means
+/// scanning most of the English half of the table *once per candidate row*.
+///
+/// Measured on a real 117,510-film subscription:
+///
+/// | first page of Movies                    | time    |
+/// |-----------------------------------------|---------|
+/// | without duplicate hiding                |  0.01 s |
+/// | with duplicate hiding, un-analysed      | 85.01 s |
+/// | with duplicate hiding, after `ANALYZE`  |  0.04 s |
+///
+/// The heading's count query is the same shape and cost, so opening Movies was ~170
+/// seconds of CPU for a page that renders in 40 ms. What a viewer saw was a blank grid
+/// for over a minute, with no spinner, no error, and nothing in the log — because
+/// nothing had failed.
+///
+/// `ANALYZE` itself takes about 0.1 s on that library. It is not a tuning knob; it is
+/// the difference between the indexes being used and being ignored.
+pub fn analyze(conn: &Connection) -> Result<()> {
+    conn.execute_batch("ANALYZE")?;
+    Ok(())
+}
+
+/// Whether `ANALYZE` has ever run on this database.
+fn has_statistics(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
 }
 
 /// README §5: "automatic integrity check + repair on startup".
