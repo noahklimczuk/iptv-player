@@ -151,11 +151,14 @@ export function HeroBillboard({
           )}
           {item.year && <span>{item.year}</span>}
           {item.certification && <Badge tone="outline">{item.certification}</Badge>}
-          <span>
-            {item.kind === 'series'
-              ? `${item.seasons.length} season${item.seasons.length === 1 ? '' : 's'}`
-              : runtime(item.runtimeMins)}
-          </span>
+          {/* See `CatalogCard`: unknown until the listing is fetched, and "0
+              seasons" is worse than saying nothing. */}
+          {item.kind === 'series' && item.seasons.length > 0 && (
+            <span>
+              {item.seasons.length} season{item.seasons.length === 1 ? '' : 's'}
+            </span>
+          )}
+          {item.kind !== 'series' && <span>{runtime(item.runtimeMins)}</span>}
           {item.quality === '4K' && <Badge tone="accent">4K</Badge>}
         </div>
 

@@ -382,6 +382,41 @@ pub fn movie(conn: &Connection, id: i64) -> Result<Option<MovieRow>> {
     Ok(conn.query_row(&sql, params![id], map_movie).optional()?)
 }
 
+/// Shows with no episodes stored, worth asking the provider about, best first.
+///
+/// An import writes the show and not its episodes, so on a fresh library this is nearly
+/// every show: 28,553 of them. The order is what makes a sweep worth running at all —
+/// the same reasoning as `enrichment::pending`, for the same reason.
+///
+/// The library filter comes first, because a show the viewer has hidden, or that "English
+/// only" keeps off their screen, is a show worth no requests. Then anything they have
+/// already reached for, then the most recently added.
+pub fn series_needing_episodes(
+    conn: &Connection,
+    filter: &crate::repo::filtering::LibraryFilter,
+    limit: u32,
+) -> Result<Vec<i64>> {
+    let visible = filter.where_sql(crate::repo::filtering::Kind::Series);
+    let sql = format!(
+        "SELECT series.id FROM series
+          WHERE series.hidden = 0{visible}
+            AND NOT EXISTS (SELECT 1 FROM episodes e WHERE e.series_id = series.id)
+          ORDER BY
+            CASE WHEN EXISTS (SELECT 1 FROM favorites f
+                               WHERE f.item_kind = 'series' AND f.item_id = series.id)
+                   OR EXISTS (SELECT 1 FROM watch_progress w
+                               JOIN episodes we ON we.id = w.item_id
+                              WHERE w.item_kind = 'episode' AND we.series_id = series.id)
+                 THEN 0 ELSE 1 END,
+            series.added_at DESC,
+            series.id
+          LIMIT ?1"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![limit], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn series(conn: &Connection, id: i64) -> Result<Option<SeriesRow>> {
     let sql = format!("{SERIES_SELECT} WHERE series.id = ?1");
     Ok(conn.query_row(&sql, params![id], map_series).optional()?)
@@ -696,6 +731,89 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
 #[cfg(test)]
 mod tests {
+    /// Which shows a listing sweep should ask about, and which it must not.
+    ///
+    /// Asking the provider about every show it lists is 28,553 requests, so the order and
+    /// the exclusions are the whole difference between a sweep worth running and one that
+    /// spends the viewer's connection on rows they will never see.
+    #[test]
+    fn the_listing_sweep_skips_what_is_answered_or_hidden_and_puts_favourites_first() {
+        use crate::repo::filtering::LibraryFilter;
+
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','xtream','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO profiles (id,name,created_at) VALUES (1,'Me',0)",
+            [],
+        )
+        .unwrap();
+
+        // (id, title, language, hidden, added_at)
+        for (id, title, lang, hidden, added) in [
+            (1, "Needs a listing", Some("en"), 0, 10),
+            (2, "Already listed", Some("en"), 0, 20),
+            (3, "Hidden by hand", Some("en"), 1, 30),
+            (4, "Another language", Some("fr"), 0, 40),
+            (5, "A favourite", Some("en"), 0, 1),
+        ] {
+            conn.execute(
+                "INSERT INTO series (id, provider_id, provider_key, title, match_key,
+                                     lang_code, hidden, added_at, last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, ?4, ?5, ?6, 0)",
+                params![id, format!("series:{id}"), title, lang, hidden, added],
+            )
+            .unwrap();
+        }
+        // Show 2 already has one, so there is nothing to ask about.
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, url, added_at)
+             VALUES (2, 1, 1, 'https://example.com/e.mkv', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO favorites (profile_id, item_kind, item_id, added_at)
+             VALUES (1, 'series', 5, 0)",
+            [],
+        )
+        .unwrap();
+
+        let strict = LibraryFilter {
+            english_only: true,
+            hide_untagged: true,
+            ..Default::default()
+        };
+        let ids = series_needing_episodes(&conn, &strict, 50).unwrap();
+
+        assert!(
+            !ids.contains(&2),
+            "a show that already has episodes was asked about"
+        );
+        assert!(!ids.contains(&3), "a hidden show was asked about");
+        assert!(!ids.contains(&4), "a show the filter hides was asked about");
+        assert_eq!(
+            ids.first(),
+            Some(&5),
+            "a show the viewer marked comes before one they have never touched: {ids:?}"
+        );
+        assert!(ids.contains(&1));
+
+        // And with no filter in force, the other-language show is in scope again.
+        let ids = series_needing_episodes(&conn, &LibraryFilter::default(), 50).unwrap();
+        assert!(
+            ids.contains(&4),
+            "nothing is filtered, so nothing should be skipped"
+        );
+
+        // The limit is a limit.
+        assert_eq!(series_needing_episodes(&conn, &strict, 1).unwrap().len(), 1);
+    }
+
     /// Continue Watching stores progress against an episode and shows the *show*, so
     /// this lookup is what turns one into the other. A wrong answer here puts the
     /// wrong poster on the home screen.

@@ -21,6 +21,42 @@ pub const RETRY_AFTER_SECS: i64 = 6 * 3600;
 /// than blocking for an hour and losing everything if it is cancelled.
 pub const DEFAULT_BATCH: u32 = 50;
 
+/// How many titles are looked up at once.
+///
+/// One at a time is what this used to do, and on a real library it was the whole cost: a
+/// batch of 50 took 3.9 seconds, essentially all of it spent waiting for one answer
+/// before asking the next question. Extrapolated over a 117,602-film subscription that is
+/// **2.6 hours** for a single pass.
+///
+/// Nothing about the work needs to be sequential. `fetch_one` touches the network and
+/// nothing else — that separation already exists so the database lock is never held
+/// across a request — so the only thing serialising it was the loop.
+///
+/// The ceiling is not this number. `TmdbClient::throttle` paces request *starts* 25 ms
+/// apart however many threads are asking, which is about 40 a second and deliberately
+/// below what TMDB will tolerate. Concurrency hides the latency; it does not raise the
+/// rate.
+///
+/// Measured against the real service, 120 titles at a time:
+///
+/// | at once | titles/second |
+/// |---------|---------------|
+/// | 1       |  9.44         |
+/// | 4       | 23.22         |
+/// | 8       | 23.40         |
+/// | 16      | 23.71         |
+///
+/// So the gain is 2.5x and it is spent by four. That is the pacer, not the machine: those
+/// 120 titles cost 196 requests, and 40 a second divided by 1.63 requests per title is
+/// 24.5 titles a second — which is what the plateau is. The default is eight rather than
+/// four only as headroom for a slower link, where each lookup takes longer and more of
+/// them have to be outstanding to keep the pacer busy.
+pub const DEFAULT_CONCURRENCY: u32 = 8;
+
+/// The range the setting is clamped to. One is "as it used to be"; the upper end is far
+/// past the point where the rate limit, not the concurrency, is what decides.
+pub const CONCURRENCY_RANGE: std::ops::RangeInclusive<u32> = 1..=32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Options {
@@ -28,6 +64,19 @@ pub struct Options {
     /// Enrich movies, series, or both.
     pub movies: bool,
     pub series: bool,
+    /// How many lookups are in flight at once. See [`DEFAULT_CONCURRENCY`].
+    pub concurrency: u32,
+}
+
+impl Options {
+    /// The worker count this asks for, kept inside [`CONCURRENCY_RANGE`] and never
+    /// larger than the work itself.
+    pub fn workers(&self, work: usize) -> usize {
+        let n = self
+            .concurrency
+            .clamp(*CONCURRENCY_RANGE.start(), *CONCURRENCY_RANGE.end());
+        (n as usize).min(work.max(1))
+    }
 }
 
 impl Default for Options {
@@ -36,6 +85,7 @@ impl Default for Options {
             batch: DEFAULT_BATCH,
             movies: true,
             series: true,
+            concurrency: DEFAULT_CONCURRENCY,
         }
     }
 }

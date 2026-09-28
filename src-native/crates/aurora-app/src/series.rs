@@ -7,12 +7,122 @@
 //! missing was anything that then did it, so every series on every panel sat at
 //! "0 seasons" permanently.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use aurora_db::repo::library;
 use aurora_db::rusqlite::OptionalExtension;
 use aurora_ingest::xtream::XtreamClient;
+use parking_lot::Mutex;
+use serde::Serialize;
 
 use crate::error::{AppError, Result};
 use crate::services::Services;
+
+/// Shows per sweep. Bounded like a metadata batch, so progress is visible and stopping
+/// costs one batch rather than everything.
+pub const SWEEP_BATCH: u32 = 200;
+
+/// How many listings are asked for at once.
+///
+/// Deliberately smaller than the metadata setting, and not configurable. That one talks
+/// to TMDB, which publishes what it will tolerate; this one talks to the viewer's own
+/// IPTV panel, which does not, and which is the same host their video comes from. Four is
+/// enough to hide the latency — a listing came back in about 0.3s — without turning a
+/// background nicety into something that competes with playback.
+pub const SWEEP_CONCURRENCY: usize = 4;
+
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SweepReport {
+    /// Shows asked about.
+    pub asked: usize,
+    /// Shows that came back with at least one episode.
+    pub listed: usize,
+    /// Episodes written in total.
+    pub episodes: usize,
+    /// Shows the provider would not answer for. Not fatal and not retried here.
+    pub failed: usize,
+}
+
+/// How far a sweep has got, for the UI.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SweepProgress {
+    pub done: usize,
+    pub total: usize,
+}
+
+/// Fetch the episode listings for shows that have none.
+///
+/// **Why this exists.** Seasons are counted from the episodes table, and an import writes
+/// the show without them — so every card said "0 seasons" and the number only appeared
+/// for shows somebody had opened by hand. Seven of 28,553, on the library this was
+/// measured against. The panel's own `get_series` carries no season information at all, so
+/// there is no cheaper source: it is one request per show or nothing.
+///
+/// One title that will not resolve does not stop the sweep. A provider that has stopped
+/// answering altogether is a different thing, and the caller sees it in `failed`.
+pub fn sweep(
+    services: &Services,
+    limit: u32,
+    on_progress: impl Fn(SweepProgress) + Sync,
+) -> Result<SweepReport> {
+    let ids = {
+        let db = services.db.lock();
+        let filter = aurora_db::repo::filtering::LibraryFilter::load(&db)?;
+        library::series_needing_episodes(&db, &filter, limit)?
+    };
+
+    let total = ids.len();
+    on_progress(SweepProgress { done: 0, total });
+    if ids.is_empty() {
+        return Ok(SweepReport::default());
+    }
+
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let report = Mutex::new(SweepReport::default());
+
+    std::thread::scope(|scope| {
+        for _ in 0..SWEEP_CONCURRENCY.min(total) {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&series_id) = ids.get(i) else { return };
+
+                let outcome = fetch_episodes(services, series_id);
+                {
+                    let mut report = report.lock();
+                    report.asked += 1;
+                    match outcome {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            report.listed += 1;
+                            report.episodes += n;
+                        }
+                        Err(e) => {
+                            report.failed += 1;
+                            tracing::debug!(series = series_id, "no listing: {e}");
+                        }
+                    }
+                }
+                on_progress(SweepProgress {
+                    done: done.fetch_add(1, Ordering::Relaxed) + 1,
+                    total,
+                });
+            });
+        }
+    });
+
+    let report = report.into_inner();
+    tracing::info!(
+        asked = report.asked,
+        listed = report.listed,
+        episodes = report.episodes,
+        failed = report.failed,
+        "episode listing sweep finished"
+    );
+    Ok(report)
+}
 
 /// What the database knows about a show, and who to ask about it.
 struct Show {
@@ -85,6 +195,46 @@ pub fn fetch_episodes(services: &Services, series_id: i64) -> Result<usize> {
     let written = library::upsert_episodes(&mut db, series_id, &episodes, crate::now_unix())?;
     tracing::info!(series = series_id, written, "episode listing stored");
     Ok(written)
+}
+
+/// How many batches the background sweep will work through before giving up the thread.
+const SWEEP_MAX_BATCHES: usize = 200;
+
+/// Fill in the episode listings after an import, in the background.
+///
+/// Fire-and-forget, like the metadata pass beside it: an import succeeded whatever the
+/// panel later says about one show, and a refresh must not wait for 28,000 requests.
+/// Stops as soon as a batch asks about nothing, which is how "there is no backlog left"
+/// arrives.
+pub fn sweep_in_background(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        use tauri::Manager;
+        let services = app.state::<Services>();
+
+        let mut total = SweepReport::default();
+        for _ in 0..SWEEP_MAX_BATCHES {
+            let batch = match sweep(&services, SWEEP_BATCH, |p| {
+                crate::emit(&app, "series.listings", &p);
+            }) {
+                Ok(batch) => batch,
+                // One failed batch ends the sweep rather than retrying for ever: the
+                // usual cause is the provider, and it does not improve by being asked two
+                // hundred more times.
+                Err(e) => {
+                    tracing::warn!("episode listing sweep stopped: {e}");
+                    break;
+                }
+            };
+            if batch.asked == 0 {
+                break;
+            }
+            total.asked += batch.asked;
+            total.listed += batch.listed;
+            total.episodes += batch.episodes;
+            total.failed += batch.failed;
+        }
+        crate::emit(&app, "series.listingsDone", &total);
+    });
 }
 
 /// The provider behind a series, and the panel's id for it. `None` when this is not a
