@@ -287,6 +287,7 @@ fn main() {
             commands::library_episodes,
             commands::library_playback_aids,
             commands::library_record_skip,
+            commands::window_fullscreen,
             commands::library_item,
             commands::library_sync_chapters,
             commands::library_series_prefs,

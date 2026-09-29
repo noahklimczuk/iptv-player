@@ -145,6 +145,26 @@ test('player OSD exposes transport, tracks and stats', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/09-player-osd.png` });
 });
 
+test('the fullscreen button in the player actually does something', async ({ page }) => {
+  // It had no onClick at all — a button that has always been decorative. The mock
+  // answers `window.fullscreen` by toggling and reporting the state it ended in, so
+  // what this checks is that pressing it changes that state and the label follows.
+  await page.goto('/#/?video');
+  await settle(page, 600);
+  await page.getByRole('button', { name: 'Play' }).first().click();
+  await settle(page, 600);
+
+  // The OSD hides itself, so wake it before looking for anything on it.
+  await page.mouse.move(640, 360);
+  const button = page.getByRole('button', { name: 'Fullscreen' });
+  await expect(button).toBeVisible();
+  await button.click();
+  await settle(page, 300);
+
+  await page.mouse.move(640, 361);
+  await expect(page.getByRole('button', { name: 'Leave fullscreen' })).toBeVisible();
+});
+
 test('command palette searches across every content kind', async ({ page }) => {
   await page.goto('/#/');
   await settle(page, 600);

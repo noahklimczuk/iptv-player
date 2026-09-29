@@ -863,6 +863,15 @@ export interface Commands {
   /** Copy the current and previous log beside the library, for a support message. */
   'logs.export': () => { files: string[]; folder: string };
   /** Version, licence, and the third-party notices this build is obliged to carry. */
+  /**
+   * Put the window in or out of fullscreen; omit the argument to toggle. Returns the
+   * state it ended up in.
+   *
+   * The *window*, not the document. mpv draws into a child window behind the WebView, so
+   * `requestFullscreen()` would fill the screen with UI and leave the video letterboxed
+   * into the old window behind it.
+   */
+  'window.fullscreen': (args?: { fullscreen?: boolean }) => boolean;
   'app.about': () => {
     version: string;
     license: string;

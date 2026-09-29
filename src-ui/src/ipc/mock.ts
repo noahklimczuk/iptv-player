@@ -1155,6 +1155,19 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return metadataConcurrency;
   },
 
+  'window.fullscreen': ({ fullscreen } = {}) => {
+    // No native window here, so the DOM call is the honest answer rather than a
+    // pretend one — in a browser the page *is* the whole surface.
+    const want = fullscreen ?? !document.fullscreenElement;
+    try {
+      if (want) void document.documentElement.requestFullscreen?.();
+      else void document.exitFullscreen?.();
+    } catch {
+      /* a browser may refuse without a user gesture; the state below still answers */
+    }
+    return want;
+  },
+
   'library.item': ({ kind, id }) => {
     if (kind === 'movie') {
       const m = fx.movies.find((x) => x.id === id);

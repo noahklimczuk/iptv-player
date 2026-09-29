@@ -701,6 +701,38 @@ pub struct EpisodePlaybackAids {
     pub prefs: markers::SeriesPrefs,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullscreenArgs {
+    /// Leave it out to toggle.
+    pub fullscreen: Option<bool>,
+}
+
+/// Put the window in or out of fullscreen. Returns the state it ended up in.
+///
+/// **This has to be the window, not the document.** `requestFullscreen()` makes the
+/// *WebView* fullscreen and leaves the window the size it was — and mpv does not draw
+/// into the WebView. It draws into a child HWND behind it (README §2.1), sized from the
+/// window's own resize events. So the DOM call produced a full-screen sheet of UI with
+/// the video still letterboxed into the old window behind it, which is a stranger result
+/// than nothing happening.
+///
+/// Going through the window instead means the existing `WindowEvent::Resized` handler
+/// resizes the video surface, which is the same path an ordinary drag already takes.
+#[tauri::command(async)]
+pub fn window_fullscreen(window: tauri::Window, args: Option<FullscreenArgs>) -> Result<bool> {
+    let wanted = match args.unwrap_or_default().fullscreen {
+        Some(want) => want,
+        None => !window
+            .is_fullscreen()
+            .map_err(|e| crate::AppError::Other(e.to_string()))?,
+    };
+    window
+        .set_fullscreen(wanted)
+        .map_err(|e| crate::AppError::Other(e.to_string()))?;
+    Ok(wanted)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemArgs {

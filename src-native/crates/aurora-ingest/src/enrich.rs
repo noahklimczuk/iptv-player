@@ -17,9 +17,22 @@ use crate::tmdb::{ImageSize, Kind, MetadataClient};
 /// a rate-limit burst should not permanently mark half a library unmatchable.
 pub const RETRY_AFTER_SECS: i64 = 6 * 3600;
 
-/// Titles per pass. Bounded so a first run shows progress and can be interrupted, rather
-/// than blocking for an hour and losing everything if it is cancelled.
-pub const DEFAULT_BATCH: u32 = 50;
+/// Titles per pass.
+///
+/// This was 50, which is a hundredth of what a real queue holds. Two things went wrong
+/// with that. Planning became a real share of the work — each batch re-runs the
+/// `pending` query, which is filter-aware over 117,602 rows and not free, and at 23
+/// titles a second a batch of 50 was over in two seconds. And pressing "Fetch metadata
+/// now" did fifty titles and stopped, which does not look like a button that works.
+///
+/// 5,000 is about four minutes at the measured rate: one press makes an obvious dent,
+/// and the background sweep behind it drains the rest without a cap. It is still a
+/// bounded unit rather than "everything", because there is no way to cancel a pass in
+/// flight — a batch boundary is the only place one can stop, so there has to be one
+/// somewhere short of twenty minutes.
+///
+/// Progress is unaffected either way: it counts finished titles, not batches.
+pub const DEFAULT_BATCH: u32 = 5_000;
 
 /// How many titles are looked up at once.
 ///
