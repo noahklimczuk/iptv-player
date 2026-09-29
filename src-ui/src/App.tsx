@@ -20,6 +20,7 @@ import { SetupWizard } from '@/features/setup/SetupWizard';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useCommand } from '@/hooks/useCommand';
 import { useEpisodeAids } from '@/hooks/useEpisodeAids';
+import { useFullscreen } from '@/hooks/useFullscreen';
 import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
@@ -187,6 +188,7 @@ export default function App() {
   }, []);
 
   const episode = useEpisodeAids(ui.player, (id) => void playEpisode(id));
+  const fullscreen = useFullscreen();
 
   const onPick = useCallback((hit: SearchHit) => {
     // A programme hit carries the channel it is on, not the programme id: what the
@@ -266,10 +268,10 @@ export default function App() {
     onMute: () =>
       invoke('player.setMuted', { muted: !(ui.player?.muted ?? false) })
         .catch(report('Could not change the volume')),
-    onFullscreen: () => void document.documentElement.requestFullscreen?.().catch(() => {}),
+    onFullscreen: fullscreen.toggle,
     onInfo: () => {},
     onNavigate: (to: string) => { closePlayer(); navigate(to); },
-  }), [ui, zapper, navigate, playerOpen, closePlayer]);
+  }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle]);
 
   useHotkeys(handlers, !ui.paletteOpen);
 
@@ -414,6 +416,8 @@ export default function App() {
       {playerOpen && ui.player && (
         <PlayerOverlay
           player={ui.player}
+          fullscreen={fullscreen.fullscreen}
+          onFullscreen={fullscreen.toggle}
           onClose={closePlayer}
           onGuide={() => { closePlayer(); navigate('/guide'); }}
           nextEpisode={episode.aids?.nextEpisode ?? null}

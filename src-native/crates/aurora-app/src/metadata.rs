@@ -499,10 +499,17 @@ fn now_unix() -> i64 {
 
 /// How many batches one automatic sweep will run before it stops.
 ///
-/// At 50 titles a batch that is 10,000 titles — enough to finish most libraries, and a
-/// bound on the pathological case rather than a target. Whatever is left is picked up
-/// by the next refresh, or by the button in Settings.
-const AUTO_MAX_BATCHES: usize = 200;
+/// A stop, not a budget.
+///
+/// This used to be 200, which at 50 titles a batch meant a pass gave up after 10,000 —
+/// a third of the way through a 31,375-title queue. Whatever was left waited for the
+/// next refresh, so on a large library the metadata simply never finished, and it was
+/// not obvious why: nothing failed and nothing said it had stopped early.
+///
+/// The loop already ends the moment a batch finds nothing to do, which is the real
+/// termination condition. This is only here so that a bug which keeps handing back work
+/// cannot spin for ever, and it is now far above any real library.
+const AUTO_MAX_BATCHES: usize = 100_000;
 
 /// Fetch artwork and cast for everything an import left bare, in the background.
 ///

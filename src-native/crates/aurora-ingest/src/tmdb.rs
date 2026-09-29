@@ -22,10 +22,31 @@ pub const DEFAULT_IMAGE_BASE_URL: &str = "https://image.tmdb.org/t/p";
 /// Credential-store key for the metadata API key.
 pub const CREDENTIAL_KEY: &str = "aurora-tmdb-api-key";
 
-/// Smallest gap between requests. TMDB's published ceiling is far higher, but a 40,000
-/// title library would hammer it, and being rate-limited mid-import costs more than
-/// going a little slower does.
-pub const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(25);
+/// The gap between requests this aims for, and the floor it will not go below.
+///
+/// 10 ms is about a hundred requests a second. That is above what TMDB suggests and
+/// below what it refuses, which is only a safe place to sit because the pacer below
+/// *reacts*: the moment the service says no, the gap widens and stays widened until
+/// requests are succeeding again.
+///
+/// It used to be a flat 25 ms — 40 a second — chosen because nothing here could tell the
+/// difference between "fine" and "about to be throttled", so the only safe answer was to
+/// stay well under. That cost real time on a large library: the pacer, not the machine,
+/// was what decided a pass took 22 minutes.
+pub const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(10);
+
+/// How far the gap is allowed to open when the service pushes back. Two seconds between
+/// requests is a crawl, and deliberately: it is what the far end has asked for.
+const MAX_REQUEST_INTERVAL: Duration = Duration::from_millis(2000);
+
+/// What a refusal costs, and what a success gives back.
+///
+/// Multiplicative up, gentle down — the standard shape, because the two mistakes are not
+/// equally expensive. Backing off too slowly means a run of rejected requests; recovering
+/// too slowly only means finishing later.
+const BACKOFF_FACTOR: u32 = 4;
+const RECOVERY_NUMERATOR: u32 = 4;
+const RECOVERY_DENOMINATOR: u32 = 5;
 
 /// Poster and backdrop widths, matching what the UI actually renders (README §12).
 /// Fetching `original` for a 342px card wastes bandwidth and disk for no visible gain.
@@ -87,7 +108,16 @@ pub struct TmdbClient {
     image_base_url: String,
     /// Two-letter language, which selects the overview and the localized title.
     language: String,
-    last_request: Mutex<Option<Instant>>,
+    /// When the last request was let through, and how far apart they are being spaced
+    /// right now. One lock, because the two are only ever read and written together.
+    pace: Mutex<Pace>,
+}
+
+/// The state of the pacer: what it is aiming for and when it last let something past.
+#[derive(Debug)]
+struct Pace {
+    last_request: Option<Instant>,
+    interval: Duration,
 }
 
 impl std::fmt::Debug for TmdbClient {
@@ -108,7 +138,10 @@ impl TmdbClient {
             base_url: DEFAULT_BASE_URL.into(),
             image_base_url: DEFAULT_IMAGE_BASE_URL.into(),
             language: "en-US".into(),
-            last_request: Mutex::new(None),
+            pace: Mutex::new(Pace {
+                last_request: None,
+                interval: MIN_REQUEST_INTERVAL,
+            }),
         }
     }
 
@@ -128,16 +161,53 @@ impl TmdbClient {
         self
     }
 
-    /// Sleep just long enough that requests stay under the rate limit.
+    /// Wait for this request's turn.
+    ///
+    /// The lock is deliberately held across the sleep. That is what makes this a pacer
+    /// rather than a free-for-all: with several lookups in flight, each one takes its
+    /// turn at the front and the *waits* overlap, so the starts stay one interval apart
+    /// however many threads are asking.
     fn throttle(&self) {
-        let mut last = self.last_request.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(previous) = *last {
+        let mut pace = self.pace.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = pace.last_request {
             let elapsed = previous.elapsed();
-            if elapsed < MIN_REQUEST_INTERVAL {
-                std::thread::sleep(MIN_REQUEST_INTERVAL - elapsed);
+            if elapsed < pace.interval {
+                std::thread::sleep(pace.interval - elapsed);
             }
         }
-        *last = Some(Instant::now());
+        pace.last_request = Some(Instant::now());
+    }
+
+    /// The service refused: space requests further apart.
+    ///
+    /// Without this the rate is a guess made once, at compile time, by someone who cannot
+    /// see the connection it will run on. With it the guess only has to be a starting
+    /// point, which is why the starting point can be an ambitious one.
+    fn slow_down(&self) {
+        let mut pace = self.pace.lock().unwrap_or_else(|e| e.into_inner());
+        let widened = (pace.interval * BACKOFF_FACTOR).min(MAX_REQUEST_INTERVAL);
+        if widened > pace.interval {
+            tracing::debug!(
+                from_ms = pace.interval.as_millis() as u64,
+                to_ms = widened.as_millis() as u64,
+                "rate limited; spacing metadata requests further apart"
+            );
+            pace.interval = widened;
+        }
+    }
+
+    /// That one worked: edge back towards the target.
+    fn speed_up(&self) {
+        let mut pace = self.pace.lock().unwrap_or_else(|e| e.into_inner());
+        if pace.interval > MIN_REQUEST_INTERVAL {
+            pace.interval = (pace.interval * RECOVERY_NUMERATOR / RECOVERY_DENOMINATOR)
+                .max(MIN_REQUEST_INTERVAL);
+        }
+    }
+
+    /// The interval in force, for tests and diagnostics.
+    pub fn current_interval(&self) -> Duration {
+        self.pace.lock().unwrap_or_else(|e| e.into_inner()).interval
     }
 
     fn get<T: serde::de::DeserializeOwned>(
@@ -152,7 +222,23 @@ impl TmdbClient {
             urlencode(&self.api_key),
             urlencode(&self.language),
         );
-        let body = self.http.fetch_string(&url)?;
+        // The pacer only earns its ambitious starting interval by reacting to the
+        // answer. `fetch_string` has already retried a 429 through its own backoff, so
+        // reaching here with one means the service is genuinely pushing back rather than
+        // hiccupping, and the spacing should change for every request after it — not
+        // just this one.
+        let body = match self.http.fetch_string(&url) {
+            Ok(body) => {
+                self.speed_up();
+                body
+            }
+            Err(failure) => {
+                if failure.code == ErrorCode::RateLimited {
+                    self.slow_down();
+                }
+                return Err(failure);
+            }
+        };
         serde_json::from_str(&body).map_err(|e| NetFailure {
             code: ErrorCode::Unknown,
             message: "The metadata service sent something unreadable".into(),
@@ -512,6 +598,85 @@ mod tests {
     fn client(server: &TestServer) -> TmdbClient {
         let http = Arc::new(HttpClient::new(HttpConfig::default()).unwrap());
         TmdbClient::new(http, "secret-key").with_base_url(server.url(""))
+    }
+
+    /// The pacer has to react, or its starting interval is just a faster guess.
+    ///
+    /// 10 ms between requests is only defensible because being refused changes it. If
+    /// this stops working the client keeps hammering at a hundred a second into a
+    /// service that has already said no, which is worse than the 25 ms it replaced.
+    #[test]
+    fn being_refused_spaces_requests_further_apart() {
+        let server = TestServer::always(Reply::status(429));
+        // One attempt: this is about what the pacer does with the answer, not about the
+        // HTTP layer's own retries, and three rounds of backoff would make it slow.
+        let http = Arc::new(
+            HttpClient::new(HttpConfig {
+                max_attempts: 1,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let client = TmdbClient::new(http, "secret-key").with_base_url(server.url(""));
+
+        assert_eq!(
+            client.current_interval(),
+            MIN_REQUEST_INTERVAL,
+            "a fresh client should start at the target"
+        );
+
+        let first = client.search(Kind::Movie, "anything", None);
+        assert!(
+            first.is_err(),
+            "the server answered 429; that is not a success"
+        );
+        let after_one = client.current_interval();
+        assert!(
+            after_one > MIN_REQUEST_INTERVAL,
+            "a refusal did not widen the gap: still {after_one:?}"
+        );
+
+        // And it keeps widening rather than settling after one step.
+        let _ = client.search(Kind::Movie, "anything", None);
+        assert!(
+            client.current_interval() > after_one,
+            "a second refusal did not widen it further"
+        );
+
+        // But not without limit: something has to stop a run of refusals turning into
+        // a request every few minutes. Driven directly rather than through twenty more
+        // requests — each of those would first *wait* the interval being tested, which
+        // is half a minute of sleeping to assert one number.
+        for _ in 0..20 {
+            client.slow_down();
+        }
+        assert!(
+            client.current_interval() <= MAX_REQUEST_INTERVAL,
+            "the gap opened past its ceiling: {:?}",
+            client.current_interval()
+        );
+    }
+
+    /// And recovers, or one bad minute would cost the rest of the pass.
+    #[test]
+    fn requests_that_work_bring_the_pace_back() {
+        let server = TestServer::always(Reply::ok(r#"{"results":[],"total_results":0}"#));
+        let client = client(&server);
+
+        // Start it somewhere slow, as a run of refusals would have left it.
+        client.slow_down();
+        client.slow_down();
+        let slowed = client.current_interval();
+        assert!(slowed > MIN_REQUEST_INTERVAL);
+
+        for _ in 0..40 {
+            client.search(Kind::Movie, "anything", None).unwrap();
+        }
+        assert_eq!(
+            client.current_interval(),
+            MIN_REQUEST_INTERVAL,
+            "successful requests never brought the pace back to the target"
+        );
     }
 
     #[test]

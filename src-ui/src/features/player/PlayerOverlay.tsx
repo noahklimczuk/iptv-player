@@ -31,7 +31,7 @@ export function behindLive(player: PlayerState): number {
 }
 
 export function PlayerOverlay({
-  player, onClose, onGuide, nextEpisode, onPlayNext,
+  player, onClose, onGuide, nextEpisode, onPlayNext, fullscreen, onFullscreen,
 }: {
   player: PlayerState;
   onClose: () => void;
@@ -39,6 +39,9 @@ export function PlayerOverlay({
   /** The episode after this one, when a series is playing (README §9). */
   nextEpisode?: Episode | null;
   onPlayNext?: () => void;
+  /** Passed in rather than held here: the `f` key is the same switch. */
+  fullscreen: boolean;
+  onFullscreen: () => void;
 }) {
   const [visible, setVisible] = useState(true);
   const [showStats, setShowStats] = useState(false);
@@ -249,7 +252,12 @@ export function PlayerOverlay({
                     onClick={() => setPanel((p) => (p === 'subtitles' ? null : 'subtitles'))}
                   />
                   <IconButton icon="settings" label="Playback settings" />
-                  <IconButton icon="fullscreen" label="Fullscreen" />
+                  <IconButton
+                    icon="fullscreen"
+                    label={fullscreen ? 'Leave fullscreen' : 'Fullscreen'}
+                    active={fullscreen}
+                    onClick={onFullscreen}
+                  />
                 </div>
               </div>
 
