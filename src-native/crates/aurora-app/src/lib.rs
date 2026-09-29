@@ -21,6 +21,39 @@ pub mod timeshift;
 pub mod updates;
 pub mod window;
 
+/// How long after launch the background passes start.
+///
+/// Long enough to be out of the way of the first thing anybody does. Startup already has
+/// the migration check, the classifier and the first screen's queries to get through, and
+/// the most likely next act is playing something — none of which wants to be sharing the
+/// connection with a metadata sweep.
+const STARTUP_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Pick up whatever the library is still missing, a little after launch.
+///
+/// Both of these passes existed and both were triggered **only by a refresh**. So a
+/// library that was imported once and then simply used never finished its metadata and
+/// never learned how many seasons anything had: the work was queued, nothing was wrong,
+/// and nothing was going to run it. Knowing to press Refresh is not a reasonable thing to
+/// require, and an app that only makes progress when prodded reads as an app that does
+/// not work.
+///
+/// Safe to call unconditionally, which is why there is no "is there a backlog" check here
+/// to get out of step with the ones that matter. Both passes already ask that question
+/// properly and stop the moment the answer is no: enrichment does nothing at all without
+/// a key, and each loop ends as soon as a batch finds nothing to do. On a library that is
+/// up to date this costs one query each and two threads that exit.
+pub fn catch_up_in_background(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(STARTUP_GRACE);
+        // Different hosts — TMDB and the viewer's own panel — so these do not contend
+        // with each other for anything but the database lock, which neither holds across
+        // a request.
+        crate::metadata::enrich_in_background(app.clone());
+        crate::series::sweep_in_background(app);
+    });
+}
+
 pub use error::AppError;
 
 /// Where a portable copy keeps its data, or `None` for an installed one (README §13).
