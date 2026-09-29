@@ -340,6 +340,37 @@ fn the_video_surface_and_the_event_pump_are_actually_called() {
 /// The compositing model needs the window itself to be transparent, not only the
 /// WebView2's background (README §2.1). This was `false`, which alone would have been
 /// enough to show no video.
+/// The background passes are started at launch, not only by a refresh.
+///
+/// This is the same shape of bug as `library.syncChapters` and `progress.save` before it:
+/// the work was written, registered and correct, and nothing called it. Both passes were
+/// reachable only from a provider refresh, so a library imported once and then simply used
+/// never finished its metadata and never learned how many seasons anything had — with
+/// nothing failing anywhere to say so.
+///
+/// A source grep rather than a behavioural test because what is being guarded is the call
+/// itself. There is no way to observe "it would have run" that does not amount to reading
+/// the same line.
+#[test]
+fn the_background_passes_are_started_at_launch() {
+    let main =
+        std::fs::read_to_string(repo_root().join("src-native/crates/aurora-app/src/main.rs"))
+            .expect("main.rs");
+    assert!(
+        main.contains("catch_up_in_background("),
+        "nothing starts the metadata and episode-listing passes at launch, so they run          only when somebody presses Refresh"
+    );
+
+    let lib = std::fs::read_to_string(repo_root().join("src-native/crates/aurora-app/src/lib.rs"))
+        .expect("lib.rs");
+    for called in ["enrich_in_background(", "sweep_in_background("] {
+        assert!(
+            lib.contains(called),
+            "catch_up_in_background does not call {called} — one of the two passes is              still refresh-only"
+        );
+    }
+}
+
 #[test]
 fn the_window_is_transparent_so_video_can_show_through() {
     let config =

@@ -198,6 +198,11 @@ fn main() {
 
             app.manage(services);
 
+            // The metadata and episode-listing passes used to run only after a refresh,
+            // so a library that was imported once and then just used never finished
+            // either. See `catch_up_in_background`.
+            aurora_app::catch_up_in_background(app.handle().clone());
+
             // The player's heartbeat. The backend only knows its state when asked, and
             // the UI's OSD is driven by a `player.state` event, so without this a
             // stream that died leaves the interface showing it playing — and nothing
