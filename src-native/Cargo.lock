@@ -186,6 +186,7 @@ version = "0.1.0"
 dependencies = [
  "aurora-core",
  "libmpv2",
+ "libmpv2-sys",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

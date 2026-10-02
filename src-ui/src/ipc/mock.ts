@@ -398,7 +398,7 @@ const visibleChannels = (): Channel[] =>
  */
 function browseFilter<T extends { title: string; genres: string[] }>(
   rows: T[],
-  f: { genre?: string; category?: string; query?: string },
+  f: { genre?: string; category?: string; query?: string; letter?: string },
 ): T[] {
   let list = [...rows];
   if (f.genre) list = list.filter((x) => x.genres.includes(f.genre!));
@@ -406,6 +406,16 @@ function browseFilter<T extends { title: string; genres: string[] }>(
   if (f.query?.trim()) {
     const needle = f.query.trim().toLowerCase();
     list = list.filter((x) => x.title.toLowerCase().includes(needle));
+  }
+  // The same rule the host applies: one letter, or `#` for everything that does not begin
+  // with one. Anything else is not a filter, so it is ignored rather than matching
+  // nothing — a UI bug would otherwise show as an empty library.
+  const letter = f.letter?.trim();
+  if (letter?.length === 1) {
+    const first = (x: T) => x.title.trim().charAt(0).toUpperCase();
+    list = letter === '#'
+      ? list.filter((x) => first(x) < 'A' || first(x) > 'Z')
+      : list.filter((x) => first(x) === letter.toUpperCase());
   }
   return list;
 }
@@ -1106,8 +1116,8 @@ type Handler<K extends CommandName> = (
 const handlers: { [K in CommandName]: Handler<K> } = {
   'library.rails': () => buildRails(),
   'library.recommended': ({ limit }) => buildRecommended(limit ?? 40),
-  'library.movies': ({ sort, limit, offset, genre, category, query }) => {
-    const list = browseFilter(visibleMovies(), { genre, category, query });
+  'library.movies': ({ sort, limit, offset, genre, category, query, letter }) => {
+    const list = browseFilter(visibleMovies(), { genre, category, query, letter });
     const cmp: Record<string, (a: Movie, b: Movie) => number> = {
       recentlyAdded: (a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0),
       title: (a, b) => a.title.localeCompare(b.title),
@@ -1117,15 +1127,15 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     list.sort(cmp[sort] ?? cmp.recentlyAdded!);
     return list.slice(offset, offset + limit);
   },
-  'library.series': ({ limit, offset, genre, category, query, sort }) => {
-    const list = browseFilter(visibleSeries(), { genre, category, query });
+  'library.series': ({ limit, offset, genre, category, query, letter, sort }) => {
+    const list = browseFilter(visibleSeries(), { genre, category, query, letter });
     if (sort === 'year') list.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
     else if (sort === 'rating') list.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
     else if (sort === 'recentlyAdded') list.sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
     else list.sort((a, b) => a.title.localeCompare(b.title));
     return list.slice(offset, offset + limit);
   },
-  'library.browseFacets': ({ kind, genre, category, query }) => {
+  'library.browseFacets': ({ kind, genre, category, query, letter }) => {
     // Narrowed to the shared shape both lists have, so one implementation covers both
     // rather than the union defeating it.
     const all: { title: string; genres: string[] }[] =
@@ -1133,7 +1143,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return {
       categories: mockCategories(all),
       genres: [...new Set(all.flatMap((x) => x.genres))].sort(),
-      total: browseFilter(all, { genre, category, query }).length,
+      total: browseFilter(all, { genre, category, query, letter }).length,
     };
   },
   'library.episodes': ({ seriesId, season }) =>
@@ -1167,6 +1177,11 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     }
     return want;
   },
+
+  // Nothing to reveal in a browser: the window is already there and was never hidden.
+  // Answered rather than omitted so the call is not a rejection on every launch of the
+  // browser preview.
+  'window.ready': () => undefined,
 
   'library.item': ({ kind, id }) => {
     if (kind === 'movie') {
@@ -1443,6 +1458,16 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     });
   },
   'progress.get': ({ kind, id }) => progress.get(`${kind}:${id}`) ?? null,
+  'progress.forget': ({ kind, id }) => {
+    if (kind === 'movie') return progress.delete(`movie:${id}`);
+    // A show's position is on its episodes, so all of them go — exactly as the host
+    // does it. Removing one would promote the next and the card would come back.
+    let removed = false;
+    for (const ep of fx.episodes.filter((e) => e.seriesId === id)) {
+      removed = progress.delete(`episode:${ep.id}`) || removed;
+    }
+    return removed;
+  },
 
   'mylist.toggle': ({ kind, id }) => {
     const key = `${kind}:${id}`;

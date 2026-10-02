@@ -250,6 +250,29 @@ export function programmesFor(ch: Channel, from: number, to: number): Programme[
 
 /* ── Movies & series ───────────────────────────────────────────────────────── */
 
+/**
+ * A YouTube key for roughly a third of the fixtures, so the preview is visible in the
+ * browser without pretending every title has one.
+ *
+ * Two real keys, both Blender Foundation open movies released under CC-BY: a fake key
+ * would render as YouTube's "video unavailable" card, which looks exactly like the
+ * feature being broken.
+ *
+ * Films get every third one, so the *absent* case is on screen too — a library where
+ * every poster has a trailer is not a library anybody has, since the real number depends
+ * on what TMDB holds for the titles a provider carries. Shows all get one, which is what
+ * makes the journeys that test trailers able to pick a card and know what they will find.
+ */
+const TRAILER_KEYS = ['aqz-KE-bpKQ', 'YE7VzlLtp-4'];
+
+function trailerKey(id: number): string {
+  return TRAILER_KEYS[id % TRAILER_KEYS.length]!;
+}
+
+function filmTrailer(id: number): string | null {
+  return id % 3 === 0 ? trailerKey(id) : null;
+}
+
 function makeMovie(id: number): Movie {
   const t = title();
   const year = int(1978, 2026);
@@ -276,6 +299,7 @@ function makeMovie(id: number): Movie {
     match: int(72, 99),
     addedAt: Math.floor(Date.now() / 1000) - int(0, 90) * 86400,
     lang: null,
+    trailerKey: filmTrailer(id),
   };
 }
 
@@ -304,6 +328,7 @@ function makeSeries(id: number): Series {
     match: int(70, 99),
     addedAt: Math.floor(Date.now() / 1000) - int(0, 120) * 86400,
     lang: null,
+    trailerKey: trailerKey(id),
   };
 }
 

@@ -234,6 +234,7 @@ pub fn save(
                    tmdb_title     = COALESCE(?11, tmdb_title),
                    original_title = COALESCE(?12, original_title),
                    tagline        = COALESCE(?13, tagline),
+                   trailer_key    = COALESCE(?15, trailer_key),
                    -- The provider's year wins where it has one. TMDB's is better
                    -- evidence, but `year` is half of the duplicate key: rewriting it
                    -- here would split a pair of copies the moment one of them was
@@ -255,6 +256,7 @@ pub fn save(
                     meta.original_title,
                     meta.tagline,
                     meta.year,
+                    meta.trailer_key,
                 ],
             )?;
         }
@@ -272,6 +274,7 @@ pub fn save(
                    tmdb_title     = COALESCE(?10, tmdb_title),
                    original_title = COALESCE(?11, original_title),
                    tagline        = COALESCE(?12, tagline),
+                   trailer_key    = COALESCE(?14, trailer_key),
                    year           = COALESCE(year, ?13)
                  WHERE id = ?1",
                 params![
@@ -288,6 +291,7 @@ pub fn save(
                     meta.original_title,
                     meta.tagline,
                     meta.year,
+                    meta.trailer_key,
                 ],
             )?;
         }

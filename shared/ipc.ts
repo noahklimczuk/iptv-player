@@ -63,6 +63,14 @@ export interface Movie {
   match?: number;
   addedAt: number | null;
   lang?: string | null;
+  /**
+   * The trailer's YouTube key, or null when enrichment has not found one.
+   *
+   * A key rather than a URL: the embed address is built from it and the iframe API is
+   * addressed by it. Null for every title until a TMDB key is configured and the
+   * metadata sweep has reached it, so nothing in the interface may assume one exists.
+   */
+  trailerKey: string | null;
 }
 
 export interface Series {
@@ -82,6 +90,8 @@ export interface Series {
   match?: number;
   addedAt: number | null;
   lang?: string | null;
+  /** See `Movie.trailerKey`. */
+  trailerKey: string | null;
 }
 
 export interface Episode {
@@ -292,7 +302,7 @@ export interface PlaybackError {
   code:
     | 'dns' | 'refused' | 'tls' | 'unauthorized' | 'forbidden' | 'notFound' | 'rateLimited'
     | 'serverError' | 'connectionLimit' | 'timeout' | 'unsupportedCodec'
-    | 'drmProtected' | 'unknown';
+    | 'drmProtected' | 'dropped' | 'unknown';
   message: string;
   cause: string;
   actions: ErrorAction[];
@@ -763,10 +773,19 @@ export interface Commands {
     genre?: string;
     category?: string;
     query?: string;
+    /**
+     * Only titles starting with this one character, or `#` for the ones starting with
+     * anything that is not a letter.
+     *
+     * The A–Z bar filters rather than scrolls, because the list is paged: W is not in the
+     * DOM to scroll to, and fetching every page up to it would read the whole library to
+     * show one screen. Anything but a single letter or `#` is ignored by the host.
+     */
+    letter?: string;
   }) => Movie[];
   'library.series': (args: {
     limit: number; offset: number; genre?: string;
-    category?: string; query?: string; sort?: BrowseSort;
+    category?: string; query?: string; letter?: string; sort?: BrowseSort;
   }) => Series[];
   /**
    * What a browse page is showing, before it has fetched any of it.
@@ -775,8 +794,15 @@ export interface Commands {
    * page has to answer before the first poster arrives, and three round trips if they
    * are asked separately.
    */
+  /**
+   * The shelves, the genres, and the real total for the current filters.
+   *
+   * Takes `letter` as well, because the total is printed beside the heading: without it
+   * the count said 117,508 while the grid showed the 4,312 films beginning with S.
+   */
   'library.browseFacets': (args: {
     kind: 'movies' | 'series'; genre?: string; category?: string; query?: string;
+    letter?: string;
   }) => BrowseFacets;
   'library.episodes': (args: { seriesId: number; season?: number }) => Episode[];
   /**
@@ -872,6 +898,18 @@ export interface Commands {
    * into the old window behind it.
    */
   'window.fullscreen': (args?: { fullscreen?: boolean }) => boolean;
+  /**
+   * Show the window, now that the UI has painted something.
+   *
+   * The window is created hidden because it is also transparent — mpv composites behind
+   * the WebView2 — and a transparent window with nothing painted in it is a hole through
+   * to the desktop. Called as early as possible, from the first frame rather than once
+   * data has arrived, because `index.html` has already painted a boot screen by then.
+   *
+   * Idempotent, and nothing waits on it: the host reveals the window by itself after a
+   * few seconds, so a UI that fails to boot still leaves a window somebody can close.
+   */
+  'window.ready': () => void;
   'app.about': () => {
     version: string;
     license: string;
@@ -933,6 +971,19 @@ export interface Commands {
     kind: 'movie' | 'episode';
     id: number;
   }) => Progress | null;
+  /**
+   * Take something off Continue Watching. Returns whether anything was there to remove.
+   *
+   * Addressed by what the *card* is, which is not what the progress is stored against: a
+   * show's position lives on its episodes, and removing it clears all of them. Deleting
+   * only the episode on the card would promote the next one and the card would appear to
+   * come back.
+   */
+  'progress.forget': (args: {
+    profileId: number;
+    kind: 'movie' | 'series';
+    id: number;
+  }) => boolean;
 
   'mylist.toggle': (args: {
     profileId: number;

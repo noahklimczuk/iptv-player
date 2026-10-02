@@ -1,13 +1,26 @@
 /**
- * Live TV — channel list, categories, favorites (README §7.3).
+ * Live TV — channel list, groups, favorites (README §7.3).
  * The set-top-box behaviours (banner, digit entry, last-channel) live in
  * features/player/ChannelBanner.tsx and hooks/useZapper.ts so they work from any screen.
+ *
+ * **The groups were a strip that scrolled sideways.** That is fine for the eight a
+ * fixture has. A real subscription has several hundred — "UK | ENTERTAINMENT", "US|
+ * SPORTS HD", "DE Kinder", one per country per genre per quality — and a sideways strip
+ * of those is a list you cannot scan, cannot see the end of, and cannot get back to the
+ * start of. The group you had selected scrolled out of sight as soon as you moved down
+ * the channels. They are a sidebar now, with their counts and a filter box.
+ *
+ * **And there was no way to search within one.** Ctrl-K searches everything, which
+ * answers a different question: "find me this" rather than "narrow what I am looking
+ * at". A group of 482 channels needed one.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Channel } from '@shared/ipc';
-import { Badge, Button, EmptyState, Skeleton } from '@/components/Primitives';
+import { Badge, Button, EmptyState, Skeleton, TextField } from '@/components/Primitives';
+import { GroupSidebar } from '@/components/GroupSidebar';
 import { Icon } from '@/components/Icon';
+import { LetterBar } from '@/components/LetterBar';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
@@ -25,9 +38,17 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   const [group, setGroup] = useState<string | undefined>(undefined);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [view, setView] = useState<'list' | 'grid'>('list');
+  const [typed, setTyped] = useState('');
+  const [letter, setLetter] = useState<string | undefined>();
+  /**
+   * Channel order. A provider's own numbering is what a set-top box uses and what digit
+   * entry addresses, so it stays the default — but it makes the A–Z bar meaningless,
+   * which is why the bar is inert until this says otherwise.
+   */
+  const [order, setOrder] = useState<'number' | 'name'>('number');
 
   const profileId = activeProfileId();
-  const { data: groups } = useCommand('channels.groups', undefined, []);
+  const { data: groups, loading: groupsLoading } = useCommand('channels.groups', undefined, []);
   // Only so the empty state can say something true. "Add a provider in Settings" on a
   // machine that already has one, with twenty thousand films in the library, is the
   // F-27 mistake again: a confident answer to a question nobody asked.
@@ -50,12 +71,30 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
     [profileId],
   );
 
-  const categories = useMemo(
-    () => [{ name: 'All', count: 0 }, ...(groups ?? [])],
-    [groups],
-  );
-
-  const visible = useMemo(() => channels ?? [], [channels]);
+  /**
+   * Narrowing, sorting and lettering, in that order, on the rows already in memory.
+   *
+   * Client-side on purpose: `channels.list` is not paged — it answers with every channel
+   * in the group, which on a real library is 6.3 MB of JSON — so asking the host again
+   * per keystroke would re-send the whole group to filter it. The browse pages do the
+   * opposite for the opposite reason: they are paged, so the host must do it.
+   */
+  const lazyTyped = useDeferredValue(typed);
+  const visible = useMemo(() => {
+    let rows = channels ?? [];
+    const needle = lazyTyped.trim().toLowerCase();
+    if (needle) rows = rows.filter((c) => c.name.toLowerCase().includes(needle));
+    if (letter) {
+      const first = (c: Channel) => c.name.trim().charAt(0).toUpperCase();
+      rows = letter === '#'
+        ? rows.filter((c) => first(c) < 'A' || first(c) > 'Z')
+        : rows.filter((c) => first(c) === letter);
+    }
+    if (order === 'name') {
+      rows = [...rows].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return rows;
+  }, [channels, lazyTyped, letter, order]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   // Measured rather than assumed: the grid template is `auto-fill` over a 150px
@@ -91,23 +130,89 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   const guide = useNowNext(visibleIds);
 
   return (
-    <div style={{ padding: 'var(--sp-5) var(--sp-6)' }}>
+    <div
+      style={{
+        padding: 'var(--sp-5) var(--sp-6)',
+        display: 'flex',
+        gap: 'var(--sp-5)',
+        alignItems: 'flex-start',
+      }}
+    >
+      <GroupSidebar
+        label="Channel groups"
+        groups={groups ?? []}
+        selected={group}
+        onSelect={(next) => { setGroup(next); setFavoritesOnly(false); }}
+        loading={groupsLoading}
+        pinned={[
+          {
+            label: 'All channels',
+            value: undefined,
+            icon: 'tv',
+            active: !group && !favoritesOnly,
+            onSelect: () => { setGroup(undefined); setFavoritesOnly(false); },
+          },
+          {
+            label: 'Favourites',
+            value: undefined,
+            icon: 'heart',
+            active: favoritesOnly,
+            // Favourites cut across groups, so choosing them clears the group rather
+            // than intersecting with it — "my favourites, within UK Sports" is a
+            // question nobody asks of a list of fourteen channels.
+            onSelect: () => { setFavoritesOnly(true); setGroup(undefined); },
+          },
+        ]}
+      />
+
+      <div style={{ flex: 1, minWidth: 0 }}>
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
           marginBottom: 'var(--sp-4)', flexWrap: 'wrap',
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>Live TV</h1>
-        <Button
-          size="sm"
-          variant={favoritesOnly ? 'primary' : 'secondary'}
-          icon="heart"
-          iconFilled={favoritesOnly}
-          onClick={() => setFavoritesOnly((f) => !f)}
+        <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
+          {/* Which list this is. "Live TV" over one group of 482 left nothing on screen
+              saying which group, once the strip had scrolled away. */}
+          {favoritesOnly ? 'Favourites' : group ?? 'Live TV'}
+        </h1>
+        <span
+          data-testid="channel-count"
+          style={{ color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums' }}
         >
-          Favorites
-        </Button>
+          {loading ? '' : NUMBER.format(visible.length)}
+        </span>
+
+        <TextField
+          icon="search"
+          clearable
+          onClear={() => setTyped('')}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder="Search channels…"
+          aria-label="Search channels"
+          data-testid="channel-search"
+          style={{ width: 200 }}
+        />
+
+        <div style={{ display: 'flex', gap: 4 }}>
+          <Button
+            size="sm"
+            variant={order === 'number' ? 'primary' : 'ghost'}
+            onClick={() => setOrder('number')}
+          >
+            Number
+          </Button>
+          <Button
+            size="sm"
+            variant={order === 'name' ? 'primary' : 'ghost'}
+            onClick={() => setOrder('name')}
+          >
+            A–Z
+          </Button>
+        </div>
+
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
           <Button
             size="sm" icon="stack"
@@ -126,34 +231,6 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
         </div>
       </div>
 
-      <div
-        className="no-scrollbar"
-        style={{
-          display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 'var(--sp-3)',
-          marginBottom: 'var(--sp-4)',
-        }}
-      >
-        {categories.map((c) => {
-          const value = c.name === 'All' ? undefined : c.name;
-          const active = group === value;
-          return (
-            <button
-              key={c.name}
-              onClick={() => setGroup(value)}
-              style={{
-                padding: '7px 15px', borderRadius: 'var(--r-full)', cursor: 'pointer',
-                whiteSpace: 'nowrap', fontSize: 'var(--fs-sm)', fontWeight: 600,
-                border: `1px solid ${active ? 'transparent' : 'var(--border)'}`,
-                background: active ? 'var(--text)' : 'var(--surface)',
-                color: active ? 'var(--text-invert)' : 'var(--text-muted)',
-              }}
-            >
-              {c.name}{c.count ? ` (${c.count})` : ''}
-            </button>
-          );
-        })}
-      </div>
-
       {loading && (
         <div style={{ display: 'grid', gap: 8 }}>
           {Array.from({ length: 8 }, (_, i) => <Skeleton key={i} h={68} />)}
@@ -163,7 +240,9 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
       {!loading && (channels ?? []).length === 0 && (
         <EmptyState
           icon="tv"
-          title={favoritesOnly ? 'No favorite channels yet' : 'No channels'}
+          // British, like the aria-labels on every heart in this list and the sidebar
+          // entry that got you here. The screen had both spellings in it.
+          title={favoritesOnly ? 'No favourite channels yet' : 'No channels'}
           body={
             favoritesOnly
               ? 'Press F while watching, or use the heart on any channel, to add it here.'
@@ -172,7 +251,29 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
         />
       )}
 
-      {!loading && (channels ?? []).length > 0 && (
+      {/* Channels exist, but not after this search or this letter. A different
+          sentence from "No channels", because the answer is different: clear the box. */}
+      {!loading && (channels ?? []).length > 0 && visible.length === 0 && (
+        <EmptyState
+          icon="search"
+          title="No channel matches"
+          body={
+            letter && typed.trim()
+              ? `Nothing here matches “${typed.trim()}” and starts with ${letter}.`
+              : letter
+                ? `No channel in this group starts with ${letter === '#' ? 'a number or symbol' : letter}.`
+                : `Nothing here matches “${typed.trim()}”.`
+          }
+          action={(
+            <Button onClick={() => { setTyped(''); setLetter(undefined); }}>
+              Clear search
+            </Button>
+          )}
+        />
+      )}
+
+      {!loading && visible.length > 0 && (
+        <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start' }}>
         <div
           ref={measure}
           data-testid="channel-scroller"
@@ -180,7 +281,15 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
           // thousand channels, and `.map()` over that is twenty-two thousand DOM
           // nodes. The Guide and the playlist editor were already virtualised; this
           // screen was the one that was missed.
-          style={{ height: 'calc(100vh - 220px)', overflowY: 'auto', overflowX: 'hidden' }}
+          style={{
+            height: 'calc(100vh - 220px)', overflowY: 'auto', overflowX: 'hidden',
+            // It is a flex item now, beside the A–Z bar. Without this it sizes to its
+            // content — and its content is absolutely positioned, so it has none: the
+            // scroller collapsed to 26px, every row with it, and the rows became a
+            // 26px-wide column of slivers that could not be clicked.
+            flex: 1,
+            minWidth: 0,
+          }}
         >
           <div style={{ height: virt.getTotalSize(), position: 'relative' }}>
             {virt.getVirtualItems().map((row) => {
@@ -219,10 +328,19 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
             })}
           </div>
         </div>
+        <LetterBar selected={letter} onSelect={setLetter} disabled={order !== 'name'} />
+        </div>
       )}
+      </div>
     </div>
   );
 }
+
+/**
+ * Thousands separators without depending on the container's locale — a WebView with no
+ * locale configured groups by nothing, and a channel count runs to five figures.
+ */
+const NUMBER = new Intl.NumberFormat('en-US');
 
 function ChannelRow({
   channel, guide, onTune, onToggleFavorite,
@@ -257,6 +375,14 @@ function ChannelRow({
         alignItems: 'center', padding: 'var(--sp-3)', textAlign: 'left',
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
         borderRadius: 'var(--r-md)', cursor: 'pointer', color: 'inherit',
+        // The height the virtualiser was told, not the height the content wants. Rows are
+        // absolutely positioned at multiples of `ROW_H`, so one that grows taller than
+        // that is drawn *over* the row below — and the row below, being later in the DOM,
+        // then swallows its clicks. Which is what happened the moment the group sidebar
+        // took 250px off this column and the longer channel names began to wrap.
+        height: ROW_H - 4,
+        boxSizing: 'border-box',
+        overflow: 'hidden',
       }}
     >
       <span
@@ -275,9 +401,24 @@ function ChannelRow({
       ) : <div style={{ width: 40 }} />}
 
       <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-          <strong style={{ fontSize: 'var(--fs-md)' }}>{channel.name}</strong>
-          {channel.quality && <Badge tone={channel.quality === '4K' ? 'accent' : 'neutral'}>{channel.quality}</Badge>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, minWidth: 0 }}>
+          {/* One line. A provider's channel names run to "UK: SKY SPORTS MAIN EVENT FHD
+              (1080p)", which wrapped as soon as this column narrowed. */}
+          <strong
+            style={{
+              fontSize: 'var(--fs-md)', whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', minWidth: 0,
+            }}
+          >
+            {channel.name}
+          </strong>
+          {channel.quality && (
+            <span style={{ flexShrink: 0 }}>
+              <Badge tone={channel.quality === '4K' ? 'accent' : 'neutral'}>
+                {channel.quality}
+              </Badge>
+            </span>
+          )}
         </div>
         <div
           style={{

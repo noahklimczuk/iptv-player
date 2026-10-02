@@ -1,8 +1,12 @@
 /**
- * Rail card with the Netflix expansion behaviour (README §8.3):
- * hover or focus scales the card ~1.35x, lifts it above its neighbours, pushes siblings
- * aside, and after a dwell delay plays a muted preview. Focus produces the identical
- * expansion so the whole thing works from a remote.
+ * Rail card with the Netflix expansion behaviour (README §8.3): hover or focus scales the
+ * card ~1.32x, lifts it above its neighbours, and after a dwell plays the muted trailer.
+ * Focus produces the identical expansion, so the whole thing works from a remote.
+ *
+ * It overlaps its neighbours rather than pushing them aside. A `transform` does not
+ * affect layout, so the siblings do not move — Netflix shifts them, and matching that
+ * means the rail owning which card is expanded rather than each card owning it. Worth
+ * doing; not done here, and the comment used to claim it was.
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
@@ -10,6 +14,7 @@ import type { CatalogItem } from '@shared/ipc';
 import { progressPct, remaining, runtime } from '@/lib/format';
 import { useUi } from '@/state/ui';
 import { Badge, IconButton, ProgressBar, Poster } from './Primitives';
+import { TrailerFrame } from './TrailerFrame';
 
 const PREVIEW_DELAY_MS = 700;
 
@@ -19,13 +24,22 @@ export interface CardProgress {
 }
 
 export const CatalogCard = memo(function CatalogCard({
-  item, index, progress, onOpen, onPlay, rank, showTitle, reason,
+  item, index, progress, onOpen, onPlay, onRemove, rank, showTitle, reason,
 }: {
   item: CatalogItem;
   index: number;
   progress?: CardProgress | null;
   onOpen: (item: CatalogItem) => void;
   onPlay: (item: CatalogItem) => void;
+  /**
+   * Take this off the rail it is on. Only Continue Watching passes one.
+   *
+   * A rail built from what you happened to start is the one rail that accumulates
+   * things you do not want: a film sampled for ten minutes, an episode left running
+   * while you fell asleep. Without a way to remove them they sit at the front of the
+   * home screen indefinitely, and the rail stops being about what you are watching.
+   */
+  onRemove?: (item: CatalogItem) => void;
   /**
    * Print the title under the poster.
    *
@@ -58,7 +72,9 @@ export const CatalogCard = memo(function CatalogCard({
   function enter() {
     if (!animations) return;
     setExpanded(true);
-    if (!hoverPreviews) return;
+    // Nothing to dwell towards without a trailer. `preview` used to be set for every
+    // card and drove a label reading "Preview playing" over a still poster.
+    if (!hoverPreviews || !item.trailerKey) return;
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setPreview(true), PREVIEW_DELAY_MS);
   }
@@ -110,6 +126,26 @@ export const CatalogCard = memo(function CatalogCard({
       >
         <div style={{ position: 'relative' }}>
           <Poster src={item.poster} alt={item.title} />
+
+          {/* Over the poster, which stays underneath: the trailer is 16:9 and a poster
+              is 2:3, so the frame covers the middle band and the artwork fills the rest.
+              Mounted only on the one expanded card — a rail of twenty iframes would be
+              twenty video players. */}
+          {preview && item.trailerKey && (
+            <div
+              style={{
+                position: 'absolute', left: 0, right: 0, top: '50%',
+                transform: 'translateY(-50%)', aspectRatio: '16 / 9',
+                overflow: 'hidden', background: '#000',
+              }}
+            >
+              <TrailerFrame
+                trailerKey={item.trailerKey}
+                muted
+                title={`Trailer for ${item.title}`}
+              />
+            </div>
+          )}
 
           {rank !== undefined && (
             <div
@@ -213,6 +249,14 @@ export const CatalogCard = memo(function CatalogCard({
                     icon="thumbUp" label="I like this" size={26}
                     onClick={(e) => e.stopPropagation()}
                   />
+                  {onRemove && (
+                    <IconButton
+                      icon="close"
+                      label={`Remove ${item.title} from Continue Watching`}
+                      size={26}
+                      onClick={(e) => { e.stopPropagation(); onRemove(item); }}
+                    />
+                  )}
                   <IconButton
                     icon="chevronDown" label="More info" size={26}
                     style={{ marginLeft: 'auto' }}
@@ -272,7 +316,7 @@ export const CatalogCard = memo(function CatalogCard({
                   </div>
                 )}
 
-                {preview && (
+                {preview && item.trailerKey && (
                   <div
                     style={{
                       marginTop: 6, fontSize: 9, color: 'var(--accent-2)',

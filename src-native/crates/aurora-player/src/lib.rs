@@ -7,6 +7,7 @@
 pub mod backend;
 pub mod error;
 pub mod state;
+pub mod watchdog;
 
 #[cfg(windows)]
 pub mod mpv;
@@ -14,6 +15,7 @@ pub mod mpv;
 pub use backend::{NullBackend, PlayerBackend};
 pub use error::{PlaybackError, PlayerError};
 pub use state::{Aspect, PlayerState, PlayerStatus, Track, TrackKind};
+pub use watchdog::{Phase, Verdict, Watchdog};
 
 /// Construct the best backend for this platform.
 pub fn create_backend() -> Box<dyn PlayerBackend> {

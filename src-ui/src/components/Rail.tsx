@@ -12,11 +12,17 @@ const CARD_W = 168;
 const GAP = 10;
 
 export function Rail({
-  rail, onOpen, onPlay,
+  rail, onOpen, onPlay, onRemove,
 }: {
   rail: RailData;
   onOpen: (i: CatalogItem) => void;
   onPlay: (i: CatalogItem) => void;
+  /**
+   * Take an item off this rail, where that means anything. Passed down to the cards and
+   * only ever supplied for Continue Watching — every other rail is derived from the
+   * library or from ratings, so there is nothing on it a person could remove.
+   */
+  onRemove?: (i: CatalogItem) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [atStart, setAtStart] = useState(true);
@@ -101,6 +107,7 @@ export function Rail({
                 reason={rail.reasons?.[`${item.kind}:${item.id}`]}
                 onOpen={onOpen}
                 onPlay={onPlay}
+                onRemove={onRemove}
               />
             </div>
           ))}

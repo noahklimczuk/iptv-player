@@ -521,6 +521,25 @@ ALTER TABLE series ADD COLUMN original_title TEXT;
 ALTER TABLE series ADD COLUMN tagline        TEXT;
 "#,
     },
+    Migration {
+        version: 10,
+        name: "trailers",
+        sql: r#"
+-- The trailer, as a YouTube key.
+--
+-- The hero billboard has claimed to be playing one since it was drawn: it prints "NOW
+-- PLAYING TRAILER", slowly zooms the backdrop, and offers a mute button wired to a
+-- state variable that drives no audio. Nothing fetched a trailer and nothing played
+-- one. The same label sits on the rail cards as "Preview playing".
+--
+-- A key rather than a URL: TMDB gives `site` and `key` separately, the embed address is
+-- built from the key, and storing a URL would mean reparsing it to get the key back for
+-- the iframe API. Nothing but YouTube is stored — TMDB lists Vimeo occasionally and
+-- there is no second player here to send it to.
+ALTER TABLE movies ADD COLUMN trailer_key TEXT;
+ALTER TABLE series ADD COLUMN trailer_key TEXT;
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 9;
+pub const LATEST_VERSION: u32 = 10;

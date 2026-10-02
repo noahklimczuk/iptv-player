@@ -69,6 +69,12 @@ test('a film you watched joins Continue Watching, because the app saved where yo
     .click();
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
   const cards = page.getByTestId('catalog-card');
+  // The heading is there before the grid is: `usePages` starts empty and the first page
+  // is a round trip away, so reading the cards on the strength of the heading alone
+  // caught zero of them about one run in three — and "no films are resumable" is a
+  // confusing way for that to be reported. The rail helper above waits for the same
+  // reason.
+  await expect(cards.first()).toBeVisible();
   const all = await titles(cards);
   const picked = all.find((t) => !before.includes(t)) ?? null;
   expect(picked, 'every film in the library was already resumable').not.toBeNull();

@@ -137,14 +137,14 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
           </div>
         </Field>
         <Field label="Animations" hint="Disables hover previews, trailer autoplay and transitions.">
-          <Button size="sm" onClick={ui.toggleAnimations}>
-            {ui.animations ? 'On' : 'Off'}
-          </Button>
+          <Toggle label="Animations" on={ui.animations} onToggle={ui.toggleAnimations} />
         </Field>
-        <Field label="Hover previews">
-          <Button size="sm" onClick={ui.toggleHoverPreviews}>
-            {ui.hoverPreviews ? 'On' : 'Off'}
-          </Button>
+        <Field label="Hover previews" hint="Plays a title's trailer when a card expands.">
+          <Toggle
+            label="Hover previews"
+            on={ui.hoverPreviews}
+            onToggle={ui.toggleHoverPreviews}
+          />
         </Field>
       </Section>
 
@@ -238,6 +238,32 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         {children}
       </div>
     </section>
+  );
+}
+
+/**
+ * An on/off control that says what it is for.
+ *
+ * These were bare buttons reading "On" — which is the whole of their accessible name, so
+ * a screen reader announced "On, button" twice in a row with nothing to distinguish the
+ * two, and neither carried the state as state. `role="switch"` with `aria-checked` is
+ * what the control actually is; the `Field` beside it supplies the visible label and this
+ * repeats it for anything that cannot see the layout.
+ */
+function Toggle({
+  label, on, onToggle,
+}: { label: string; on: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      size="sm"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      variant={on ? 'primary' : 'secondary'}
+      onClick={onToggle}
+    >
+      {on ? 'On' : 'Off'}
+    </Button>
   );
 }
 

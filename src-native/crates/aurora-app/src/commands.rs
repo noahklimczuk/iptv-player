@@ -224,6 +224,9 @@ pub struct MoviesArgs {
     /// Narrow by title, within whatever else is selected.
     #[serde(default)]
     pub query: Option<String>,
+    /// One letter, or `#` for everything that does not start with one.
+    #[serde(default)]
+    pub letter: Option<String>,
 }
 
 /// Everything a browse page can narrow by, before it becomes a query.
@@ -233,6 +236,7 @@ struct Browse {
     genre: Option<String>,
     category: Option<String>,
     query: Option<String>,
+    letter: Option<String>,
     limit: u32,
     offset: u32,
 }
@@ -251,6 +255,23 @@ fn browse_query(db: &aurora_db::rusqlite::Connection, b: Browse) -> Result<libra
         // match every title containing "", which is all of them — the same answer,
         // reached the slow way.
         query: b.query.filter(|q| !q.trim().is_empty()),
+        // Exactly one character, upper-cased, or `#`. Normalised here rather than
+        // trusted, because this reaches a SQL comparison: a UI that sent "Th" would
+        // otherwise match nothing and look broken, and one that sent a long string would
+        // be comparing a title's first letter against a sentence.
+        letter: b.letter.and_then(|l| {
+            let mut chars = l.trim().chars();
+            let first = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            if first == '#' {
+                return Some("#".to_string());
+            }
+            first
+                .is_alphabetic()
+                .then(|| first.to_uppercase().to_string())
+        }),
         limit: b.limit.clamp(1, 500),
         offset: b.offset,
         library: filtering::LibraryFilter::load(db)?,
@@ -270,6 +291,7 @@ pub fn library_movies(
             genre: args.genre,
             category: args.category,
             query: args.query,
+            letter: args.letter,
             limit: args.limit,
             offset: args.offset,
         },
@@ -287,6 +309,8 @@ pub struct SeriesArgs {
     pub category: Option<String>,
     #[serde(default)]
     pub query: Option<String>,
+    #[serde(default)]
+    pub letter: Option<String>,
     /// How the list is ordered. Series used to be locked to A–Z while films had four
     /// sorts, for no reason anybody could name.
     #[serde(default)]
@@ -306,6 +330,7 @@ pub fn library_series(
             genre: args.genre,
             category: args.category,
             query: args.query,
+            letter: args.letter,
             limit: args.limit,
             offset: args.offset,
         },
@@ -325,6 +350,8 @@ pub struct BrowseFacetsArgs {
     pub category: Option<String>,
     #[serde(default)]
     pub query: Option<String>,
+    #[serde(default)]
+    pub letter: Option<String>,
 }
 
 /// The shelves, the genres, and how many rows the current filters actually match.
@@ -359,6 +386,10 @@ pub fn library_browse_facets(
             genre: args.genre,
             category: args.category,
             query: args.query,
+            // The facets' count has to be the count of what is on screen: without the
+            // letter the heading said 117,508 while the grid showed the 4,312 films
+            // beginning with S.
+            letter: args.letter,
             limit: 1,
             offset: 0,
         },
@@ -731,6 +762,37 @@ pub fn window_fullscreen(window: tauri::Window, args: Option<FullscreenArgs>) ->
         .set_fullscreen(wanted)
         .map_err(|e| crate::AppError::Other(e.to_string()))?;
     Ok(wanted)
+}
+
+/// Show the window, now that there is something on it worth looking at.
+///
+/// The window is created hidden (`"visible": false`). It has to be, because it is also
+/// `"transparent": true` — the mpv surface composites behind the WebView2 and that is
+/// what makes it possible — and a transparent window with nothing painted in it yet is a
+/// hole straight through to the desktop. Aurora launched as a floating title bar over
+/// whatever happened to be behind it, for as long as WebView2 took to start, which is
+/// the slowest part of the launch and not a short time on a cold disk.
+///
+/// `index.html` paints a boot screen before any script runs, so by the time the UI calls
+/// this there is already something to reveal. The reveal is deliberately not waited on
+/// by anything: `main` shows the window regardless after a few seconds, because a UI
+/// that fails to boot must still produce a window somebody can close.
+///
+/// Idempotent. The fallback and this may both run, and in either order.
+#[tauri::command(async)]
+pub fn window_ready(window: tauri::Window) -> Result<()> {
+    let already = window.is_visible().unwrap_or(false);
+    window
+        .show()
+        .map_err(|e| crate::AppError::Other(e.to_string()))?;
+    if !already {
+        // Only on the transition. Stealing focus from whatever the person moved on to
+        // while waiting would be its own rudeness, but the first appearance of a window
+        // somebody launched should be the thing they are looking at.
+        let _ = window.set_focus();
+        tracing::info!("window revealed by the UI");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

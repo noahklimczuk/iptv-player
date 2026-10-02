@@ -84,10 +84,52 @@ body {
 
 .aurora-page { animation: aurora-page-in var(--t-base) var(--ease-out) both; }
 
+/* The boot screen's indeterminate bar. A sweep rather than a fill: there is no
+   percentage to be honest about, and this reads as "working" without claiming progress
+   it cannot measure. */
+@keyframes boot-sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(300%); }
+}
+
+.boot-sweep {
+  width: 33%;
+  height: 100%;
+  border-radius: var(--r-full);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  animation: boot-sweep 1.1s var(--ease) infinite;
+}
+
+/* Motion off, by either route.
+ *
+ * `[data-motion='off']` is set on `<html>` by `state/ui.ts` from the Animations switch,
+ * and was read by nothing at all: the switch moved, the attribute changed, and every CSS
+ * animation on the screen carried on — the page fade, the skeleton shimmer, the button
+ * lift. Only the framer-motion durations, which are decided in JavaScript, were ever
+ * turned off by it. So "Animations: Off" visibly did about half of what it said.
+ *
+ * The OS preference is honoured here as well as in the store's initial value, because the
+ * store's value can be toggled back on afterwards and the preference should not need a
+ * reload to be re-applied. `:root:not([data-motion='on'])` is what makes the switch able
+ * to override it: somebody who has asked their system for less motion and then asked
+ * this app for more gets what they asked this app for.
+ */
+:root[data-motion='off'] .aurora-page { animation-duration: 1ms; }
+:root[data-motion='off'] .aurora-btn:hover:not(:disabled),
+:root[data-motion='off'] .aurora-btn:active:not(:disabled) { transform: none; }
+/* The placeholder stays, its sweep stops: a still skeleton still reads as "not here
+   yet", which is the whole job. */
+:root[data-motion='off'] .skeleton::after { animation: none; }
+/* Still visibly a loading bar, just not a moving one: full width and static, so the
+   screen does not look like it has finished. */
+:root[data-motion='off'] .boot-sweep { animation: none; width: 100%; opacity: 0.6; }
+
 @media (prefers-reduced-motion: reduce) {
-  .aurora-page { animation-duration: 1ms; }
-  .aurora-btn:hover:not(:disabled),
-  .aurora-btn:active:not(:disabled) { transform: none; }
+  :root:not([data-motion='on']) .aurora-page { animation-duration: 1ms; }
+  :root:not([data-motion='on']) .aurora-btn:hover:not(:disabled),
+  :root:not([data-motion='on']) .aurora-btn:active:not(:disabled) { transform: none; }
+  :root:not([data-motion='on']) .skeleton::after { animation: none; }
+  :root:not([data-motion='on']) .boot-sweep { animation: none; width: 100%; opacity: 0.6; }
 }
 
 .no-scrollbar { scrollbar-width: none; }

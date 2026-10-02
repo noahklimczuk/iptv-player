@@ -21,11 +21,12 @@
         "fullscreen": false,
         "transparent": true,
         "decorations": true,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "visible": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: https: http: asset: http://asset.localhost; media-src 'self' https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'",
+      "csp": "default-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; img-src 'self' data: https: http: asset: http://asset.localhost; media-src 'self' https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": []
