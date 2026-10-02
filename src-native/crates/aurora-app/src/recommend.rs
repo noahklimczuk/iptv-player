@@ -60,6 +60,9 @@ pub fn pick(conn: &Connection, profile_id: i64, now: i64, limit: usize) -> Resul
         &taste.top_genres(TASTE_BUCKETS),
         PER_BUCKET,
         EXPLORE,
+        // A rail is a list like any other: what "English only" hides from browsing it
+        // must also hide from the first thing on the home screen.
+        &aurora_db::repo::filtering::LibraryFilter::load(conn)?,
     )?;
 
     let seen: HashSet<(Kind, i64)> = store::already_seen(conn, profile_id)?.into_iter().collect();

@@ -33,6 +33,14 @@ interface MarksState {
   liked: Set<string>;
   /** The profile these belong to, so a switch reloads rather than showing the last one's. */
   profileId: number | null;
+  /**
+   * Whether the first load has finished, however it finished.
+   *
+   * The shell waits for this before it paints. Arriving afterwards meant every plus on
+   * every card became a tick a moment after the grid appeared — and re-rendered a hundred
+   * and twenty cards to do it, under whatever the pointer was already on.
+   */
+  loaded: boolean;
   load: (profileId: number) => Promise<void>;
   toggleMyList: (item: CatalogItem) => void;
   toggleLiked: (item: CatalogItem) => void;
@@ -51,6 +59,7 @@ export const useMarks = create<MarksState>((set, get) => ({
   myList: new Set(),
   liked: new Set(),
   profileId: null,
+  loaded: false,
 
   load: async (profileId) => {
     try {
@@ -64,7 +73,7 @@ export const useMarks = create<MarksState>((set, get) => ({
       // case is a tick that starts in the wrong state until the next load.
       report('Could not read your lists')(e);
     } finally {
-      set({ profileId });
+      set({ profileId, loaded: true });
     }
   },
 

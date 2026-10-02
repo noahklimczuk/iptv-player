@@ -101,7 +101,10 @@ export default function App() {
   const profileId = profile.active?.id ?? 0;
 
   // My List and the likes, once per profile. Every plus and every thumb on every screen
-  // reads them, so they are fetched here rather than by each card.
+  // reads them, so they are fetched here rather than by each card — and waited for below,
+  // because a set that lands after the grid does turns every plus into a tick in front of
+  // the viewer and re-renders every card on screen to do it.
+  const marksLoaded = useMarks((s) => s.loaded);
   useEffect(() => {
     if (profileId) void useMarks.getState().load(profileId);
   }, [profileId]);
@@ -306,7 +309,7 @@ export default function App() {
   // `providersLoading` rather than `providers === null`: a refusal also ends the wait,
   // because `useCommand` has already reported it and the setup wizard is the right
   // answer to "there are no providers that we know of".
-  if (providersLoading || !profile.loaded) {
+  if (providersLoading || !profile.loaded || (profileId > 0 && !marksLoaded)) {
     return <BootScreen label="Opening your library…" />;
   }
 

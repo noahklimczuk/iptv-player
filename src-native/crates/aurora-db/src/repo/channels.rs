@@ -212,12 +212,22 @@ fn row_to_channel(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelRow> {
     })
 }
 
-pub fn groups(conn: &Connection) -> Result<Vec<(String, i64)>> {
-    let mut stmt = conn.prepare(
+/// The channel groups, with how many channels are in each — after the library filters.
+///
+/// Filtered here as well as in [`list`], because these counts are the sidebar: a group
+/// offering 482 channels that opens onto 120 is two screens disagreeing about what the
+/// library holds, and "English only" or collapsed duplicates is exactly the sort of thing
+/// that makes them disagree by a factor of four.
+pub fn groups(
+    conn: &Connection,
+    filter: &crate::repo::filtering::LibraryFilter,
+) -> Result<Vec<(String, i64)>> {
+    let visible = filter.where_sql(crate::repo::filtering::Kind::Live);
+    let mut stmt = conn.prepare(&format!(
         "SELECT COALESCE(custom_group, group_title) AS g, count(*)
-         FROM channels WHERE hidden = 0 AND g IS NOT NULL
-         GROUP BY g ORDER BY g",
-    )?;
+         FROM channels WHERE hidden = 0 AND g IS NOT NULL{visible}
+         GROUP BY g ORDER BY g"
+    ))?;
     let rows = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -643,8 +653,55 @@ mod tests {
         let a = entry("A", Some(1));
         let b = entry("B", Some(2));
         upsert_batch(&mut conn, p, &[("a".into(), &a), ("b".into(), &b)], 0).unwrap();
-        let g = groups(&conn).unwrap();
+        let g = groups(&conn, &crate::repo::filtering::LibraryFilter::default()).unwrap();
         assert_eq!(g, vec![("News".to_string(), 2)]);
+    }
+
+    /// The count in the sidebar and the list it opens have to be the same library.
+    ///
+    /// They were two different questions: `list` was read through the library filter and
+    /// `groups` was not, so "English only" left a group advertising channels it would not
+    /// then show — by a factor of four on a subscription that carries every country.
+    #[test]
+    fn a_group_counts_what_the_filter_would_actually_show() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let english = entry("BBC One", Some(1));
+        let french = entry("TF1", Some(2));
+        upsert_batch(
+            &mut conn,
+            p,
+            &[("en".into(), &english), ("fr".into(), &french)],
+            0,
+        )
+        .unwrap();
+        // A playlist entry carries no language; the classifier writes one onto the row
+        // after import (migration 8), which is what the filter reads.
+        conn.execute(
+            "UPDATE channels SET lang_code = CASE name WHEN 'BBC One' THEN 'en' ELSE 'fr' END",
+            [],
+        )
+        .unwrap();
+
+        let english_only = crate::repo::filtering::LibraryFilter {
+            english_only: true,
+            ..Default::default()
+        };
+        let counted = groups(&conn, &english_only).unwrap();
+        let listed = list(
+            &conn,
+            &ChannelFilter {
+                library: english_only,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            counted,
+            vec![("News".to_string(), listed.len() as i64)],
+            "the sidebar promised {counted:?} and the list has {} in it",
+            listed.len()
+        );
     }
 
     #[test]

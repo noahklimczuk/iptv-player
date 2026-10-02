@@ -152,22 +152,32 @@ pub fn already_seen(conn: &Connection, profile_id: i64) -> Result<Vec<(Kind, i64
 ///
 /// `hidden` rows are excluded throughout: the viewer has said they do not want to see
 /// them, and a recommendation is the most annoying possible place for one to return.
+///
+/// The library filters are applied for the same reason, and were not. "English only" and
+/// collapsed duplicates governed every list in the app and not this one, so a viewer who
+/// had asked to be shown English titles was still recommended French ones — on the home
+/// screen, which is the first thing they see. A rail is a list like any other.
 pub fn candidates(
     conn: &Connection,
     categories: &[String],
     genres: &[String],
     per_bucket: u32,
     explore: u32,
+    filter: &crate::repo::filtering::LibraryFilter,
 ) -> Result<Vec<Candidate>> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
 
-    for (table, kind) in [("movies", Kind::Movie), ("series", Kind::Series)] {
+    for (table, kind, filter_kind) in [
+        ("movies", Kind::Movie, crate::repo::filtering::Kind::Movies),
+        ("series", Kind::Series, crate::repo::filtering::Kind::Series),
+    ] {
+        let visible = filter.where_sql(filter_kind);
         // Each shelf the viewer watches. `group_title` is compared case-insensitively
         // because the taste profile lowercases everything it stores.
         for category in categories {
             let sql = format!(
-                "{} WHERE hidden = 0 AND LOWER(group_title) = ?1 {ORDER} LIMIT ?2",
+                "{} WHERE hidden = 0 AND LOWER(group_title) = ?1{visible} {ORDER} LIMIT ?2",
                 select(table),
                 ORDER = ORDER_BY,
             );
@@ -185,7 +195,8 @@ pub fn candidates(
         // `LIKE` the browse filter uses.
         for genre in genres {
             let sql = format!(
-                "{} WHERE hidden = 0 AND LOWER(genres) LIKE '%\"' || ?1 || '\"%' {ORDER} LIMIT ?2",
+                "{} WHERE hidden = 0 AND LOWER(genres) LIKE '%\"' || ?1 || '\"%'{visible} \
+                 {ORDER} LIMIT ?2",
                 select(table),
                 ORDER = ORDER_BY,
             );
@@ -199,7 +210,7 @@ pub fn candidates(
         let sql = format!(
             "{} WHERE hidden = 0
                AND ( (genres IS NOT NULL AND genres != '' AND genres != '[]')
-                     OR (group_title IS NOT NULL AND group_title != '') )
+                     OR (group_title IS NOT NULL AND group_title != '') ){visible}
              {ORDER} LIMIT ?1",
             select(table),
             ORDER = ORDER_BY,
@@ -450,7 +461,15 @@ mod tests {
             [],
         )
         .unwrap();
-        let pool = candidates(&conn, &[], &[], 100, 100).unwrap();
+        let pool = candidates(
+            &conn,
+            &[],
+            &[],
+            100,
+            100,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         let shelved = pool.iter().find(|c| c.title == "Nothing").unwrap();
         assert!(shelved.genres.is_empty());
         assert_eq!(shelved.category.as_deref(), Some("EN ✪ BOX OFFICE"));
@@ -480,7 +499,15 @@ mod tests {
     #[test]
     fn candidates_skip_rows_with_nothing_to_go_on() {
         let conn = seeded();
-        let pool = candidates(&conn, &[], &[], 100, 100).unwrap();
+        let pool = candidates(
+            &conn,
+            &[],
+            &[],
+            100,
+            100,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         let titles: Vec<_> = pool.iter().map(|c| c.title.as_str()).collect();
         assert!(titles.contains(&"Alien"));
         assert!(titles.contains(&"The Wire"));
@@ -497,14 +524,30 @@ mod tests {
         let conn = seeded();
         conn.execute("UPDATE movies SET hidden = 1 WHERE id = 1", [])
             .unwrap();
-        let pool = candidates(&conn, &[], &[], 100, 100).unwrap();
+        let pool = candidates(
+            &conn,
+            &[],
+            &[],
+            100,
+            100,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         assert!(!pool.iter().any(|c| c.title == "Alien"));
     }
 
     #[test]
     fn the_explore_pool_is_capped_per_kind_and_takes_the_best_first() {
         let conn = seeded();
-        let pool = candidates(&conn, &[], &[], 1, 1).unwrap();
+        let pool = candidates(
+            &conn,
+            &[],
+            &[],
+            1,
+            1,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         // One film and one show, and the film is the better-rated of the two eligible.
         assert_eq!(pool.len(), 2, "{pool:?}");
         assert_eq!(pool[0].title, "Heat", "8.3 outranks 8.1");
@@ -524,14 +567,71 @@ mod tests {
         .unwrap();
 
         // An explore pool of one cannot reach it: `Heat` is better rated.
-        let general = candidates(&conn, &[], &[], 0, 1).unwrap();
+        let general = candidates(
+            &conn,
+            &[],
+            &[],
+            0,
+            1,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         assert!(!general.iter().any(|c| c.title == "Alien"), "{general:?}");
 
         // Naming the shelf does.
-        let directed = candidates(&conn, &["nl ✪ films [sub]".into()], &[], 10, 1).unwrap();
+        let directed = candidates(
+            &conn,
+            &["nl ✪ films [sub]".into()],
+            &[],
+            10,
+            1,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         assert!(
             directed.iter().any(|c| c.title == "Alien"),
             "the watched shelf must be represented: {directed:?}"
+        );
+    }
+
+    /// The home screen is the first thing a viewer sees, and it was the one list in the
+    /// app that ignored their filters: "English only" governed browsing, searching and
+    /// Live TV, and still recommended French films.
+    #[test]
+    fn recommendations_obey_the_library_filters() {
+        use crate::repo::filtering::LibraryFilter;
+
+        let conn = seeded();
+        conn.execute("UPDATE movies SET lang_code = 'fr' WHERE id = 1", [])
+            .unwrap();
+        conn.execute("UPDATE movies SET lang_code = 'en' WHERE id != 1", [])
+            .unwrap();
+
+        let unfiltered = candidates(&conn, &[], &[], 0, 50, &LibraryFilter::default()).unwrap();
+        assert!(
+            unfiltered.iter().any(|c| c.title == "Alien"),
+            "with nothing filtered it should be there: {unfiltered:?}"
+        );
+
+        let english = candidates(
+            &conn,
+            &[],
+            &[],
+            0,
+            50,
+            &LibraryFilter {
+                english_only: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !english.iter().any(|c| c.title == "Alien"),
+            "a French film was recommended under English only: {english:?}"
+        );
+        assert!(
+            english.iter().any(|c| c.title == "Heat"),
+            "and the English ones must still be there: {english:?}"
         );
     }
 
@@ -540,7 +640,15 @@ mod tests {
         let conn = seeded();
         conn.execute("UPDATE movies SET rating = NULL WHERE id = 1", [])
             .unwrap();
-        let directed = candidates(&conn, &[], &["horror".into()], 10, 0).unwrap();
+        let directed = candidates(
+            &conn,
+            &[],
+            &["horror".into()],
+            10,
+            0,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         assert!(
             directed.iter().any(|c| c.title == "Alien"),
             "Alien is tagged Horror: {directed:?}"
@@ -561,6 +669,7 @@ mod tests {
             &["horror".into()],
             10,
             10,
+            &crate::repo::filtering::LibraryFilter::default(),
         )
         .unwrap();
         let aliens = pool.iter().filter(|c| c.title == "Alien").count();
@@ -572,7 +681,15 @@ mod tests {
         let conn = seeded();
         conn.execute("UPDATE movies SET genres = 'not json' WHERE id = 1", [])
             .unwrap();
-        let pool = candidates(&conn, &[], &[], 100, 100).unwrap();
+        let pool = candidates(
+            &conn,
+            &[],
+            &[],
+            100,
+            100,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
         let alien = pool.iter().find(|c| c.title == "Alien").unwrap();
         assert!(alien.genres.is_empty());
         assert!(pool.iter().any(|c| c.title == "Heat"), "the rest survives");
