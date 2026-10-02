@@ -90,7 +90,11 @@ export function HeroBillboard({
         overflow: 'hidden',
       }}
     >
-      <AnimatePresence mode="wait">
+      {/* A crossfade, not a handover. `mode="wait"` held the next backdrop until the
+          previous one had finished leaving, and both are `position: absolute` — so every
+          rotation went through half a second of empty billboard with the title text
+          floating over nothing. Overlapping them is what a dissolve is. */}
+      <AnimatePresence>
         <motion.div
           key={item.id}
           initial={{ opacity: 0, scale: 1 }}

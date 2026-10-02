@@ -1,8 +1,12 @@
 /**
- * Rail card with the Netflix expansion behaviour (README §8.3):
- * hover or focus scales the card ~1.35x, lifts it above its neighbours, pushes siblings
- * aside, and after a dwell delay plays a muted preview. Focus produces the identical
- * expansion so the whole thing works from a remote.
+ * Rail card with the Netflix expansion behaviour (README §8.3): hover or focus scales the
+ * card ~1.32x, lifts it above its neighbours, and after a dwell plays the muted trailer.
+ * Focus produces the identical expansion, so the whole thing works from a remote.
+ *
+ * It overlaps its neighbours rather than pushing them aside. A `transform` does not
+ * affect layout, so the siblings do not move — Netflix shifts them, and matching that
+ * means the rail owning which card is expanded rather than each card owning it. Worth
+ * doing; not done here, and the comment used to claim it was.
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
