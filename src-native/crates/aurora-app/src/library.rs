@@ -106,6 +106,7 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
         genre: None,
         category: None,
         query: None,
+        letter: None,
         limit: RAIL_SIZE,
         offset: 0,
         library: filters,
@@ -221,6 +222,7 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
         &library::BrowseQuery {
             category: None,
             query: None,
+            letter: None,
             sort: library::MovieSort::Title,
             genre: None,
             limit: RAIL_SIZE,

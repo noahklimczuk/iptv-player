@@ -19,10 +19,19 @@
  *
  * **The rows did not line up.** Titles wrap to one or two lines, so every row started
  * at a different height and the grid looked broken. The cards are a fixed height now.
+ *
+ * **And the categories were a strip.** Eight chips, with the other 194 behind a dropdown
+ * labelled "All categories" — so the structure that is the only structure a library
+ * without a TMDB key has was almost entirely out of sight. They are a sidebar now, with
+ * their counts, a filter box, and the selected one staying visible however far down the
+ * posters you have scrolled. The A–Z bar beside the grid is the other half of the same
+ * problem: a category of four thousand films is still four thousand films.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowseSort, CatalogItem } from '@shared/ipc';
 import { CatalogCard } from '@/components/CatalogCard';
+import { GroupSidebar } from '@/components/GroupSidebar';
+import { LetterBar } from '@/components/LetterBar';
 import { Button, EmptyState, Select, Skeleton, TextField } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { usePages } from '@/hooks/usePages';
@@ -36,9 +45,6 @@ const PAGE = 120;
 
 /** How long typing settles before the library is asked. */
 const SEARCH_DEBOUNCE_MS = 300;
-
-/** How many shelves the bar offers before the rest go behind "All". */
-const SHELF_CHIPS = 8;
 
 /**
  * Thousands separators, without depending on the container's locale.
@@ -68,6 +74,15 @@ export function BrowsePage({
   const [category, setCategory] = useState<string | undefined>();
   const [typed, setTyped] = useState('');
   const [query, setQuery] = useState<string | undefined>();
+  const [letter, setLetter] = useState<string | undefined>();
+
+  // The letter bar only means anything against an alphabetical list: picking "W" while
+  // sorted by year would narrow to the Ws and then order them by year, which is a result
+  // nobody asked for from a control that looks like an index.
+  const alphabetical = sort === 'title';
+  useEffect(() => {
+    if (!alphabetical) setLetter(undefined);
+  }, [alphabetical]);
 
   // Typing filters a library of a hundred thousand rows, so it waits for a pause.
   useEffect(() => {
@@ -78,27 +93,31 @@ export function BrowsePage({
     return () => window.clearTimeout(id);
   }, [typed]);
 
-  const { data: facets } = useCommand(
+  const { data: facets, loading: facetsLoading } = useCommand(
     'library.browseFacets',
-    { kind: mode, genre, category, query },
-    [mode, genre, category, query],
+    { kind: mode, genre, category, query, letter },
+    [mode, genre, category, query, letter],
   );
 
   const page = useCallback(
     async (limit: number, offset: number): Promise<CatalogItem[]> => (
       mode === 'movies'
-        ? (await invoke('library.movies', { sort, limit, offset, genre, category, query }))
+        ? (await invoke('library.movies', {
+          sort, limit, offset, genre, category, query, letter,
+        }))
           .map((m) => ({ kind: 'movie' as const, ...m }))
-        : (await invoke('library.series', { sort, limit, offset, genre, category, query }))
+        : (await invoke('library.series', {
+          sort, limit, offset, genre, category, query, letter,
+        }))
           .map((s) => ({ kind: 'series' as const, ...s }))
     ),
-    [mode, sort, genre, category, query],
+    [mode, sort, genre, category, query, letter],
   );
 
   const { items, loading, done, loadMore } = usePages<CatalogItem>(
     page,
     PAGE,
-    [mode, sort, genre, category, query],
+    [mode, sort, genre, category, query, letter],
     mode === 'movies' ? 'your films' : 'your series',
   );
 
@@ -116,17 +135,40 @@ export function BrowsePage({
     return () => io.disconnect();
   }, [done, loadMore, items.length]);
 
-  const shelves = facets?.categories ?? [];
-  const chips = useMemo(() => shelves.slice(0, SHELF_CHIPS), [shelves]);
-  const rest = useMemo(() => shelves.slice(SHELF_CHIPS), [shelves]);
-  const filtered = Boolean(genre || category || query);
+  const shelves = useMemo(() => facets?.categories ?? [], [facets]);
+  const filtered = Boolean(genre || category || query || letter);
   const total = facets?.total;
 
   return (
-    <div style={{ padding: 'var(--sp-5) var(--sp-6) var(--sp-8)' }}>
+    <div
+      style={{
+        padding: 'var(--sp-5) var(--sp-6) var(--sp-8)',
+        display: 'flex',
+        gap: 'var(--sp-5)',
+        alignItems: 'flex-start',
+      }}
+    >
+      <GroupSidebar
+        label={mode === 'movies' ? 'Film categories' : 'Series categories'}
+        groups={shelves}
+        selected={category}
+        onSelect={setCategory}
+        loading={facetsLoading}
+        pinned={[{
+          label: 'All',
+          value: undefined,
+          count: category || letter || query || genre ? undefined : total,
+          icon: mode === 'movies' ? 'film' : 'stack',
+          active: !category,
+        }]}
+      />
+
+      <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)' }}>
         <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
-          {mode === 'movies' ? 'Movies' : 'Series'}
+          {/* The category, where one is chosen: a heading reading "Movies" while the grid
+              shows one shelf of them leaves nothing on screen saying which. */}
+          {category ?? (mode === 'movies' ? 'Movies' : 'Series')}
         </h1>
         {/* The real total for these filters, counted by the host. This used to be
             `items.length`, which on the first page was the page size and after that
@@ -157,6 +199,14 @@ export function BrowsePage({
           style={{ width: 220 }}
         />
 
+        {/* The active letter, where it can be cleared. The bar itself is at the far edge
+            of the grid, which is the wrong place to look for "how do I undo this". */}
+        {letter && (
+          <Button size="sm" variant="primary" icon="close" onClick={() => setLetter(undefined)}>
+            {letter === '#' ? '0–9' : letter}
+          </Button>
+        )}
+
         {/* Genres only when there are any. An empty dropdown labelled "All genres" is
             a control that looks broken and is, on every library without a TMDB key. */}
         {(facets?.genres.length ?? 0) > 0 && (
@@ -166,18 +216,6 @@ export function BrowsePage({
             options={facets!.genres.map((g) => ({ value: g, label: g }))}
             value={genre}
             onChange={setGenre}
-          />
-        )}
-
-        {rest.length > 0 && (
-          <Select
-            label="Category"
-            placeholder="All categories"
-            options={shelves.map((c) => ({
-              value: c.name, label: c.name, hint: NUMBER.format(c.count),
-            }))}
-            value={category}
-            onChange={setCategory}
           />
         )}
 
@@ -194,100 +232,63 @@ export function BrowsePage({
         </div>
       </div>
 
-      {chips.length > 0 && (
-        <div
-          data-testid="browse-categories"
-          style={{
-            display: 'flex', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)',
-            overflowX: 'auto', paddingBottom: 4,
-          }}
-        >
-          <Chip active={!category} onClick={() => setCategory(undefined)}>All</Chip>
-          {chips.map((c) => (
-            <Chip
-              key={c.name}
-              active={category === c.name}
-              onClick={() => setCategory(category === c.name ? undefined : c.name)}
-            >
-              {c.name}
-              <span style={{ opacity: 0.55, marginLeft: 6, fontVariantNumeric: 'tabular-nums' }}>
-                {NUMBER.format(c.count)}
-              </span>
-            </Chip>
-          ))}
-        </div>
-      )}
+      <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Only for the first page. Replacing a screenful of posters with skeletons
+              every time another page arrives would make scrolling flicker. */}
+          {loading && items.length === 0 && (
+            <div style={gridStyle}>
+              {Array.from({ length: 24 }, (_, i) => <Skeleton key={i} h={CARD_H} />)}
+            </div>
+          )}
 
-      {/* Only for the first page. Replacing a screenful of posters with skeletons
-          every time another page arrives would make scrolling flicker. */}
-      {loading && items.length === 0 && (
-        <div style={gridStyle}>
-          {Array.from({ length: 24 }, (_, i) => <Skeleton key={i} h={CARD_H} />)}
-        </div>
-      )}
+          {!loading && items.length === 0 && (
+            <EmptyState
+              icon="film"
+              title={filtered ? 'Nothing matches those filters' : 'Nothing here yet'}
+              action={filtered ? (
+                <Button
+                  onClick={() => {
+                    setGenre(undefined);
+                    setCategory(undefined);
+                    setLetter(undefined);
+                    setTyped('');
+                  }}
+                >
+                  Clear filters
+                </Button>
+              ) : undefined}
+            />
+          )}
 
-      {!loading && items.length === 0 && (
-        <EmptyState
-          icon="film"
-          title={filtered ? 'Nothing matches those filters' : 'Nothing here yet'}
-          action={filtered ? (
-            <Button
-              onClick={() => { setGenre(undefined); setCategory(undefined); setTyped(''); }}
-            >
-              Clear filters
-            </Button>
-          ) : undefined}
-        />
-      )}
-
-      <div style={gridStyle}>
-        {items.map((item, i) => (
-          // Fixed height, so a two-line title does not push the row below it out of
-          // alignment — which is what made a grid of a hundred posters look broken.
-          <div key={`${item.kind}-${item.id}`} style={{ height: CARD_H }}>
-            <CatalogCard item={item} index={i} onOpen={onOpen} onPlay={onPlay} showTitle />
+          <div style={gridStyle}>
+            {items.map((item, i) => (
+              // Fixed height, so a two-line title does not push the row below it out of
+              // alignment — which is what made a grid of a hundred posters look broken.
+              <div key={`${item.kind}-${item.id}`} style={{ height: CARD_H }}>
+                <CatalogCard item={item} index={i} onOpen={onOpen} onPlay={onPlay} showTitle />
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {items.length > 0 && !done && (
-        <div
-          ref={sentinel}
-          data-testid="browse-sentinel"
-          style={{
-            padding: 'var(--sp-6)', textAlign: 'center', color: 'var(--text-faint)',
-            fontSize: 'var(--fs-sm)',
-          }}
-        >
-          Loading more…
+          {items.length > 0 && !done && (
+            <div
+              ref={sentinel}
+              data-testid="browse-sentinel"
+              style={{
+                padding: 'var(--sp-6)', textAlign: 'center', color: 'var(--text-faint)',
+                fontSize: 'var(--fs-sm)',
+              }}
+            >
+              Loading more…
+            </div>
+          )}
         </div>
-      )}
-    </div>
-  );
-}
 
-function Chip({
-  active, onClick, children,
-}: {
-  active: boolean; onClick: () => void; children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      data-testid="browse-category"
-      style={{
-        flexShrink: 0, padding: '6px 13px', borderRadius: 'var(--r-full)',
-        fontSize: 'var(--fs-sm)', fontWeight: 600, cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        border: `1px solid ${active ? 'var(--text)' : 'var(--border-strong)'}`,
-        background: active ? 'var(--text)' : 'transparent',
-        color: active ? 'var(--text-invert)' : 'var(--text-muted)',
-        transition: 'all var(--t-fast) var(--ease)',
-      }}
-    >
-      {children}
-    </button>
+        <LetterBar selected={letter} onSelect={setLetter} disabled={!alphabetical} />
+      </div>
+      </div>
+    </div>
   );
 }
 

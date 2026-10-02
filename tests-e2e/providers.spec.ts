@@ -121,13 +121,18 @@ test('a channel can be favourited, and the filter then shows only it', async ({ 
   // Start from a clean slate: turn off whatever the fixtures shipped as favourited.
   // One at a time, re-querying each round — the list is re-read from the host after
   // every toggle, so a batch of handles collected up front goes stale.
-  await page.getByRole('button', { name: 'Favorites' }).click();
+  await page.getByRole('navigation', { name: 'Channel groups' })
+    .getByRole('button', { name: 'Favourites' }).click();
   const filled = page.getByRole('button', { name: /Remove .* from favourites/ });
   for (let guard = 0; guard < 40 && (await filled.count()) > 0; guard += 1) {
     await filled.first().click();
   }
   await expect(filled).toHaveCount(0);
-  await page.getByRole('button', { name: 'Favorites' }).click();
+  // Back to the whole list by choosing it. The sidebar entry is a selection rather than
+  // the toggle the old button was, so pressing Favourites again stays on Favourites —
+  // which, having just emptied it, is an empty list.
+  await page.getByRole('navigation', { name: 'Channel groups' })
+    .getByRole('button', { name: 'All channels' }).click();
   await expect(rows.first()).toBeVisible();
 
   const heart = page.getByRole('button', { name: /Add .* to favourites/ }).first();
@@ -140,7 +145,8 @@ test('a channel can be favourited, and the filter then shows only it', async ({ 
     page.getByRole('button', { name: `Remove ${name} from favourites` }),
   ).toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('button', { name: 'Favorites' }).click();
+  await page.getByRole('navigation', { name: 'Channel groups' })
+    .getByRole('button', { name: 'Favourites' }).click();
   await expect(rows).toHaveCount(1);
   await expect(page.getByTestId('channel-row').first()).toContainText(name);
 

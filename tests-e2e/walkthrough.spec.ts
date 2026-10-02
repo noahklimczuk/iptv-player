@@ -105,12 +105,13 @@ test('an empty filter result says so on every list screen', async ({ page }) => 
   // Favourites with nothing favourited is the reachable empty state on Live TV.
   await page.goto('/#/live');
   await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
-  await page.getByRole('button', { name: 'Favorites' }).click();
+  await page.getByRole('navigation', { name: 'Channel groups' })
+    .getByRole('button', { name: 'Favourites' }).click();
   const filled = page.getByRole('button', { name: /Remove .* from favourites/ });
   for (let guard = 0; guard < 40 && (await filled.count()) > 0; guard += 1) {
     await filled.first().click();
   }
-  await expect(page.getByText('No favorite channels yet')).toBeVisible();
+  await expect(page.getByText('No favourite channels yet')).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/walkthrough-empty-favorites.png` });
 
   // A genre nothing matches is the one on Movies.

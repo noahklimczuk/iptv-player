@@ -173,6 +173,16 @@ pub struct BrowseQuery {
     /// a list somebody is already looking at, where the ranked cross-library search
     /// behind Ctrl-K is a different question with a different answer.
     pub query: Option<String>,
+    /// Show only titles starting with this letter, or — for `#` — starting with anything
+    /// that is not one.
+    ///
+    /// A filter rather than a scroll position, because the list is paged: 20,000 films
+    /// sorted A–Z arrive 120 at a time, so "jump to W" cannot be answered on the client
+    /// at all, and answering it by fetching every page up to W would read the whole
+    /// library to display one screen of it.
+    /// One character, or `#`. A `String` rather than a `char` because it is bound as a
+    /// SQL parameter, and because the command layer takes it from JSON.
+    pub letter: Option<String>,
     pub limit: u32,
     pub offset: u32,
     pub library: crate::repo::filtering::LibraryFilter,
@@ -207,6 +217,30 @@ fn browse_filters<'a>(
             " AND COALESCE({table}.custom_title, {table}.title) LIKE '%' || :query || '%'"
         ));
         params.push((":query", query));
+    }
+    // The letter is matched against the title as shown, which is the same expression the
+    // A–Z sort orders by — otherwise the bar would filter on one name and the list would
+    // be sorted by another, and "W" could land among the Vs.
+    //
+    // `#` means everything else: a provider's library is full of titles starting with a
+    // digit, a bracket or a language tag, and they have to be reachable by something.
+    // Compared with `upper()` rather than a `LIKE` prefix because `LIKE` on a column with
+    // no index would be no faster and the intent is clearer.
+    match q.letter.as_deref() {
+        Some("#") => {
+            let shown = format!("COALESCE({table}.custom_title, {table}.title)");
+            sql.push_str(&format!(
+                " AND (upper(substr({shown}, 1, 1)) < 'A' OR upper(substr({shown}, 1, 1)) > 'Z')"
+            ));
+        }
+        Some(_) => {
+            sql.push_str(&format!(
+                " AND upper(substr(COALESCE({table}.custom_title, {table}.title), 1, 1)) \
+                   = upper(:letter)"
+            ));
+            params.push((":letter", &q.letter));
+        }
+        None => {}
     }
     (sql, params)
 }
@@ -739,6 +773,94 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
 #[cfg(test)]
 mod tests {
+    /// A library with titles across the alphabet, plus the ones a provider's naming
+    /// actually produces: digits, brackets, and a language tag on the front.
+    fn lettered_library() -> crate::rusqlite::Connection {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for (id, title) in [
+            (1, "Arrival"),
+            (2, "Alien"),
+            (3, "Blade Runner"),
+            (4, "the quiet hour"),
+            (5, "2001: A Space Odyssey"),
+            (6, "[4K] Dune"),
+            (7, "Zodiac"),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 'https://example.com/m.mkv', 0)",
+                params![id, format!("m{id}"), title],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    fn by_letter(conn: &crate::rusqlite::Connection, letter: Option<&str>) -> Vec<String> {
+        let q = BrowseQuery {
+            sort: MovieSort::Title,
+            genre: None,
+            category: None,
+            query: None,
+            letter: letter.map(str::to_string),
+            limit: 100,
+            offset: 0,
+            library: Default::default(),
+        };
+        list_movies(conn, &q)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.title)
+            .collect()
+    }
+
+    /// The A–Z bar is a filter rather than a scroll position, because the list is paged:
+    /// 20,000 films sorted A–Z arrive 120 at a time, so "jump to W" cannot be answered on
+    /// the client, and answering it by fetching every page up to W would read the whole
+    /// library to show one screen of it.
+    #[test]
+    fn a_letter_narrows_the_list_to_titles_starting_with_it() {
+        let conn = lettered_library();
+        assert_eq!(by_letter(&conn, Some("A")), vec!["Alien", "Arrival"]);
+        assert_eq!(by_letter(&conn, Some("Z")), vec!["Zodiac"]);
+        // Case is not the viewer's problem: a provider that files a film in lower case
+        // must not hide it from its own letter.
+        assert_eq!(by_letter(&conn, Some("T")), vec!["the quiet hour"]);
+        assert_eq!(by_letter(&conn, Some("t")), vec!["the quiet hour"]);
+        // Nothing selected is everything.
+        assert_eq!(by_letter(&conn, None).len(), 7);
+    }
+
+    /// Everything that does not begin with a letter has to be reachable by something, and
+    /// on a real provider's library that is thousands of titles: `[4K] …`, `2001 …`,
+    /// `|UK| …`.
+    #[test]
+    fn the_hash_bucket_holds_everything_that_is_not_a_letter() {
+        let conn = lettered_library();
+        let mut found = by_letter(&conn, Some("#"));
+        found.sort();
+        assert_eq!(found, vec!["2001: A Space Odyssey", "[4K] Dune"]);
+    }
+
+    /// The count beside the heading has to be the count of what is on screen. Every
+    /// letter's rows plus the `#` bucket's must add up to the library.
+    #[test]
+    fn the_letters_and_the_hash_bucket_partition_the_library() {
+        let conn = lettered_library();
+        let mut total = by_letter(&conn, Some("#")).len();
+        for letter in 'A'..='Z' {
+            total += by_letter(&conn, Some(&letter.to_string())).len();
+        }
+        assert_eq!(total, 7, "a title belonged to no bucket, or to two");
+    }
+
     /// Which shows a listing sweep should ask about, and which it must not.
     ///
     /// Asking the provider about every show it lists is 28,553 requests, so the order and

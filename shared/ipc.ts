@@ -773,10 +773,19 @@ export interface Commands {
     genre?: string;
     category?: string;
     query?: string;
+    /**
+     * Only titles starting with this one character, or `#` for the ones starting with
+     * anything that is not a letter.
+     *
+     * The A–Z bar filters rather than scrolls, because the list is paged: W is not in the
+     * DOM to scroll to, and fetching every page up to it would read the whole library to
+     * show one screen. Anything but a single letter or `#` is ignored by the host.
+     */
+    letter?: string;
   }) => Movie[];
   'library.series': (args: {
     limit: number; offset: number; genre?: string;
-    category?: string; query?: string; sort?: BrowseSort;
+    category?: string; query?: string; letter?: string; sort?: BrowseSort;
   }) => Series[];
   /**
    * What a browse page is showing, before it has fetched any of it.
@@ -785,8 +794,15 @@ export interface Commands {
    * page has to answer before the first poster arrives, and three round trips if they
    * are asked separately.
    */
+  /**
+   * The shelves, the genres, and the real total for the current filters.
+   *
+   * Takes `letter` as well, because the total is printed beside the heading: without it
+   * the count said 117,508 while the grid showed the 4,312 films beginning with S.
+   */
   'library.browseFacets': (args: {
     kind: 'movies' | 'series'; genre?: string; category?: string; query?: string;
+    letter?: string;
   }) => BrowseFacets;
   'library.episodes': (args: { seriesId: number; season?: number }) => Episode[];
   /**

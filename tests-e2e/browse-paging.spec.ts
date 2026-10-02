@@ -45,11 +45,17 @@ test('a category narrows the list, and clears again', async ({ page }) => {
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
   const count = page.getByTestId('browse-count');
+  // The count is empty until the host has counted, and `Number('')` is 0 — so reading it
+  // on the strength of the heading alone made `total` zero and every comparison below
+  // meaningless. The first test in this file already waited; the rest did not.
+  await expect(count).not.toHaveText('');
   const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
 
-  // The first chip after "All" — the biggest shelf in this library.
-  const chips = page.getByTestId('browse-category');
-  await chips.nth(1).click();
+  // The biggest shelf in this library: the sidebar is ordered by size, and "All" is
+  // pinned above the list rather than being its first row.
+  const sidebar = page.getByRole('navigation', { name: 'Film categories' });
+  const shelves = sidebar.getByTestId('group-list').getByRole('button');
+  await shelves.first().click();
 
   await expect
     .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
@@ -63,16 +69,129 @@ test('a category narrows the list, and clears again', async ({ page }) => {
     .poll(async () => page.getByTestId('catalog-card').count())
     .toBeLessThanOrEqual(Math.min(narrowed, PAGE));
 
-  await chips.first().click();
+  await sidebar.getByRole('button', { name: /^All/ }).click();
   await expect
     .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
     .toBe(total);
+});
+
+test('the selected category is named, and stays visible while you scroll', async ({ page }) => {
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+
+  const sidebar = page.getByRole('navigation', { name: 'Film categories' });
+  const shelf = sidebar.getByTestId('group-list').getByRole('button').first();
+  const name = (await shelf.innerText()).split('\n')[0]!.trim();
+  await shelf.click();
+
+  // The heading says which shelf, rather than "Movies" over one shelf of them.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(name);
+  // And it is marked as the one that is on, for anything that cannot see the highlight.
+  await expect(shelf).toHaveAttribute('aria-pressed', 'true');
+
+  // The sidebar is sticky, so scrolling the grid does not take the group list away —
+  // which is what a horizontal strip of chips did as soon as you moved down the page.
+  await page.mouse.wheel(0, 2400);
+  await expect(shelf).toBeInViewport();
+});
+
+test('a long category list is filtered in place', async ({ page }) => {
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+
+  const sidebar = page.getByRole('navigation', { name: 'Film categories' });
+  const filter = sidebar.getByTestId('group-filter');
+  test.skip(await filter.count() === 0, 'this library has few enough shelves to need no filter');
+
+  const rows = sidebar.getByTestId('group-list').getByRole('button');
+  const before = await rows.count();
+  expect(before).toBeGreaterThan(1);
+
+  const name = (await rows.first().innerText()).split('\n')[0]!.trim();
+  await filter.fill(name.slice(0, 4));
+  await expect.poll(async () => rows.count()).toBeLessThan(before);
+  // What was typed still matches the row it was taken from.
+  await expect(rows.first()).toContainText(name.slice(0, 4));
+
+  // Nothing matching says so rather than showing an empty column.
+  await filter.fill('zzzqqq');
+  await expect(sidebar.getByText(/No group matches/)).toBeVisible();
+});
+
+test('the A–Z bar narrows to a letter, and only where that means something', async ({ page }) => {
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+
+  const bar = page.getByRole('group', { name: 'Jump to letter' });
+  const count = page.getByTestId('browse-count');
+
+  // Films default to Recently added, where a letter would narrow to a set ordered by
+  // something else entirely. The bar is visible and inert, with the reason in its title.
+  await expect(bar).toHaveAttribute('title', /Sort by A–Z/);
+
+  await page.getByRole('button', { name: 'A–Z', exact: true }).click();
+  await expect(page.getByTestId('card-title').first()).toBeVisible();
+  await expect(count).not.toHaveText('');
+  const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
+
+  // A letter this library actually has, taken from the data rather than chosen in
+  // advance: the fixtures are mostly "The …", so picking one by hand tests an empty
+  // result and calls it a failure. Skipping the titles that start with a bracket or a
+  // digit, which are the `#` bucket's and have no letter of their own.
+  const shown = await page.getByTestId('card-title').allInnerTexts();
+  const lettered = shown.map((t) => t.trim()).find((t) => /^[A-Za-z]/.test(t));
+  expect(lettered, 'no film in the fixtures starts with a letter').toBeTruthy();
+  const pick = lettered!.charAt(0).toUpperCase();
+
+  await bar.getByRole('button', { name: pick, exact: true }).click();
+  await expect
+    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
+    .toBeLessThan(total);
+
+  // Every title on screen starts with it — the host filtered, rather than the page
+  // scrolling to roughly the right place.
+  const titles = await page.getByTestId('card-title').allInnerTexts();
+  expect(titles.length).toBeGreaterThan(0);
+  for (const title of titles) {
+    expect(
+      title.trim().toUpperCase().startsWith(pick),
+      `${title} does not start with ${pick}`,
+    ).toBe(true);
+  }
+
+  // Pressing it again clears it: a filter needs an off.
+  await bar.getByRole('button', { name: pick, exact: true }).click();
+  await expect
+    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
+    .toBe(total);
+});
+
+test('the hash bucket holds the titles no letter would reach', async ({ page }) => {
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  await page.getByRole('button', { name: 'A–Z', exact: true }).click();
+
+  const bar = page.getByRole('group', { name: 'Jump to letter' });
+  await bar.getByRole('button', { name: /number or symbol/ }).click();
+
+  // A provider's library is full of these: "[SPANISH] La Casa del Lago" in the fixtures,
+  // and `[4K] …`, `2001 …`, `|UK| …` on a real one.
+  const titles = await page.getByTestId('card-title').allInnerTexts();
+  expect(titles.length).toBeGreaterThan(0);
+  for (const title of titles) {
+    const first = title.trim().charAt(0).toUpperCase();
+    expect(first < 'A' || first > 'Z', `${title} starts with a letter`).toBe(true);
+  }
 });
 
 test('searching narrows within the list without leaving the page', async ({ page }) => {
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
   const count = page.getByTestId('browse-count');
+  // The count is empty until the host has counted, and `Number('')` is 0 — so reading it
+  // on the strength of the heading alone made `total` zero and every comparison below
+  // meaningless. The first test in this file already waited; the rest did not.
+  await expect(count).not.toHaveText('');
   const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
 
   const title = await page.getByTestId('card-title').first().innerText();
@@ -124,35 +243,6 @@ test('an empty genre filter is not shown at all', async ({ page }) => {
     // The "all" row plus at least one real genre.
     expect(await page.getByTestId('select-row').count()).toBeGreaterThan(1);
   }
-});
-
-test('a long category list is searchable rather than a two-hundred-row dropdown', async ({
-  page,
-}) => {
-  await page.goto('/#/movies');
-  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
-
-  const picker = page.getByTestId('select-category');
-  test.skip(await picker.count() === 0, 'this library has few enough shelves to fit in chips');
-  await picker.click();
-
-  const rows = page.getByTestId('select-row');
-  const before = await rows.count();
-  expect(before).toBeGreaterThan(1);
-
-  // Typing narrows it, and the "all" row goes with the rest.
-  const name = await rows.nth(1).innerText();
-  await page.getByLabel('Filter category').fill(name.split(/\s+/)[0]!);
-  await expect.poll(async () => rows.count()).toBeLessThan(before);
-
-  // Picking one closes the popover and narrows the library.
-  const count = page.getByTestId('browse-count');
-  const total = Number((await count.innerText()).replace(/[^0-9]/g, ''));
-  await rows.last().click();
-  await expect(rows).toHaveCount(0);
-  await expect
-    .poll(async () => Number((await count.innerText()).replace(/[^0-9]/g, '')))
-    .toBeLessThan(total);
 });
 
 test('the count is grouped, so a six-figure library is readable', async ({ page }) => {
