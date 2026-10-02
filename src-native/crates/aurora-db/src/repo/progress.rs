@@ -208,6 +208,36 @@ pub fn next_episode(conn: &Connection, profile_id: i64, series_id: i64) -> Resul
         .optional()?)
 }
 
+/// Take a film off the Continue Watching rail by forgetting where it got to.
+///
+/// A deletion rather than a "dismissed" flag. The rail is built from the existence of a
+/// position, so forgetting the position is exactly the thing being asked for — and a
+/// flag would have to be cleared again the moment the viewer pressed play, which is a
+/// second rule to keep in step with the first.
+///
+/// Returns how many rows went, so the caller can tell "removed" from "it was not there".
+pub fn forget_movie(conn: &Connection, profile_id: i64, movie_id: i64) -> Result<usize> {
+    Ok(conn.execute(
+        "DELETE FROM watch_progress
+          WHERE profile_id = ?1 AND item_kind = 'movie' AND item_id = ?2",
+        params![profile_id, movie_id],
+    )?)
+}
+
+/// Take a show off the rail: every episode of it, not just the one on the card.
+///
+/// The rail shows one card per show, built from the most recent episode with a position.
+/// Deleting only that episode's row would promote the next one and the card would appear
+/// to come back — which is not a slow refresh, it is the opposite of what was asked.
+pub fn forget_series(conn: &Connection, profile_id: i64, series_id: i64) -> Result<usize> {
+    Ok(conn.execute(
+        "DELETE FROM watch_progress
+          WHERE profile_id = ?1 AND item_kind = 'episode'
+            AND item_id IN (SELECT id FROM episodes WHERE series_id = ?2)",
+        params![profile_id, series_id],
+    )?)
+}
+
 pub fn mark_watched(
     conn: &Connection,
     profile_id: i64,
@@ -355,6 +385,70 @@ mod tests {
             ids,
             vec![1001],
             "only the showable row belongs on the rail: {rail:?}"
+        );
+    }
+
+    /// Removing a show has to take every episode with it. Deleting only the episode on
+    /// the card would promote the next most recent one, and the card would come back.
+    #[test]
+    fn forgetting_a_show_clears_every_episode_of_it() {
+        let conn = db();
+        seeded_series(&conn, 1, 3);
+        seeded_series(&conn, 2, 2);
+        for e in 1..=3 {
+            save(&conn, 1, ItemKind::Episode, 1000 + e, 300, 3000, 100 + e).unwrap();
+        }
+        // Another show, which must be left exactly as it was.
+        save(&conn, 1, ItemKind::Episode, 2001, 300, 3000, 200).unwrap();
+
+        assert_eq!(forget_series(&conn, 1, 1).unwrap(), 3);
+
+        let left: Vec<i64> = continue_watching(&conn, 1, 10)
+            .unwrap()
+            .iter()
+            .map(|p| p.item_id)
+            .collect();
+        assert_eq!(left, vec![2001], "the wrong show was affected");
+        // And it stays gone: nothing is resurrected by a second read.
+        assert_eq!(forget_series(&conn, 1, 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn forgetting_a_film_leaves_the_others_alone() {
+        let conn = db();
+        seeded_movies(&conn, &[1, 2]);
+        save(&conn, 1, ItemKind::Movie, 1, 300, 6000, 100).unwrap();
+        save(&conn, 1, ItemKind::Movie, 2, 300, 6000, 101).unwrap();
+
+        assert_eq!(forget_movie(&conn, 1, 1).unwrap(), 1);
+        let left: Vec<i64> = continue_watching(&conn, 1, 10)
+            .unwrap()
+            .iter()
+            .map(|p| p.item_id)
+            .collect();
+        assert_eq!(left, vec![2]);
+        assert!(get(&conn, 1, ItemKind::Movie, 1).unwrap().is_none());
+    }
+
+    /// One viewer's rail is not another's. Profiles exist so that two people can watch
+    /// the same film to different points.
+    #[test]
+    fn forgetting_is_per_profile() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO profiles (id,name,created_at) VALUES (2,'Kid',0)",
+            [],
+        )
+        .unwrap();
+        seeded_movies(&conn, &[1]);
+        save(&conn, 1, ItemKind::Movie, 1, 300, 6000, 100).unwrap();
+        save(&conn, 2, ItemKind::Movie, 1, 900, 6000, 100).unwrap();
+
+        forget_movie(&conn, 1, 1).unwrap();
+        assert!(get(&conn, 1, ItemKind::Movie, 1).unwrap().is_none());
+        assert!(
+            get(&conn, 2, ItemKind::Movie, 1).unwrap().is_some(),
+            "another profile's position was taken away with it"
         );
     }
 

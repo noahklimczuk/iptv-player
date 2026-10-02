@@ -404,6 +404,7 @@ fn main() {
             library::mylist_toggle,
             library::favorites_toggle,
             library::progress_get,
+            library::progress_forget,
             timeshift::timeshift_settings,
             timeshift::timeshift_set_settings,
             timeshift::timeshift_clear,

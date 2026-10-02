@@ -945,6 +945,19 @@ export interface Commands {
     kind: 'movie' | 'episode';
     id: number;
   }) => Progress | null;
+  /**
+   * Take something off Continue Watching. Returns whether anything was there to remove.
+   *
+   * Addressed by what the *card* is, which is not what the progress is stored against: a
+   * show's position lives on its episodes, and removing it clears all of them. Deleting
+   * only the episode on the card would promote the next one and the card would appear to
+   * come back.
+   */
+  'progress.forget': (args: {
+    profileId: number;
+    kind: 'movie' | 'series';
+    id: number;
+  }) => boolean;
 
   'mylist.toggle': (args: {
     profileId: number;

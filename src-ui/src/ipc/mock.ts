@@ -1448,6 +1448,16 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     });
   },
   'progress.get': ({ kind, id }) => progress.get(`${kind}:${id}`) ?? null,
+  'progress.forget': ({ kind, id }) => {
+    if (kind === 'movie') return progress.delete(`movie:${id}`);
+    // A show's position is on its episodes, so all of them go — exactly as the host
+    // does it. Removing one would promote the next and the card would come back.
+    let removed = false;
+    for (const ep of fx.episodes.filter((e) => e.seriesId === id)) {
+      removed = progress.delete(`episode:${ep.id}`) || removed;
+    }
+    return removed;
+  },
 
   'mylist.toggle': ({ kind, id }) => {
     const key = `${kind}:${id}`;

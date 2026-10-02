@@ -19,13 +19,22 @@ export interface CardProgress {
 }
 
 export const CatalogCard = memo(function CatalogCard({
-  item, index, progress, onOpen, onPlay, rank, showTitle, reason,
+  item, index, progress, onOpen, onPlay, onRemove, rank, showTitle, reason,
 }: {
   item: CatalogItem;
   index: number;
   progress?: CardProgress | null;
   onOpen: (item: CatalogItem) => void;
   onPlay: (item: CatalogItem) => void;
+  /**
+   * Take this off the rail it is on. Only Continue Watching passes one.
+   *
+   * A rail built from what you happened to start is the one rail that accumulates
+   * things you do not want: a film sampled for ten minutes, an episode left running
+   * while you fell asleep. Without a way to remove them they sit at the front of the
+   * home screen indefinitely, and the rail stops being about what you are watching.
+   */
+  onRemove?: (item: CatalogItem) => void;
   /**
    * Print the title under the poster.
    *
@@ -213,6 +222,14 @@ export const CatalogCard = memo(function CatalogCard({
                     icon="thumbUp" label="I like this" size={26}
                     onClick={(e) => e.stopPropagation()}
                   />
+                  {onRemove && (
+                    <IconButton
+                      icon="close"
+                      label={`Remove ${item.title} from Continue Watching`}
+                      size={26}
+                      onClick={(e) => { e.stopPropagation(); onRemove(item); }}
+                    />
+                  )}
                   <IconButton
                     icon="chevronDown" label="More info" size={26}
                     style={{ marginLeft: 'auto' }}

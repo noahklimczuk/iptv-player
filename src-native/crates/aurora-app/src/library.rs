@@ -330,3 +330,35 @@ pub fn progress_get(
     let db = services.db.lock();
     Ok(progress::get(&db, args.profile_id, kind, args.id)?)
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgetProgressArgs {
+    pub profile_id: i64,
+    /// `movie` or `series` — what the *card* is, which is not always what the progress
+    /// is stored against. A show's position lives on its episodes.
+    pub kind: String,
+    pub id: i64,
+}
+
+/// Take something off Continue Watching.
+///
+/// Addressed the way the rail is addressed, by the card: a show is removed by its series
+/// id even though the rows being deleted are its episodes'. Asking the UI to find the
+/// episode the card happens to stand for would make it the only screen that has to know
+/// how the rail is assembled, and would be wrong anyway — one episode's position going
+/// just promotes the next.
+#[tauri::command(async)]
+pub fn progress_forget(services: State<'_, Services>, args: ForgetProgressArgs) -> Result<bool> {
+    let db = services.db.lock();
+    let removed = match args.kind.as_str() {
+        "series" => progress::forget_series(&db, args.profile_id, args.id)?,
+        "movie" => progress::forget_movie(&db, args.profile_id, args.id)?,
+        other => {
+            return Err(crate::AppError::Other(format!(
+                "nothing on Continue Watching is a {other:?}"
+            )))
+        }
+    };
+    Ok(removed > 0)
+}

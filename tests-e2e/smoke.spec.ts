@@ -48,6 +48,39 @@ test('hovering a rail card expands it with quick actions', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/02-hover-card.png` });
 });
 
+test('a card can be taken off Continue Watching, and stays off', async ({ page }) => {
+  await page.goto('/#/');
+  await settle(page, 600);
+
+  const rail = page.getByRole('region', { name: 'Continue Watching' });
+  const remove = rail.getByRole('button', { name: /^Remove .* from Continue Watching$/ });
+
+  // The action lives in the expanded panel, so the card has to be hovered first.
+  const first = rail.getByTestId('catalog-card').first();
+  await first.hover();
+  await expect(remove.first()).toBeVisible();
+
+  // Which card, by name, so the assertion is about that one and not about the count.
+  const label = await remove.first().getAttribute('aria-label');
+  const title = label!.replace(/^Remove /, '').replace(/ from Continue Watching$/, '');
+  const before = await rail.getByTestId('catalog-card').count();
+
+  await remove.first().click();
+  await expect(rail.getByRole('button', { name: new RegExp(`^${title},`) })).toHaveCount(0);
+  expect(await rail.getByTestId('catalog-card').count()).toBe(before - 1);
+
+  // And it is gone from the host, not just from the screen: leaving and coming back
+  // rebuilds the rail from `library.rails`.
+  await page.goto('/#/settings');
+  await page.goto('/#/');
+  await settle(page, 600);
+  await expect(
+    page
+      .getByRole('region', { name: 'Continue Watching' })
+      .getByRole('button', { name: new RegExp(`^${title},`) }),
+  ).toHaveCount(0);
+});
+
 test('detail modal opens with metadata and tabs', async ({ page }) => {
   await page.goto('/#/');
   await settle(page, 600);
