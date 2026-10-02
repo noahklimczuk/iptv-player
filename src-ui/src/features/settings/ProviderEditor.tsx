@@ -7,7 +7,7 @@
  * renders it by default is one nobody can screen-share (README C10).
  */
 import { useCallback, useEffect, useState } from 'react';
-import type { Provider, ProviderCredentials } from '@shared/ipc';
+import type { Provider, ProviderCredentials, ValidationResult } from '@shared/ipc';
 import { Button, FIELD } from '@/components/Primitives';
 import { invoke } from '@/ipc';
 
@@ -23,6 +23,49 @@ export function ProviderEditor({
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  /**
+   * The result of checking what is in the form, if it has been checked.
+   *
+   * The wizard has had this since it was written and the editor never did — so the one
+   * screen where you go to *fix* a provider that has stopped working was the one with no
+   * way to find out whether your fix worked. You saved, and learned at the next refresh.
+   */
+  const [checked, setChecked] = useState<ValidationResult | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  /**
+   * Ask the host about what is in the form, without saving it.
+   *
+   * Takes the address as an argument for the same reason the wizard's does: the "use that
+   * address" button sets it and re-checks in one go, and state has not landed yet.
+   */
+  const check = useCallback(async (overrideUrl?: string) => {
+    setChecking(true);
+    try {
+      setChecked(await invoke('providers.validate', {
+        draft: {
+          // `Provider.kind` knows about Stalker and `providers.validate` does not; the
+          // button offering this is hidden for one, so the narrowing is never a guess.
+          name,
+          kind: provider.kind === 'xtream' ? 'xtream' : 'm3u',
+          url: overrideUrl ?? url,
+          username: username || null,
+          password: password || null,
+        },
+      }));
+    } catch (e) {
+      setChecked({
+        ok: false,
+        message: 'Could not check that',
+        detail: e instanceof Error ? e.message : String(e),
+        expiresAt: null, daysUntilExpiry: null, maxConnections: null,
+        activeConnections: null, isTrial: false, credentialsDetected: false,
+        suggestedUrl: null,
+      });
+    } finally {
+      setChecking(false);
+    }
+  }, [name, provider.kind, url, username, password]);
   const [revealed, setRevealed] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -126,6 +169,46 @@ export function ProviderEditor({
         </>
       )}
 
+      {checked && (
+        <div
+          role="status"
+          style={{
+            padding: 'var(--sp-3)', borderRadius: 'var(--r-md)',
+            fontSize: 'var(--fs-sm)',
+            background: checked.ok
+              ? 'color-mix(in srgb, var(--success) 12%, transparent)'
+              : 'color-mix(in srgb, var(--danger) 12%, transparent)',
+            border: `1px solid ${checked.ok ? 'var(--success)' : 'var(--danger)'}`,
+          }}
+        >
+          <strong>{checked.message}</strong>
+          {checked.detail && (
+            <div style={{ color: 'var(--text-muted)', marginTop: 3 }}>{checked.detail}</div>
+          )}
+          {/* The same offer the wizard makes: the host found this panel answering under
+              the other scheme. Which is the case this editor most needs, because a
+              provider that was saved with an address that no longer works is exactly what
+              somebody opens this screen to repair. */}
+          {!checked.ok && checked.suggestedUrl && (
+            <div style={{ marginTop: 'var(--sp-3)' }}>
+              <div style={{ marginBottom: 6 }}>
+                It does answer at <strong>{checked.suggestedUrl}</strong>.
+                {checked.suggestedUrl.startsWith('http://')
+                  && ' That is an unencrypted address, so your sign-in would be sent in'
+                    + ' clear text — which is how most panels work.'}
+              </div>
+              <Button
+                size="sm"
+                data-testid="editor-use-suggested-url"
+                onClick={() => { setUrl(checked.suggestedUrl!); void check(checked.suggestedUrl!); }}
+              >
+                Use that address
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
       {loaded && !loaded.passwordIsPersistent && (
         <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--warning)' }}>
           There is no OS credential store on this platform, so a password saved here
@@ -137,6 +220,17 @@ export function ProviderEditor({
         <Button size="sm" variant="primary" disabled={busy || !name.trim()} onClick={() => void save()}>
           Save changes
         </Button>
+        {/* Stalker portals authenticate differently and `providers.validate` has no path
+            for them, so there is nothing honest to offer here. */}
+        {provider.kind !== 'stalker' && (
+          <Button
+            size="sm"
+            disabled={busy || checking || !url.trim()}
+            onClick={() => void check()}
+          >
+            {checking ? 'Checking…' : 'Check connection'}
+          </Button>
+        )}
         <Button size="sm" disabled={busy} onClick={onClose}>Cancel</Button>
 
         <div style={{ flex: 1 }} />
