@@ -75,6 +75,12 @@ const mockUpdates: UpdateStatus = {
 };
 
 const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'movie:14']);
+/**
+ * Liked titles — the thumbs-up, which is a different statement from My List: one is
+ * "watch this later", the other is "more like this". On a real library this is what the
+ * recommender's favourite boost reads.
+ */
+const liked = new Set<string>(['movie:4', 'series:2']);
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -1475,6 +1481,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     myList.add(key);
     return true;
   },
+  'likes.toggle': ({ kind, id }) => {
+    const key = `${kind}:${id}`;
+    if (liked.has(key)) { liked.delete(key); return false; }
+    liked.add(key);
+    return true;
+  },
+  'lists.marks': () => ({ myList: [...myList], liked: [...liked] }),
   'favorites.toggle': ({ channelId }) => {
     if (favorites.has(channelId)) { favorites.delete(channelId); return false; }
     favorites.add(channelId);
@@ -1832,7 +1845,21 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       return { ...base, message: 'That does not look like a URL',
         detail: 'A provider address starts with http:// or https://' };
     }
-    // The mock accepts anything well-formed; the shape of the answer is what the
+    // A host that cannot exist gets the answer a real one would: `.invalid` is reserved
+    // by RFC 2606 precisely so that something can be unreachable on purpose. Without
+    // this the preview had no way to reach the failed-check state at all, which is the
+    // state the wizard most needs to get right — it is the one somebody is looking at
+    // when their panel is down.
+    if (/\.invalid(\/|:|$)/i.test(draft.url.trim())) {
+      return {
+        ...base,
+        message: "Your provider didn't respond in time",
+        detail:
+          'The server may be overloaded, or the address may be missing a port. '
+          + 'Panels usually publish one, like :8080 or :2082.',
+      };
+    }
+    // The mock accepts anything else well-formed; the shape of the answer is what the
     // wizard is being exercised against.
     if (draft.kind === 'xtream') {
       if (!draft.username || !draft.password) {

@@ -402,6 +402,8 @@ fn main() {
             library::library_stats,
             library::library_rails,
             library::mylist_toggle,
+            library::likes_toggle,
+            library::lists_marks,
             library::favorites_toggle,
             library::progress_get,
             library::progress_forget,

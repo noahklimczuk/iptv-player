@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
 import type { CatalogItem } from '@shared/ipc';
 import { progressPct, remaining, runtime } from '@/lib/format';
+import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useUi } from '@/state/ui';
 import { Badge, IconButton, ProgressBar, Poster } from './Primitives';
 import { TrailerFrame } from './TrailerFrame';
@@ -66,6 +67,10 @@ export const CatalogCard = memo(function CatalogCard({
   const timer = useRef<number | undefined>(undefined);
   const animations = useUi((s) => s.animations);
   const hoverPreviews = useUi((s) => s.hoverPreviews);
+  const onMyList = useOnMyList(item);
+  const liked = useIsLiked(item);
+  const toggleMyList = useMarks((s) => s.toggleMyList);
+  const toggleLiked = useMarks((s) => s.toggleLiked);
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
@@ -242,12 +247,25 @@ export const CatalogCard = memo(function CatalogCard({
                     onClick={(e) => { e.stopPropagation(); onPlay(item); }}
                   />
                   <IconButton
-                    icon="plus" label="Add to My List" size={26}
-                    onClick={(e) => e.stopPropagation()}
+                    icon={onMyList ? 'check' : 'plus'}
+                    label={
+                      onMyList
+                        ? `Remove ${item.title} from My List`
+                        : `Add ${item.title} to My List`
+                    }
+                    aria-pressed={onMyList}
+                    active={onMyList}
+                    size={26}
+                    onClick={(e) => { e.stopPropagation(); toggleMyList(item); }}
                   />
                   <IconButton
-                    icon="thumbUp" label="I like this" size={26}
-                    onClick={(e) => e.stopPropagation()}
+                    icon="thumbUp"
+                    filled={liked}
+                    label={liked ? `Undo liking ${item.title}` : `I like ${item.title}`}
+                    aria-pressed={liked}
+                    active={liked}
+                    size={26}
+                    onClick={(e) => { e.stopPropagation(); toggleLiked(item); }}
                   />
                   {onRemove && (
                     <IconButton

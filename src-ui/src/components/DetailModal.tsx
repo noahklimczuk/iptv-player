@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CatalogItem, Episode, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
 import { getProgress, invoke } from '@/ipc';
+import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { report } from '@/lib/errors';
 import { duration, progressPct, runtime } from '@/lib/format';
@@ -90,6 +91,10 @@ function Hero({
    */
   const [playingTrailer, setPlayingTrailer] = useState(false);
   useEffect(() => setPlayingTrailer(false), [item.id]);
+  const onMyList = useOnMyList(item);
+  const liked = useIsLiked(item);
+  const toggleMyList = useMarks((s) => s.toggleMyList);
+  const toggleLiked = useMarks((s) => s.toggleLiked);
 
   return (
     <div style={{ position: 'relative', aspectRatio: '16 / 8', background: 'var(--surface)' }}>
@@ -169,9 +174,23 @@ function Hero({
               Trailer
             </Button>
           )}
-          <IconButton icon="plus" label="Add to My List" size={46} />
-          <IconButton icon="thumbUp" label="I like this" size={46} />
-          <IconButton icon="record" label="Download" size={46} />
+          <IconButton
+            icon={onMyList ? 'check' : 'plus'}
+            label={onMyList ? `Remove ${item.title} from My List` : `Add ${item.title} to My List`}
+            aria-pressed={onMyList}
+            active={onMyList}
+            size={46}
+            onClick={() => toggleMyList(item)}
+          />
+          <IconButton
+            icon="thumbUp"
+            filled={liked}
+            label={liked ? `Undo liking ${item.title}` : `I like ${item.title}`}
+            aria-pressed={liked}
+            active={liked}
+            size={46}
+            onClick={() => toggleLiked(item)}
+          />
         </div>
       </div>
       )}

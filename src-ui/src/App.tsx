@@ -27,6 +27,7 @@ import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
+import { useMarks } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
 
@@ -98,6 +99,15 @@ export default function App() {
   useWatchProgress(ui.player, profile.active?.id ?? 0);
 
   const profileId = profile.active?.id ?? 0;
+
+  // My List and the likes, once per profile. Every plus and every thumb on every screen
+  // reads them, so they are fetched here rather than by each card — and waited for below,
+  // because a set that lands after the grid does turns every plus into a tick in front of
+  // the viewer and re-renders every card on screen to do it.
+  const marksLoaded = useMarks((s) => s.loaded);
+  useEffect(() => {
+    if (profileId) void useMarks.getState().load(profileId);
+  }, [profileId]);
 
   /**
    * Leave the player, and actually stop what it was playing.
@@ -274,7 +284,31 @@ export default function App() {
       invoke('player.setMuted', { muted: !(ui.player?.muted ?? false) })
         .catch(report('Could not change the volume')),
     onFullscreen: fullscreen.toggle,
-    onInfo: () => {},
+    /**
+     * `i` — what is this?
+     *
+     * The key was bound, documented in the hotkeys sheet, and called an empty function.
+     * On live TV the answer is the channel banner, which is the same thing a zap shows
+     * and which `useZapper` has always been able to raise. On a film or an episode it is
+     * the detail panel, fetched by what the player says is playing — `library.item`
+     * ignores the library filter on purpose, so this works for something reached by
+     * search that browsing would hide.
+     */
+    onInfo: () => {
+      const p = ui.player;
+      if (!p) return;
+      if (p.isLive) {
+        if (p.channelId != null) ui.showBanner(p.channelId);
+        return;
+      }
+      if (p.itemId == null || p.itemKind == null) return;
+      // An episode's detail is its series': there is no card for one episode, and "what
+      // is this?" about an episode is a question about the show it belongs to.
+      const kind = p.itemKind === 'episode' ? 'series' : 'movie';
+      invoke('library.item', { kind, id: p.itemId })
+        .then((found) => found && ui.openDetail(found))
+        .catch(report('Could not look that up'));
+    },
     onNavigate: (to: string) => { closePlayer(); navigate(to); },
   }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle]);
 
@@ -299,7 +333,7 @@ export default function App() {
   // `providersLoading` rather than `providers === null`: a refusal also ends the wait,
   // because `useCommand` has already reported it and the setup wizard is the right
   // answer to "there are no providers that we know of".
-  if (providersLoading || !profile.loaded) {
+  if (providersLoading || !profile.loaded || (profileId > 0 && !marksLoaded)) {
     return <BootScreen label="Opening your library…" />;
   }
 

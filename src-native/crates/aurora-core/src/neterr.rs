@@ -121,16 +121,20 @@ impl NetFailure {
         } else if is(403) || l.contains("forbidden") {
             (
                 ErrorCode::Forbidden,
-                "Your provider refused this stream",
-                "This often means the line has hit its connection limit, or this channel \
-                 is not part of your package.",
+                "Your provider refused the request",
+                "This often means the line has hit its connection limit, or that what was \
+                 asked for is not part of your package.",
             )
         } else if is(404) || l.contains("not found") {
             (
                 ErrorCode::NotFound,
-                "This stream no longer exists",
-                "The provider has probably removed or renumbered it. A library refresh \
-                 may fix it.",
+                // Not "this stream": the same classifier answers for a provider being
+                // checked in the setup wizard, where nothing is playing and the address
+                // itself is what came back 404.
+                "Your provider doesn't have that",
+                "It has probably been removed or renumbered. For a title, a library \
+                 refresh may fix it; for an address, check it against what your provider \
+                 gave you.",
             )
         } else if is(429) || l.contains("too many requests") {
             (
@@ -154,8 +158,12 @@ impl NetFailure {
         } else if l.contains("timed out") || l.contains("timeout") {
             (
                 ErrorCode::Timeout,
-                "The stream didn't respond in time",
-                "The server may be overloaded, or your connection may be unstable.",
+                // This is the one the setup wizard shows most, where there is no stream
+                // yet — "The stream didn't respond in time" was describing something that
+                // did not exist, under a form that had just been filled in.
+                "Your provider didn't respond in time",
+                "The server may be overloaded, or the address may be missing a port. \
+                 Panels usually publish one, like :8080 or :2082.",
             )
         } else if l.contains("getaddrinfo")
             || l.contains("name or service not known")
@@ -224,10 +232,10 @@ impl NetFailure {
         } else {
             (
                 ErrorCode::Unknown,
-                // Not "this channel": the same classifier answers for a film and an
-                // episode, and being told a channel did not respond when you pressed
-                // play on a film reads as the app having lost track of what it is doing.
-                "This stream didn't respond",
+                // Not "this channel", and not "this stream": the same classifier answers
+                // for a film, an episode, and a provider being checked before anything is
+                // playing at all.
+                "Your provider didn't respond",
                 "It may be temporarily offline.",
             )
         };
@@ -381,6 +389,38 @@ mod tests {
         let e = NetFailure::classify("something nobody has seen before");
         assert_eq!(e.code, ErrorCode::Unknown);
         assert!(!e.message.to_lowercase().contains("channel"), "{e:?}");
+    }
+
+    /// These messages are shown by the setup wizard too, where nothing is playing and
+    /// there is no stream to describe — only an address somebody has just typed.
+    /// "The stream didn't respond in time", under a provider form, is a sentence about
+    /// something that does not exist yet.
+    #[test]
+    fn a_provider_being_checked_is_not_described_as_a_stream() {
+        for raw in [
+            "connection timed out",
+            "server returned 404 not found",
+            "server returned 403 forbidden",
+            "something nobody has seen before",
+        ] {
+            let e = NetFailure::classify(raw);
+            let said = format!("{} {}", e.message, e.cause).to_lowercase();
+            assert!(
+                !e.message.to_lowercase().contains("stream"),
+                "a provider check would say {:?} about a stream that does not exist",
+                e.message
+            );
+            assert!(!said.is_empty());
+        }
+    }
+
+    /// The commonest reason a panel does not answer, and the one worth naming: a bare
+    /// hostname with no port. Panels publish one far more often than not.
+    #[test]
+    fn a_timeout_suggests_the_thing_that_is_usually_wrong() {
+        let e = NetFailure::classify("connection timed out");
+        assert_eq!(e.code, ErrorCode::Timeout);
+        assert!(e.cause.contains("port"), "{e:?}");
     }
 
     #[test]

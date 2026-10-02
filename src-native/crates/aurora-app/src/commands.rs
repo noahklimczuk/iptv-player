@@ -56,7 +56,10 @@ pub struct GroupRow {
 #[tauri::command(async)]
 pub fn channels_groups(services: State<'_, Services>) -> Result<Vec<GroupRow>> {
     let db = services.db.lock();
-    Ok(channels::groups(&db)?
+    // The same filter the list behind each group is read through. Counting one way and
+    // listing another is how a sidebar comes to disagree with its own screen.
+    let filter = filtering::LibraryFilter::load(&db)?;
+    Ok(channels::groups(&db, &filter)?
         .into_iter()
         .map(|(name, count)| GroupRow { name, count })
         .collect())
@@ -395,8 +398,10 @@ pub fn library_browse_facets(
         },
     )?;
     Ok(BrowseFacets {
-        categories: library::categories(&db, kind)?,
-        genres: library::genres(&db)?,
+        // `q.library` rather than a second load: the count below is computed through that
+        // one, and two reads of the settings table could in principle straddle a change.
+        categories: library::categories(&db, kind, &q.library)?,
+        genres: library::genres(&db, &q.library)?,
         total: if series {
             library::count_series(&db, &q)?
         } else {
@@ -408,7 +413,7 @@ pub fn library_browse_facets(
 #[tauri::command(async)]
 pub fn library_genres(services: State<'_, Services>) -> Result<Vec<String>> {
     let db = services.db.lock();
-    Ok(library::genres(&db)?)
+    Ok(library::genres(&db, &filtering::LibraryFilter::load(&db)?)?)
 }
 
 #[derive(Debug, Deserialize)]

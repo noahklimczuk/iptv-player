@@ -392,15 +392,26 @@ pub struct Category {
 /// needs an API key a viewer may never set — so on most libraries the genre filter is
 /// an empty dropdown, while the panel has been filing everything under 202 named
 /// shelves the whole time.
-pub fn categories(conn: &Connection, kind: crate::repo::filtering::Kind) -> Result<Vec<Category>> {
+/// The shelves, with how many titles are on each — after the library filters.
+///
+/// The filter has to be here and not only on the list it leads to. These counts are the
+/// sidebar, so "UK | FILMS 482" that opens onto 120 films is not a slow count, it is two
+/// screens disagreeing about what the library contains — and the one with the number on
+/// it is the one that is wrong.
+pub fn categories(
+    conn: &Connection,
+    kind: crate::repo::filtering::Kind,
+    filter: &crate::repo::filtering::LibraryFilter,
+) -> Result<Vec<Category>> {
     let table = match kind {
         crate::repo::filtering::Kind::Movies => "movies",
         crate::repo::filtering::Kind::Series => "series",
         _ => return Ok(Vec::new()),
     };
+    let visible = filter.where_sql(kind);
     let mut stmt = conn.prepare(&format!(
         "SELECT group_title, count(*) FROM {table}
-         WHERE hidden = 0 AND group_title IS NOT NULL AND group_title != ''
+         WHERE hidden = 0 AND group_title IS NOT NULL AND group_title != ''{visible}
          GROUP BY group_title
          ORDER BY count(*) DESC, group_title"
     ))?;
@@ -527,11 +538,22 @@ pub fn stats(conn: &Connection) -> Result<LibraryStats> {
 }
 
 /// Every genre present in the library, for the browse filters.
-pub fn genres(conn: &Connection) -> Result<Vec<String>> {
+/// Every genre the visible library has, for the dropdown.
+///
+/// Filtered for the same reason the categories are: a genre whose every title the filters
+/// hide is an option that selects nothing.
+pub fn genres(
+    conn: &Connection,
+    filter: &crate::repo::filtering::LibraryFilter,
+) -> Result<Vec<String>> {
     let mut out = std::collections::BTreeSet::new();
-    for table in ["movies", "series"] {
+    for (table, kind) in [
+        ("movies", crate::repo::filtering::Kind::Movies),
+        ("series", crate::repo::filtering::Kind::Series),
+    ] {
+        let visible = filter.where_sql(kind);
         let mut stmt = conn.prepare(&format!(
-            "SELECT genres FROM {table} WHERE genres IS NOT NULL AND hidden = 0"
+            "SELECT genres FROM {table} WHERE genres IS NOT NULL AND hidden = 0{visible}"
         ))?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
@@ -859,6 +881,118 @@ mod tests {
             total += by_letter(&conn, Some(&letter.to_string())).len();
         }
         assert_eq!(total, 7, "a title belonged to no bucket, or to two");
+    }
+
+    /// The sidebar's number and the grid it opens have to be the same library.
+    ///
+    /// `list_movies` was read through the library filter and `categories` was not, so a
+    /// shelf advertised titles it would then refuse to show. On a subscription that
+    /// carries every country with "English only" on, that is most of them.
+    #[test]
+    fn a_category_counts_what_the_filter_would_actually_show() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for (id, title, lang) in [
+            (1, "Arrival", Some("en")),
+            (2, "Le Samouraï", Some("fr")),
+            (3, "Solaris", None),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     group_title, lang_code, last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 'https://example.com/m.mkv', 'FILMS', ?4, 0)",
+                params![id, format!("m{id}"), title, lang],
+            )
+            .unwrap();
+        }
+
+        let counted = |filter: &LibraryFilter| {
+            categories(&conn, Kind::Movies, filter).unwrap()[0].count as usize
+        };
+        let listed = |filter: LibraryFilter| {
+            list_movies(
+                &conn,
+                &BrowseQuery {
+                    sort: MovieSort::Title,
+                    genre: None,
+                    category: Some("FILMS".into()),
+                    query: None,
+                    letter: None,
+                    limit: 100,
+                    offset: 0,
+                    library: filter,
+                },
+            )
+            .unwrap()
+            .len()
+        };
+
+        for filter in [
+            LibraryFilter::default(),
+            LibraryFilter {
+                english_only: true,
+                ..Default::default()
+            },
+            // Untagged hidden as well: "Solaris" has no language, which the looser
+            // reading lets through and the stricter one does not.
+            LibraryFilter {
+                english_only: true,
+                hide_untagged: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                counted(&filter),
+                listed(filter),
+                "the shelf promised a different number from the grid, for {filter:?}"
+            );
+        }
+    }
+
+    /// A genre whose every title the filters hide is an option that selects nothing.
+    #[test]
+    fn genres_come_from_the_visible_library() {
+        use crate::repo::filtering::LibraryFilter;
+
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                 genres, lang_code, last_seen_at)
+             VALUES (1,1,'a','A','a','u','[\"Chanson\"]','fr',0),
+                    (2,1,'b','B','b','u','[\"Western\"]','en',0)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            genres(&conn, &LibraryFilter::default()).unwrap(),
+            vec!["Chanson".to_string(), "Western".to_string()]
+        );
+        assert_eq!(
+            genres(
+                &conn,
+                &LibraryFilter {
+                    english_only: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            vec!["Western".to_string()],
+            "a genre only French films have was still offered under English only"
+        );
     }
 
     /// Which shows a listing sweep should ask about, and which it must not.
