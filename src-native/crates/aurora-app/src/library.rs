@@ -117,9 +117,11 @@ pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<V
     // doing, and the one thing they are most likely to have come back for.
     //
     // Progress is stored against the episode but shown against the *show* — one card
-    // saying "you are partway through this", not one per episode of it. Two episodes
-    // of the same series collapse to the furthest-recent, which is the first seen
-    // because the query is newest-first.
+    // saying "you are partway through this", not one per episode of it. That collapse
+    // happens in the query, because it has to happen before the limit: merging it here
+    // meant somebody working through one series got a rail of a single card, the rest of
+    // what they were watching having never left the database. The dedup below is only
+    // the belt to that query's braces.
     let mut resumed: Vec<CatalogItem> = Vec::new();
     let mut resumed_progress = std::collections::HashMap::new();
     for p in progress::continue_watching(&db, args.profile_id, RAIL_SIZE)? {

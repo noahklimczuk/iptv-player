@@ -121,12 +121,55 @@ pub fn get(
 }
 
 /// The Continue Watching rail: started, not finished, most recent first.
+/// What the viewer is partway through, one card per thing rather than one per row.
+///
+/// **The collapse has to happen before the limit, not after it.** Progress is stored
+/// against the episode and shown against the show, and the caller used to ask for `limit`
+/// rows and then merge the ones belonging to the same series. So somebody working through
+/// a single show had a rail of one card: all `limit` rows were that show, they collapsed
+/// to one, and the twenty-three other things they were watching never came back from the
+/// database to be considered. The more of one show you watched, the emptier the rail got.
+///
+/// Three other things a row has to survive to earn a slot, for the same reason — a row
+/// that cannot become a card must not take the place of one that can:
+///
+///   * a title the library no longer holds, film or episode. `watch_progress.item_id` is
+///     polymorphic, so it carries no foreign key and nothing cascades into it: removing
+///     a provider takes its titles and leaves the progress rows standing, by design.
+///     The caller drops one when the lookup comes back empty, but it was being counted
+///     first. Dropping the show covers its episodes, which cascade with it.
+///   * a duration of zero, which makes the percentage meaningless and the bar a lie.
+///     `saveProgress` refuses to write these now; older libraries still hold them.
+///   * anything already finished, or barely started, which is what the existing
+///     `completed` and 60-second conditions are for.
 pub fn continue_watching(conn: &Connection, profile_id: i64, limit: u32) -> Result<Vec<Progress>> {
     let mut stmt = conn.prepare(
         "SELECT item_kind, item_id, position_secs, duration_secs, completed, updated_at
-         FROM watch_progress
-         WHERE profile_id = ?1 AND completed = 0 AND position_secs > 60
-           AND item_kind IN ('movie','episode')
+         FROM (
+           SELECT w.item_kind, w.item_id, w.position_secs, w.duration_secs,
+                  w.completed, w.updated_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY CASE WHEN w.item_kind = 'episode'
+                                      THEN 'series:' || e.series_id
+                                      ELSE 'movie:' || w.item_id END
+                    ORDER BY w.updated_at DESC
+                  ) AS rank_in_show
+             FROM watch_progress w
+             LEFT JOIN episodes e
+               ON w.item_kind = 'episode' AND e.id = w.item_id
+             LEFT JOIN movies m
+               ON w.item_kind = 'movie' AND m.id = w.item_id
+            WHERE w.profile_id = ?1
+              AND w.completed = 0
+              AND w.position_secs > 60
+              AND w.duration_secs > 0
+              AND w.item_kind IN ('movie','episode')
+              AND CASE w.item_kind
+                    WHEN 'episode' THEN e.id IS NOT NULL
+                    ELSE m.id IS NOT NULL
+                  END
+         )
+         WHERE rank_in_show = 1
          ORDER BY updated_at DESC LIMIT ?2",
     )?;
     let rows = stmt
@@ -198,6 +241,123 @@ mod tests {
         conn
     }
 
+    /// Films the rail is allowed to show, so movie progress has somewhere to point.
+    fn seeded_movies(conn: &Connection, ids: &[i64]) {
+        conn.execute(
+            "INSERT OR IGNORE INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for &id in ids {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key,
+                                     url, last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 'https://example.com/m.mkv', 0)",
+                params![id, format!("movie:{id}"), format!("Film {id}")],
+            )
+            .unwrap();
+        }
+    }
+
+    /// A show with `count` episodes, so episode progress has somewhere to point.
+    fn seeded_series(conn: &Connection, series_id: i64, count: i64) {
+        conn.execute(
+            "INSERT OR IGNORE INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO series (id, provider_id, provider_key, title, match_key,
+                                 last_seen_at)
+             VALUES (?1, 1, ?2, ?3, ?3, 0)",
+            params![
+                series_id,
+                format!("series:{series_id}"),
+                format!("Show {series_id}")
+            ],
+        )
+        .unwrap();
+        for e in 1..=count {
+            conn.execute(
+                "INSERT INTO episodes (id, series_id, season, episode, url, added_at)
+                 VALUES (?1, ?2, 1, ?3, 'https://example.com/e.mkv', 0)",
+                params![series_id * 1000 + e, series_id, e],
+            )
+            .unwrap();
+        }
+    }
+
+    /// The rail used to get *emptier* the more of one show you watched.
+    ///
+    /// Progress is stored per episode and shown per show. The limit was applied to rows
+    /// and the collapse happened afterwards in the caller, so twenty in-progress episodes
+    /// of one series filled the whole query, collapsed to a single card, and pushed
+    /// everything else out of the result before it could be considered.
+    #[test]
+    fn one_show_watched_a_lot_does_not_crowd_out_everything_else() {
+        let conn = db();
+        seeded_series(&conn, 1, 20);
+        seeded_movies(&conn, &[1, 2, 3]);
+
+        // Twenty episodes of the same show, oldest first so the newest is last.
+        for e in 1..=20 {
+            save(&conn, 1, ItemKind::Episode, 1000 + e, 300, 3000, 100 + e).unwrap();
+        }
+        // And three films, each touched more recently than any of them.
+        for m in 1..=3 {
+            save(&conn, 1, ItemKind::Movie, m, 300, 6000, 200 + m).unwrap();
+        }
+
+        let rail = continue_watching(&conn, 1, 10).unwrap();
+        assert_eq!(
+            rail.len(),
+            4,
+            "expected one card per show plus three films: {rail:?}"
+        );
+
+        let episodes: Vec<_> = rail
+            .iter()
+            .filter(|p| p.item_kind == ItemKind::Episode)
+            .collect();
+        assert_eq!(episodes.len(), 1, "the show should appear once");
+        assert_eq!(
+            episodes[0].item_id, 1020,
+            "the card should be the most recently watched episode"
+        );
+    }
+
+    /// A row that cannot become a card must not take the place of one that can.
+    #[test]
+    fn rows_that_cannot_be_shown_do_not_occupy_the_rail() {
+        let conn = db();
+        seeded_series(&conn, 1, 1);
+        seeded_movies(&conn, &[42, 43, 44]);
+
+        // An episode a refresh has since removed. The progress row outlives it by
+        // design; the caller drops it, but it was being counted first.
+        save(&conn, 1, ItemKind::Episode, 9_999, 300, 3000, 300).unwrap();
+        // And a film gone the same way — removing a provider cascades its titles away
+        // and leaves the progress rows behind.
+        save(&conn, 1, ItemKind::Movie, 77, 300, 6000, 298).unwrap();
+        // A duration of zero, which makes the percentage meaningless and the bar a lie.
+        save(&conn, 1, ItemKind::Movie, 42, 300, 0, 297).unwrap();
+        // Barely started, and already finished: the existing rules.
+        save(&conn, 1, ItemKind::Movie, 43, 10, 6000, 296).unwrap();
+        save(&conn, 1, ItemKind::Movie, 44, 5900, 6000, 295).unwrap();
+        // One that really can be shown.
+        save(&conn, 1, ItemKind::Episode, 1001, 300, 3000, 294).unwrap();
+
+        let rail = continue_watching(&conn, 1, 10).unwrap();
+        let ids: Vec<i64> = rail.iter().map(|p| p.item_id).collect();
+        assert_eq!(
+            ids,
+            vec![1001],
+            "only the showable row belongs on the rail: {rail:?}"
+        );
+    }
+
     #[test]
     fn saves_and_reads_back_progress() {
         let conn = db();
@@ -255,6 +415,7 @@ mod tests {
     #[test]
     fn continue_watching_excludes_finished_and_barely_started() {
         let conn = db();
+        seeded_movies(&conn, &[1, 2, 3]);
         save(&conn, 1, ItemKind::Movie, 1, 3000, 10_000, 10).unwrap(); // in progress
         save(&conn, 1, ItemKind::Movie, 2, 9900, 10_000, 20).unwrap(); // finished
         save(&conn, 1, ItemKind::Movie, 3, 5, 10_000, 30).unwrap(); // just opened
@@ -268,6 +429,7 @@ mod tests {
     #[test]
     fn continue_watching_is_most_recent_first() {
         let conn = db();
+        seeded_movies(&conn, &[1, 2]);
         save(&conn, 1, ItemKind::Movie, 1, 3000, 10_000, 10).unwrap();
         save(&conn, 1, ItemKind::Movie, 2, 3000, 10_000, 99).unwrap();
         let rows = continue_watching(&conn, 1, 10).unwrap();
