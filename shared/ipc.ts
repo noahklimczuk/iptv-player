@@ -990,6 +990,26 @@ export interface Commands {
     kind: 'movie' | 'series';
     id: number;
   }) => boolean;
+  /**
+   * Like a film or show, or stop. Returns whether it is liked afterwards.
+   *
+   * Not the same as My List: one is "watch this later", the other is "more like this".
+   * Liking is what the recommender's `FAVOURITE_BOOST` reads — a flag it has always asked
+   * about and which nothing in the app has ever set for a title.
+   */
+  'likes.toggle': (args: {
+    profileId: number;
+    kind: 'movie' | 'series';
+    id: number;
+  }) => boolean;
+  /**
+   * What this profile has marked, as `kind:id` keys.
+   *
+   * One request for both sets rather than a question per poster: a grid draws 120 cards
+   * and each needs to know whether its plus is a tick. Small enough — tens of titles — for
+   * the interface to hold them and answer from memory.
+   */
+  'lists.marks': (args: { profileId: number }) => { myList: string[]; liked: string[] };
   'favorites.toggle': (args: { profileId: number; channelId: number }) => boolean;
 
   'profiles.list': () => Profile[];

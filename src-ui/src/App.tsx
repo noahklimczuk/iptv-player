@@ -27,6 +27,7 @@ import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
+import { useMarks } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
 
@@ -98,6 +99,12 @@ export default function App() {
   useWatchProgress(ui.player, profile.active?.id ?? 0);
 
   const profileId = profile.active?.id ?? 0;
+
+  // My List and the likes, once per profile. Every plus and every thumb on every screen
+  // reads them, so they are fetched here rather than by each card.
+  useEffect(() => {
+    if (profileId) void useMarks.getState().load(profileId);
+  }, [profileId]);
 
   /**
    * Leave the player, and actually stop what it was playing.

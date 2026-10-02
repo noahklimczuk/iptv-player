@@ -15,6 +15,7 @@ import type { CatalogItem } from '@shared/ipc';
 import { runtime } from '@/lib/format';
 import { useUi } from '@/state/ui';
 import { fallBackToRemote, useAssetSrc } from '@/hooks/useAssetSrc';
+import { useMarks } from '@/state/marks';
 
 import { Badge, Button, IconButton } from './Primitives';
 import { TrailerFrame } from './TrailerFrame';
@@ -44,6 +45,8 @@ export function HeroBillboard({
   const [paused, setPaused] = useState(false);
   const animations = useUi((s) => s.animations);
   const hoverPreviews = useUi((s) => s.hoverPreviews);
+  const myList = useMarks((s) => s.myList);
+  const toggleMyList = useMarks((s) => s.toggleMyList);
 
   const item = items[index];
   // Asked for unguarded, and before the `!item` return below: hooks cannot be called
@@ -251,7 +254,18 @@ export function HeroBillboard({
           <Button variant="primary" size="lg" icon="play" iconFilled onClick={() => onPlay(item)}>
             Play
           </Button>
-          <Button variant="secondary" size="lg" icon="plus">My List</Button>
+          {/* Was a button with no handler at all, on the most prominent surface in the
+              app. `onMyList` is read here rather than through the hook because `item`
+              comes from an array and the hooks above it must not be conditional. */}
+          <Button
+            variant="secondary"
+            size="lg"
+            icon={myList.has(`${item.kind === 'series' ? 'series' : 'movie'}:${item.id}`) ? 'check' : 'plus'}
+            aria-pressed={myList.has(`${item.kind === 'series' ? 'series' : 'movie'}:${item.id}`)}
+            onClick={() => toggleMyList(item)}
+          >
+            My List
+          </Button>
           <Button variant="secondary" size="lg" icon="info" onClick={() => onOpen(item)}>
             More Info
           </Button>

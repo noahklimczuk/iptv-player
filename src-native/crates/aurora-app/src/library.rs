@@ -291,6 +291,62 @@ pub fn mylist_toggle(services: State<'_, Services>, args: MyListArgs) -> Result<
     )?)
 }
 
+/// Like a film or show, or stop. Returns whether it is liked afterwards.
+///
+/// Stored in `favorites` beside the channel hearts, because that is the table
+/// `repo::recommend::history` already reads to decide `FAVOURITE_BOOST` — a flag it has
+/// always been asking about and nothing has ever set for a title.
+#[tauri::command(async)]
+pub fn likes_toggle(services: State<'_, Services>, args: MyListArgs) -> Result<bool> {
+    let kind = match args.kind.as_str() {
+        "series" => lists::ItemKind::Series,
+        _ => lists::ItemKind::Movie,
+    };
+    let db = services.db.lock();
+    Ok(lists::toggle_liked(
+        &db,
+        args.profile_id,
+        kind,
+        args.id,
+        now_unix(),
+    )?)
+}
+
+/// What this profile has marked, as `kind:id` keys.
+///
+/// One request for both sets rather than a question per poster: a grid draws a hundred
+/// and twenty cards and each one needs to know whether its plus should be a tick. The
+/// sets are small — tens of titles, not the library — so the interface holds them and
+/// answers from memory.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Marks {
+    pub my_list: Vec<String>,
+    pub liked: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarksArgs {
+    pub profile_id: i64,
+}
+
+#[tauri::command(async)]
+pub fn lists_marks(services: State<'_, Services>, args: MarksArgs) -> Result<Marks> {
+    let db = services.db.lock();
+    let key = |(kind, id): (lists::ItemKind, i64)| format!("{}:{id}", kind.as_str());
+    Ok(Marks {
+        my_list: lists::my_list(&db, args.profile_id)?
+            .into_iter()
+            .map(key)
+            .collect(),
+        liked: lists::liked(&db, args.profile_id)?
+            .into_iter()
+            .map(key)
+            .collect(),
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FavoriteArgs {

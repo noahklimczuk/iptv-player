@@ -75,6 +75,12 @@ const mockUpdates: UpdateStatus = {
 };
 
 const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'movie:14']);
+/**
+ * Liked titles — the thumbs-up, which is a different statement from My List: one is
+ * "watch this later", the other is "more like this". On a real library this is what the
+ * recommender's favourite boost reads.
+ */
+const liked = new Set<string>(['movie:4', 'series:2']);
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -1475,6 +1481,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     myList.add(key);
     return true;
   },
+  'likes.toggle': ({ kind, id }) => {
+    const key = `${kind}:${id}`;
+    if (liked.has(key)) { liked.delete(key); return false; }
+    liked.add(key);
+    return true;
+  },
+  'lists.marks': () => ({ myList: [...myList], liked: [...liked] }),
   'favorites.toggle': ({ channelId }) => {
     if (favorites.has(channelId)) { favorites.delete(channelId); return false; }
     favorites.add(channelId);

@@ -117,6 +117,64 @@ pub fn toggle_favorite(
     Ok(true)
 }
 
+/// Mark a film or show as liked, or stop.
+///
+/// Stored in `favorites` beside the channel hearts rather than in a table of its own,
+/// because that is the table the recommender already reads: `repo::recommend::history`
+/// asks `EXISTS (SELECT 1 FROM favorites … item_kind = 'movie')` for every watched film
+/// and feeds the answer to `FAVOURITE_BOOST`.
+///
+/// Nothing had ever written one. The column was read, the boost was implemented, it had
+/// a unit test, and the only writer in the codebase was the channel heart — so for films
+/// and shows the flag was always false and the boost could not fire. The thumbs-up in the
+/// interface was the other half of the same gap: a button that called nothing.
+pub fn toggle_liked(
+    conn: &Connection,
+    profile_id: i64,
+    kind: ItemKind,
+    item_id: i64,
+    now: i64,
+) -> Result<bool> {
+    let removed = conn.execute(
+        "DELETE FROM favorites
+         WHERE profile_id = ?1 AND list_name = ?2 AND item_kind = ?3 AND item_id = ?4",
+        params![profile_id, FAVORITES, kind.as_str(), item_id],
+    )?;
+    if removed > 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        "INSERT INTO favorites (profile_id, list_name, item_kind, item_id, sort_order, added_at)
+         VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+        params![profile_id, FAVORITES, kind.as_str(), item_id, now],
+    )?;
+    Ok(true)
+}
+
+/// Everything this profile has liked, newest first. Channels are not included: they are
+/// in the same table, under the same list, but they are a different affordance on a
+/// different screen and the interface asks for them by `channels.list`.
+pub fn liked(conn: &Connection, profile_id: i64) -> Result<Vec<(ItemKind, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT item_kind, item_id FROM favorites
+          WHERE profile_id = ?1 AND list_name = ?2 AND item_kind IN ('movie','series')
+          ORDER BY added_at DESC",
+    )?;
+    let rows = stmt.query_map(params![profile_id, FAVORITES], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (kind, id) = row?;
+        match kind.as_str() {
+            "movie" => out.push((ItemKind::Movie, id)),
+            "series" => out.push((ItemKind::Series, id)),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 pub fn favorite_channel_ids(conn: &Connection, profile_id: i64) -> Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT item_id FROM favorites
@@ -131,6 +189,66 @@ pub fn favorite_channel_ids(conn: &Connection, profile_id: i64) -> Result<Vec<i6
 mod tests {
     use super::*;
     use crate::repo::profiles;
+
+    /// The flag the recommender reads for a film had no writer at all: `toggle_favorite`
+    /// is channels only, so `FAVOURITE_BOOST` could never fire for anything but a channel
+    /// — and channels are not recommended.
+    #[test]
+    fn liking_a_film_is_what_the_recommender_reads() {
+        let conn = db();
+        assert!(toggle_liked(&conn, 1, ItemKind::Movie, 7, 100).unwrap());
+
+        // Exactly the shape `repo::recommend::history` asks about.
+        let seen: bool = conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM favorites
+                                 WHERE profile_id = 1 AND item_kind = 'movie' AND item_id = 7)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(seen, "the recommender would still see this film as unliked");
+
+        assert!(!toggle_liked(&conn, 1, ItemKind::Movie, 7, 200).unwrap());
+        assert_eq!(liked(&conn, 1).unwrap(), vec![]);
+    }
+
+    /// Liking is not adding to a list. Two buttons, two meanings, two sets.
+    #[test]
+    fn liking_and_my_list_are_separate() {
+        let conn = db();
+        toggle_liked(&conn, 1, ItemKind::Movie, 7, 100).unwrap();
+        assert_eq!(my_list(&conn, 1).unwrap(), vec![]);
+
+        toggle_my_list(&conn, 1, ItemKind::Series, 9, 100).unwrap();
+        assert_eq!(liked(&conn, 1).unwrap(), vec![(ItemKind::Movie, 7)]);
+    }
+
+    /// A film and a show with the same id are different things, as they are everywhere
+    /// else in this table.
+    #[test]
+    fn liking_is_per_kind_and_per_profile() {
+        // Profile 2 is the one `db()` creates; 1 is the default migration 5 seeds.
+        let conn = db();
+        toggle_liked(&conn, 1, ItemKind::Movie, 3, 100).unwrap();
+
+        assert_eq!(liked(&conn, 1).unwrap(), vec![(ItemKind::Movie, 3)]);
+        assert_eq!(liked(&conn, 2).unwrap(), vec![], "another profile's taste");
+        assert!(
+            toggle_liked(&conn, 1, ItemKind::Series, 3, 100).unwrap(),
+            "a show with a film's id must be its own row"
+        );
+    }
+
+    /// The channel hearts live in the same table under the same list name, and must not
+    /// appear in a list of liked titles.
+    #[test]
+    fn a_favourite_channel_is_not_a_liked_title() {
+        let conn = db();
+        toggle_favorite(&conn, 1, 42, 100).unwrap();
+        assert_eq!(liked(&conn, 1).unwrap(), vec![]);
+        assert_eq!(favorite_channel_ids(&conn, 1).unwrap(), vec![42]);
+    }
 
     fn db() -> Connection {
         let conn = crate::open_memory().expect("open");

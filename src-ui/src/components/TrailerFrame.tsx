@@ -18,7 +18,7 @@
  * which is the caller's business — every caller here is a browse screen that the player
  * overlay covers.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /** Where the embed is served from. The `-nocookie` host sets no tracking cookie. */
 const EMBED_ORIGIN = 'https://www.youtube-nocookie.com';
@@ -49,6 +49,15 @@ export function TrailerFrame({
   radius?: string;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  /**
+   * Whether the frame has navigated to the embed yet.
+   *
+   * Before it has, its window is still `about:blank`, whose origin is not YouTube's — and
+   * `postMessage` with a target origin that does not match the recipient throws. It did
+   * so on every mount, into the console, for a command the URL's own `mute` parameter had
+   * already applied.
+   */
+  const [ready, setReady] = useState(false);
 
   // Mute and unmute through the iframe API rather than through the URL, because a URL
   // change reloads the frame and the trailer would jump back to its first frame every
@@ -56,6 +65,7 @@ export function TrailerFrame({
   // `postMessage` is the whole of the API that is needed — loading YouTube's helper
   // script is not possible here anyway, since the CSP allows scripts from `self` only.
   useEffect(() => {
+    if (!ready) return;
     const win = frame.current?.contentWindow;
     if (!win) return;
     const send = (func: 'mute' | 'unMute') => {
@@ -68,7 +78,7 @@ export function TrailerFrame({
       }
     };
     send(muted ? 'mute' : 'unMute');
-  }, [muted]);
+  }, [muted, ready]);
 
   // Everything here is deliberate:
   //   autoplay=1   a preview nobody asked to start
@@ -91,6 +101,7 @@ export function TrailerFrame({
       data-testid="trailer-frame"
       title={title}
       src={src}
+      onLoad={() => setReady(true)}
       // No `allowFullScreen`: fullscreen here is the window's job (`window.fullscreen`),
       // and an iframe going fullscreen by itself would cover the app's own chrome with
       // YouTube's.
