@@ -4,6 +4,7 @@ import type { CatalogItem, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
+import { BootScreen } from '@/components/BootScreen';
 import { BrowsePage } from '@/features/browse/BrowsePage';
 import { RecordingsPage } from '@/features/dvr/RecordingsPage';
 import { GuidePage } from '@/features/guide/GuidePage';
@@ -73,7 +74,11 @@ export default function App() {
     () => !new URLSearchParams(window.location.search).has('setup'),
   );
 
-  const { data: providers, reload: reloadProviders } = useCommand('providers.list', undefined, []);
+  const {
+    data: providers,
+    loading: providersLoading,
+    reload: reloadProviders,
+  } = useCommand('providers.list', undefined, []);
   // Settings can open the same wizard first run uses, to add a second provider.
   const [addingProvider, setAddingProvider] = useState(false);
   const { data: channels } = useCommand('channels.list', {}, []);
@@ -285,6 +290,18 @@ export default function App() {
     const t = window.setTimeout(() => ui.hideBanner(), 5000);
     return () => window.clearTimeout(t);
   }, [ui.banner, ui]);
+
+  // Hold the launch screen until the two questions that decide the first screen have
+  // been answered. Both are asked once, at mount, and both are quick — but neither is
+  // instant, and rendering before they land meant the first thing the viewer saw was
+  // the wrong screen: an empty profile picker, replaced a moment later by Home.
+  //
+  // `providersLoading` rather than `providers === null`: a refusal also ends the wait,
+  // because `useCommand` has already reported it and the setup wizard is the right
+  // answer to "there are no providers that we know of".
+  if (providersLoading || !profile.loaded) {
+    return <BootScreen label="Opening your library…" />;
+  }
 
   const needsSetup = !setupDone || providers?.length === 0;
   if (needsSetup || addingProvider) {

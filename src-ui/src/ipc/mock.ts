@@ -1168,6 +1168,11 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return want;
   },
 
+  // Nothing to reveal in a browser: the window is already there and was never hidden.
+  // Answered rather than omitted so the call is not a rejection on every launch of the
+  // browser preview.
+  'window.ready': () => undefined,
+
   'library.item': ({ kind, id }) => {
     if (kind === 'movie') {
       const m = fx.movies.find((x) => x.id === id);

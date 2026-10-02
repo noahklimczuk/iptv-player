@@ -872,6 +872,18 @@ export interface Commands {
    * into the old window behind it.
    */
   'window.fullscreen': (args?: { fullscreen?: boolean }) => boolean;
+  /**
+   * Show the window, now that the UI has painted something.
+   *
+   * The window is created hidden because it is also transparent — mpv composites behind
+   * the WebView2 — and a transparent window with nothing painted in it is a hole through
+   * to the desktop. Called as early as possible, from the first frame rather than once
+   * data has arrived, because `index.html` has already painted a boot screen by then.
+   *
+   * Idempotent, and nothing waits on it: the host reveals the window by itself after a
+   * few seconds, so a UI that fails to boot still leaves a window somebody can close.
+   */
+  'window.ready': () => void;
   'app.about': () => {
     version: string;
     license: string;

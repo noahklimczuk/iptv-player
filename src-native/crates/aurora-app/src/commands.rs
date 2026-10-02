@@ -733,6 +733,37 @@ pub fn window_fullscreen(window: tauri::Window, args: Option<FullscreenArgs>) ->
     Ok(wanted)
 }
 
+/// Show the window, now that there is something on it worth looking at.
+///
+/// The window is created hidden (`"visible": false`). It has to be, because it is also
+/// `"transparent": true` — the mpv surface composites behind the WebView2 and that is
+/// what makes it possible — and a transparent window with nothing painted in it yet is a
+/// hole straight through to the desktop. Aurora launched as a floating title bar over
+/// whatever happened to be behind it, for as long as WebView2 took to start, which is
+/// the slowest part of the launch and not a short time on a cold disk.
+///
+/// `index.html` paints a boot screen before any script runs, so by the time the UI calls
+/// this there is already something to reveal. The reveal is deliberately not waited on
+/// by anything: `main` shows the window regardless after a few seconds, because a UI
+/// that fails to boot must still produce a window somebody can close.
+///
+/// Idempotent. The fallback and this may both run, and in either order.
+#[tauri::command(async)]
+pub fn window_ready(window: tauri::Window) -> Result<()> {
+    let already = window.is_visible().unwrap_or(false);
+    window
+        .show()
+        .map_err(|e| crate::AppError::Other(e.to_string()))?;
+    if !already {
+        // Only on the transition. Stealing focus from whatever the person moved on to
+        // while waiting would be its own rudeness, but the first appearance of a window
+        // somebody launched should be the thing they are looking at.
+        let _ = window.set_focus();
+        tracing::info!("window revealed by the UI");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemArgs {

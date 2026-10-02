@@ -48,6 +48,15 @@ const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
 /// opens it.
 const UPDATE_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// How long to wait for the UI to say it has painted before showing the window anyway.
+///
+/// The window starts hidden so that its transparency is never a hole through to the
+/// desktop (`commands::window_ready`), which means something must guarantee it appears.
+/// A UI that throws during mount, or a WebView2 that is not there at all, must still end
+/// with a window somebody can see and close — an invisible process that has to be killed
+/// from Task Manager is a far worse failure than an ugly first second.
+const LAUNCH_REVEAL_FALLBACK: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Ask GitHub whether there is a newer build.
 ///
 /// On its own thread and after a pause, because nothing about this is urgent and the
@@ -198,6 +207,26 @@ fn main() {
 
             app.manage(services);
 
+            // The backstop for the hidden window. Harmless when the UI has already
+            // revealed it: `show` on a visible window does nothing.
+            if let Some(main_window) = app.get_webview_window("main") {
+                std::thread::Builder::new()
+                    .name("aurora-reveal".into())
+                    .spawn(move || {
+                        std::thread::sleep(LAUNCH_REVEAL_FALLBACK);
+                        if !main_window.is_visible().unwrap_or(false) {
+                            tracing::warn!(
+                                "the UI did not report itself ready in {:?}; showing the \
+                                 window anyway",
+                                LAUNCH_REVEAL_FALLBACK
+                            );
+                            let _ = main_window.show();
+                            let _ = main_window.set_focus();
+                        }
+                    })
+                    .expect("spawning the reveal thread");
+            }
+
             // The metadata and episode-listing passes used to run only after a refresh,
             // so a library that was imported once and then just used never finished
             // either. See `catch_up_in_background`.
@@ -293,6 +322,7 @@ fn main() {
             commands::library_playback_aids,
             commands::library_record_skip,
             commands::window_fullscreen,
+            commands::window_ready,
             commands::library_item,
             commands::library_sync_chapters,
             commands::library_series_prefs,

@@ -25,3 +25,23 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </React.StrictMode>,
 );
+
+/**
+ * Tell the host there is something on screen worth showing.
+ *
+ * The window is created hidden, because it is transparent so mpv can composite behind
+ * it, and a transparent window with an unpainted WebView2 in it shows the desktop.
+ *
+ * Two frames, not zero: `render` only schedules the work, so a call on this line would
+ * reveal the window before React has committed anything to it. One frame gets the commit
+ * scheduled and the second runs after the paint that follows it.
+ *
+ * Not awaited and never surfaced. The host shows the window by itself a few seconds in,
+ * so the worst a failure here can cost is that fallback — and a toast about a window
+ * that is plainly visible would be its own small absurdity.
+ */
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    void invoke('window.ready').catch(() => {});
+  });
+});
