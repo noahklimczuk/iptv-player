@@ -37,6 +37,41 @@ use crate::error::{AppError, Result};
 /// an endless reconnect.
 pub const MAX_ROLLOVERS: u32 = 6;
 
+/// How many times a film or episode is reloaded after the stream dies before the error
+/// is left on screen.
+///
+/// A film has one URL, so there is nothing to roll over *to* — but the thing that
+/// usually went wrong is the connection rather than the file, and reloading at the
+/// position it died on is both what a person would do and invisible when it works.
+/// Counted as consecutive failures, not lifetime ones: a two-hour film that hiccups
+/// three times in an hour should still be trying.
+pub const MAX_VOD_RETRIES: u32 = 3;
+
+/// How long to wait before each reload, in seconds, indexed by how many have been tried.
+///
+/// Immediately would be wrong twice over: a provider that just dropped the connection is
+/// rarely ready a quarter-second later, and the heartbeat runs four times a second, so
+/// three retries would be spent inside a second and the viewer would see the error
+/// appear as if nothing had been attempted at all.
+const VOD_BACKOFF_SECS: [i64; MAX_VOD_RETRIES as usize] = [2, 5, 10];
+
+/// A film, episode or catch-up programme that is on, kept so it can be reloaded if the
+/// stream dies.
+///
+/// Deliberately the same URL every time, unlike `LiveSession`: catch-up is addressed by
+/// a time window and a film has exactly one file, so another source would be a
+/// different programme rather than another route to this one.
+#[derive(Debug, Clone)]
+struct VodSession {
+    url: String,
+    options: LoadOptions,
+    /// Consecutive failures so far, reset the moment playback is healthy again.
+    retries: u32,
+    /// When the current failure was first seen, so the backoff can be measured against
+    /// it. `None` while playing.
+    failed_at: Option<i64>,
+}
+
 /// The live channel currently on, and where we are in its list of URLs.
 #[derive(Debug, Clone)]
 struct LiveSession {
@@ -53,6 +88,9 @@ pub struct Playback {
     db: Arc<Mutex<Connection>>,
     player: Arc<Mutex<Box<dyn PlayerBackend>>>,
     session: Mutex<Option<LiveSession>>,
+    /// The non-live thing that is on. Exclusive with `session`: one of the two is always
+    /// `None`, because a film is not a channel and must never roll over to one.
+    vod: Mutex<Option<VodSession>>,
     /// The last state reported, so `tick` can tell a change from a repeat.
     last: Mutex<Option<PlayerState>>,
     /// Where the timeshift buffer goes when the setting does not name a folder.
@@ -81,6 +119,7 @@ impl Playback {
             db,
             player,
             session: Mutex::new(None),
+            vod: Mutex::new(None),
             last: Mutex::new(None),
             data_dir,
             tune: Mutex::new(()),
@@ -125,6 +164,10 @@ impl Playback {
                 "channel {channel_id} has no stream URL"
             )));
         }
+
+        // A channel is on, so nothing else is. Left behind, a film's retry would fire
+        // from the heartbeat and load it over the channel just tuned.
+        *self.vod.lock() = None;
 
         let candidates: Vec<(i64, String)> = sources.into_iter().map(|s| (s.id, s.url)).collect();
         let mut session = LiveSession {
@@ -178,6 +221,12 @@ impl Playback {
         *self.session.lock() = None;
         let mut player = self.player.lock();
         player.load(&url, &options)?;
+        *self.vod.lock() = Some(VodSession {
+            url,
+            options,
+            retries: 0,
+            failed_at: None,
+        });
         Ok(player.state())
     }
 
@@ -199,6 +248,14 @@ impl Playback {
         *self.session.lock() = None;
         let mut player = self.player.lock();
         player.load(&url, &options)?;
+        // Reloading the same catch-up URL is safe and is not failover: it asks the
+        // provider for the same window of the same channel, which is the same programme.
+        *self.vod.lock() = Some(VodSession {
+            url,
+            options,
+            retries: 0,
+            failed_at: None,
+        });
         Ok(player.state())
     }
 
@@ -235,6 +292,7 @@ impl Playback {
         // so a load that was already under way cannot restart the picture afterwards.
         let (_tune, _generation) = self.begin_tune();
         *self.session.lock() = None;
+        *self.vod.lock() = None;
         let mut player = self.player.lock();
         player.stop()?;
         Ok(player.state())
@@ -256,8 +314,18 @@ impl Playback {
             player.state()
         };
 
-        if state.status == PlayerStatus::Error && self.try_recover(now) {
-            // A rollover happened, so the interesting state is the new one.
+        // Healthy playback forgives a film's past failures, so the three retries it is
+        // allowed are three *in a row*. Without this a long film that stuttered early
+        // would arrive at the one failure that mattered with nothing left to try.
+        if state.status == PlayerStatus::Playing {
+            if let Some(vod) = self.vod.lock().as_mut() {
+                vod.retries = 0;
+                vod.failed_at = None;
+            }
+        }
+
+        if state.status == PlayerStatus::Error && (self.try_recover(now) || self.retry_vod(now)) {
+            // Something was reloaded, so the interesting state is the new one.
             let recovered = self.player.lock().state();
             *self.last.lock() = Some(recovered.clone());
             return Some(recovered);
@@ -295,6 +363,68 @@ impl Playback {
                 Err(e.into())
             }
         }
+    }
+
+    /// Reload a film or episode whose stream died, at the position it died on.
+    ///
+    /// Returns whether anything was loaded. `false` covers three different situations and
+    /// they all mean the same thing to the caller — leave the error up: nothing non-live
+    /// is on, the backoff has not elapsed yet, or the retries are spent.
+    fn retry_vod(&self, now: i64) -> bool {
+        // The same reasoning as `try_recover`: the heartbeat must never wait behind a
+        // tune, because by the time it got the lock the viewer would have moved on and
+        // this would load over whatever they chose.
+        let Some(_tune) = self.tune.try_lock() else {
+            return false;
+        };
+        let generation = self.generation.load(Ordering::SeqCst);
+
+        let Some(mut session) = self.vod.lock().clone() else {
+            return false;
+        };
+        if session.retries >= MAX_VOD_RETRIES {
+            return false;
+        }
+
+        // First sight of this failure: start the clock and let the error show. The retry
+        // is deliberately not instant, and pretending otherwise by holding the old state
+        // would be a picture that is not there.
+        let since = match session.failed_at {
+            Some(at) => at,
+            None => {
+                if let Some(v) = self.vod.lock().as_mut() {
+                    v.failed_at = Some(now);
+                }
+                return false;
+            }
+        };
+        if now - since < VOD_BACKOFF_SECS[session.retries as usize] {
+            return false;
+        }
+
+        // Resume where it died rather than at the start. A film that drops forty minutes
+        // in and comes back at the beginning is worse than one that stays broken: the
+        // viewer has to find their place again, and the progress row has already moved.
+        let died_at = self.player.lock().state().position_secs;
+        if died_at > 0.0 && !session.options.is_live {
+            session.options.start_at_secs = Some(died_at);
+        }
+
+        session.retries += 1;
+        session.failed_at = None;
+        tracing::info!(
+            "reloading {} at {died_at:.0}s, attempt {} of {MAX_VOD_RETRIES}",
+            session.url,
+            session.retries
+        );
+        let loaded = self.player.lock().load(&session.url, &session.options);
+
+        // A tune that arrived while this was loading owns the picture now.
+        if !self.is_current(generation) {
+            return false;
+        }
+        *self.vod.lock() = Some(session);
+        loaded.is_ok()
     }
 
     /// Roll over, unless a tune is already under way.
@@ -375,6 +505,9 @@ mod tests {
     #[derive(Default)]
     struct FakeInner {
         loaded: Vec<String>,
+        /// The position each load was asked to start at, in the same order as `loaded`.
+        /// What proves a reload resumed where the stream died rather than at the top.
+        starts: Vec<Option<f64>>,
         refuse: Vec<String>,
         state: PlayerState,
     }
@@ -409,9 +542,18 @@ mod tests {
         fn loaded(&self) -> Vec<String> {
             self.0.lock().loaded.clone()
         }
+        fn starts(&self) -> Vec<Option<f64>> {
+            self.0.lock().starts.clone()
+        }
         /// What a dropped connection looks like from the outside.
         fn die(&self) {
             self.0.lock().state.status = PlayerStatus::Error;
+        }
+        /// Playing, and this far in — so a reload has a position to resume from.
+        fn playing_at(&self, position_secs: f64) {
+            let mut inner = self.0.lock();
+            inner.state.status = PlayerStatus::Playing;
+            inner.state.position_secs = position_secs;
         }
         fn backend(&self) -> Box<dyn PlayerBackend> {
             Box::new(Self(Arc::clone(&self.0), Arc::clone(&self.1)))
@@ -422,7 +564,7 @@ mod tests {
         fn load(
             &mut self,
             url: &str,
-            _options: &LoadOptions,
+            options: &LoadOptions,
         ) -> std::result::Result<(), PlayerError> {
             let wait = self.1 .0.lock().get(url).copied();
             if let Some(wait) = wait {
@@ -433,9 +575,10 @@ mod tests {
                 return Err(PlayerError::Command(format!("refused {url}")));
             }
             inner.loaded.push(url.to_string());
+            inner.starts.push(options.start_at_secs);
             inner.state = PlayerState {
                 status: PlayerStatus::Playing,
-                is_live: true,
+                is_live: options.is_live,
                 ..Default::default()
             };
             Ok(())
@@ -958,6 +1101,121 @@ mod tests {
         assert_eq!(
             fake.loaded(),
             vec![url(0), "http://example.com/film.mkv".to_string()]
+        );
+    }
+
+    /// A film's URL in the harness's library, so `play_item` has something to resolve.
+    fn seed_film(db: &Arc<Mutex<Connection>>) -> String {
+        db.lock()
+            .execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (1,1,'m1','A Film','afilm','http://example.com/film.mkv',0)",
+                [],
+            )
+            .unwrap();
+        "http://example.com/film.mkv".to_string()
+    }
+
+    /// A film has one URL, so there is nothing to roll over to — but the connection is
+    /// what usually broke, and reloading it is both what a person would do and invisible
+    /// when it works. Before this, a provider dropping a film forty minutes in left the
+    /// error on screen and that was the end of the evening.
+    #[test]
+    fn a_film_whose_stream_dies_is_reloaded_where_it_died() {
+        let (playback, fake, db) = harness(0);
+        let film = seed_film(&db);
+
+        playback.play_item("movie", 1, None).unwrap();
+        fake.playing_at(2_400.0);
+        fake.die();
+
+        // The first heartbeat starts the backoff and deliberately does not reload: a
+        // provider that just hung up is not ready a quarter of a second later.
+        playback.tick(NOW);
+        assert_eq!(fake.loaded(), vec![film.clone()], "reloaded too eagerly");
+
+        // Nor before the backoff has elapsed.
+        playback.tick(NOW + 1);
+        assert_eq!(fake.loaded().len(), 1, "reloaded before the backoff");
+
+        playback.tick(NOW + 2);
+        assert_eq!(fake.loaded(), vec![film.clone(), film.clone()]);
+        assert_eq!(
+            fake.starts(),
+            vec![None, Some(2_400.0)],
+            "a film that drops forty minutes in must not come back at the beginning"
+        );
+    }
+
+    /// Bounded, for the same reason rollovers are: a provider having an outage should end
+    /// with an honest error rather than an endless reconnect.
+    #[test]
+    fn a_film_is_given_up_on_after_three_tries() {
+        let (playback, fake, db) = harness(0);
+        seed_film(&db);
+        playback.play_item("movie", 1, None).unwrap();
+
+        // Each attempt: it dies, the backoff is noticed, the backoff elapses, it reloads.
+        let mut at = NOW;
+        for backoff in [2, 5, 10] {
+            fake.die();
+            playback.tick(at);
+            at += backoff;
+            playback.tick(at);
+        }
+        assert_eq!(fake.loaded().len(), 4, "one load and three retries");
+
+        // And then it stops, however long anyone waits.
+        fake.die();
+        for extra in [0, 1, 30, 600] {
+            playback.tick(at + extra);
+        }
+        assert_eq!(fake.loaded().len(), 4, "kept retrying past its budget");
+    }
+
+    /// Three retries *in a row*, not three in a lifetime. A two-hour film on a line that
+    /// hiccups every half hour should still be trying at the end of it.
+    #[test]
+    fn healthy_playback_forgives_a_films_earlier_failures() {
+        let (playback, fake, db) = harness(0);
+        seed_film(&db);
+        playback.play_item("movie", 1, None).unwrap();
+
+        // Two failures, each recovered from.
+        let mut at = NOW;
+        for _ in 0..2 {
+            fake.die();
+            playback.tick(at);
+            at += 2;
+            playback.tick(at);
+            // It came back, and played for a while.
+            fake.playing_at(1_000.0);
+            playback.tick(at + 1);
+            at += 60;
+        }
+        assert_eq!(fake.loaded().len(), 3);
+
+        // A third failure is still worth retrying, because the count was reset by the
+        // playing in between. With a lifetime budget this reload would not happen.
+        fake.die();
+        playback.tick(at);
+        playback.tick(at + 2);
+        assert_eq!(fake.loaded().len(), 4, "gave up on a film it had recovered");
+    }
+
+    /// Live TV keeps its own recovery. A channel with another source rolls over to it
+    /// rather than reloading the one that just failed.
+    #[test]
+    fn a_channel_still_rolls_over_rather_than_reloading() {
+        let (playback, fake, _db) = harness(2);
+        playback.play_live(1, NOW).unwrap();
+        fake.die();
+        playback.tick(NOW);
+        assert_eq!(
+            fake.loaded(),
+            vec![url(0), url(1)],
+            "a channel should move to its next source immediately, not wait on a backoff"
         );
     }
 

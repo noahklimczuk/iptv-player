@@ -292,7 +292,7 @@ export interface PlaybackError {
   code:
     | 'dns' | 'refused' | 'tls' | 'unauthorized' | 'forbidden' | 'notFound' | 'rateLimited'
     | 'serverError' | 'connectionLimit' | 'timeout' | 'unsupportedCodec'
-    | 'drmProtected' | 'unknown';
+    | 'drmProtected' | 'dropped' | 'unknown';
   message: string;
   cause: string;
   actions: ErrorAction[];

@@ -13,6 +13,9 @@ tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 libmpv2 = "4"
+# For `mpv_request_log_messages`, which `libmpv2` does not wrap. Capturing mpv's own log
+# is the only way the player learns *why* a stream refused: see `MpvBackend::fail`.
+libmpv2-sys = "4"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",

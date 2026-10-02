@@ -31,6 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::backend::{LoadOptions, PlayerBackend};
 use crate::error::{PlaybackError, PlayerError};
 use crate::state::{Aspect, PlaybackStats, PlayerState, PlayerStatus, Track, TrackKind};
+use crate::watchdog::{Phase, Watchdog};
 
 /// The runtime libmpv, by the name the import library was built against. `mpv.lib` is
 /// generated from the DLL's own export table with `/name:` set to it, so this string and
@@ -54,6 +55,17 @@ fn libmpv_loadable() -> bool {
 /// mpv's end-file reason for a playback error.
 const MPV_END_FILE_REASON_ERROR: u32 = 4;
 
+/// How many of mpv's own log lines are kept to describe the next failure.
+///
+/// Small on purpose. What is wanted is the handful of lines immediately before the
+/// failure — the HTTP status, the codec it could not open — and not a transcript.
+const LOG_CONTEXT_LINES: usize = 8;
+
+/// The lowest mpv log level worth keeping. `warn` is where the useful ones live:
+/// ffmpeg reports `Server returned 403 Forbidden` at error level and its codec
+/// complaints at warn, while `info` adds a paragraph of version banners per load.
+const LOG_LEVEL: &str = "warn";
+
 /// Owned copies of the mpv events we care about, so the event-context borrow can be
 /// released before handling them.
 enum Drained {
@@ -66,6 +78,8 @@ enum Drained {
     /// before `Event::EndFile` is ever constructed, so the most important thing the
     /// player can be told arrives down the arm that used to end the loop.
     Failed(String),
+    /// A line mpv logged, kept to describe whatever fails next.
+    Log(String),
 }
 
 /// A live stream being kept on disk so it can be rewound (README §7.6).
@@ -84,6 +98,15 @@ pub struct MpvBackend {
     state: PlayerState,
     /// The buffer this load was given, or `None` when nothing is being kept.
     timeshift: Option<Timeshift>,
+    /// Catches the failures mpv does not report: a load that never arrives, and a
+    /// stream that stops sending without closing. See `crate::watchdog`.
+    watchdog: Watchdog,
+    /// A monotonic clock for the watchdog, started when the backend was built. Not
+    /// wall-clock: the question is only ever how much time has passed.
+    clock: std::time::Instant,
+    /// mpv's last few log lines, newest last, cleared on each load. These are what give
+    /// `classify` something better than "loading failed" to work from.
+    recent_log: std::collections::VecDeque<String>,
 }
 
 // SAFETY: `Mpv` is internally synchronized, and the backend lives behind a `Mutex` in
@@ -189,11 +212,39 @@ impl MpvBackend {
                 .map_err(|e| PlayerError::Init(format!("mpv refused to report {name}: {e}")))?;
         }
 
+        // Ask mpv for its own log. Without this the only description of a failure is
+        // `mpv_error_string`, which says "loading failed" for a 403, a 404, a dead host
+        // and an unplayable codec alike — so `classify` had nothing to tell them apart
+        // by and every one of them reached the viewer as "This channel didn't respond".
+        // The lines captured here are what `fail` hands it instead.
+        //
+        // Not fatal if it is refused: a player that cannot explain its failures well is
+        // better than one that will not start.
+        unsafe {
+            let level = std::ffi::CString::new(LOG_LEVEL).expect("a literal with no nul");
+            let rc = libmpv2_sys::mpv_request_log_messages(mpv.ctx.as_ptr(), level.as_ptr());
+            if rc < 0 {
+                tracing::warn!("mpv refused to report its log ({rc}); errors will be vaguer");
+            }
+        }
+
+        let state = PlayerState::default();
+
+        // Push the starting volume into mpv rather than assuming it is already there.
+        // `PlayerState::default` says 70 and mpv's own default is 100, so the OSD opened
+        // on a slider that did not match the sound coming out — and the first nudge of
+        // the volume key jumped from 100 to 71 rather than moving by one.
+        let _ = mpv.set_property("volume", state.volume as f64);
+        let _ = mpv.set_property("mute", state.muted);
+
         Ok(Self {
             mpv,
             video_hwnd: None,
-            state: PlayerState::default(),
+            state,
             timeshift: None,
+            watchdog: Watchdog::default(),
+            clock: std::time::Instant::now(),
+            recent_log: std::collections::VecDeque::new(),
         })
     }
 
@@ -250,9 +301,40 @@ impl MpvBackend {
     /// stops. Getting "403" in front of `classify` means capturing mpv's log stream
     /// (`mpv_request_log_messages`), which is a larger change than this one.
     fn fail(&mut self, message: &str) {
-        tracing::warn!("playback failed: {message}");
-        self.state.error = Some(PlaybackError::classify(message));
+        // mpv's own message plus the log lines leading up to it. The status code lives in
+        // the latter: `mpv_error_string` gives "loading failed" and ffmpeg gives
+        // "Server returned 403 Forbidden", and only one of those tells the viewer their
+        // line has hit its connection limit.
+        let described = if self.recent_log.is_empty() {
+            message.to_string()
+        } else {
+            format!(
+                "{message} [mpv: {}]",
+                self.recent_log
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            )
+        };
+        tracing::warn!("playback failed: {described}");
+        self.state.error = Some(PlaybackError::classify(&described));
         self.state.status = PlayerStatus::Error;
+        // A failed stream is not a buffered one. Leaving the window up would have the
+        // OSD offer a rewind into a cache that is no longer being written.
+        self.timeshift = None;
+        self.state.timeshift = None;
+    }
+
+    /// Which of the watchdog's phases the player is currently in.
+    fn phase(&self) -> Phase {
+        match self.state.status {
+            PlayerStatus::Loading => Phase::Starting,
+            PlayerStatus::Playing => Phase::Running,
+            PlayerStatus::Buffering => Phase::Rebuffering,
+            // Idle, Paused and Error are all deliberate: nothing is owed a picture.
+            _ => Phase::Resting,
+        }
     }
 
     /// Pump mpv's event queue. Called from a dedicated thread by the app layer; every
@@ -277,6 +359,9 @@ impl MpvBackend {
                     Ok(Event::FileLoaded) => Drained::FileLoaded,
                     Ok(Event::EndFile(reason)) => Drained::EndFile(reason),
                     Ok(Event::PropertyChange { name, .. }) => Drained::Property(name.to_string()),
+                    Ok(Event::LogMessage { prefix, text, .. }) => {
+                        Drained::Log(format!("{prefix}: {}", text.trim_end()))
+                    }
                     Ok(_) => continue,
                     Err(e) => Drained::Failed(e.to_string()),
                 });
@@ -305,6 +390,14 @@ impl MpvBackend {
                     // classified from the literal word "unknown".
                     if reason == MPV_END_FILE_REASON_ERROR {
                         self.fail("playback stopped with an error");
+                    } else if self.state.is_live {
+                        // A live stream has no end. Reaching one means the provider hung
+                        // up — the commonest way an IPTV stream dies, and it arrives with
+                        // a perfectly ordinary EOF rather than an error. Treated as Idle,
+                        // as it used to be, it looked to the viewer like the channel had
+                        // simply stopped, and `playback::tick` never rolled over to
+                        // another source because it only reacts to `Error`.
+                        self.fail("the provider closed the connection");
                     } else {
                         self.state.status = PlayerStatus::Idle;
                     }
@@ -343,10 +436,32 @@ impl MpvBackend {
                     }
                     _ => {}
                 },
+                Drained::Log(line) => {
+                    // Kept for `fail`, and logged at debug so a failure can be read about
+                    // afterwards in `aurora.log` rather than only summarised in the OSD.
+                    tracing::debug!("mpv: {line}");
+                    if self.recent_log.len() == LOG_CONTEXT_LINES {
+                        self.recent_log.pop_front();
+                    }
+                    self.recent_log.push_back(line);
+                }
             }
         }
         self.refresh_stats();
         self.refresh_timeshift();
+
+        // Last, so it judges the state the events above have just produced. A verdict is
+        // a failure in exactly the same terms as one mpv reported itself, which is what
+        // lets `playback::tick` roll over to another source without knowing the
+        // difference between a stream that refused and one that went quiet.
+        let verdict = self.watchdog.observe(
+            self.clock.elapsed().as_secs_f64(),
+            self.phase(),
+            self.state.position_secs,
+        );
+        if let Some(reason) = verdict.reason() {
+            self.fail(reason);
+        }
     }
 
     /// Work out what the viewer can currently rewind into.
@@ -535,6 +650,12 @@ impl PlayerBackend for MpvBackend {
                 budget: ts.budget,
                 tuned_at: None,
             });
+        // Both belong to the stream being replaced. The watchdog would otherwise judge
+        // this load against the old one's playhead, and `fail` would describe it with the
+        // previous stream's complaints — a 403 from the channel you just left, attached
+        // to the one you just asked for.
+        self.watchdog.reset();
+        self.recent_log.clear();
         self.cmd(&["loadfile", url, "replace"])
     }
 
@@ -543,6 +664,9 @@ impl PlayerBackend for MpvBackend {
         self.state.status = PlayerStatus::Idle;
         self.timeshift = None;
         self.state.timeshift = None;
+        // Nothing is being attempted any more, so nothing is late. Without this the
+        // position left by the stopped stream is still the watchdog's last known one.
+        self.watchdog.reset();
         r
     }
 
@@ -552,8 +676,14 @@ impl PlayerBackend for MpvBackend {
             .map_err(|e| PlayerError::Command(e.to_string()))?;
         self.state.status = if paused {
             PlayerStatus::Paused
-        } else {
+        } else if self.state.status == PlayerStatus::Paused {
+            // Only a pause can be undone here. Claiming `Playing` unconditionally meant
+            // un-pausing a stream that was buffering, or had failed, announced a picture
+            // that was not there — and told the watchdog to start timing a phase the
+            // player was not in.
             PlayerStatus::Playing
+        } else {
+            self.state.status
         };
         Ok(())
     }

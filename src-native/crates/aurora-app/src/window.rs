@@ -2,7 +2,7 @@
 
 use aurora_core::catchup;
 use aurora_db::repo::channels;
-use aurora_db::rusqlite::Connection;
+use aurora_db::rusqlite::{Connection, OptionalExtension};
 use aurora_player::backend::{LoadOptions, Playing};
 use aurora_player::state::MediaKind;
 
@@ -145,6 +145,22 @@ pub fn live_sources(
     ))
 }
 
+/// A URL worth handing to the player, or a sentence saying why there isn't one.
+///
+/// An M3U entry can carry a title and no address, and `movies.url` is `NOT NULL` without
+/// being non-empty, so this is reachable from an ordinary import. mpv's own answer to a
+/// blank URL is `PlayerError::Command("empty URL")`, which reached the viewer as the
+/// detail line under "Could not play …" and told them nothing.
+fn playable(url: String, noun: &str) -> Result<String> {
+    if url.trim().is_empty() {
+        return Err(AppError::Other(format!(
+            "Your provider listed this {noun} without a playable address, so there is \
+             nothing to open. A library refresh may fill it in."
+        )));
+    }
+    Ok(url)
+}
+
 /// Turn a library item into a playable URL plus the options it needs.
 ///
 /// Credentials live in Windows Credential Manager, not the database (README C10), so
@@ -169,7 +185,20 @@ pub fn resolve_playback(
                 .query_row("SELECT url, title FROM movies WHERE id = ?1", [id], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
                 })
-                .map_err(aurora_db::DbError::from)?;
+                .optional()
+                .map_err(aurora_db::DbError::from)?
+                .ok_or_else(|| {
+                    // Not a database error dressed up as one. The row being absent is an
+                    // ordinary thing — a refresh removed the title, or a stale screen is
+                    // still offering it — and `rusqlite`'s own words for it are
+                    // "Query returned no rows", which went to the viewer verbatim.
+                    AppError::Other(
+                        "This film is no longer in your library. A refresh may have \
+                         removed it."
+                            .into(),
+                    )
+                })?;
+            let url = playable(url, "film")?;
             Ok((
                 url,
                 LoadOptions {
@@ -191,7 +220,16 @@ pub fn resolve_playback(
                 .query_row("SELECT url, title FROM episodes WHERE id = ?1", [id], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
-                .map_err(aurora_db::DbError::from)?;
+                .optional()
+                .map_err(aurora_db::DbError::from)?
+                .ok_or_else(|| {
+                    AppError::Other(
+                        "This episode is no longer in your library. A refresh may have \
+                         removed it."
+                            .into(),
+                    )
+                })?;
+            let url = playable(url, "episode")?;
             Ok((
                 url,
                 LoadOptions {
@@ -281,6 +319,52 @@ mod tests {
         let db = aurora_db::open_memory().unwrap();
         let err = resolve_playback(&db, "podcast", 1, None).unwrap_err();
         assert!(err.to_string().contains("podcast"));
+    }
+
+    /// What the viewer saw before this was the detail line "Query returned no rows"
+    /// under "Could not play …", which describes the database's experience rather than
+    /// theirs. The row goes missing for an ordinary reason — a refresh removed the
+    /// title while a screen was still offering it.
+    #[test]
+    fn a_title_that_is_gone_says_so_in_words() {
+        let db = aurora_db::open_memory().unwrap();
+        for (kind, noun) in [("movie", "film"), ("episode", "episode")] {
+            let err = resolve_playback(&db, kind, 404, None)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(noun), "{kind}: {err}");
+            assert!(err.contains("no longer in your library"), "{kind}: {err}");
+            assert!(
+                !err.to_lowercase().contains("query"),
+                "the database's words reached the viewer: {err}"
+            );
+        }
+    }
+
+    /// An M3U entry can carry a title and no address. mpv's answer to that is "empty
+    /// URL", which is true and useless.
+    #[test]
+    fn a_title_with_no_address_says_what_is_missing() {
+        let db = aurora_db::open_memory().unwrap();
+        db.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                 last_seen_at)
+             VALUES (1,1,'m1','A Film','afilm','   ',0)",
+            [],
+        )
+        .unwrap();
+
+        let err = resolve_playback(&db, "movie", 1, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("without a playable address"), "{err}");
+        assert!(err.contains("film"), "{err}");
     }
 
     #[test]
