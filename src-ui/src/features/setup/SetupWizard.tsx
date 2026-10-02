@@ -71,11 +71,28 @@ export function SetupWizard({
     }));
   }, []);
 
-  const validate = useCallback(async () => {
+  /**
+   * Check the draft — or the one passed in.
+   *
+   * The override exists for the "use that address" button, which changes the draft and
+   * re-checks in the same breath: `setDraft` does not take effect until the next render,
+   * so without it this would close over the address that had just been rejected and check
+   * that again.
+   */
+  const validate = useCallback(async (override?: DraftProvider) => {
+    const subject = override ?? draft;
+    if (override) {
+      setDraft(override);
+      // The box at the top holds what was pasted, not the draft, so without this the
+      // address on screen stays the one that was just rejected — and taking the offer
+      // looks like it did nothing. Set directly rather than through `onPaste`, which
+      // re-runs detection and would throw away the username and password already typed.
+      setPasted(override.url);
+    }
     setChecking(true);
     setError(null);
     try {
-      setValidation(await invoke('providers.validate', { draft }));
+      setValidation(await invoke('providers.validate', { draft: subject }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -263,7 +280,7 @@ function SourceStep({
   detected: 'none' | 'credentials' | 'panel';
   checking: boolean;
   validation: ValidationResult | null;
-  onCheck: () => void;
+  onCheck: (draft?: DraftProvider) => void;
   onNext: () => void;
 }) {
   const firstRef = useRef<HTMLTextAreaElement>(null);
@@ -387,6 +404,28 @@ function SourceStep({
             {validation.detail && (
               <div style={{ color: 'var(--text-muted)', marginTop: 3 }}>{validation.detail}</div>
             )}
+
+            {/* The host found the same panel answering under the other scheme. Offered
+                rather than applied: switching to `http://` puts the sign-in on the wire in
+                clear text, which is a trade the viewer makes, not one made for them — and
+                it is a trade most panels force, since plenty are published on plain HTTP
+                and nothing else. */}
+            {!validation.ok && validation.suggestedUrl && (
+              <div style={{ marginTop: 'var(--sp-3)' }}>
+                <div style={{ color: 'var(--text)', marginBottom: 6 }}>
+                  It does answer at <strong>{validation.suggestedUrl}</strong>.
+                  {validation.suggestedUrl.startsWith('http://')
+                    && ' That is an unencrypted address, so your sign-in would be sent in'
+                      + ' clear text — which is how most panels work.'}
+                </div>
+                <Button
+                  data-testid="use-suggested-url"
+                  onClick={() => onCheck({ ...draft, url: validation.suggestedUrl! })}
+                >
+                  Use that address
+                </Button>
+              </div>
+            )}
             {validation.ok && validation.daysUntilExpiry != null && (
               <div style={{ display: 'flex', gap: 6, marginTop: 7, flexWrap: 'wrap' }}>
                 <Badge tone={validation.daysUntilExpiry < 7 ? 'live' : 'neutral'}>
@@ -415,7 +454,7 @@ function SourceStep({
           The button says which it is doing, so continuing past a failure is a decision
           rather than something that happened. */}
       <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end' }}>
-        <Button onClick={onCheck} disabled={checking || !draft.url}>
+        <Button onClick={() => onCheck()} disabled={checking || !draft.url}>
           {checking ? 'Checking…' : 'Check connection'}
         </Button>
         <Button
