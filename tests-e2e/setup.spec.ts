@@ -41,8 +41,12 @@ test('validation reports account status before anything is saved', async ({ page
     .getByLabel('Provider address')
     .fill('http://panel.example.com/get.php?username=alice&password=hunter2');
 
-  // Continue stays disabled until the connection is proven.
-  await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
+  // The form is complete, so Continue is available: the check reports on the panel, it
+  // does not decide whether the provider may be saved. A panel that is down for ten
+  // minutes is not a provider somebody typed wrongly, and refusing to let them finish the
+  // form means they cannot use the app until it comes back. A failed check says "Add it
+  // anyway" instead; a malformed address still gates, below.
+  await expect(page.getByRole('button', { name: 'Continue' })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Check connection' }).click();
   await expect(page.getByRole('status')).toContainText('Connected');
@@ -57,7 +61,12 @@ test('a bad address is refused with a readable reason', async ({ page }) => {
   await page.getByRole('button', { name: 'Check connection' }).click();
 
   await expect(page.getByRole('status')).toContainText('does not look like a URL');
-  await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
+  // A string that is not a URL is a form that is not filled in, not a panel that is
+  // having a bad day — so this one really does gate, whichever label the button is
+  // wearing after a failed check.
+  await expect(
+    page.getByRole('button', { name: /^(Continue|Add it anyway)$/ }),
+  ).toBeDisabled();
 });
 
 test('the full journey ends in a populated library', async ({ page }) => {

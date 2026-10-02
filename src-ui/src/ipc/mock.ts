@@ -1845,7 +1845,21 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       return { ...base, message: 'That does not look like a URL',
         detail: 'A provider address starts with http:// or https://' };
     }
-    // The mock accepts anything well-formed; the shape of the answer is what the
+    // A host that cannot exist gets the answer a real one would: `.invalid` is reserved
+    // by RFC 2606 precisely so that something can be unreachable on purpose. Without
+    // this the preview had no way to reach the failed-check state at all, which is the
+    // state the wizard most needs to get right — it is the one somebody is looking at
+    // when their panel is down.
+    if (/\.invalid(\/|:|$)/i.test(draft.url.trim())) {
+      return {
+        ...base,
+        message: "Your provider didn't respond in time",
+        detail:
+          'The server may be overloaded, or the address may be missing a port. '
+          + 'Panels usually publish one, like :8080 or :2082.',
+      };
+    }
+    // The mock accepts anything else well-formed; the shape of the answer is what the
     // wizard is being exercised against.
     if (draft.kind === 'xtream') {
       if (!draft.username || !draft.password) {

@@ -284,7 +284,31 @@ export default function App() {
       invoke('player.setMuted', { muted: !(ui.player?.muted ?? false) })
         .catch(report('Could not change the volume')),
     onFullscreen: fullscreen.toggle,
-    onInfo: () => {},
+    /**
+     * `i` — what is this?
+     *
+     * The key was bound, documented in the hotkeys sheet, and called an empty function.
+     * On live TV the answer is the channel banner, which is the same thing a zap shows
+     * and which `useZapper` has always been able to raise. On a film or an episode it is
+     * the detail panel, fetched by what the player says is playing — `library.item`
+     * ignores the library filter on purpose, so this works for something reached by
+     * search that browsing would hide.
+     */
+    onInfo: () => {
+      const p = ui.player;
+      if (!p) return;
+      if (p.isLive) {
+        if (p.channelId != null) ui.showBanner(p.channelId);
+        return;
+      }
+      if (p.itemId == null || p.itemKind == null) return;
+      // An episode's detail is its series': there is no card for one episode, and "what
+      // is this?" about an episode is a question about the show it belongs to.
+      const kind = p.itemKind === 'episode' ? 'series' : 'movie';
+      invoke('library.item', { kind, id: p.itemId })
+        .then((found) => found && ui.openDetail(found))
+        .catch(report('Could not look that up'));
+    },
     onNavigate: (to: string) => { closePlayer(); navigate(to); },
   }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle]);
 

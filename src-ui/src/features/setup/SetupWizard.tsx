@@ -234,6 +234,23 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/**
+ * Enough of a provider to be worth saving, without asking the network anything.
+ *
+ * This is the line the Continue button is gated on, and it is drawn between two different
+ * kinds of wrong. A form that is not filled in — no address, a string that is not a URL, a
+ * panel login missing half its sign-in — cannot be saved, and no amount of retrying the
+ * network will change that. A panel that does not answer is a different thing entirely: it
+ * may be overloaded, down for ten minutes, or blocking this machine's User-Agent, and none
+ * of that is something the viewer typed. The check reports it; it does not get to lock
+ * them out of the app over it.
+ */
+function canContinue(draft: DraftProvider): boolean {
+  if (!/^https?:\/\//i.test(draft.url.trim())) return false;
+  if (draft.kind !== 'xtream') return true;
+  return Boolean(draft.username?.trim() && draft.password?.trim());
+}
+
 function SourceStep({
   draft, setDraft, pasted, onPaste, detected, checking, validation, onCheck, onNext,
 }: {
@@ -387,12 +404,26 @@ function SourceStep({
         </div>
       )}
 
+      {/* A failed check used to disable Continue outright, which made the check a gate
+          rather than advice — and the gate is wrong at exactly the moment it matters. A
+          panel that is overloaded, slow, behind a block on this machine's User-Agent, or
+          simply down for ten minutes is not a panel the viewer has typed wrongly, and
+          refusing to let them finish the form means they cannot use the app at all until
+          their provider recovers. The check is worth running and worth reporting; it is
+          not worth being the only way in.
+
+          The button says which it is doing, so continuing past a failure is a decision
+          rather than something that happened. */}
       <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end' }}>
         <Button onClick={onCheck} disabled={checking || !draft.url}>
           {checking ? 'Checking…' : 'Check connection'}
         </Button>
-        <Button variant="primary" onClick={onNext} disabled={!validation?.ok}>
-          Continue
+        <Button
+          variant="primary"
+          onClick={onNext}
+          disabled={checking || !draft.url || !canContinue(draft)}
+        >
+          {validation && !validation.ok ? 'Add it anyway' : 'Continue'}
         </Button>
       </div>
     </div>
