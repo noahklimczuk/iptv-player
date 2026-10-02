@@ -10,10 +10,77 @@ import type { Episode, PlayerState, TimeshiftWindow } from '@shared/ipc';
 import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { hasVideoSurface, invoke } from '@/ipc';
-import { report } from '@/lib/errors';
+import { notify, report } from '@/lib/errors';
 import { clockTime, duration } from '@/lib/format';
 
 const HIDE_AFTER_MS = 3200;
+
+/**
+ * How long to record when the channel has no guide.
+ *
+ * A provider with no EPG is common, and "there is nothing in the guide so you cannot
+ * record" is a worse answer than recording the hour somebody is actually watching.
+ */
+const UNGUIDED_RECORDING_SECS = 60 * 60;
+
+/** Speeds the transport offers. Beyond this, pitch correction stops being convincing. */
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
+/** README §6.2's aspect choices, in the order a person tries them. */
+const ASPECTS: { value: PlayerState['aspect']; label: string; detail?: string }[] = [
+  { value: 'auto', label: 'Auto', detail: 'What the stream says' },
+  { value: '16:9', label: '16:9', detail: 'Widescreen' },
+  { value: '4:3', label: '4:3', detail: 'Older broadcasts' },
+  { value: '21:9', label: '21:9', detail: 'Cinematic' },
+  { value: 'zoom', label: 'Zoom', detail: 'Fill the screen, crop the edges' },
+  { value: 'stretch', label: 'Stretch', detail: 'Fill the screen, distort' },
+];
+
+/**
+ * Record what is on this channel now.
+ *
+ * The button had no handler at all, on a screen where the DVR is the obvious thing to
+ * want: `dvr.schedule` has been implemented, registered, contract-typed and covered by a
+ * scheduler with its own tick since the beginning.
+ *
+ * The guide decides what gets recorded. With a programme on, it is that programme, by
+ * name and to its own end — which is what makes it appear in Recordings as something
+ * recognisable rather than as a block of time. Without one, the next hour of the channel,
+ * said plainly in the notice so nobody is surprised by where it stops.
+ */
+async function recordNow(player: PlayerState): Promise<void> {
+  const channelId = player.channelId;
+  if (channelId == null) return;
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    // A channel with no guide answers with nulls rather than failing, so this is one
+    // call either way.
+    const guide = await invoke('epg.nowNext', { channelId }).catch(() => null);
+    const programme = guide?.now ?? null;
+    const id = await invoke('dvr.schedule', {
+      channelId,
+      title: programme?.title ?? player.title ?? 'Recording',
+      subTitle: programme?.subTitle ?? null,
+      // Start from the beginning of the programme: the buffer may well hold the part
+      // already shown, and a recording that begins where you happened to press the
+      // button is half a programme.
+      airStart: programme?.start ?? now,
+      airStop: programme?.stop ?? now + UNGUIDED_RECORDING_SECS,
+    });
+    if (id == null) {
+      notify('That is already being recorded');
+      return;
+    }
+    notify(
+      programme
+        ? `Recording ${programme.title}`
+        : `Recording the next hour — this channel has no guide data`,
+    );
+  } catch (e) {
+    report('Could not start recording')(e);
+  }
+}
 
 /**
  * How close to the live edge still counts as live.
@@ -45,7 +112,7 @@ export function PlayerOverlay({
 }) {
   const [visible, setVisible] = useState(true);
   const [showStats, setShowStats] = useState(false);
-  const [panel, setPanel] = useState<'audio' | 'subtitles' | null>(null);
+  const [panel, setPanel] = useState<'audio' | 'subtitles' | 'playback' | null>(null);
   const hideTimer = useRef<number | undefined>(undefined);
 
   const bump = useCallback(() => {
@@ -164,8 +231,15 @@ export function PlayerOverlay({
                   active={showStats}
                   onClick={() => setShowStats((s) => !s)}
                 />
-                <IconButton icon="pip" label="Picture-in-picture" />
-                <IconButton icon="record" label="Record" />
+                {/* Live only: there is nothing to schedule for a film, which is already
+                    a file on the provider's disk rather than something going past. */}
+                {player.isLive && player.channelId != null && (
+                  <IconButton
+                    icon="record"
+                    label="Record what's on"
+                    onClick={() => recordNow(player)}
+                  />
+                )}
               </div>
             </motion.div>
 
@@ -251,7 +325,11 @@ export function PlayerOverlay({
                     active={panel === 'subtitles'}
                     onClick={() => setPanel((p) => (p === 'subtitles' ? null : 'subtitles'))}
                   />
-                  <IconButton icon="settings" label="Playback settings" />
+                  <IconButton
+                    icon="settings" label="Playback settings"
+                    active={panel === 'playback'}
+                    onClick={() => setPanel((p) => (p === 'playback' ? null : 'playback'))}
+                  />
                   <IconButton
                     icon="fullscreen"
                     label={fullscreen ? 'Leave fullscreen' : 'Fullscreen'}
@@ -262,7 +340,11 @@ export function PlayerOverlay({
               </div>
 
               <AnimatePresence>
-                {panel && (
+                {panel === 'playback' && <PlaybackPanel player={player} />}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {panel && panel !== 'playback' && (
                   <TrackPanel
                     kind={panel}
                     player={player}
@@ -552,6 +634,85 @@ function TrackPanel({
         />
       ))}
     </motion.div>
+  );
+}
+
+/**
+ * Speed and aspect ratio, which nothing in the interface could reach.
+ *
+ * `player.setSpeed` and `player.setAspect` are implemented on the host, carried in the
+ * state, handled by the mpv backend — `Aspect::mpv_value` and its panscan fallback exist
+ * precisely for this — and no screen had ever called either. The button that should have
+ * opened them had no handler.
+ */
+function PlaybackPanel({ player }: { player: PlayerState }) {
+  return (
+    <motion.div
+      data-testid="playback-panel"
+      initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
+      transition={{ duration: 0.15 }}
+      style={{
+        position: 'absolute', right: 'var(--sp-5)', bottom: 84, width: 300,
+        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        borderRadius: 'var(--r-lg)', padding: 'var(--sp-3)', boxShadow: 'var(--shadow-3)',
+        maxHeight: '60vh', overflowY: 'auto',
+      }}
+    >
+      {/* Live TV has no speed worth changing: the stream arrives at the rate it arrives,
+          and playing it at 1.5x means running out of buffer and rebuffering for ever. */}
+      {!player.isLive && (
+        <>
+          <PanelHeading>Speed</PanelHeading>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 'var(--sp-3)' }}>
+            {SPEEDS.map((speed) => (
+              <button
+                key={speed}
+                aria-pressed={player.speed === speed}
+                onClick={() => {
+                  invoke('player.setSpeed', { speed }).catch(report('Could not change the speed'));
+                }}
+                style={{
+                  padding: '5px 11px', borderRadius: 'var(--r-full)', cursor: 'pointer',
+                  fontSize: 'var(--fs-xs)', fontWeight: 700,
+                  border: `1px solid ${player.speed === speed ? 'transparent' : 'var(--border-strong)'}`,
+                  background: player.speed === speed ? 'var(--accent)' : 'transparent',
+                  color: player.speed === speed ? 'var(--accent-text)' : 'var(--text-muted)',
+                }}
+              >
+                {speed === 1 ? 'Normal' : `${speed}×`}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      <PanelHeading>Aspect ratio</PanelHeading>
+      {ASPECTS.map((a) => (
+        <TrackOption
+          key={a.value}
+          label={a.label}
+          detail={a.detail}
+          active={player.aspect === a.value}
+          onClick={() => {
+            invoke('player.setAspect', { aspect: a.value })
+              .catch(report('Could not change the aspect ratio'));
+          }}
+        />
+      ))}
+    </motion.div>
+  );
+}
+
+function PanelHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', fontWeight: 700,
+        letterSpacing: '0.06em', marginBottom: 'var(--sp-2)', textTransform: 'uppercase',
+      }}
+    >
+      {children}
+    </div>
   );
 }
 

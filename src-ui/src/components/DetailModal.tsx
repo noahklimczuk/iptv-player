@@ -191,7 +191,6 @@ function Hero({
             size={46}
             onClick={() => toggleLiked(item)}
           />
-          <IconButton icon="record" label="Download" size={46} />
         </div>
       </div>
       )}
