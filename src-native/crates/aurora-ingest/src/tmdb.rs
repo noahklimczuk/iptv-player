@@ -298,7 +298,7 @@ impl MetadataClient for TmdbClient {
         // the import time and the rate-limit pressure.
         let raw: Details = self.get(
             &format!("/{}/{id}", kind.path()),
-            "&append_to_response=credits,images,release_dates,content_ratings",
+            "&append_to_response=credits,images,release_dates,content_ratings,videos",
         )?;
         Ok(raw.into_metadata(kind))
     }
@@ -401,6 +401,53 @@ struct Details {
     release_dates: Option<Paged<ReleaseDates>>,
     #[serde(default)]
     content_ratings: Option<Paged<ContentRating>>,
+    #[serde(default)]
+    videos: Option<Paged<Video>>,
+}
+
+/// One entry from TMDB's `videos` list.
+#[derive(Debug, Deserialize)]
+struct Video {
+    #[serde(default)]
+    key: Option<String>,
+    /// `YouTube` or `Vimeo`. Only the former is usable here.
+    #[serde(default)]
+    site: Option<String>,
+    /// `Trailer`, `Teaser`, `Clip`, `Featurette`, `Behind the Scenes`, `Bloopers`.
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    official: bool,
+    #[serde(default)]
+    size: Option<u32>,
+}
+
+/// Pick the one video worth calling "the trailer".
+///
+/// TMDB returns everything anyone has ever attached, in no useful order: a dozen clips,
+/// three teasers, a bloopers reel and four trailers in different languages. Taking the
+/// first gave a behind-the-scenes featurette about as often as a trailer.
+///
+/// Trailers before teasers, official before fan-uploaded, and the highest resolution
+/// within that — in that order of importance, because an official 1080p teaser is a
+/// better thing to autoplay behind a title than somebody's 360p camera recording of a
+/// trailer. Everything that is not a trailer or a teaser is discarded outright: a clip
+/// is a scene from the film, which is a spoiler rather than an advertisement.
+fn pick_trailer(videos: Vec<Video>) -> Option<String> {
+    videos
+        .into_iter()
+        .filter(|v| v.site.as_deref() == Some("YouTube"))
+        .filter(|v| v.key.as_ref().is_some_and(|k| !k.trim().is_empty()))
+        .filter_map(|v| {
+            let rank = match v.kind.as_deref() {
+                Some("Trailer") => 2,
+                Some("Teaser") => 1,
+                _ => return None,
+            };
+            Some((rank, u8::from(v.official), v.size.unwrap_or(0), v.key?))
+        })
+        .max_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)))
+        .map(|(_, _, _, key)| key)
 }
 
 #[derive(Debug, Deserialize)]
@@ -560,6 +607,7 @@ impl Details {
             ),
             genres: self.genres.into_iter().filter_map(|g| g.name).collect(),
             credits,
+            trailer_key: pick_trailer(self.videos.map(|p| p.results).unwrap_or_default()),
         }
     }
 }
@@ -805,7 +853,11 @@ mod tests {
                      {"file_path":"/best.png","vote_average":9.0}]},
                  "release_dates":{"results":[
                      {"iso_3166_1":"GB","release_dates":[{"certification":"15"}]},
-                     {"iso_3166_1":"US","release_dates":[{"certification":"R"}]}]}}"#
+                     {"iso_3166_1":"US","release_dates":[{"certification":"R"}]}]},
+                 "videos":{"results":[
+                     {"key":"clip1","site":"YouTube","type":"Clip","official":true},
+                     {"key":"m8e-FF8MsqU","site":"YouTube","type":"Trailer",
+                      "official":true,"size":1080}]}}"#
                 .to_vec(),
         ));
         let meta = client(&server).details(Kind::Movie, 603).unwrap();
@@ -825,11 +877,101 @@ mod tests {
         // US is preferred over GB, because that is what the parental mapping understands.
         assert_eq!(meta.certification.as_deref(), Some("R"));
 
+        // The trailer, not the clip that was listed before it.
+        assert_eq!(meta.trailer_key.as_deref(), Some("m8e-FF8MsqU"));
+
         let cast: Vec<&str> = meta.cast().iter().map(|c| c.person.name.as_str()).collect();
         assert_eq!(cast, vec!["Keanu Reeves", "Laurence Fishburne"]);
         assert_eq!(
             meta.crew_by_job("Director")[0].person.name,
             "Lana Wachowski"
+        );
+    }
+
+    /// TMDB returns everything anyone ever attached, in no useful order: clips, teasers,
+    /// bloopers, featurettes, and trailers in several languages. Taking the first gave a
+    /// behind-the-scenes featurette about as often as a trailer.
+    #[test]
+    fn the_trailer_is_chosen_rather_than_whichever_video_came_first() {
+        let v = |key: &str, kind: &str, official: bool, size: u32| Video {
+            key: Some(key.into()),
+            site: Some("YouTube".into()),
+            kind: Some(kind.into()),
+            official,
+            size: Some(size),
+        };
+
+        // A trailer beats a teaser, however good the teaser is.
+        assert_eq!(
+            pick_trailer(vec![
+                v("teaser", "Teaser", true, 2160),
+                v("trailer", "Trailer", true, 720),
+            ])
+            .as_deref(),
+            Some("trailer")
+        );
+        // Official beats fan-uploaded within the same kind.
+        assert_eq!(
+            pick_trailer(vec![
+                v("fan", "Trailer", false, 1080),
+                v("official", "Trailer", true, 1080),
+            ])
+            .as_deref(),
+            Some("official")
+        );
+        // And resolution decides the rest.
+        assert_eq!(
+            pick_trailer(vec![
+                v("small", "Trailer", true, 360),
+                v("big", "Trailer", true, 1080),
+            ])
+            .as_deref(),
+            Some("big")
+        );
+        // A clip is a scene from the film: an advertisement is wanted, not a spoiler.
+        // Featurettes and bloopers are not trailers either.
+        assert_eq!(
+            pick_trailer(vec![
+                v("clip", "Clip", true, 1080),
+                v("bts", "Behind the Scenes", true, 1080),
+                v("bloopers", "Bloopers", true, 1080),
+            ]),
+            None
+        );
+        // Vimeo cannot be embedded by the player this feeds, so it is not an answer.
+        assert_eq!(
+            pick_trailer(vec![Video {
+                key: Some("123456".into()),
+                site: Some("Vimeo".into()),
+                kind: Some("Trailer".into()),
+                official: true,
+                size: Some(1080),
+            }]),
+            None
+        );
+        // Nothing listed, nothing claimed.
+        assert_eq!(pick_trailer(Vec::new()), None);
+        // A key that is present and empty is not a key.
+        assert_eq!(
+            pick_trailer(vec![Video {
+                key: Some("  ".into()),
+                site: Some("YouTube".into()),
+                kind: Some("Trailer".into()),
+                official: true,
+                size: None,
+            }]),
+            None
+        );
+    }
+
+    /// Most titles have none, and the absence has to survive the round trip as `None`
+    /// rather than as an empty string the interface would treat as a key.
+    #[test]
+    fn a_title_with_no_videos_has_no_trailer() {
+        let server = TestServer::always(Reply::ok(br#"{"id":7,"videos":{"results":[]}}"#.to_vec()));
+        assert_eq!(
+            client(&server).details(Kind::Movie, 7).unwrap().trailer_key,
+            None
         );
     }
 

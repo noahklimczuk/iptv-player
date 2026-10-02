@@ -12,6 +12,7 @@ import { report } from '@/lib/errors';
 import { duration, progressPct, runtime } from '@/lib/format';
 import { Badge, Button, IconButton, ProgressBar, Select, Skeleton } from './Primitives';
 import { Icon } from './Icon';
+import { TrailerFrame } from './TrailerFrame';
 
 type Tab = 'episodes' | 'similar' | 'details';
 
@@ -79,6 +80,16 @@ function Hero({
 }: { item: CatalogItem; onClose: () => void; onPlay: (i: CatalogItem) => void }) {
   const prog = item.kind === 'movie' ? getProgress('movie', item.id) : null;
   const pct = prog ? progressPct(prog.positionSecs, prog.durationSecs) : 0;
+  /**
+   * The trailer, when asked for.
+   *
+   * Not on by itself, unlike the home billboard's: this modal is opened deliberately,
+   * often to read the synopsis, and starting a video under the text somebody came to
+   * read is an interruption rather than a flourish. With sound and with YouTube's own
+   * controls, because here the trailer is the thing being watched.
+   */
+  const [playingTrailer, setPlayingTrailer] = useState(false);
+  useEffect(() => setPlayingTrailer(false), [item.id]);
 
   return (
     <div style={{ position: 'relative', aspectRatio: '16 / 8', background: 'var(--surface)' }}>
@@ -88,13 +99,40 @@ function Hero({
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       )}
-      <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }} />
+      {playingTrailer && item.trailerKey && (
+        <div style={{ position: 'absolute', inset: 0, background: '#000' }}>
+          <TrailerFrame
+            trailerKey={item.trailerKey}
+            muted={false}
+            controls
+            loop={false}
+            title={`Trailer for ${item.title}`}
+          />
+        </div>
+      )}
+      {/* The scrim is what the title and the buttons are legible against, and it has to
+          go when the trailer is the subject — a gradient over a video somebody chose to
+          watch is just a dark video. */}
+      {!playingTrailer && (
+        <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }} />
+      )}
 
       <IconButton
         icon="close" label="Close" onClick={onClose}
         style={{ position: 'absolute', top: 14, right: 14 }}
       />
 
+      {playingTrailer ? (
+        // Just a way back, pinned clear of YouTube's own controls along the bottom.
+        <Button
+          variant="secondary"
+          icon="close"
+          onClick={() => setPlayingTrailer(false)}
+          style={{ position: 'absolute', left: 'var(--sp-6)', top: 'var(--sp-5)' }}
+        >
+          Stop trailer
+        </Button>
+      ) : (
       <div style={{ position: 'absolute', left: 'var(--sp-6)', right: 'var(--sp-6)', bottom: 'var(--sp-5)' }}>
         <h1
           className="text-shadow-hero"
@@ -119,11 +157,24 @@ function Hero({
           <Button variant="primary" size="lg" icon="play" iconFilled onClick={() => onPlay(item)}>
             {pct > 0 && prog ? `Resume from ${duration(prog.positionSecs)}` : 'Play'}
           </Button>
+          {/* Only when there is one. A disabled button would be a promise the library
+              cannot keep until the metadata sweep has reached this title. */}
+          {item.trailerKey && (
+            <Button
+              variant="secondary"
+              size="lg"
+              icon="play"
+              onClick={() => setPlayingTrailer(true)}
+            >
+              Trailer
+            </Button>
+          )}
           <IconButton icon="plus" label="Add to My List" size={46} />
           <IconButton icon="thumbUp" label="I like this" size={46} />
           <IconButton icon="record" label="Download" size={46} />
         </div>
       </div>
+      )}
     </div>
   );
 }

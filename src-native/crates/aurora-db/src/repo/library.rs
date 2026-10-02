@@ -24,6 +24,8 @@ pub struct MovieRow {
     pub logo_art: Option<String>,
     /// ISO 639-1, or nothing when the title never said (README §7.3).
     pub lang: Option<String>,
+    /// The trailer's YouTube key, when enrichment found one (migration 10).
+    pub trailer_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -99,7 +101,8 @@ const MOVIE_SELECT: &str = "SELECT movies.id,
                                       FROM credits c JOIN people p ON p.tmdb_id = c.person_id
                                      WHERE c.item_kind = 'movie' AND c.item_id = movies.id
                                        AND c.is_cast = 1
-                                     ORDER BY c.ord)
+                                     ORDER BY c.ord),
+                                   trailer_key
                             FROM movies";
 
 /// `group_concat` cannot be ordered portably, and a comma would split names that
@@ -143,6 +146,7 @@ fn map_movie(r: &rusqlite::Row<'_>) -> rusqlite::Result<MovieRow> {
         logo_art: r.get(12)?,
         lang: r.get(13)?,
         cast: split_names(r.get(14)?),
+        trailer_key: r.get(15)?,
     })
 }
 
@@ -261,6 +265,8 @@ pub struct SeriesRow {
     pub seasons: Vec<u16>,
     pub added_at: Option<i64>,
     pub lang: Option<String>,
+    /// The trailer's YouTube key, when enrichment found one (migration 10).
+    pub trailer_key: Option<String>,
 }
 
 const SERIES_SELECT: &str = "SELECT series.id,
@@ -273,7 +279,8 @@ const SERIES_SELECT: &str = "SELECT series.id,
                                         AND c.is_cast = 1
                                       ORDER BY c.ord),
                                     (SELECT group_concat(DISTINCT e.season)
-                                       FROM episodes e WHERE e.series_id = series.id)
+                                       FROM episodes e WHERE e.series_id = series.id),
+                                    trailer_key
                              FROM series";
 
 fn map_series(r: &rusqlite::Row<'_>) -> rusqlite::Result<SeriesRow> {
@@ -301,6 +308,7 @@ fn map_series(r: &rusqlite::Row<'_>) -> rusqlite::Result<SeriesRow> {
         lang: r.get(12)?,
         cast: split_names(r.get(13)?),
         seasons,
+        trailer_key: r.get(15)?,
     })
 }
 

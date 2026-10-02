@@ -44,7 +44,8 @@ test('hovering a rail card expands it with quick actions', async ({ page }) => {
   await page.waitForTimeout(1100);
 
   await expect(rail.getByRole('button', { name: /^Play / }).first()).toBeVisible();
-  await expect(rail.getByText('Preview playing').first()).toBeVisible();
+  // The preview itself is covered in `trailers.spec.ts`, against a rail whose titles are
+  // known to have one — Recently Added is films, and only some films carry a trailer.
   await page.screenshot({ path: `${SHOTS}/02-hover-card.png` });
 });
 

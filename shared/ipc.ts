@@ -63,6 +63,14 @@ export interface Movie {
   match?: number;
   addedAt: number | null;
   lang?: string | null;
+  /**
+   * The trailer's YouTube key, or null when enrichment has not found one.
+   *
+   * A key rather than a URL: the embed address is built from it and the iframe API is
+   * addressed by it. Null for every title until a TMDB key is configured and the
+   * metadata sweep has reached it, so nothing in the interface may assume one exists.
+   */
+  trailerKey: string | null;
 }
 
 export interface Series {
@@ -82,6 +90,8 @@ export interface Series {
   match?: number;
   addedAt: number | null;
   lang?: string | null;
+  /** See `Movie.trailerKey`. */
+  trailerKey: string | null;
 }
 
 export interface Episode {

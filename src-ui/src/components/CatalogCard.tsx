@@ -10,6 +10,7 @@ import type { CatalogItem } from '@shared/ipc';
 import { progressPct, remaining, runtime } from '@/lib/format';
 import { useUi } from '@/state/ui';
 import { Badge, IconButton, ProgressBar, Poster } from './Primitives';
+import { TrailerFrame } from './TrailerFrame';
 
 const PREVIEW_DELAY_MS = 700;
 
@@ -67,7 +68,9 @@ export const CatalogCard = memo(function CatalogCard({
   function enter() {
     if (!animations) return;
     setExpanded(true);
-    if (!hoverPreviews) return;
+    // Nothing to dwell towards without a trailer. `preview` used to be set for every
+    // card and drove a label reading "Preview playing" over a still poster.
+    if (!hoverPreviews || !item.trailerKey) return;
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setPreview(true), PREVIEW_DELAY_MS);
   }
@@ -119,6 +122,26 @@ export const CatalogCard = memo(function CatalogCard({
       >
         <div style={{ position: 'relative' }}>
           <Poster src={item.poster} alt={item.title} />
+
+          {/* Over the poster, which stays underneath: the trailer is 16:9 and a poster
+              is 2:3, so the frame covers the middle band and the artwork fills the rest.
+              Mounted only on the one expanded card — a rail of twenty iframes would be
+              twenty video players. */}
+          {preview && item.trailerKey && (
+            <div
+              style={{
+                position: 'absolute', left: 0, right: 0, top: '50%',
+                transform: 'translateY(-50%)', aspectRatio: '16 / 9',
+                overflow: 'hidden', background: '#000',
+              }}
+            >
+              <TrailerFrame
+                trailerKey={item.trailerKey}
+                muted
+                title={`Trailer for ${item.title}`}
+              />
+            </div>
+          )}
 
           {rank !== undefined && (
             <div
@@ -289,7 +312,7 @@ export const CatalogCard = memo(function CatalogCard({
                   </div>
                 )}
 
-                {preview && (
+                {preview && item.trailerKey && (
                   <div
                     style={{
                       marginTop: 6, fontSize: 9, color: 'var(--accent-2)',

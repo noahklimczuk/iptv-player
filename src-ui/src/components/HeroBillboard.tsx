@@ -1,7 +1,13 @@
 /**
  * Hero billboard (README §8.1): full-bleed backdrop, metadata row, truncated synopsis,
- * Play / My List / More Info. After ~2s it crossfades into a muted "trailer" preview,
- * with a mute toggle and rotation through several picks. Respects Reduce Motion.
+ * Play / My List / More Info. After ~2s it crossfades into the muted trailer, with a
+ * mute toggle and rotation through several picks. Respects Reduce Motion.
+ *
+ * The trailer used to be imaginary: this printed "NOW PLAYING TRAILER", zoomed the
+ * backdrop over eight seconds, and offered a speaker button wired to a state variable
+ * that no audio existed to obey. It now plays the thing TMDB lists, when TMDB lists one
+ * — and says nothing when it does not, which is most titles on a library whose metadata
+ * sweep has not run.
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
@@ -11,9 +17,19 @@ import { useUi } from '@/state/ui';
 import { fallBackToRemote, useAssetSrc } from '@/hooks/useAssetSrc';
 
 import { Badge, Button, IconButton } from './Primitives';
+import { TrailerFrame } from './TrailerFrame';
 
 const TRAILER_DELAY_MS = 2000;
 const ROTATE_MS = 12000;
+
+/**
+ * How long a title stays up once its trailer is playing.
+ *
+ * Longer than the 12s a still backdrop gets: cutting away four seconds into a trailer is
+ * worse than not starting one. Still bounded, because the billboard is a rotation and
+ * not a cinema.
+ */
+const ROTATE_WITH_TRAILER_MS = 32000;
 
 export function HeroBillboard({
   items, onOpen, onPlay,
@@ -35,18 +51,29 @@ export function HeroBillboard({
   const backdrop = useAssetSrc(item?.backdrop);
   const poster = useAssetSrc(item?.poster);
 
+  // Only when there is something to play. `trailer` used to mean "pretend", so it could
+  // be turned on for anything; it now gates a real frame and a real claim.
+  const trailerKey = item?.trailerKey ?? null;
+
   useEffect(() => {
     setTrailer(false);
-    if (!animations || !hoverPreviews) return;
+    // Muted autoplay is the only autoplay an engine allows, so each title starts silent
+    // however the last one was left. Keeping an unmute across a rotation would mean a
+    // home screen that suddenly makes noise about a film nobody asked about.
+    setMuted(true);
+    if (!animations || !hoverPreviews || !trailerKey) return;
     const t = window.setTimeout(() => setTrailer(true), TRAILER_DELAY_MS);
     return () => window.clearTimeout(t);
-  }, [index, animations, hoverPreviews]);
+  }, [index, animations, hoverPreviews, trailerKey]);
 
   useEffect(() => {
     if (paused || items.length < 2) return;
-    const t = window.setTimeout(() => setIndex((i) => (i + 1) % items.length), ROTATE_MS);
+    const t = window.setTimeout(
+      () => setIndex((i) => (i + 1) % items.length),
+      trailer ? ROTATE_WITH_TRAILER_MS : ROTATE_MS,
+    );
     return () => window.clearTimeout(t);
-  }, [index, paused, items.length]);
+  }, [index, paused, items.length, trailer]);
 
   if (!item) return null;
 
@@ -55,17 +82,27 @@ export function HeroBillboard({
       aria-label="Featured"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
-      style={{ position: 'relative', height: '62vh', minHeight: 420, marginBottom: 'var(--sp-5)' }}
+      style={{
+        position: 'relative', height: '62vh', minHeight: 420,
+        marginBottom: 'var(--sp-5)',
+        // The trailer frame is scaled up to hide its letterboxing; this is what keeps
+        // the overscan inside the billboard.
+        overflow: 'hidden',
+      }}
     >
       <AnimatePresence mode="wait">
         <motion.div
           key={item.id}
-          initial={{ opacity: 0, scale: 1.04 }}
-          animate={{ opacity: 1, scale: trailer ? 1.06 : 1 }}
+          initial={{ opacity: 0, scale: 1 }}
+          // A slow drift on the still backdrop, not a response to the trailer: the
+          // trailer covers this element, so a zoom that only ran while one was playing
+          // was a zoom nobody could see. It is what keeps the hero from looking like a
+          // screenshot while a title waits its turn.
+          animate={{ opacity: 1, scale: animations ? 1.06 : 1 }}
           exit={{ opacity: 0 }}
           transition={{
             opacity: { duration: animations ? 0.5 : 0 },
-            scale: { duration: animations ? 8 : 0, ease: 'linear' },
+            scale: { duration: animations ? 18 : 0, ease: 'linear' },
           }}
           style={{ position: 'absolute', inset: 0 }}
         >
@@ -106,6 +143,36 @@ export function HeroBillboard({
         </motion.div>
       </AnimatePresence>
 
+      {/* Over the backdrop rather than instead of it: the frame is 16:9 and the
+          billboard is not, so the backdrop fills what the video cannot and is what
+          remains if the embed never loads. Scaled past the edges to keep YouTube's own
+          letterboxing off screen — a black band across the hero reads as a layout fault,
+          and `overflow: hidden` on the section is what stops the overscan showing. */}
+      {trailer && trailerKey && (
+        <div
+          aria-hidden={false}
+          style={{
+            position: 'absolute', inset: 0, overflow: 'hidden',
+            // Behind the scrims and the text below, in front of the backdrop.
+            zIndex: 0,
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute', top: '50%', left: '50%',
+              width: '100%', height: '100%',
+              transform: 'translate(-50%, -50%) scale(1.35)',
+            }}
+          >
+            <TrailerFrame
+              trailerKey={trailerKey}
+              muted={muted}
+              title={`Trailer for ${item.title}`}
+            />
+          </div>
+        </div>
+      )}
+
       <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }} />
       <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim-side)' }} />
 
@@ -115,7 +182,10 @@ export function HeroBillboard({
           maxWidth: 'min(560px, 52%)',
         }}
       >
-        {trailer && (
+        {/* Only with a key, so the claim is never made about a title that has no
+            trailer. `trailer` cannot be set without one, and saying so here keeps the
+            two from drifting apart. */}
+        {trailer && trailerKey && (
           <div
             style={{
               display: 'flex', alignItems: 'center', gap: 6, marginBottom: 'var(--sp-2)',
@@ -190,7 +260,7 @@ export function HeroBillboard({
           display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         }}
       >
-        {trailer && (
+        {trailer && trailerKey && (
           <IconButton
             icon={muted ? 'volumeOff' : 'volume'}
             label={muted ? 'Unmute trailer' : 'Mute trailer'}

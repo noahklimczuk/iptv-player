@@ -227,6 +227,12 @@ pub struct Metadata {
     pub certification: Option<String>,
     pub genres: Vec<String>,
     pub credits: Vec<Credit>,
+    /// The trailer's YouTube key, when TMDB lists one.
+    ///
+    /// A key, not a URL: the embed address is built from it, and a URL would have to be
+    /// reparsed to get the key back for the iframe API. YouTube only — TMDB lists Vimeo
+    /// now and then, and there is no second player here to send it to.
+    pub trailer_key: Option<String>,
 }
 
 impl Metadata {
