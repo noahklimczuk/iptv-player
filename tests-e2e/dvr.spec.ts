@@ -47,6 +47,40 @@ test('recordings library groups what is watchable, what is coming, and what fail
   await page.screenshot({ path: `${SHOTS}/20-recordings.png` });
 });
 
+test('deleting a recording asks first, and backing out keeps the file', async ({ page }) => {
+  await page.goto('/#/recordings');
+  await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
+
+  const plays = page.getByRole('button', { name: /^Play$/ });
+  const before = await plays.count();
+  expect(before).toBeGreaterThan(0);
+
+  // Identify one recording by name and follow that one, rather than counting rows: the
+  // row being asked about swaps its controls for the question, so a count of Play
+  // buttons legitimately dips by one while it is open.
+  const first = page.getByRole('button', { name: /^Delete / }).first();
+  const name = (await first.getAttribute('aria-label'))!.replace(/^Delete /, '');
+
+  // The delete control sits beside Keep, so the first click must not be the last word.
+  await first.click();
+  await expect(page.getByText(/Delete permanently, freeing/)).toBeVisible();
+  await expect(page.getByText(name, { exact: true })).toBeVisible();
+
+  await settle(page, 300);
+  await page.screenshot({ path: `${SHOTS}/20-recordings-confirm-delete.png` });
+
+  await page.getByRole('button', { name: 'Keep', exact: true }).click();
+  await expect(page.getByText(/Delete permanently, freeing/)).toHaveCount(0);
+  await expect(plays).toHaveCount(before);
+  await expect(page.getByText(name, { exact: true })).toBeVisible();
+
+  // And confirming does go through.
+  await page.getByRole('button', { name: `Delete ${name}` }).click();
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(plays).toHaveCount(before - 1);
+  await expect(page.getByText(name, { exact: true })).toHaveCount(0);
+});
+
 test('a recording in flight shows live progress, and failures say why', async ({ page }) => {
   await page.goto('/#/recordings');
   await page.getByRole('tab', { name: /Scheduled/ }).click();
@@ -85,6 +119,27 @@ test('series rules list what they cover and can be paused', async ({ page }) => 
 
   await settle(page);
   await page.screenshot({ path: `${SHOTS}/22-recording-rules.png` });
+});
+
+test('deleting a series rule asks first, and pausing still does not', async ({ page }) => {
+  await page.goto('/#/recordings');
+  await page.getByRole('tab', { name: /Series rules/ }).click();
+
+  const remove = page.getByRole('button', { name: /^Delete the rule for / }).first();
+  const name = (await remove.getAttribute('aria-label'))!.replace(/^Delete the rule for /, '');
+
+  // Pause is the reversible neighbour and keeps its single click.
+  await page.getByRole('button', { name: /^(Pause|Resume)$/ }).first().click();
+  await expect(page.getByText(/forget this rule/)).toHaveCount(0);
+
+  await remove.click();
+  await expect(page.getByText(`Stop recording ${name} and forget this rule?`)).toBeVisible();
+  await page.getByRole('button', { name: 'Keep', exact: true }).click();
+  await expect(page.getByText(name, { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: `Delete the rule for ${name}` }).click();
+  await page.getByRole('button', { name: 'Delete rule' }).click();
+  await expect(page.getByText(name, { exact: true })).toHaveCount(0);
 });
 
 test('Record in the guide schedules the airing and marks the cell', async ({ page }) => {
