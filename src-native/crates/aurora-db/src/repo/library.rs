@@ -245,6 +245,64 @@ fn browse_filters<'a>(
     (sql, params)
 }
 
+/// Find a title by name, the way a recommendation arrives: as words, not an id.
+///
+/// `match_key` is what makes this work at all. A model answers "Am I Not Your Girl?" and
+/// the library holds "FR ✪ AM I NOT YOUR GIRL 1992 FHD"; the key folds the country tag,
+/// the quality suffix, the punctuation and the diacritics, so the two meet. It is the same
+/// key duplicate collapsing already uses, which means a title with four copies resolves
+/// once rather than four times.
+///
+/// The year narrows it where the caller has one, because remakes are exactly the case a
+/// recommender trips over: suggesting the 1978 *Invasion of the Body Snatchers* and
+/// playing the 2007 one is worse than not suggesting it. A year that matches nothing falls
+/// back to the title alone rather than giving up — the model's year is often a year out,
+/// and a near miss is better than a gap in the rail.
+///
+/// Respects the library filter and `hidden`, so a recommendation can never be something
+/// the viewer has told this app not to show them.
+pub fn find_by_title(
+    conn: &Connection,
+    kind: crate::repo::filtering::Kind,
+    title: &str,
+    year: Option<i32>,
+    filter: &crate::repo::filtering::LibraryFilter,
+) -> Result<Option<i64>> {
+    let key = aurora_core::title::match_key(title);
+    if key.is_empty() {
+        return Ok(None);
+    }
+    let table = match kind {
+        crate::repo::filtering::Kind::Movies => "movies",
+        crate::repo::filtering::Kind::Series => "series",
+        crate::repo::filtering::Kind::Live => return Ok(None),
+    };
+    let visible = filter.where_sql(kind);
+
+    if let Some(year) = year {
+        let sql = format!(
+            "SELECT id FROM {table}
+              WHERE match_key = ?1 AND hidden = 0 AND year IS NOT NULL
+                AND abs(year - ?2) <= 1{visible}
+              ORDER BY abs(year - ?2), id LIMIT 1"
+        );
+        if let Some(id) = conn
+            .query_row(&sql, params![key, year], |r| r.get(0))
+            .optional()?
+        {
+            return Ok(Some(id));
+        }
+    }
+
+    let sql = format!(
+        "SELECT id FROM {table} WHERE match_key = ?1 AND hidden = 0{visible} \
+         ORDER BY id LIMIT 1"
+    );
+    Ok(conn
+        .query_row(&sql, params![key], |r| r.get(0))
+        .optional()?)
+}
+
 pub fn list_movies(conn: &Connection, q: &BrowseQuery) -> Result<Vec<MovieRow>> {
     let order = match q.sort {
         MovieSort::RecentlyAdded => "added_at DESC, movies.id DESC",
@@ -881,6 +939,106 @@ mod tests {
             total += by_letter(&conn, Some(&letter.to_string())).len();
         }
         assert_eq!(total, 7, "a title belonged to no bucket, or to two");
+    }
+
+    /// A recommendation arrives as words, and has to find the row a provider filed under
+    /// a country tag, a quality suffix and a different kind of apostrophe.
+    #[test]
+    fn a_suggested_title_finds_the_row_a_provider_filed_it_under() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for (id, title, year) in [
+            (1, "FR \u{2605} AM I NOT YOUR GIRL FHD", Some(1992)),
+            (2, "Invasion of the Body Snatchers", Some(1978)),
+            (3, "Invasion of the Body Snatchers", Some(2007)),
+            (4, "Caf\u{e9} de Flore", Some(2011)),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     year, last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?4, 'u', ?5, 0)",
+                params![
+                    id,
+                    format!("m{id}"),
+                    title,
+                    aurora_core::title::match_key(title),
+                    year
+                ],
+            )
+            .unwrap();
+        }
+
+        let find = |title: &str, year: Option<i32>| {
+            find_by_title(&conn, Kind::Movies, title, year, &LibraryFilter::default()).unwrap()
+        };
+
+        // The provider's filing string is not the name anyone would type.
+        assert_eq!(find("Am I Not Your Girl?", Some(1992)), Some(1));
+        // Diacritics fold, so a model's plain-ASCII answer still lands.
+        assert_eq!(find("Cafe de Flore", None), Some(4));
+        // The remake case: the year decides, which is the whole reason it is passed.
+        assert_eq!(find("Invasion of the Body Snatchers", Some(2007)), Some(3));
+        assert_eq!(find("Invasion of the Body Snatchers", Some(1978)), Some(2));
+        // A year a little out still finds it rather than leaving a gap in the rail.
+        assert_eq!(find("Invasion of the Body Snatchers", Some(1979)), Some(2));
+        // Nothing of that name is nothing, not a wrong guess.
+        assert_eq!(find("A Film Nobody Has Made", None), None);
+    }
+
+    /// A recommendation must never be something the viewer has hidden or filtered away:
+    /// being recommended what you asked not to see is the most annoying possible version
+    /// of this feature.
+    #[test]
+    fn a_suggestion_cannot_resolve_to_something_the_filters_hide() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                 lang_code, hidden, last_seen_at)
+             VALUES (1,1,'a','Le Samourai',?1,'u','fr',0,0),
+                    (2,1,'b','Hidden Film',?2,'u','en',1,0)",
+            params![
+                aurora_core::title::match_key("Le Samourai"),
+                aurora_core::title::match_key("Hidden Film")
+            ],
+        )
+        .unwrap();
+
+        let english_only = LibraryFilter {
+            english_only: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            find_by_title(&conn, Kind::Movies, "Le Samourai", None, &english_only).unwrap(),
+            None,
+            "English only hid it from browsing; it must stay hidden here"
+        );
+        assert_eq!(
+            find_by_title(
+                &conn,
+                Kind::Movies,
+                "Hidden Film",
+                None,
+                &LibraryFilter::default()
+            )
+            .unwrap(),
+            None,
+            "the viewer hid this one by hand"
+        );
     }
 
     /// The sidebar's number and the grid it opens have to be the same library.

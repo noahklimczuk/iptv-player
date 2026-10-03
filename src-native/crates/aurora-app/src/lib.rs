@@ -6,6 +6,7 @@
 pub mod commands;
 pub mod dvr;
 pub mod error;
+pub mod gemini;
 pub mod library;
 pub mod logging;
 pub mod metadata;

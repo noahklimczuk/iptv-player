@@ -2,6 +2,7 @@ pub mod artwork;
 pub mod credentials;
 pub mod enrich;
 pub mod epg;
+pub mod gemini;
 pub mod http;
 pub mod playlist;
 pub mod recorder;
