@@ -27,6 +27,14 @@ export function Rail({
   const scroller = useRef<HTMLDivElement>(null);
   const [atStart, setAtStart] = useState(true);
   const [atEnd, setAtEnd] = useState(false);
+  /**
+   * Which card is expanded, so the others can get out of its way.
+   *
+   * It has to live here. A card grows with a `transform`, which does not affect layout,
+   * so it cannot move its siblings by growing — the only thing that can is something
+   * that knows about all of them.
+   */
+  const [expanded, setExpanded] = useState<number | null>(null);
 
   const sync = useCallback(() => {
     const el = scroller.current;
@@ -53,7 +61,25 @@ export function Rail({
   const showRank = rail.kind === 'top10';
 
   return (
-    <section style={{ marginBottom: 'var(--sp-6)' }} aria-label={rail.title}>
+    <section
+      aria-label={rail.title}
+      style={{
+        marginBottom: 'var(--sp-6)',
+        // Lifted above the rails below it while a card is open.
+        //
+        // An expanded card grows downward, past the bottom of this section and over the
+        // next one. Sections are static and painted in document order, so the rail *below*
+        // was drawn on top of that overhang — and the quick actions live at the bottom of
+        // it. Play, My List and Remove were all sitting under the next rail and swallowing
+        // their own clicks, which is how it was found: a journey timed out with
+        // "<div> from <section aria-label='Up Next'> intercepts pointer events".
+        //
+        // Only while something is open, so a page of rails has no standing stack order to
+        // reason about.
+        position: expanded === null ? undefined : 'relative',
+        zIndex: expanded === null ? undefined : 40,
+      }}
+    >
       <div
         style={{
           display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
@@ -108,6 +134,12 @@ export function Rail({
                 onOpen={onOpen}
                 onPlay={onPlay}
                 onRemove={onRemove}
+                onExpand={setExpanded}
+                // Everything before the expanded card leans left and everything after it
+                // leans right. Shifting only the immediate neighbours would leave a gap
+                // opening in the middle of a row that is otherwise still, which looks
+                // like a hole rather than like room being made.
+                shift={expanded === null || expanded === i ? 0 : i < expanded ? -1 : 1}
               />
             </div>
           ))}

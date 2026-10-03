@@ -3,10 +3,11 @@
  * card ~1.32x, lifts it above its neighbours, and after a dwell plays the muted trailer.
  * Focus produces the identical expansion, so the whole thing works from a remote.
  *
- * It overlaps its neighbours rather than pushing them aside. A `transform` does not
- * affect layout, so the siblings do not move — Netflix shifts them, and matching that
- * means the rail owning which card is expanded rather than each card owning it. Worth
- * doing; not done here, and the comment used to claim it was.
+ * It pushes its neighbours aside rather than covering them. A `transform` does not affect
+ * layout, so a scaled card cannot move its siblings by growing — the rail has to know
+ * which card is expanded and shift the rest, which is why `shift` arrives as a prop and
+ * `onExpand` reports upward. Each card still owns whether *it* is expanded; the rail owns
+ * only which one that is.
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
@@ -19,16 +20,34 @@ import { TrailerFrame } from './TrailerFrame';
 
 const PREVIEW_DELAY_MS = 700;
 
+/**
+ * How far a neighbour moves aside.
+ *
+ * A card is 168px and grows by a third, so it needs about 27px on each side to stop
+ * covering the one next to it. Rounded up: the shadow wants a little air too, and a card
+ * that is almost clear reads worse than one that plainly is.
+ */
+const NEIGHBOUR_SHIFT = 30;
+
 export interface CardProgress {
   positionSecs: number;
   durationSecs: number;
 }
 
 export const CatalogCard = memo(function CatalogCard({
-  item, index, progress, onOpen, onPlay, onRemove, rank, showTitle, reason,
+  item, index, progress, onOpen, onPlay, onRemove, rank, showTitle, reason, shift = 0,
+  onExpand,
 }: {
   item: CatalogItem;
   index: number;
+  /**
+   * Which way to get out of the way, and how far: -1 for the cards left of the expanded
+   * one, +1 for those right of it, 0 when nothing is expanded or this is the one that is.
+   * In card widths' worth of pixels — see `NEIGHBOUR_SHIFT`.
+   */
+  shift?: number;
+  /** Tell the rail this card has expanded, or that nothing is. */
+  onExpand?: (index: number | null) => void;
   progress?: CardProgress | null;
   onOpen: (item: CatalogItem) => void;
   onPlay: (item: CatalogItem) => void;
@@ -77,6 +96,7 @@ export const CatalogCard = memo(function CatalogCard({
   function enter() {
     if (!animations) return;
     setExpanded(true);
+    onExpand?.(index);
     // Nothing to dwell towards without a trailer. `preview` used to be set for every
     // card and drove a label reading "Preview playing" over a still poster.
     if (!hoverPreviews || !item.trailerKey) return;
@@ -87,6 +107,7 @@ export const CatalogCard = memo(function CatalogCard({
     window.clearTimeout(timer.current);
     setExpanded(false);
     setPreview(false);
+    onExpand?.(null);
   }
 
   const pct = progress ? progressPct(progress.positionSecs, progress.durationSecs) : 0;
@@ -118,6 +139,10 @@ export const CatalogCard = memo(function CatalogCard({
         animate={{
           scale: expanded ? 1.32 : 1,
           y: expanded ? -12 : 0,
+          // Out of the expanded card's way. The card that is expanded never shifts: it
+          // grows from where it already is, which is what makes the row look like it
+          // opened rather than slid.
+          x: expanded ? 0 : shift * NEIGHBOUR_SHIFT,
         }}
         transition={{ duration: animations ? 0.22 : 0, ease: [0.16, 1, 0.3, 1] }}
         style={{
