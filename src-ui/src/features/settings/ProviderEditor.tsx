@@ -60,7 +60,7 @@ export function ProviderEditor({
         detail: e instanceof Error ? e.message : String(e),
         expiresAt: null, daysUntilExpiry: null, maxConnections: null,
         activeConnections: null, isTrial: false, credentialsDetected: false,
-        suggestedUrl: null,
+        suggestedUrl: null, suggestedKind: null,
       });
     } finally {
       setChecking(false);
@@ -192,8 +192,12 @@ export function ProviderEditor({
           {!checked.ok && checked.suggestedUrl && (
             <div style={{ marginTop: 'var(--sp-3)' }}>
               <div style={{ marginBottom: 6 }}>
-                It does answer at <strong>{checked.suggestedUrl}</strong>.
-                {checked.suggestedUrl.startsWith('http://')
+                {checked.suggestedKind === 'm3u'
+                  ? 'Its playlist does work, even though its API does not. Most other'
+                    + ' players use the playlist and never touch the API, which is why'
+                    + ' this subscription works elsewhere.'
+                  : <>It does answer at <strong>{checked.suggestedUrl}</strong>.</>}
+                {checked.suggestedKind !== 'm3u' && checked.suggestedUrl.startsWith('http://')
                   && ' That is an unencrypted address, so your sign-in would be sent in'
                     + ' clear text — which is how most panels work.'}
               </div>
@@ -202,7 +206,7 @@ export function ProviderEditor({
                 data-testid="editor-use-suggested-url"
                 onClick={() => { setUrl(checked.suggestedUrl!); void check(checked.suggestedUrl!); }}
               >
-                Use that address
+                {checked.suggestedKind === 'm3u' ? 'Use its playlist instead' : 'Use that address'}
               </Button>
             </div>
           )}

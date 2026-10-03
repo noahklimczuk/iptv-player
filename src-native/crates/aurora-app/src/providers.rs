@@ -44,6 +44,9 @@ pub struct ValidationResult {
     /// a dead host when the address says `https` — and a viewer has no way to tell those
     /// apart from a spinner that ends in a red box.
     pub suggested_url: Option<String>,
+    /// The provider type that address needs, when it is not the one being checked.
+    /// `"m3u"` when an Xtream panel's API is unusable but its playlist is fine.
+    pub suggested_kind: Option<String>,
 }
 
 /// README §13: recognise a pasted `get.php` URL and fill the form from it.
@@ -138,6 +141,58 @@ fn probe_other_scheme(http: &aurora_ingest::http::HttpClient, url: &str) -> Opti
     }
 }
 
+/// The M3U address an Xtream panel serves the same subscription at.
+///
+/// `get.php` is the other half of the Xtream protocol, and on plenty of panels it is the
+/// half that works: `player_api.php` can be disabled, restricted to certain clients, or
+/// simply broken, while the playlist it would have described is served perfectly well.
+/// Most other IPTV players use this endpoint and never touch the API at all, which is why
+/// a subscription can be "working everywhere else" and fail here.
+fn m3u_url(base_url: &str, username: &str, password: &str) -> String {
+    format!(
+        "{}/get.php?username={}&password={}&type=m3u_plus&output=ts",
+        base_url.trim_end_matches('/'),
+        urlencoding(username),
+        urlencoding(password),
+    )
+}
+
+/// Percent-encode a credential for a query string.
+///
+/// Small and local rather than a dependency: the characters that matter in a panel's
+/// username and password are the handful below, and `aurora_ingest` already has its own
+/// copy for the same reason.
+fn urlencoding(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for b in raw.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Does this panel serve a usable playlist, even though its API would not answer?
+///
+/// Returns the address when it does. The credentials go with it, which is no new
+/// exposure: they were just sent to the same host, over the same scheme, by the API call
+/// that failed.
+fn probe_m3u(
+    http: &aurora_ingest::http::HttpClient,
+    base_url: &str,
+    username: &str,
+    password: &str,
+) -> Option<String> {
+    let url = m3u_url(base_url, username, password);
+    let parsed = aurora_ingest::playlist::fetch(http, &url).ok()?;
+    // Entries, not merely a 200. A panel that refuses returns an error page, and an error
+    // page parses as a playlist with nothing in it.
+    (!parsed.result.entries.is_empty()).then_some(url)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidateArgs {
@@ -171,6 +226,7 @@ pub fn providers_validate(
                     is_trial: false,
                     credentials_detected: false,
                     suggested_url: None,
+                    suggested_kind: None,
                 });
             }
             let client = XtreamClient::new(&services.http, &draft.url, &username, &password);
@@ -179,10 +235,36 @@ pub fn providers_validate(
             // else. A panel published on plain HTTP — which many are — is indistinguishable
             // from a dead one when the address says `https`, and the viewer has nothing to
             // tell those apart with but a spinner that ends in a red box.
+            let mut suggested_kind = None;
             let suggested_url = match &outcome {
                 Err(e) if worth_probing(e.code) => probe_other_scheme(&services.http, &draft.url),
+                // The API said no but the host is there. Before reporting a dead
+                // subscription, ask whether the playlist half of the same protocol works
+                // — on plenty of panels `player_api.php` is disabled or restricted while
+                // `get.php` serves the whole library, which is why a line can work in
+                // every other player and fail here.
+                Err(_) => {
+                    let found = probe_m3u(&services.http, &draft.url, &username, &password);
+                    if found.is_some() {
+                        suggested_kind = Some("m3u".to_string());
+                    }
+                    found
+                }
                 _ => None,
             };
+            if let Err(e) = &outcome {
+                // The request is logged and its outcome was not, so a check that failed
+                // left `aurora.log` saying only that something had been asked — which is
+                // no help at all to the one person who needs it, reading the log after
+                // the fact to find out why their provider will not connect.
+                tracing::warn!(
+                    code = ?e.code,
+                    suggested = suggested_url.is_some(),
+                    "provider check failed: {} — {}",
+                    e.message,
+                    e.cause
+                );
+            }
             match outcome {
                 Ok(status) => Ok(ValidationResult {
                     ok: true,
@@ -195,6 +277,7 @@ pub fn providers_validate(
                     is_trial: status.is_trial,
                     credentials_detected: false,
                     suggested_url: None,
+                    suggested_kind: None,
                 }),
                 Err(e) => Ok(ValidationResult {
                     ok: false,
@@ -207,6 +290,7 @@ pub fn providers_validate(
                     is_trial: false,
                     credentials_detected: false,
                     suggested_url,
+                    suggested_kind,
                 }),
             }
         }
@@ -234,6 +318,7 @@ pub fn providers_validate(
                         is_trial: false,
                         credentials_detected: false,
                         suggested_url: None,
+                        suggested_kind: None,
                     })
                 }
                 Err(e) => Ok(ValidationResult {
@@ -247,6 +332,7 @@ pub fn providers_validate(
                     is_trial: false,
                     credentials_detected: false,
                     suggested_url: None,
+                    suggested_kind: None,
                 }),
             }
         }

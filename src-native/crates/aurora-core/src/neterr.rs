@@ -210,12 +210,23 @@ impl NetFailure {
             || l.contains("connection reset")
             || l.contains("broken pipe")
             || l.contains("end of file")
+            // What hyper says when a server accepts a connection and then hangs up
+            // without sending a reply — which is how a panel that is overloaded, or
+            // blocking this device, actually behaves. Reported for a provider check as
+            // "didn't respond", which is both vaguer than the truth and points at the
+            // wrong thing: the host answered, it just would not say anything.
+            || l.contains("closed before message completed")
+            || l.contains("incompletemessage")
+            || l.contains("empty reply")
         {
             (
                 ErrorCode::Dropped,
-                "The stream ended unexpectedly",
-                "The provider dropped the connection. This is usually temporary, and \
-                 another source for the same channel often works.",
+                // True of a live stream that dies mid-programme and of a panel that hangs
+                // up on a request: in both, something was there and then was not.
+                "Your provider closed the connection",
+                "It accepted the connection and then hung up without answering. That \
+                 usually means the panel is overloaded or is refusing this device, and \
+                 it is often temporary. For a channel, another source frequently works.",
             )
         } else if l.contains("codec")
             || l.contains("no video")
@@ -367,6 +378,31 @@ mod tests {
         assert!(e.retryable);
         assert!(e.actions.contains(&ErrorAction::TryAnotherSource));
         assert!(!e.message.contains("DRM"));
+    }
+
+    /// A panel that accepts the connection and then hangs up without answering.
+    ///
+    /// Observed against a real subscription: `curl` reports "Empty reply from server" and
+    /// hyper reports "connection closed before message completed", neither of which any
+    /// branch recognised — so it fell through to "didn't respond", which points at the
+    /// wrong thing. The host answered; it just would not say anything.
+    #[test]
+    fn a_host_that_accepts_and_then_hangs_up_is_not_a_silent_host() {
+        for raw in [
+            "error sending request; connection closed before message completed",
+            "hyper::Error(IncompleteMessage)",
+            "empty reply from server",
+        ] {
+            let e = NetFailure::classify(raw);
+            assert_eq!(e.code, ErrorCode::Dropped, "for {raw:?}");
+            assert!(
+                e.cause.contains("hung up"),
+                "the cause should say what actually happened: {e:?}"
+            );
+            // Retryable, because this is overload or throttling far more often than it
+            // is anything permanent.
+            assert!(e.retryable, "for {raw:?}");
+        }
     }
 
     /// Both watchdog verdicts are timeouts, and timeouts are retryable — which is what

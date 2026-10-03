@@ -503,6 +503,15 @@ export interface ValidationResult {
    * unencrypted connection to somewhere that has not been established as the right place.
    */
   suggestedUrl: string | null;
+  /**
+   * The provider type `suggestedUrl` needs, when it is not the one being checked.
+   *
+   * `"m3u"` when an Xtream panel's API will not answer but its playlist will. `get.php`
+   * is the other half of the same protocol and on plenty of panels it is the half that
+   * works — most other players use it and never touch the API, which is why a
+   * subscription can work everywhere else and fail here.
+   */
+  suggestedKind: SourceKind | null;
 }
 
 export type IngestPhase =
