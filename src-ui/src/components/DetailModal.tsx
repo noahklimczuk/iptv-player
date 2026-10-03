@@ -3,8 +3,8 @@
  * metadata pills, cast, and tabs for episodes / more like this / details.
  */
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useMemo, useState } from 'react';
-import type { CatalogItem, Episode, SeriesPrefs } from '@shared/ipc';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { CatalogItem, Episode, EpisodeProgress, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
 import { getProgress, invoke } from '@/ipc';
 import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
@@ -26,6 +26,15 @@ export function DetailModal({
 }) {
   const [tab, setTab] = useState<Tab>('episodes');
   const [season, setSeason] = useState(1);
+  /*
+   * One source of truth for what has been watched.
+   *
+   * The episode list draws the ticks and the Play button names the episode it would
+   * open, and those are the same fact seen from two places. Held here so that marking an
+   * episode in the list moves the button too — while they each fetched their own, the
+   * button went on offering an episode that had just been ticked off.
+   */
+  const watch = useSeriesProgress(item?.kind === 'series' ? item.id : 0);
 
   useEffect(() => {
     if (!item) return;
@@ -64,10 +73,10 @@ export function DetailModal({
               borderRadius: 'var(--r-xl)', overflow: 'hidden', boxShadow: 'var(--shadow-4)',
             }}
           >
-            <Hero item={item} onClose={onClose} onPlay={onPlay} />
+            <Hero item={item} onClose={onClose} onPlay={onPlay} watch={watch} />
             <Body
               item={item} tab={tab} setTab={setTab}
-              season={season} setSeason={setSeason} onPlay={onPlay}
+              season={season} setSeason={setSeason} onPlay={onPlay} watch={watch}
             />
           </motion.div>
         </motion.div>
@@ -76,11 +85,60 @@ export function DetailModal({
   );
 }
 
+/**
+ * The label Play should carry for a show: which episode, and whether it is a resume.
+ *
+ * Null for anything that is not a series, and for a series nobody has started — both
+ * of which leave the button saying "Play".
+ */
+function useSeriesResume(item: CatalogItem, version: number): string | null {
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  const [label, setLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (item.kind !== 'series') { setLabel(null); return; }
+    let live = true;
+    void (async () => {
+      try {
+        const point = await invoke('progress.resumePoint', { profileId, seriesId: item.id });
+        if (!live || !point) { if (live) setLabel(null); return; }
+        const eps = await invoke('library.episodes', { seriesId: item.id });
+        const ep = eps.find((e) => e.id === point.episodeId);
+        if (!live || !ep) return;
+        const which = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`;
+        setLabel(
+          point.positionSecs > 0
+            ? `Resume ${which} from ${duration(point.positionSecs)}`
+            : `Play ${which}`,
+        );
+      } catch {
+        // Not knowing is a reason to say "Play", not a reason to say nothing.
+        if (live) setLabel(null);
+      }
+    })();
+    return () => { live = false; };
+  }, [item.kind, item.id, profileId, version]);
+
+  return label;
+}
+
 function Hero({
-  item, onClose, onPlay,
-}: { item: CatalogItem; onClose: () => void; onPlay: (i: CatalogItem) => void }) {
+  item, onClose, onPlay, watch,
+}: {
+  item: CatalogItem; onClose: () => void; onPlay: (i: CatalogItem) => void; watch: Watch;
+}) {
   const prog = item.kind === 'movie' ? getProgress('movie', item.id) : null;
   const pct = prog ? progressPct(prog.positionSecs, prog.durationSecs) : 0;
+  /*
+   * What Play means for a show, said on the button before it is pressed.
+   *
+   * A film's resume label has always come from its own progress. A show's position is on
+   * its episodes, so the button could not know — it said "Play" whether you were at the
+   * pilot or halfway through series three, and then started the pilot. The host works
+   * out which episode it would open; this just names it, so the button and what it does
+   * agree.
+   */
+  const resume = useSeriesResume(item, watch.version);
   /**
    * The trailer, when asked for.
    *
@@ -160,7 +218,9 @@ function Hero({
 
         <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center', flexWrap: 'wrap' }}>
           <Button variant="primary" size="lg" icon="play" iconFilled onClick={() => onPlay(item)}>
-            {pct > 0 && prog ? `Resume from ${duration(prog.positionSecs)}` : 'Play'}
+            {pct > 0 && prog
+              ? `Resume from ${duration(prog.positionSecs)}`
+              : resume ?? 'Play'}
           </Button>
           {/* Only when there is one. A disabled button would be a promise the library
               cannot keep until the metadata sweep has reached this title. */}
@@ -247,8 +307,9 @@ function Sources({
 }
 
 function Body({
-  item, tab, setTab, season, setSeason, onPlay,
+  item, tab, setTab, season, setSeason, onPlay, watch,
 }: {
+  watch: Watch;
   item: CatalogItem;
   tab: Tab; setTab: (t: Tab) => void;
   season: number; setSeason: (s: number) => void;
@@ -344,6 +405,7 @@ function Body({
           <Episodes
             episodes={episodes} season={season} setSeason={setSeason}
             onPlay={(epId) => onPlay(item, epId)}
+            watch={watch}
           />
         </>
       )}
@@ -496,11 +558,73 @@ function useEpisodes(item: CatalogItem, isSeries: boolean): Episodes {
   return { all, seasons, loading: isSeries && loading };
 }
 
+/** "S02E04", for a label that has to say which episode without the row around it. */
+function label(ep: Episode) {
+  return `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`;
+}
+
+/**
+ * What this profile has watched of one show, and how to change it.
+ *
+ * Held here rather than refetched per row: one call covers the whole show, and marking
+ * an episode has to move the tick, the Play button's label and the Continue Watching
+ * rail together — so the state they all read has to be one thing.
+ *
+ * Optimistic, because the tick is the feedback. Waiting for a round trip to redraw a
+ * checkbox is how a control starts feeling broken, and the failure case is a mark that
+ * does not stick, which the next open corrects.
+ */
+function useSeriesProgress(seriesId: number) {
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  const [seen, setSeen] = useState<Map<number, EpisodeProgress>>(new Map());
+
+  // Bumped on every load, so anything derived from this — the Play button's label is
+  // worked out by the host — knows to ask again.
+  const [version, setVersion] = useState(0);
+
+  const load = useCallback(async () => {
+    try {
+      const rows = await invoke('progress.forSeries', { profileId, seriesId });
+      setSeen(new Map(rows.map((r) => [r.episodeId, r])));
+    } catch {
+      // An episode list that cannot say what is watched is still an episode list.
+      setSeen(new Map());
+    }
+    setVersion((v) => v + 1);
+  }, [profileId, seriesId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const setWatched = useCallback(async (episodeId: number, watched: boolean) => {
+    setSeen((prev) => {
+      const next = new Map(prev);
+      const was = next.get(episodeId);
+      next.set(episodeId, {
+        episodeId,
+        positionSecs: was?.positionSecs ?? 0,
+        durationSecs: was?.durationSecs ?? 0,
+        completed: watched,
+      });
+      return next;
+    });
+    try {
+      await invoke('progress.setWatched', { profileId, kind: 'episode', id: episodeId, watched });
+    } finally {
+      await load();
+    }
+  }, [profileId, load]);
+
+  return { get: (id: number) => seen.get(id), setWatched, version };
+}
+
+type Watch = ReturnType<typeof useSeriesProgress>;
+
 function Episodes({
-  episodes, season, setSeason, onPlay,
+  episodes, season, setSeason, onPlay, watch,
 }: {
   episodes: Episodes; season: number;
   setSeason: (s: number) => void; onPlay: (episodeId: number) => void;
+  watch: Watch;
 }) {
   const { seasons: choices, loading } = episodes;
   // Filtering here rather than asking the host again: the whole show is already in
@@ -529,19 +653,32 @@ function Episodes({
             This provider listed the show but returned no episodes for it.
           </div>
         )}
-        {(data ?? []).map((ep: Episode) => (
+        {(data ?? []).map((ep: Episode) => {
+        const seen = watch.get(ep.id);
+        const watched = seen?.completed ?? false;
+        const partway = !watched && seen != null && seen.durationSecs > 0
+          ? progressPct(seen.positionSecs, seen.durationSecs)
+          : 0;
+        return (
+        <div
+          key={ep.id}
+          style={{ display: 'flex', alignItems: 'center', borderRadius: 'var(--r-md)' }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
           <button
-            key={ep.id}
             onClick={() => onPlay(ep.id)}
             style={{
+              flex: 1, minWidth: 0,
               display: 'grid', gridTemplateColumns: '38px 148px 1fr', gap: 'var(--sp-4)',
               alignItems: 'center', textAlign: 'left', cursor: 'pointer',
               padding: 'var(--sp-3)', borderRadius: 'var(--r-md)',
               background: 'transparent', border: 'none', color: 'inherit',
-              transition: 'background var(--t-fast) var(--ease)',
+              // Watched episodes step back rather than disappear: the list is still how
+              // you get to one you want to see again.
+              opacity: watched ? 0.55 : 1,
+              transition: 'opacity var(--t-fast) var(--ease)',
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface)')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           >
             <div
               style={{
@@ -549,7 +686,7 @@ function Episodes({
                 textAlign: 'center',
               }}
             >
-              {ep.episode}
+              {watched ? <Icon name="check" size={18} /> : ep.episode}
             </div>
             <div style={{ position: 'relative', borderRadius: 'var(--r-sm)', overflow: 'hidden' }}>
               {ep.still && (
@@ -566,6 +703,16 @@ function Episodes({
               >
                 <Icon name="play" size={22} filled />
               </div>
+              {partway > 0 && (
+                <div
+                  style={{
+                    position: 'absolute', left: 0, right: 0, bottom: 0, height: 3,
+                    background: 'rgb(255 255 255 / 0.25)',
+                  }}
+                >
+                  <div style={{ width: `${partway}%`, height: '100%', background: 'var(--accent)' }} />
+                </div>
+              )}
             </div>
             <div style={{ minWidth: 0 }}>
               <div
@@ -590,7 +737,23 @@ function Episodes({
               </div>
             </div>
           </button>
-        ))}
+
+          {/* A sibling of the row, not a child: a button inside a button is invalid
+              markup, and the whole row already means "play this". */}
+          {/* One control in two states rather than two icons: a ✕ beside a row reads as
+              "delete this", which is not what unmarking does. The same check, filled
+              when it is true, is the vocabulary the Keep heart already uses. */}
+          <IconButton
+            size={34}
+            icon="check"
+            filled={watched}
+            active={watched}
+            label={watched ? `Mark ${label(ep)} as unplayed` : `Mark ${label(ep)} as played`}
+            onClick={() => void watch.setWatched(ep.id, !watched)}
+          />
+        </div>
+        );
+        })}
       </div>
     </div>
   );

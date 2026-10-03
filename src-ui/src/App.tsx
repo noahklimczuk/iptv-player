@@ -137,8 +137,24 @@ export default function App() {
     ui.openDetail(null);
     try {
       if (item.kind === 'series') {
+        /*
+         * Which episode Play means, when nobody named one.
+         *
+         * It used to be the first row of the episode list, unconditionally — so pressing
+         * Play on a show you were four episodes into started the pilot again. The host
+         * answers it properly: the episode left unfinished, or the first unwatched one,
+         * or nothing when the show has never been touched or is finished. Only then is
+         * episode one the right answer.
+         *
+         * Asked only when no episode was named, because picking one in the list is not a
+         * question about where the viewer is up to.
+         */
+        const resume = episodeId == null
+          ? await invoke('progress.resumePoint', { profileId, seriesId: item.id })
+              .catch(() => null)
+          : null;
         const eps = await invoke('library.episodes', { seriesId: item.id });
-        const target = episodeId ?? eps[0]?.id;
+        const target = episodeId ?? resume?.episodeId ?? eps[0]?.id;
         if (target == null) {
           report(`No episodes of ${item.title} have been imported yet`)(
             new Error('The provider listed the show but not its episodes.'),

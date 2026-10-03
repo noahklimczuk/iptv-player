@@ -1505,6 +1505,58 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return removed;
   },
 
+  'progress.forSeries': ({ seriesId }) =>
+    fx.episodes
+      .filter((e) => e.seriesId === seriesId)
+      .map((e) => progress.get(`episode:${e.id}`))
+      .filter((p): p is Progress => p != null)
+      .map((p) => ({
+        episodeId: p.itemId,
+        positionSecs: p.positionSecs,
+        durationSecs: p.durationSecs,
+        completed: p.completed,
+      })),
+
+  /**
+   * Which episode Play opens, mirroring `aurora_db::repo::progress::resume_point`.
+   *
+   * The unfinished episode first and the next unwatched one after it, because somebody
+   * who stopped halfway through is in the middle of that episode, not at the start of
+   * the following one. Null when the show is untouched or finished, and the caller opens
+   * episode one.
+   */
+  'progress.resumePoint': ({ seriesId }) => {
+    const eps = fx.episodes
+      .filter((e) => e.seriesId === seriesId)
+      .sort((a, b) => a.season - b.season || a.episode - b.episode);
+
+    const unfinished = eps
+      .map((e) => progress.get(`episode:${e.id}`))
+      .filter((p): p is Progress => p != null && !p.completed && p.positionSecs > 60)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (unfinished) {
+      return { episodeId: unfinished.itemId, positionSecs: unfinished.positionSecs };
+    }
+
+    const next = eps.find((e) => !progress.get(`episode:${e.id}`)?.completed);
+    return next ? { episodeId: next.id, positionSecs: 0 } : null;
+  },
+
+  'progress.setWatched': ({ kind, id, watched }) => {
+    const key = `${kind}:${id}`;
+    const existing = progress.get(key);
+    // The position survives, so a show marked watched by mistake still remembers where
+    // it got to when it is unmarked.
+    progress.set(key, {
+      itemKind: kind,
+      itemId: id,
+      positionSecs: existing?.positionSecs ?? 0,
+      durationSecs: existing?.durationSecs ?? 0,
+      completed: watched,
+      updatedAt: Math.floor(Date.now() / 1000),
+    });
+  },
+
   'mylist.toggle': ({ kind, id }) => {
     const key = `${kind}:${id}`;
     if (myList.has(key)) { myList.delete(key); return false; }
