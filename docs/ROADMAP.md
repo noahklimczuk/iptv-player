@@ -268,12 +268,28 @@ were built first.
    is only observable with a subscription. The refusals are deliberate: a channel that
    advertises catch-up without saying how to ask for it gets a message, not a guessed
    URL that fails silently at the player.
-4. **The filters against a real playlist.** `aurora_core::lang` is written from the
-   conventions playlists use and tested against names shaped like them, but the only way
-   to know how much of a real 10,000-entry subscription it can classify is to point
-   `examples/probe.rs` at one and read the language histogram. The failure mode to watch
-   for is the opposite of the obvious one: not content wrongly hidden, but a provider
-   whose tagging is so sparse that "English only" hides almost nothing.
+4. **The filters against a real playlist. Done — and the feared failure is not there.**
+   `probe.rs` now prints the histogram, run over 6,698 real channels:
+
+   ```
+   languages         en=6514  es=174  it=2  bn=1  de=1  hi=1  no=1  pl=1
+   classified        6698 of 6698 (100%), 0 unknown
+   via group only    1098 (16% of classified)
+   "English only"    keeps 6514, removes 184, cannot judge 0
+   ```
+
+   The worry was a provider tagged so sparsely that "English only" hides almost nothing
+   and nobody can tell whether that is because the list really is English or because the
+   classifier has no opinion. It removes 2.7% here — but **nothing went unclassified**,
+   which is what settles it: the list really is almost all English. The probe now says
+   which of the two it is rather than leaving the number to be read either way.
+
+   Two things worth knowing from the same run. 1,098 channels (16%) are classified only
+   by their category name — `24/7 ★ Bewitched` says nothing itself — so a provider that
+   renames categories reclassifies them silently. And `split_country_prefix` reads `NCIS`
+   as a country code on 3 channels, which is the documented cost of the `★` separator and
+   0.04% of the list; tightening it to known codes would break this provider's own
+   non-standard `QFR`, `LAT` and `CAF` prefixes, so it stays.
 
 5. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
    points at remote URLs. Closing that needs `assetProtocol` enabled in
