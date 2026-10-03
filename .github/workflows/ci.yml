@@ -417,7 +417,6 @@ jobs:
           name: aurora-tv-installers
           path: |
             src-native/target/release/bundle/nsis/*.exe
-            src-native/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
       - name: Publish this build to its own release
@@ -488,9 +487,15 @@ jobs:
             'itself and will say in Settings when there is something newer.'
             ''
             'Two downloads: the installer, and a portable zip that needs no install.'
-            'Either can update itself from Settings once it is running — the portable'
-            'one replaces its own files and restarts, the installed one runs the'
-            'installer for you.'
+            'Both update themselves from Settings the same way once they are running:'
+            'they fetch the portable archive, replace their own files and restart. No'
+            'installer, no administrator prompt.'
+            ''
+            'The installer puts Aurora in your own profile rather than in Program Files,'
+            'which is what makes that possible — a copy in Program Files cannot write to'
+            'its own folder without elevation, so it has to fall back to running the'
+            'installer. If you have an older copy there, install this one over it once'
+            'and it will update itself from then on.'
             ''
             'This is a development build, not a finished product. docs/TESTING_A_BUILD.md'
             'says what to look at first and where the log is.'
