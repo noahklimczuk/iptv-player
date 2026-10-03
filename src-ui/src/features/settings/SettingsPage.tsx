@@ -223,10 +223,23 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
   );
 }
 
+/**
+ * One titled card of settings.
+ *
+ * The heading names the section to assistive technology as well as to the eye, which
+ * turns each card into its own addressable region. That is worth the two extra lines: a
+ * page of eight panels is otherwise one undifferentiated blob to a screen reader, and
+ * anything looking for a control inside one panel has to search the whole page. The
+ * second half of that bit us — a field labelled "Gemini API key" and one labelled
+ * "API key" are the same field to a substring match, so adding the first broke every
+ * journey that went looking for the second.
+ */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const headingId = `settings-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   return (
-    <section style={{ marginBottom: 'var(--sp-6)' }}>
+    <section aria-labelledby={headingId} style={{ marginBottom: 'var(--sp-6)' }}>
       <h2
+        id={headingId}
         style={{
           margin: '0 0 var(--sp-3)', fontSize: 'var(--fs-xs)', fontWeight: 700,
           letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-faint)',

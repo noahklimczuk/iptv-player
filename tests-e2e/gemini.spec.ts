@@ -12,9 +12,18 @@ const SHOTS = 'screenshots';
 
 const RAIL = 'Because of what you watch';
 
+/**
+ * Opens Settings and hands back the Recommendations panel.
+ *
+ * Scoped for the same reason the metadata journeys are: this panel's key field, Save and
+ * status all have near-twins in the panel above it, and a page-wide locator picks
+ * whichever shipped first.
+ */
 async function settings(page: Page) {
   await page.goto('/#/settings');
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  const panel = page.getByRole('region', { name: 'Recommendations' });
+  await expect(panel).toBeVisible();
+  return panel;
 }
 
 test('without a key there is no rail, and Settings says where to get one', async ({ page }) => {
@@ -24,27 +33,27 @@ test('without a key there is no rail, and Settings says where to get one', async
   // No heading, no skeleton, no empty state — it simply is not there.
   await expect(page.getByRole('region', { name: RAIL })).toHaveCount(0);
 
-  await settings(page);
-  await expect(page.getByText(/No key yet/)).toBeVisible();
-  await expect(page.getByText(/aistudio\.google\.com/)).toBeVisible();
+  const panel = await settings(page);
+  await expect(panel.getByText(/No key yet/)).toBeVisible();
+  await expect(panel.getByText(/aistudio\.google\.com/)).toBeVisible();
 });
 
 test('the panel says what leaves this computer, before anything is sent', async ({ page }) => {
-  await settings(page);
+  const panel = await settings(page);
   // The privacy claim is on the screen where the key is entered, which is the only moment
   // somebody is deciding whether to turn this on.
-  await expect(page.getByText(/What leaves this computer/)).toBeVisible();
-  await expect(page.getByText(/nothing about your provider, your sign-in/)).toBeVisible();
+  await expect(panel.getByText(/What leaves this computer/)).toBeVisible();
+  await expect(panel.getByText(/nothing about your provider, your sign-in/)).toBeVisible();
 });
 
 test('with a key, the rail appears and every card says why', async ({ page }) => {
-  await settings(page);
-  await page.getByLabel('Gemini API key').fill('test-key');
-  await page.getByRole('button', { name: 'Use this key' }).click();
+  const panel = await settings(page);
+  await panel.getByLabel('Gemini API key').fill('test-key');
+  await panel.getByRole('button', { name: 'Use this key' }).click();
 
   // Settings can ask for a set directly, and reports what came back.
-  await page.getByRole('button', { name: 'Get recommendations now' }).click();
-  await expect(page.getByRole('status')).toContainText(/are in your library/, {
+  await panel.getByRole('button', { name: 'Get recommendations now' }).click();
+  await expect(panel.getByRole('status')).toContainText(/are in your library/, {
     timeout: 20_000,
   });
 
@@ -60,13 +69,13 @@ test('with a key, the rail appears and every card says why', async ({ page }) =>
 });
 
 test('removing the key takes the rail away again', async ({ page }) => {
-  await settings(page);
-  await page.getByLabel('Gemini API key').fill('test-key');
-  await page.getByRole('button', { name: 'Use this key' }).click();
-  await expect(page.getByRole('button', { name: 'Get recommendations now' })).toBeVisible();
+  const panel = await settings(page);
+  await panel.getByLabel('Gemini API key').fill('test-key');
+  await panel.getByRole('button', { name: 'Use this key' }).click();
+  await expect(panel.getByRole('button', { name: 'Get recommendations now' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Remove key' }).click();
-  await expect(page.getByText(/No key yet/)).toBeVisible();
+  await panel.getByRole('button', { name: 'Remove key' }).click();
+  await expect(panel.getByText(/No key yet/)).toBeVisible();
 
   await page.goto('/#/');
   await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
