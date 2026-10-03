@@ -49,6 +49,10 @@ test('an edited address is kept', async ({ page }) => {
 test('removing a provider asks first, and says what goes with it', async ({ page }) => {
   await page.goto('/#/settings');
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  // The heading is static markup and the providers are a round trip behind it, so
+  // counting on the strength of the heading alone caught zero rows about one run in four
+  // — reported as "expected > 0", which reads like the fixture having no providers.
+  await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible();
   // Counted before the editor opens: the row's own button reads "Close" once it has.
   const before = await page.getByRole('button', { name: 'Edit' }).count();
   expect(before).toBeGreaterThan(0);
