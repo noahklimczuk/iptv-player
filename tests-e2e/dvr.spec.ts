@@ -87,6 +87,32 @@ test('series rules list what they cover and can be paused', async ({ page }) => 
   await page.screenshot({ path: `${SHOTS}/22-recording-rules.png` });
 });
 
+test('a recording that uses the last stream says so, and only then', async ({ page }) => {
+  const strip = page.getByText(/stream this subscription allows|streams this subscription allows/);
+
+  // One recording in flight against a two-stream allowance is not worth a word.
+  await page.goto('/#/recordings');
+  await expect(page.getByRole('tab', { name: /Scheduled/ })).toBeVisible();
+  await expect(strip).toHaveCount(0);
+
+  // Record something already on air, so the mock's next tick starts it and both
+  // streams are spoken for. The first cell in the grid is the one under the now-line.
+  await page.goto('/#/guide');
+  await settle(page);
+  await page.locator('button[title*="·"]').first().click();
+  const record = page.getByRole('button', { name: 'Record', exact: true });
+  await expect(record).toBeEnabled();
+  await record.click();
+
+  // The scheduler ticks every five seconds; the strip follows that same event.
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('status').filter({ hasText: /subscription allows/ }))
+    .toContainText(/Starting something now may stop/);
+
+  await settle(page, 300);
+  await page.screenshot({ path: `${SHOTS}/24-connection-budget.png` });
+});
+
 test('Record in the guide schedules the airing and marks the cell', async ({ page }) => {
   const cell = await selectUpcoming(page);
 

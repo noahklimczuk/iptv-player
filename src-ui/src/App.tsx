@@ -5,6 +5,7 @@ import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
 import { BootScreen } from '@/components/BootScreen';
+import { ConnectionBudget } from '@/components/ConnectionBudget';
 import { BrowsePage } from '@/features/browse/BrowsePage';
 import { RecordingsPage } from '@/features/dvr/RecordingsPage';
 import { GuidePage } from '@/features/guide/GuidePage';
@@ -437,6 +438,9 @@ export default function App() {
           profileName={profile.active.name}
           onSwitchProfile={() => profile.setPicking(true)}
         />
+        {/* Above the page rather than inside one, because every page here can start
+            playback and the budget is the same wherever you press. */}
+        <ConnectionBudget />
         {/* Keyed on the path so React remounts the wrapper on every navigation,
             which is what restarts the entrance animation. Without the key the class
             is already applied and nothing fades.
