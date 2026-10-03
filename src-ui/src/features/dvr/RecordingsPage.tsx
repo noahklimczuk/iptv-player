@@ -462,7 +462,30 @@ function RulesTab({
   return (
     <div style={listStyle}>
       {rules.map((rule) => (
-        <RowShell key={rule.id}>
+        <RuleRow key={rule.id} rule={rule} channels={channels} onChanged={onChanged} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One series rule.
+ *
+ * Deleting it asks first, for the same reason deleting a recording does: the control that
+ * does it sits beside Pause, which is the reversible version of the same intent, and a
+ * rule carries settings — its channel, its weekdays, its time window, how many episodes
+ * to keep — that only exist here. Pausing is one click, because pausing is undoable.
+ */
+function RuleRow({
+  rule, channels, onChanged,
+}: {
+  rule: RecordingRule;
+  channels: Map<number, Channel>;
+  onChanged: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+        <RowShell accent={confirming ? 'var(--danger)' : undefined}>
           <div style={{ minWidth: 0, flex: 1, opacity: rule.enabled ? 1 : 0.55 }}>
             <div style={{ fontWeight: 700 }}>{rule.title}</div>
             <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
@@ -476,31 +499,47 @@ function RulesTab({
             </div>
           </div>
 
-          <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
-            {rule.scheduled} recorded
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={async () => {
-              await invoke('dvr.setRuleEnabled', { id: rule.id, value: !rule.enabled });
-              onChanged();
-            }}
-          >
-            {rule.enabled ? 'Pause' : 'Resume'}
-          </Button>
-          <IconButton
-            size={32}
-            icon="close"
-            label={`Delete the rule for ${rule.title}`}
-            onClick={async () => {
-              await invoke('dvr.deleteRule', { id: rule.id });
-              onChanged();
-            }}
-          />
+          {confirming ? (
+            <>
+              <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)', whiteSpace: 'nowrap' }}>
+                Stop recording {rule.title} and forget this rule?
+              </span>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={async () => {
+                  await invoke('dvr.deleteRule', { id: rule.id });
+                  onChanged();
+                }}
+              >
+                Delete rule
+              </Button>
+              <Button size="sm" onClick={() => setConfirming(false)}>Keep</Button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
+                {rule.scheduled} recorded
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  await invoke('dvr.setRuleEnabled', { id: rule.id, value: !rule.enabled });
+                  onChanged();
+                }}
+              >
+                {rule.enabled ? 'Pause' : 'Resume'}
+              </Button>
+              <IconButton
+                size={32}
+                icon="close"
+                label={`Delete the rule for ${rule.title}`}
+                onClick={() => setConfirming(true)}
+              />
+            </>
+          )}
         </RowShell>
-      ))}
-    </div>
   );
 }
 

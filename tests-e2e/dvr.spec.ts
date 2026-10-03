@@ -121,6 +121,27 @@ test('series rules list what they cover and can be paused', async ({ page }) => 
   await page.screenshot({ path: `${SHOTS}/22-recording-rules.png` });
 });
 
+test('deleting a series rule asks first, and pausing still does not', async ({ page }) => {
+  await page.goto('/#/recordings');
+  await page.getByRole('tab', { name: /Series rules/ }).click();
+
+  const remove = page.getByRole('button', { name: /^Delete the rule for / }).first();
+  const name = (await remove.getAttribute('aria-label'))!.replace(/^Delete the rule for /, '');
+
+  // Pause is the reversible neighbour and keeps its single click.
+  await page.getByRole('button', { name: /^(Pause|Resume)$/ }).first().click();
+  await expect(page.getByText(/forget this rule/)).toHaveCount(0);
+
+  await remove.click();
+  await expect(page.getByText(`Stop recording ${name} and forget this rule?`)).toBeVisible();
+  await page.getByRole('button', { name: 'Keep', exact: true }).click();
+  await expect(page.getByText(name, { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: `Delete the rule for ${name}` }).click();
+  await page.getByRole('button', { name: 'Delete rule' }).click();
+  await expect(page.getByText(name, { exact: true })).toHaveCount(0);
+});
+
 test('Record in the guide schedules the airing and marks the cell', async ({ page }) => {
   const cell = await selectUpcoming(page);
 
