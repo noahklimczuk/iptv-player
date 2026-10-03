@@ -89,7 +89,7 @@ pub struct RailProgress {
 
 /// How many titles a rail carries. More than fits on screen, so sideways scrolling has
 /// somewhere to go; far short of the library, so the home screen is not a full import.
-const RAIL_SIZE: u32 = 24;
+pub(crate) const RAIL_SIZE: u32 = 24;
 
 /// The home screen (README §11).
 ///

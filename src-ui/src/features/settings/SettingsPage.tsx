@@ -7,6 +7,7 @@ import { isNativeHost } from '@/ipc';
 import { AboutPanel } from '@/features/settings/AboutPanel';
 import { DiagnosticsPanel } from '@/features/settings/DiagnosticsPanel';
 import { FilterPanel } from '@/features/settings/FilterPanel';
+import { GeminiPanel } from '@/features/settings/GeminiPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
 import { RefreshButton } from '@/features/settings/RefreshButton';
@@ -150,6 +151,10 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
 
       <Section title="Artwork and metadata">
         <MetadataPanel />
+      </Section>
+
+      <Section title="Recommendations">
+        <GeminiPanel />
       </Section>
 
       <Section title="Filtering">

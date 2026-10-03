@@ -179,13 +179,33 @@ impl HttpClient {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// POST a JSON body and read the reply as text.
+    ///
+    /// Goes through the same retry, timeout, size cap and redaction as every GET, which
+    /// is the reason it lives here rather than in the one module that wants it: a second
+    /// HTTP path would be a second place for all of that to be got wrong.
+    ///
+    /// No gzip handling, unlike `fetch_reader`: the APIs this talks to answer in JSON over
+    /// an encoding the client negotiates, and a `.gz` *file* is not something anything
+    /// POSTs for.
+    pub fn post_json(&self, url: &str, body: &str) -> Result<String, NetFailure> {
+        let response = self.send_with_retry(url, Some(body))?;
+        let capped = response.take(self.config.max_bytes);
+        let mut out = Vec::new();
+        let mut capped = capped;
+        capped
+            .read_to_end(&mut out)
+            .map_err(|e| NetFailure::classify(&e.to_string()))?;
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    }
+
     /// Fetch a URL as a stream, transparently inflating a gzip payload.
     ///
     /// Handles both forms providers use: `Content-Encoding: gzip` (unwrapped by the
     /// client) and a plain `.xml.gz` *file*, which is just gzip bytes over an
     /// otherwise ordinary response and has to be inflated here.
     pub fn fetch_reader(&self, url: &str) -> Result<Box<dyn Read + Send>, NetFailure> {
-        let response = self.send_with_retry(url)?;
+        let response = self.send_with_retry(url, None)?;
 
         let declared_gzip_file = looks_gzipped(url)
             || response
@@ -225,7 +245,16 @@ impl HttpClient {
         }
     }
 
-    fn send_with_retry(&self, url: &str) -> Result<reqwest::blocking::Response, NetFailure> {
+    /// One request, retried where that could help.
+    ///
+    /// `json` turns it into a POST carrying that body; `None` is the GET every other
+    /// caller wants. The body is rebuilt per attempt rather than cloned, because a retry
+    /// is a new request and sharing one would be a subtle way to send half of it twice.
+    fn send_with_retry(
+        &self,
+        url: &str,
+        json: Option<&str>,
+    ) -> Result<reqwest::blocking::Response, NetFailure> {
         let attempts = self.config.max_attempts.max(1);
         let mut last: Option<NetFailure> = None;
 
@@ -239,7 +268,15 @@ impl HttpClient {
                 (self.sleep)(Duration::from_secs(wait));
             }
 
-            match blocking(|| self.inner.get(url).send()) {
+            let build = || match json {
+                Some(body) => self
+                    .inner
+                    .post(url)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body.to_string()),
+                None => self.inner.get(url),
+            };
+            match blocking(|| build().send()) {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {

@@ -146,7 +146,9 @@ export type RailKind =
   | 'continueWatching' | 'myList' | 'recentlyAdded' | 'trending' | 'top10'
   | 'becauseYouWatched' | 'watchAgain' | 'genre' | 'acclaimed' | 'fourK'
   | 'newReleases' | 'hiddenGems' | 'providerCategory' | 'shortAndSweet'
-  | 'collections' | 'upNext';
+  | 'collections' | 'upNext'
+  /** Suggested by Gemini from what has been watched, resolved against this library. */
+  | 'aiPicks';
 
 export interface Rail {
   id: string;
@@ -823,6 +825,38 @@ export interface Commands {
     kind: 'movies' | 'series'; genre?: string; category?: string; query?: string;
     letter?: string;
   }) => BrowseFacets;
+  /**
+   * Recommendations from Gemini, resolved against this library.
+   *
+   * The model is asked for titles *by name* — what it is good at, and what the local
+   * recommender cannot do: no amount of genre overlap says that somebody who watched
+   * Arrival and Primer would like Coherence. Every answer is then looked up here, and
+   * anything this subscription does not carry is dropped, so a card on the rail is always
+   * something there is a stream for.
+   *
+   * Cached for six hours and keyed on how much has been watched, because a generation
+   * costs seconds and money and taste does not move hourly. `refresh` forces a new one.
+   *
+   * Only the watched titles, their years and genres, how much of each was watched and
+   * whether it was liked ever leave the machine. Needs a key, which is the opt-in.
+   */
+  'gemini.recommendations': (args: { profileId: number; refresh?: boolean }) => {
+    items: CatalogItem[];
+    /** `kind:id` to the model's own sentence about why this viewer would like it. */
+    reasons: Record<string, string>;
+    generatedAt: number;
+    /** How many it offered that this library does not carry. */
+    notInLibrary: number;
+  };
+  'gemini.status': (args: { profileId: number }) => {
+    hasKey: boolean;
+    keyIsBuiltIn: boolean;
+    keyIsPersistent: boolean;
+    hasHistory: boolean;
+  };
+  /** Empty clears the stored key. */
+  'gemini.setKey': (args: { key: string }) => void;
+
   'library.episodes': (args: { seriesId: number; season?: number }) => Episode[];
   /**
    * One film or show by id, for opening something that was found rather than browsed to.

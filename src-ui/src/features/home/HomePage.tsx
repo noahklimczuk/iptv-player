@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { CatalogItem } from '@shared/ipc';
+import { AiRail } from './AiRail';
 import { HeroBillboard } from '@/components/HeroBillboard';
 import { Rail } from '@/components/Rail';
 import { EmptyState, Skeleton } from '@/components/Primitives';
@@ -123,6 +124,10 @@ export function HomePage({
   return (
     <div>
       <HeroBillboard items={heroItems} onOpen={onOpen} onPlay={onPlay} />
+      {/* Second, under Continue Watching: what you were already part-way through beats a
+          suggestion, and everything below is the library's own shelves. Renders nothing
+          until it has something, so on a library with no key it does not exist. */}
+      <AiRail onOpen={onOpen} onPlay={onPlay} />
       {visibleRails.map((rail) => (
         <Rail
           key={rail.id}

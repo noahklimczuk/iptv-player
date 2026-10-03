@@ -81,6 +81,8 @@ const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'm
  * recommender's favourite boost reads.
  */
 const liked = new Set<string>(['movie:4', 'series:2']);
+/** Set through `gemini.setKey`, so the preview can show both sides of the switch. */
+let mockGeminiKey = '';
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -1152,6 +1154,34 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       total: browseFilter(all, { genre, category, query, letter }).length,
     };
   },
+  /* ── Gemini recommendations ───────────────────────────────────────────── */
+
+  'gemini.status': () => ({
+    hasKey: mockGeminiKey.length > 0,
+    keyIsBuiltIn: false,
+    keyIsPersistent: true,
+    hasHistory: progress.size > 0,
+  }),
+  'gemini.setKey': ({ key }) => { mockGeminiKey = key.trim(); },
+  'gemini.recommendations': ({ refresh }) => {
+    if (!mockGeminiKey) throw new Error('No Gemini key is set. Add one in Settings.');
+    // The real thing asks a model for titles and then looks each one up here, dropping
+    // what this library does not carry. The preview models the *shape* of that: a dozen
+    // real rows with a sentence each, and a count of the ones that did not resolve.
+    const pool = visibleMovies().slice(refresh ? 12 : 0, refresh ? 24 : 12);
+    const reasons: Record<string, string> = {};
+    for (const m of pool) {
+      reasons[`movie:${m.id}`] =
+        `Shares the ${m.genres[0]?.toLowerCase() ?? 'mood'} of something you finished.`;
+    }
+    return {
+      items: pool.map(asMovie),
+      reasons,
+      generatedAt: Math.floor(Date.now() / 1000),
+      notInLibrary: 7,
+    };
+  },
+
   'library.episodes': ({ seriesId, season }) =>
     fx.episodes.filter((e) => e.seriesId === seriesId && (season == null || e.season === season)),
   'library.stats': () => ({
