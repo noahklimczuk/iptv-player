@@ -20,7 +20,9 @@
 
 use std::collections::BTreeMap;
 
+use aurora_core::lang;
 use aurora_core::title;
+use aurora_core::xtream::Category;
 use aurora_ingest::http::{redact, HttpClient, HttpConfig};
 use aurora_ingest::xtream::XtreamClient;
 
@@ -91,7 +93,7 @@ fn main() {
     let live = report("live streams", client.live_streams());
     let vod = report("VOD streams", client.vod_streams());
     let series = report("series", client.series());
-    report("live categories", client.live_categories());
+    let live_cats = report("live categories", client.live_categories());
     report("VOD categories", client.vod_categories());
     report("series categories", client.series_categories());
     println!();
@@ -134,6 +136,8 @@ fn main() {
         }
         println!("  quality tags      {}", top(&qualities, 6));
         println!("  country prefixes  {}", top(&countries, 6));
+
+        language_histogram(live, live_cats.as_deref());
         println!("  samples:");
         for s in live.iter().filter_map(|s| s.name.as_deref()).take(5) {
             println!("    {s}");
@@ -190,6 +194,97 @@ fn main() {
 
 /// Run one endpoint and say how it went, without letting a failure end the probe —
 /// knowing which endpoints a panel does not implement is part of what this is for.
+/// What `aurora_core::lang` makes of real channel names.
+///
+/// The classifier is written from the conventions playlists use and tested against names
+/// shaped like them. Whether those conventions describe *this* provider is a different
+/// question, and the only way to ask it is to run the shipping code over the whole list
+/// and count.
+///
+/// The failure worth looking for is the opposite of the obvious one. Content wrongly
+/// hidden is loud — somebody notices their channel is gone. A provider whose tagging is
+/// so sparse that "English only" hides almost nothing is silent: the filter looks like it
+/// works, the list barely changes, and nobody can tell whether that is because everything
+/// really is English or because almost nothing could be classified at all. So this prints
+/// what the filter would actually remove, not just the distribution.
+fn language_histogram(live: &[aurora_core::xtream::LiveStream], cats: Option<&[Category]>) {
+    let names: BTreeMap<String, String> = cats
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|c| Some((c.category_id.clone()?, c.category_name.clone()?)))
+        .collect();
+
+    let mut langs: BTreeMap<String, usize> = BTreeMap::new();
+    let mut from_group_only = 0usize;
+    let mut unknown = 0usize;
+    for s in live {
+        let Some(name) = s.name.as_deref() else {
+            continue;
+        };
+        let group = s
+            .category_id
+            .as_deref()
+            .and_then(|id| names.get(id))
+            .map(String::as_str);
+        match lang::detect(name, group, None) {
+            Some(code) => {
+                *langs.entry(code).or_default() += 1;
+                // Would the name alone have been enough? If not, this channel is
+                // classified only because its category happened to say so, and a
+                // provider that renames its categories silently reclassifies it.
+                if lang::detect(name, None, None).is_none() {
+                    from_group_only += 1;
+                }
+            }
+            None => unknown += 1,
+        }
+    }
+
+    let total = live.len();
+    let classified = total - unknown;
+    println!("  languages         {}", top(&langs, 8));
+    println!(
+        "  classified        {classified} of {total} ({}%), {unknown} unknown",
+        pct(classified, total)
+    );
+    println!(
+        "  via group only    {from_group_only} ({}% of classified)",
+        pct(from_group_only, classified.max(1))
+    );
+
+    // What "English only" would actually do here. `lang` returns ISO 639-1, so English
+    // is `en`; everything else with a code is what the filter removes, and the unknowns
+    // are what it has no opinion about.
+    let english = langs.get("en").copied().unwrap_or(0);
+    let other = classified - english;
+    println!("  \"English only\"    keeps {english}, removes {other}, cannot judge {unknown}");
+    if pct(other, total) < 5 {
+        // Which of the two explanations applies is decided by `unknown`, not by taste.
+        if unknown == 0 {
+            println!("  . removes under 5%, and nothing went unclassified - it really is almost all English");
+        } else {
+            println!(
+                "  ! removes under 5% while {unknown} channels could not be classified at all"
+            );
+            println!("    - the filter looks like it works because it has no opinion, not because there is nothing to remove");
+        }
+    }
+    // Not "unclassified" - nothing here need be. These are the ones whose *name* says
+    // nothing, so they ride on their category, and a provider that renames its
+    // categories reclassifies them silently.
+    let mut group_only = live
+        .iter()
+        .filter_map(|s| s.name.as_deref())
+        .filter(|n| lang::detect(n, None, None).is_none())
+        .peekable();
+    if group_only.peek().is_some() {
+        println!("  named without a language, classified by their group:");
+        for s in group_only.take(5) {
+            println!("    {s}");
+        }
+    }
+}
+
 fn report<T>(
     what: &str,
     result: Result<Vec<T>, aurora_core::neterr::NetFailure>,
