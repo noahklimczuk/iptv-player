@@ -25,6 +25,7 @@ export function ChannelBanner({
     <AnimatePresence>
       {channel && (
         <motion.div
+          data-testid="channel-banner"
           initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 30 }} transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
           style={{

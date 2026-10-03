@@ -318,12 +318,30 @@ export default function App() {
     ? (channels ?? []).find((c) => c.id === ui.banner!.channelId) ?? null
     : null;
 
-  // Auto-hide the banner.
+  /**
+   * Auto-hide the banner.
+   *
+   * Two things here, and both of them are the bug.
+   *
+   * `ui` cannot be a dependency. `useUi()` subscribes to the whole store, so every
+   * unrelated write produces a new snapshot — and while the player is open the host's
+   * heartbeat writes `setPlayer` four times a second. The effect re-ran on each one,
+   * cleared the pending timeout and started a fresh five seconds, so the deadline was
+   * never reached and the banner stayed on screen for the whole programme. `hideBanner`
+   * is a store action and is stable, so taking it directly is enough.
+   *
+   * And the wait is until the deadline the store already recorded, not another full five
+   * seconds from now. `until` has been set on every zap since the banner was written and
+   * nothing ever read it; with the effect re-running, counting from scratch each time is
+   * what made a reset indistinguishable from a fresh zap.
+   */
+  const hideBanner = useUi((s) => s.hideBanner);
+  const bannerUntil = ui.banner?.until ?? null;
   useEffect(() => {
-    if (!ui.banner) return;
-    const t = window.setTimeout(() => ui.hideBanner(), 5000);
+    if (bannerUntil == null) return;
+    const t = window.setTimeout(hideBanner, Math.max(0, bannerUntil - Date.now()));
     return () => window.clearTimeout(t);
-  }, [ui.banner, ui]);
+  }, [bannerUntil, hideBanner]);
 
   // Hold the launch screen until the two questions that decide the first screen have
   // been answered. Both are asked once, at mount, and both are quick — but neither is
