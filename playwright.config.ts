@@ -34,15 +34,34 @@ export default defineConfig({
   },
   webServer: {
     /**
+     * Build, then serve what was built.
+     *
+     * `vite preview` serves `dist/`, and nothing here used to put anything in it. CI has
+     * a build step before this and a local run did not, so running the journeys after
+     * editing the UI tested whatever was last built — which on this machine was a bundle
+     * from the previous week. Every one of them passed, against code that no longer
+     * existed. The build is a couple of seconds and it is the difference between a green
+     * suite and a meaningful one.
+     *
      * Bind IPv4 explicitly and wait on that same address. `vite preview` otherwise
      * binds whatever `localhost` resolves to; on a host where that is `::1` it
      * listens on IPv6 only, Playwright's port probe succeeds, and every test then
      * gets ECONNREFUSED against 127.0.0.1.
      */
-    command: `pnpm exec vite preview --port ${PORT} --strictPort --host 127.0.0.1`,
+    command:
+      `pnpm exec vite build && `
+      + `pnpm exec vite preview --port ${PORT} --strictPort --host 127.0.0.1`,
     url: ORIGIN,
-    reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
+    /**
+     * Never locally, despite the cost of a rebuild each run.
+     *
+     * Reusing a server that is already up skips the build above with it, which is exactly
+     * the trap this is meant to close: the second run of the day would go back to serving
+     * whatever the first one built.
+     */
+    reuseExistingServer: false,
+    // Longer, because it now covers the build as well as the server coming up.
+    timeout: 120_000,
     stdout: 'pipe',
     stderr: 'pipe',
   },

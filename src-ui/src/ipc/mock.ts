@@ -1839,7 +1839,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     const base: ValidationResult = {
       ok: false, message: '', detail: null, expiresAt: null, daysUntilExpiry: null,
       maxConnections: null, activeConnections: null, isTrial: false,
-      credentialsDetected: false,
+      credentialsDetected: false, suggestedUrl: null,
     };
     if (!/^https?:\/\//i.test(draft.url.trim())) {
       return { ...base, message: 'That does not look like a URL',
@@ -1857,6 +1857,10 @@ const handlers: { [K in CommandName]: Handler<K> } = {
         detail:
           'The server may be overloaded, or the address may be missing a port. '
           + 'Panels usually publish one, like :8080 or :2082.',
+        // The host probes the other scheme when a check fails this way; an https address
+        // that will not answer is modelled as one whose panel is on plain HTTP, because
+        // that is the commonest reason for it.
+        suggestedUrl: draft.url.trim().replace(/^https:/i, 'http:'),
       };
     }
     // The mock accepts anything else well-formed; the shape of the answer is what the

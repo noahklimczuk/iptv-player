@@ -1,5 +1,6 @@
 //! Provider management commands: add, validate, refresh (README §4, §13).
 
+use aurora_core::neterr::ErrorCode;
 use aurora_core::rules::{Rule, RuleSet};
 use aurora_db::rusqlite::{params, OptionalExtension};
 use aurora_ingest::credentials::credential_ref;
@@ -38,6 +39,11 @@ pub struct ValidationResult {
     pub is_trial: bool,
     /// True when the paste was recognised as a full Xtream URL and split up.
     pub credentials_detected: bool,
+    /// The same host under the other scheme, when the given one did not answer and that
+    /// one does. Many panels are published on plain HTTP, which is indistinguishable from
+    /// a dead host when the address says `https` — and a viewer has no way to tell those
+    /// apart from a spinner that ends in a red box.
+    pub suggested_url: Option<String>,
 }
 
 /// README §13: recognise a pasted `get.php` URL and fill the form from it.
@@ -85,6 +91,53 @@ pub fn providers_detect(args: PastedArgs) -> DetectedSource {
     }
 }
 
+/// The same address under the other scheme, when there is one.
+///
+/// `https://panel.example.com` → `http://panel.example.com`, and the reverse.
+fn other_scheme(url: &str) -> Option<String> {
+    let url = url.trim();
+    if let Some(rest) = url.strip_prefix("https://") {
+        Some(format!("http://{rest}"))
+    } else {
+        url.strip_prefix("http://")
+            .map(|rest| format!("https://{rest}"))
+    }
+}
+
+/// Whether a failure is the kind where the address itself may be the problem.
+///
+/// A 401 means the host is there and the credentials are wrong — trying the same host
+/// under a different scheme would prove nothing and waste the viewer's time. A timeout, a
+/// refused connection or a name that does not resolve are the ones worth a second look.
+fn worth_probing(code: ErrorCode) -> bool {
+    matches!(
+        code,
+        ErrorCode::Timeout | ErrorCode::Refused | ErrorCode::Dns | ErrorCode::Tls
+    )
+}
+
+/// Does this host answer under the other scheme?
+///
+/// Asked **without credentials**, deliberately. The thing being established is whether
+/// anything is listening and speaking HTTP there, which an unauthenticated request answers
+/// just as well — and the alternative is usually `http://`, where sending a username and
+/// password to find out would put them on the wire in clear text to a host that has not
+/// yet been shown to be the right one.
+///
+/// Any HTTP answer counts, including a refusal: a panel that replies "401" or "forbidden"
+/// to an empty sign-in is a panel that is *there*, which is the whole question.
+fn probe_other_scheme(http: &aurora_ingest::http::HttpClient, url: &str) -> Option<String> {
+    let alternative = other_scheme(url)?;
+    let probe = format!("{}/player_api.php", alternative.trim_end_matches('/'));
+    match http.fetch_bytes(&probe) {
+        Ok(_) => Some(alternative),
+        // A reply that is an HTTP error is still a reply. Only the transport failures
+        // mean nothing is there.
+        Err(e) if !worth_probing(e.code) => Some(alternative),
+        Err(_) => None,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidateArgs {
@@ -117,10 +170,20 @@ pub fn providers_validate(
                     active_connections: None,
                     is_trial: false,
                     credentials_detected: false,
+                    suggested_url: None,
                 });
             }
             let client = XtreamClient::new(&services.http, &draft.url, &username, &password);
-            match client.authenticate(now_unix()) {
+            let outcome = client.authenticate(now_unix());
+            // Before reporting "it did not answer", find out whether it answers somewhere
+            // else. A panel published on plain HTTP — which many are — is indistinguishable
+            // from a dead one when the address says `https`, and the viewer has nothing to
+            // tell those apart with but a spinner that ends in a red box.
+            let suggested_url = match &outcome {
+                Err(e) if worth_probing(e.code) => probe_other_scheme(&services.http, &draft.url),
+                _ => None,
+            };
+            match outcome {
                 Ok(status) => Ok(ValidationResult {
                     ok: true,
                     message: "Connected".into(),
@@ -131,6 +194,7 @@ pub fn providers_validate(
                     active_connections: status.active_connections,
                     is_trial: status.is_trial,
                     credentials_detected: false,
+                    suggested_url: None,
                 }),
                 Err(e) => Ok(ValidationResult {
                     ok: false,
@@ -142,6 +206,7 @@ pub fn providers_validate(
                     active_connections: None,
                     is_trial: false,
                     credentials_detected: false,
+                    suggested_url,
                 }),
             }
         }
@@ -168,6 +233,7 @@ pub fn providers_validate(
                         active_connections: None,
                         is_trial: false,
                         credentials_detected: false,
+                        suggested_url: None,
                     })
                 }
                 Err(e) => Ok(ValidationResult {
@@ -180,6 +246,7 @@ pub fn providers_validate(
                     active_connections: None,
                     is_trial: false,
                     credentials_detected: false,
+                    suggested_url: None,
                 }),
             }
         }

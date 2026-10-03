@@ -46,3 +46,24 @@ test('a panel login with no credentials cannot continue', async ({ page }) => {
   await page.getByLabel('Password').fill('secret');
   await expect(page.getByRole('button', { name: /^(Continue|Add it anyway)$/ })).toBeEnabled();
 });
+
+test('a panel that only answers on http is found and offered', async ({ page }) => {
+  await page.goto('/?setup#/');
+  await expect(page.getByRole('heading', { name: /Welcome to Aurora/i })).toBeVisible();
+
+  // An https address that will not answer — the shape of the report that prompted this.
+  await page.getByRole('textbox').first().fill('https://panel.invalid');
+  await page.getByRole('button', { name: 'Xtream / panel login' }).click();
+  await page.getByLabel('Username').fill('someone');
+  await page.getByLabel('Password').fill('secret');
+  await page.getByRole('button', { name: 'Check connection' }).click();
+
+  // The host probed the other scheme and found it answering there.
+  await expect(page.getByText('http://panel.invalid')).toBeVisible({ timeout: 20_000 });
+  // Said plainly, because it is a downgrade and the viewer is the one making it.
+  await expect(page.getByText(/unencrypted address/)).toBeVisible();
+
+  // Taking the offer rewrites the address and checks it again.
+  await page.getByTestId('use-suggested-url').click();
+  await expect(page.getByLabel('Provider address')).toHaveValue('http://panel.invalid');
+});

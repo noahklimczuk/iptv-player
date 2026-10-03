@@ -493,6 +493,16 @@ export interface ValidationResult {
   activeConnections: number | null;
   isTrial: boolean;
   credentialsDetected: boolean;
+  /**
+   * The same host under the other scheme, when the given one did not answer and that one
+   * does. Null the rest of the time.
+   *
+   * Many panels are published on plain HTTP, which is indistinguishable from a dead host
+   * when the address says `https` — the viewer gets a spinner and a red box either way.
+   * The host probes without credentials, so finding this out never puts a password on an
+   * unencrypted connection to somewhere that has not been established as the right place.
+   */
+  suggestedUrl: string | null;
 }
 
 export type IngestPhase =

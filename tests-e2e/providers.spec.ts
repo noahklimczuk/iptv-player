@@ -152,3 +152,26 @@ test('a channel can be favourited, and the filter then shows only it', async ({ 
 
   await page.screenshot({ path: `${SHOTS}/41-favorites.png` });
 });
+
+test('the editor can check a connection, and offers the address that answers', async ({
+  page,
+}) => {
+  await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit' }).first().click();
+
+  const address = page.getByLabel('Provider address');
+  await expect(address).toBeVisible();
+
+  // The state somebody opens this screen in: a saved provider whose address stopped
+  // working. Before this the editor had no check at all — you changed it, saved, and
+  // found out at the next refresh.
+  await address.fill('https://panel.invalid');
+  await page.getByRole('button', { name: 'Check connection' }).click();
+
+  await expect(page.getByText('http://panel.invalid')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/unencrypted address/)).toBeVisible();
+
+  await page.getByTestId('editor-use-suggested-url').click();
+  await expect(address).toHaveValue('http://panel.invalid');
+});
