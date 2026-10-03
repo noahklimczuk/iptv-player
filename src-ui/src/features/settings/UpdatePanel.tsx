@@ -155,14 +155,37 @@ export function UpdatePanel() {
           )}
           <div style={{ marginTop: 'var(--sp-3)' }}>
             {data.canInstall ? (
-              <InstallControls
-                download={download}
-                kind={data.kind}
-                busy={busy}
-                onDownload={() => void startDownload()}
-                onInstall={() => void install()}
-                onOpen={() => void open()}
-              />
+              <>
+                <InstallControls
+                  download={download}
+                  kind={data.kind}
+                  busy={busy}
+                  onDownload={() => void startDownload()}
+                  onInstall={() => void install()}
+                  onOpen={() => void open()}
+                />
+                {/*
+                  * Only a copy that cannot write its own folder ends up here, because
+                  * that is the one question `asset_kind` asks. Since Aurora installs
+                  * into the viewer's own profile this is an older copy in Program
+                  * Files, and saying so is the difference between "why does this keep
+                  * running an installer" and one reinstall that ends it.
+                  */}
+                {data.kind === 'installer' && (
+                  <div
+                    style={{
+                      marginTop: 'var(--sp-2)', fontSize: 'var(--fs-sm)',
+                      color: 'var(--text-faint)',
+                    }}
+                  >
+                    This copy is somewhere it cannot write to — Program Files, most
+                    likely — so it has to run the installer rather than replace its own
+                    files. Installing Aurora again puts it in your own profile, and from
+                    then on it updates itself here without an installer or an
+                    administrator prompt.
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 <Button
@@ -174,8 +197,8 @@ export function UpdatePanel() {
                 <span
                   style={{ marginLeft: 10, fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}
                 >
-                  An installed copy can only update itself on Windows, because what it
-                  runs is the Windows installer. A portable copy can, on any platform.
+                  This copy cannot replace its own files, and the installer it would
+                  otherwise run exists only on Windows.
                 </span>
               </>
             )}

@@ -408,3 +408,49 @@ fn the_updaters_bundle_identifier_matches_the_manifest() {
         "tauri.conf.json's identifier and updates::BUNDLE_IDENTIFIER must agree"
     );
 }
+
+/// The installer must put Aurora somewhere it can write to.
+///
+/// This is the whole reason in-app updates work. `updates::asset_kind` asks one
+/// question — can this process write to the folder it is running from — and answers
+/// "replace my own files" or "run the installer" on that basis alone. A per-user
+/// install can write to its folder. A per-machine install in Program Files cannot, so
+/// it falls back to downloading a 39 MB installer and asking for elevation, which for
+/// a standard account is not an update path at all.
+///
+/// `installMode: "both"` let the installer decide, and it chose Program Files: a copy
+/// that had been updating itself in place went back to running the installer every
+/// time, with nothing in the app to say why. That is what this pins.
+///
+/// MSI is excluded for the same reason rather than as tidying — an MSI installs
+/// per-machine by construction, so shipping one re-creates the folder the app cannot
+/// update itself in.
+#[test]
+fn the_bundle_installs_per_user_so_a_copy_can_update_itself() {
+    let config =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+            .expect("tauri.conf.json");
+    let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
+
+    let mode = parsed["bundle"]["windows"]["nsis"]["installMode"]
+        .as_str()
+        .expect("an NSIS install mode is set");
+    assert_eq!(
+        mode, "currentUser",
+        "the installer must install into the viewer's own profile; {mode:?} can land in \
+         Program Files, where the app cannot replace its own files and has to run the \
+         installer instead"
+    );
+
+    let targets: Vec<&str> = parsed["bundle"]["targets"]
+        .as_array()
+        .expect("bundle targets are a list")
+        .iter()
+        .filter_map(|t| t.as_str())
+        .collect();
+    assert!(
+        !targets.contains(&"msi"),
+        "an MSI installs per-machine, which puts Aurora back somewhere it cannot update \
+         itself: {targets:?}"
+    );
+}

@@ -36,8 +36,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis",
-      "msi"
+      "nsis"
     ],
     "resources": {
       "../../../LICENSE": "LICENSE.txt",
@@ -47,7 +46,7 @@
     },
     "windows": {
       "nsis": {
-        "installMode": "both"
+        "installMode": "currentUser"
       }
     },
     "icon": [
