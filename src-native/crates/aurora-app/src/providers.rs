@@ -174,6 +174,62 @@ fn http_for_probe<'a>(
     Some(one_shot.as_ref().unwrap_or(shared))
 }
 
+/// The security products Windows knows about, by name.
+///
+/// Named rather than guessed at. "Security software such as Bitdefender, ESET or others"
+/// asks somebody to go and find out what is on their own machine; "Bitdefender Antivirus
+/// and 360 Total Security are running on this computer" tells them where to go. Windows
+/// keeps the list in the Security Center, which is where every one of them registers.
+///
+/// Best effort, and the sentence reads fine without it. This only runs on the one failure
+/// already diagnosed as local, which is rare and always something a person just asked for.
+#[cfg(windows)]
+fn installed_security_products() -> Vec<String> {
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct \
+             -ErrorAction SilentlyContinue | Select-Object -ExpandProperty displayName",
+        ])
+        .output();
+    let Ok(out) = out else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        // Windows Defender is on every machine and is not the one doing this: it does not
+        // inspect plaintext HTTP for credential submission. Naming it would send people
+        // to the wrong settings page.
+        //
+        // Matched by its full name, not by the word "defender" — which is also inside
+        // *Bit*defender, the product most likely to be the actual cause. Filtering on the
+        // substring hid the one name worth printing.
+        .filter(|l| {
+            let lower = l.to_ascii_lowercase();
+            !lower.contains("windows defender") && !lower.contains("microsoft defender")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn installed_security_products() -> Vec<String> {
+    Vec::new()
+}
+
+/// "A and B", "A, B and C" — a list a person reads rather than parses.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// The failure to report when the host is plainly up and only *our* logins are dying.
 fn locally_blocked(url: &str, took: std::time::Duration) -> aurora_core::neterr::NetFailure {
     let host = url
@@ -183,17 +239,28 @@ fn locally_blocked(url: &str, took: std::time::Duration) -> aurora_core::neterr:
         .split('/')
         .next()
         .unwrap_or(url);
+    let products = installed_security_products();
+    let culprits = if products.is_empty() {
+        "Security software that inspects web traffic (Bitdefender, 360 Total Security, \
+         McAfee WebAdvisor, ESET and others) commonly blocks"
+            .to_string()
+    } else {
+        format!(
+            "{} {} running on this computer, and software like it blocks",
+            and_list(&products),
+            if products.len() == 1 { "is" } else { "are" }
+        )
+    };
     aurora_core::neterr::NetFailure {
         code: ErrorCode::Dropped,
         message: "Something on this computer is blocking the sign-in".into(),
         cause: format!(
             "{host} answers normally when asked without a username and password, and \
-             drops the connection the moment one carries them ({} ms). That is not your \
-             provider being down. Security software that inspects web traffic \
-             (Bitdefender, 360 Total Security, McAfee WebAdvisor, ESET and others) \
-             commonly blocks IPTV panel logins exactly this way — allow {host} in its \
-             web protection and try again. The same subscription working on a phone on \
-             this network confirms it.",
+             drops the connection the moment one carries both ({} ms). That is not your \
+             provider being down. {culprits} sign-ins sent over plain http:// to protect \
+             you from putting a password on an unencrypted connection — allow {host} in \
+             its web protection and try again. The same subscription working on a phone \
+             on this network confirms it.",
             took.as_millis()
         ),
         actions: vec![
@@ -917,11 +984,33 @@ mod local_cut_tests {
         assert!(f.message.contains("this computer"), "{f:?}");
         assert!(f.cause.contains("64582429.max-jbnott.online"), "{f:?}");
         assert!(f.cause.contains("9 ms"), "{f:?}");
-        assert!(f.cause.contains("Bitdefender"), "{f:?}");
+        // Either the products this machine actually has, or the generic list when the
+        // Security Center has nothing to say.
+        assert!(
+            f.cause.contains("running on this computer") || f.cause.contains("Bitdefender"),
+            "{f:?}"
+        );
+        // It names what the rule is about, which is what makes it findable in a settings
+        // screen full of toggles.
+        assert!(f.cause.contains("http://"), "{f:?}");
         // It must not accuse the provider, which is the whole point of the distinction.
         assert!(!f.message.contains("provider"), "{f:?}");
         // Retryable: allowing it in the filter and pressing the button again is the fix.
         assert!(f.retryable);
+    }
+
+    #[test]
+    fn a_list_of_products_reads_like_a_sentence() {
+        assert_eq!(and_list(&[]), "");
+        assert_eq!(and_list(&["Bitdefender".into()]), "Bitdefender");
+        assert_eq!(
+            and_list(&["Bitdefender".into(), "360 Total Security".into()]),
+            "Bitdefender and 360 Total Security"
+        );
+        assert_eq!(
+            and_list(&["A".into(), "B".into(), "C".into()]),
+            "A, B and C"
+        );
     }
 }
 
