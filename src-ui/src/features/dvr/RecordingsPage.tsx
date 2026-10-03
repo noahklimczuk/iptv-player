@@ -109,7 +109,7 @@ export function RecordingsPage({ onPlay }: { onPlay?: (r: Recording) => void }) 
               <RecordedRow
                 key={r.id}
                 rec={r}
-                channel={byName.get(r.channelId)?.name ?? null}
+                channel={byName.get(r.channelId) ?? null}
                 onChanged={refresh}
                 onPlay={onPlay}
               />
@@ -132,7 +132,7 @@ export function RecordingsPage({ onPlay }: { onPlay?: (r: Recording) => void }) 
                 <ScheduledRow
                   key={r.id}
                   rec={r}
-                  channel={byName.get(r.channelId)?.name ?? null}
+                  channel={byName.get(r.channelId) ?? null}
                   onChanged={refresh}
                 />
               ))}
@@ -147,7 +147,7 @@ export function RecordingsPage({ onPlay }: { onPlay?: (r: Recording) => void }) 
                   <ProblemRow
                     key={r.id}
                     rec={r}
-                    channel={byName.get(r.channelId)?.name ?? null}
+                    channel={byName.get(r.channelId) ?? null}
                     onChanged={refresh}
                   />
                 ))}
@@ -242,19 +242,38 @@ function RowShell({
   );
 }
 
-function TitleBlock({ rec, channel }: { rec: Recording; channel: string | null }) {
+/**
+ * Takes the channel rather than its name, so the row can carry its logo.
+ *
+ * Every other list in the app is something to look at — posters on the home rails, logos
+ * down the guide — and this one was four lines of grey text. The page already holds the
+ * channels it is naming, so the mark costs nothing to show and makes a long list scannable
+ * without reading it.
+ */
+function TitleBlock({ rec, channel }: { rec: Recording; channel: Channel | null }) {
   const ep = rec.season != null && rec.episode != null
     ? `S${String(rec.season).padStart(2, '0')}E${String(rec.episode).padStart(2, '0')}`
     : null;
   return (
-    <div style={{ minWidth: 0, flex: 1 }}>
-      <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {rec.title}
-        {ep && <span style={{ color: 'var(--text-faint)', fontWeight: 500 }}> · {ep}</span>}
-      </div>
-      <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
-        {channel && <>{channel} · </>}
-        {dayLabel(rec.airStart)} {clockTime(rec.airStart)}–{clockTime(rec.airStop)}
+    <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+      {channel?.logo && (
+        <img
+          src={channel.logo} alt=""
+          style={{
+            width: 34, height: 34, borderRadius: 'var(--r-sm)', objectFit: 'cover',
+            flexShrink: 0,
+          }}
+        />
+      )}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {rec.title}
+          {ep && <span style={{ color: 'var(--text-faint)', fontWeight: 500 }}> · {ep}</span>}
+        </div>
+        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
+          {channel && <>{channel.name} · </>}
+          {dayLabel(rec.airStart)} {clockTime(rec.airStart)}–{clockTime(rec.airStop)}
+        </div>
       </div>
     </div>
   );
@@ -264,14 +283,45 @@ function RecordedRow({
   rec, channel, onChanged, onPlay,
 }: {
   rec: Recording;
-  channel: string | null;
+  channel: Channel | null;
   onChanged: () => void;
   onPlay?: (r: Recording) => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const act = async (fn: () => Promise<unknown>) => {
     await fn();
     onChanged();
   };
+
+  /*
+   * Deleting a recording erases the file. There is no undo and no recycle bin, and the
+   * button that does it sat one 32px target away from Keep — the control whose entire
+   * purpose is to say "do not lose this". So it asks first, in the row, the same two-step
+   * the provider editor uses for the other irreversible thing in this app. Cancelling a
+   * scheduled recording and dismissing a failed one still go in one click, because
+   * neither has a file to lose.
+   */
+  if (confirming) {
+    return (
+      <RowShell accent="var(--danger)">
+        <TitleBlock rec={rec} channel={channel} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+          <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)', whiteSpace: 'nowrap' }}>
+            Delete permanently, freeing {bytes(rec.bytes)}?
+          </span>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => act(() => invoke('dvr.delete', { id: rec.id }))}
+          >
+            Delete
+          </Button>
+          <Button size="sm" onClick={() => setConfirming(false)}>Keep</Button>
+        </div>
+      </RowShell>
+    );
+  }
+
   return (
     <RowShell>
       <TitleBlock rec={rec} channel={channel} />
@@ -305,7 +355,7 @@ function RecordedRow({
           size={32}
           icon="close"
           label={`Delete ${rec.title}`}
-          onClick={() => act(() => invoke('dvr.delete', { id: rec.id }))}
+          onClick={() => setConfirming(true)}
         />
       </div>
     </RowShell>
@@ -316,7 +366,7 @@ function ScheduledRow({
   rec, channel, onChanged,
 }: {
   rec: Recording;
-  channel: string | null;
+  channel: Channel | null;
   onChanged: () => void;
 }) {
   const live = rec.state === 'recording';
@@ -364,7 +414,7 @@ function ProblemRow({
   rec, channel, onChanged,
 }: {
   rec: Recording;
-  channel: string | null;
+  channel: Channel | null;
   onChanged: () => void;
 }) {
   return (
@@ -412,7 +462,30 @@ function RulesTab({
   return (
     <div style={listStyle}>
       {rules.map((rule) => (
-        <RowShell key={rule.id}>
+        <RuleRow key={rule.id} rule={rule} channels={channels} onChanged={onChanged} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One series rule.
+ *
+ * Deleting it asks first, for the same reason deleting a recording does: the control that
+ * does it sits beside Pause, which is the reversible version of the same intent, and a
+ * rule carries settings — its channel, its weekdays, its time window, how many episodes
+ * to keep — that only exist here. Pausing is one click, because pausing is undoable.
+ */
+function RuleRow({
+  rule, channels, onChanged,
+}: {
+  rule: RecordingRule;
+  channels: Map<number, Channel>;
+  onChanged: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+        <RowShell accent={confirming ? 'var(--danger)' : undefined}>
           <div style={{ minWidth: 0, flex: 1, opacity: rule.enabled ? 1 : 0.55 }}>
             <div style={{ fontWeight: 700 }}>{rule.title}</div>
             <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
@@ -426,31 +499,47 @@ function RulesTab({
             </div>
           </div>
 
-          <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
-            {rule.scheduled} recorded
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={async () => {
-              await invoke('dvr.setRuleEnabled', { id: rule.id, value: !rule.enabled });
-              onChanged();
-            }}
-          >
-            {rule.enabled ? 'Pause' : 'Resume'}
-          </Button>
-          <IconButton
-            size={32}
-            icon="close"
-            label={`Delete the rule for ${rule.title}`}
-            onClick={async () => {
-              await invoke('dvr.deleteRule', { id: rule.id });
-              onChanged();
-            }}
-          />
+          {confirming ? (
+            <>
+              <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)', whiteSpace: 'nowrap' }}>
+                Stop recording {rule.title} and forget this rule?
+              </span>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={async () => {
+                  await invoke('dvr.deleteRule', { id: rule.id });
+                  onChanged();
+                }}
+              >
+                Delete rule
+              </Button>
+              <Button size="sm" onClick={() => setConfirming(false)}>Keep</Button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
+                {rule.scheduled} recorded
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  await invoke('dvr.setRuleEnabled', { id: rule.id, value: !rule.enabled });
+                  onChanged();
+                }}
+              >
+                {rule.enabled ? 'Pause' : 'Resume'}
+              </Button>
+              <IconButton
+                size={32}
+                icon="close"
+                label={`Delete the rule for ${rule.title}`}
+                onClick={() => setConfirming(true)}
+              />
+            </>
+          )}
         </RowShell>
-      ))}
-    </div>
   );
 }
 

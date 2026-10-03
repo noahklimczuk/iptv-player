@@ -244,12 +244,14 @@ Several things can only be answered with an account:
   fixture, and "Live TV says No channels" does not reproduce. Opening a show lists its
   episodes (6 on the one opened); `episodes` is 0 straight after an import because they
   are fetched when a show is opened. Artwork is still unconfirmed — that needs item 7.
-- **Catch-up (F-23, deferred).** `xtream_url` formats its timestamp in UTC; panels read
-  it in their own local time, and `server_info.timezone` said `Europe/Paris` on the one
-  panel probed — two hours out. `timeshift.php` 404s there, so it cannot be fixed
-  against evidence. On a panel where catch-up *works*: record a programme from the
-  guide, check its first frame against the advertised start, and if it is out by the
-  server's offset, store `server_info.timezone` at authentication and apply it.
+- **Catch-up (F-23, still deferred — now on two panels).** `xtream_url` formats its
+  timestamp in UTC; panels read it in their own local time. The second subscription
+  publishes everything the fix needs — `timezone: Europe/Paris`, a true UTC
+  `timestamp_now` and a local `time_now`, confirming +2h from the panel's own two clocks
+  — and advertises `tv_archive=1` on **127 of its 6,698 channels**. It still serves no
+  archive: three of those channels at 20, 60 and 180 minutes back, with `start` spelled
+  both ways, returned 404 or an empty 200 for all eighteen requests. See F-23 for the
+  table and for the probe to run on a panel that does answer.
 - **A second subscription, on the current build.** 6,697 channels in 67 groups, 24,658
   films and 8,054 series, imported through the wizard by `tests-host/real_panel` against
   the release binary. Live TV drew the groups with their counts, and **now/next drew
@@ -268,8 +270,12 @@ Several things can only be answered with an account:
   look like a flaky provider. The app now tells the two apart by asking the same host once
   without credentials, and names the products Windows reports.
 - **Recording.** The recorder has only ever met the test server.
-- **Logos.** F-12 widened `img-src` to allow `http:`. Confirm channel logos actually
-  appear now; that failure was invisible from a browser, which serves no CSP.
+- **Logos. Answered.** Every logo on Live TV decoded against the real panel — 18 of 18,
+  all of them over plain `http:` — so F-12's `img-src` widening does what it was meant
+  to. `real_panel` now asks the images themselves, since a blocked image is not a broken
+  one but an `<img>` that never decodes, and `naturalWidth` is the only thing that tells
+  them apart. It stays in the scenario rather than the browser suite because a browser
+  serves no CSP, which is exactly why this went unconfirmed for so long.
 
 ## 4. Decide about ARM64 (F-26, currently won't-fix)
 

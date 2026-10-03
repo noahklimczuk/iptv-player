@@ -49,6 +49,30 @@ test('hovering a rail card expands it with quick actions', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/02-hover-card.png` });
 });
 
+test('an expanded card pushes its neighbours aside rather than covering them', async ({
+  page,
+}) => {
+  await page.goto('/#/');
+  await settle(page, 600);
+
+  const rail = page.getByRole('region', { name: 'Recently Added' });
+  const cards = rail.getByTestId('catalog-card');
+  await expect(cards.first()).toBeVisible();
+  // The transform is on the inner element: the outer div is the flex item and never
+  // moves, which is exactly why the rail has to own which card is expanded.
+  const inner = (n: number) => cards.nth(n).getByRole('button').first();
+
+  const before = await inner(3).boundingBox();
+  await cards.nth(2).hover();
+  await page.waitForTimeout(700);
+  const after = await inner(3).boundingBox();
+
+  expect(
+    after!.x,
+    'the card to the right of an expanded one should make room',
+  ).toBeGreaterThan(before!.x + 10);
+});
+
 test('a card can be taken off Continue Watching, and stays off', async ({ page }) => {
   await page.goto('/#/');
   await settle(page, 600);

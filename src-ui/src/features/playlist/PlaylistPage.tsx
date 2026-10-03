@@ -409,7 +409,15 @@ function Row({
             Reset
           </Button>
         )}
+        {/*
+          * Quiet when shown, solid when hidden — the opposite way round from how this
+          * started. Almost every row in a playlist is shown, so filling that state made
+          * the column a wall of accent and left the handful of hidden rows, which are the
+          * only ones anyone is scanning for, as the faintest things on the screen. The
+          * row already dims when it is hidden; this stops the switch arguing with it.
+          */}
         <button
+          className="aurora-switch"
           role="switch"
           aria-checked={!row.hidden}
           aria-label={`Show ${row.name}`}
@@ -417,9 +425,9 @@ function Row({
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px',
             borderRadius: 'var(--r-full)', cursor: 'pointer', fontSize: 'var(--fs-sm)',
-            border: `1px solid ${row.hidden ? 'var(--border-strong)' : 'transparent'}`,
-            background: row.hidden ? 'transparent' : 'var(--accent)',
-            color: row.hidden ? 'var(--text-muted)' : 'var(--accent-text)',
+            border: `1px solid ${row.hidden ? 'transparent' : 'var(--border)'}`,
+            background: row.hidden ? 'var(--border-strong)' : 'transparent',
+            color: row.hidden ? 'var(--text)' : 'var(--text-muted)',
             fontWeight: 600,
           }}
         >

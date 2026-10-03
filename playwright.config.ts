@@ -24,6 +24,16 @@ export default defineConfig({
   timeout: 45_000,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
+  /**
+   * Four locally, against a default of half the cores — ten on this machine, and more
+   * browsers than it can actually run. The symptom was journeys that take two seconds
+   * alone timing out at forty-five, a different one each run, which reads exactly like
+   * flakiness and is not. Four is no slower in wall time: three consecutive full runs
+   * came in at 1.5 minutes either way, so everything above four was going into
+   * contention rather than throughput. CI keeps the default, where the runner is not
+   * also somebody's desktop with three security suites on it.
+   */
+  workers: process.env.CI ? undefined : 4,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list']],
   use: {

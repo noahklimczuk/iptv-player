@@ -114,6 +114,61 @@ def run(d, ctx):
         )
         print(f"   {page}: drew, settled={settled}")
 
+        if page == "Live TV":
+            _logos_render(d, ctx)
+
+
+def _logos_render(d, ctx):
+    """
+    Do the channel logos actually appear?
+
+    This cannot be answered anywhere but here. A browser serves no Content-Security-Policy,
+    so every logo loads during development no matter what the policy says; F-12 widened
+    `img-src` to allow plain `http:` precisely because panels serve their artwork over it,
+    and whether that worked has been unconfirmed since. A blocked image is not a broken
+    one either — it is an `<img>` that simply never decodes, so the only honest test is to
+    ask the images themselves how wide they came out.
+
+    `naturalWidth` is 0 for an image that failed, was blocked, or has not finished
+    loading; the wait above has already let the page settle. Reported rather than
+    asserted when a panel publishes no artwork at all, because that is the provider's
+    choice and not a defect in this app.
+    """
+    stats = d.js(
+        """
+        const imgs = Array.from(document.images)
+          .filter((i) => /^https?:/i.test(i.currentSrc || i.src));
+        return {
+          total: imgs.length,
+          decoded: imgs.filter((i) => i.naturalWidth > 0).length,
+          http: imgs.filter((i) => /^http:/i.test(i.currentSrc || i.src)).length,
+          httpDecoded: imgs.filter(
+            (i) => /^http:/i.test(i.currentSrc || i.src) && i.naturalWidth > 0,
+          ).length,
+          sample: imgs.slice(0, 3).map((i) => (i.currentSrc || i.src).slice(0, 60)),
+        };
+        """
+    )
+    ctx.assert_no_panic()
+    print(
+        f"   logos: {stats['decoded']}/{stats['total']} decoded"
+        f" ({stats['httpDecoded']}/{stats['http']} of them over plain http)"
+    )
+    if not stats["total"]:
+        print("   logos: this panel publishes none, so there is nothing to check")
+        return
+    assert stats["decoded"] > 0, (
+        f"every channel logo failed to load — {stats['total']} images, none decoded. "
+        f"If these are http: URLs this is F-12's img-src rule rejecting them, which is "
+        f"invisible from a browser. Sample: {stats['sample']}"
+    )
+    if stats["http"]:
+        assert stats["httpDecoded"] > 0, (
+            f"{stats['http']} logos are served over plain http and none of them "
+            f"decoded, while https ones did — that is the CSP, not the network. "
+            f"Sample: {stats['sample']}"
+        )
+
 
 class Skipped(Exception):
     """Raised when this scenario has nothing to run against."""

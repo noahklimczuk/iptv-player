@@ -27,6 +27,41 @@ test('pasting an Xtream URL splits out the credentials', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/18-wizard-detect.png` });
 });
 
+test('a pasted password does not stay on screen', async ({ page }) => {
+  await openWizard(page);
+
+  // A real paste, through the clipboard, because that is the whole distinction being
+  // tested: the box tidies itself after a paste and leaves typing alone.
+  const url = 'http://panel.example.com:8080/get.php?username=alice&password=hunter2';
+  const box = page.getByLabel('Provider address');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await box.click();
+  await page.evaluate((t) => navigator.clipboard.writeText(t), url);
+  await page.keyboard.press('ControlOrMeta+V');
+
+  await expect(page.getByText(/Recognised an Xtream address/)).toBeVisible();
+  // Read out into the fields below, where the password field is masked …
+  await expect(page.getByLabel('Username')).toHaveValue('alice');
+  await expect(page.getByLabel('Password')).toHaveValue('hunter2');
+  await expect(page.getByLabel('Password')).toHaveAttribute('type', 'password');
+  // … and gone from the box, which is plain text in front of the whole room.
+  await expect(box).toHaveValue('http://panel.example.com:8080');
+  await expect(box).not.toHaveValue(/hunter2/);
+});
+
+test('typing an address is left alone while it is being typed', async ({ page }) => {
+  await openWizard(page);
+
+  // The same URL, typed. Detection still fills the fields in, but the box keeps exactly
+  // what is in it: rewriting under somebody mid-sentence makes the field unusable.
+  const url = 'http://panel.example.com:8080/get.php?username=alice&password=hunter2';
+  const box = page.getByLabel('Provider address');
+  await box.fill(url);
+
+  await expect(page.getByLabel('Username')).toHaveValue('alice');
+  await expect(box).toHaveValue(url);
+});
+
 test('a plain playlist URL does not ask for credentials', async ({ page }) => {
   await openWizard(page);
   await page.getByLabel('Provider address').fill('http://example.com/list.m3u');

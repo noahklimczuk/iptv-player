@@ -51,8 +51,18 @@ export function SetupWizard({
 
   useEffect(() => onIngestProgress(setProgress), []);
 
-  /** Recognise what was pasted and fill the form from it. */
-  const detect = useCallback(async (text: string) => {
+  /**
+   * Recognise what was pasted and fill the form from it.
+   *
+   * `fromPaste` distinguishes a paste from typing, and it matters because of what happens
+   * at the end: an Xtream `get.php` URL carries the password in clear text, and once it
+   * has been read out into the field below — which is masked, deliberately — leaving the
+   * original on screen means the secret is still sitting there in a monospace box, in
+   * front of whoever is in the room or on the call. So the box collapses to the address
+   * alone. Only on a paste: this runs on every keystroke, and rewriting the field under
+   * somebody typing a URL by hand would make it impossible to finish the sentence.
+   */
+  const detect = useCallback(async (text: string, fromPaste = false) => {
     setPasted(text);
     setValidation(null);
     if (!text.trim()) { setDetected('none'); return; }
@@ -69,6 +79,7 @@ export function SetupWizard({
       password: d.password ?? '',
       name: prev.name || hostOf(d.url),
     }));
+    if (fromPaste && d.username && d.password) setPasted(d.url);
   }, []);
 
   /**
@@ -274,7 +285,8 @@ function SourceStep({
   draft: DraftProvider;
   setDraft: React.Dispatch<React.SetStateAction<DraftProvider>>;
   pasted: string;
-  onPaste: (text: string) => void;
+  /** The second argument says the text arrived by paste rather than by typing. */
+  onPaste: (text: string, fromPaste?: boolean) => void;
   /** What detection could tell from the address: nothing, a full credential pair, or
       a panel root whose credentials the user still has to type. */
   detected: 'none' | 'credentials' | 'panel';
@@ -286,13 +298,22 @@ function SourceStep({
   const firstRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => firstRef.current?.focus(), []);
 
+  const wasPaste = useRef(false);
+
   return (
     <div style={card}>
       <Field label="Paste your playlist URL or Xtream address">
         <textarea className="aurora-field"
           ref={firstRef}
           value={pasted}
-          onChange={(e) => onPaste(e.target.value)}
+          // `paste` fires before the `change` it causes, so the flag is set by the time
+          // the text arrives and is spent on the way through.
+          onPaste={() => { wasPaste.current = true; }}
+          onChange={(e) => {
+            const byPaste = wasPaste.current;
+            wasPaste.current = false;
+            onPaste(e.target.value, byPaste);
+          }}
           placeholder="http://your-provider.example.com/get.php?username=…&password=…"
           rows={3}
           aria-label="Provider address"
@@ -310,7 +331,7 @@ function SourceStep({
         >
           <Icon name={detected === 'credentials' ? 'check' : 'info'} size={15} />
           {detected === 'credentials'
-            ? 'Recognised an Xtream address — username and password filled in for you.'
+            ? 'Recognised an Xtream address — username and password filled in below, and taken out of the address.'
             : 'Looks like a panel login. Enter the username and password your provider gave you.'}
         </div>
       )}
