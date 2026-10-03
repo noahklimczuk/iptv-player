@@ -250,6 +250,23 @@ Several things can only be answered with an account:
   against evidence. On a panel where catch-up *works*: record a programme from the
   guide, check its first frame against the advertised start, and if it is out by the
   server's offset, store `server_info.timezone` at authentication and apply it.
+- **A second subscription, on the current build.** 6,697 channels in 67 groups, 24,658
+  films and 8,054 series, imported through the wizard by `tests-host/real_panel` against
+  the release binary. Live TV drew the groups with their counts, and **now/next drew
+  against real channels** — which the first panel could not show, since it published no
+  EPG. Catch-up badges appeared on the channels whose provider advertises it. Screenshots
+  in `screenshots/real-content-*.png`.
+- **Security software on the viewer's own machine is a failure mode.** Found on this one,
+  and worth knowing before anyone else is asked to install this. Credentials sent over
+  plain `http://` were cut before they left the machine: `?username=a` answered 403,
+  `?password=b` answered 403, and both together had the connection closed with no reply in
+  8 ms — against a host whose TCP handshake takes 130. Wrong credentials behaved exactly
+  as right ones, so it was never the account, and eight User-Agents, a POST body, a split
+  request and percent-encoded parameter names all behaved the same. That is an "insecure
+  password submission" rule; the machine had Bitdefender, 360 Total Security and McAfee
+  WebAdvisor, and a phone on the same network worked. Intermittent, which is what made it
+  look like a flaky provider. The app now tells the two apart by asking the same host once
+  without credentials, and names the products Windows reports.
 - **Recording.** The recorder has only ever met the test server.
 - **Logos.** F-12 widened `img-src` to allow `http:`. Confirm channel logos actually
   appear now; that failure was invisible from a browser, which serves no CSP.
