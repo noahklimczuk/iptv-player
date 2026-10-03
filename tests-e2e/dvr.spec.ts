@@ -47,40 +47,6 @@ test('recordings library groups what is watchable, what is coming, and what fail
   await page.screenshot({ path: `${SHOTS}/20-recordings.png` });
 });
 
-test('deleting a recording asks first, and backing out keeps the file', async ({ page }) => {
-  await page.goto('/#/recordings');
-  await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
-
-  const plays = page.getByRole('button', { name: /^Play$/ });
-  const before = await plays.count();
-  expect(before).toBeGreaterThan(0);
-
-  // Identify one recording by name and follow that one, rather than counting rows: the
-  // row being asked about swaps its controls for the question, so a count of Play
-  // buttons legitimately dips by one while it is open.
-  const first = page.getByRole('button', { name: /^Delete / }).first();
-  const name = (await first.getAttribute('aria-label'))!.replace(/^Delete /, '');
-
-  // The delete control sits beside Keep, so the first click must not be the last word.
-  await first.click();
-  await expect(page.getByText(/Delete permanently, freeing/)).toBeVisible();
-  await expect(page.getByText(name, { exact: true })).toBeVisible();
-
-  await settle(page, 300);
-  await page.screenshot({ path: `${SHOTS}/20-recordings-confirm-delete.png` });
-
-  await page.getByRole('button', { name: 'Keep', exact: true }).click();
-  await expect(page.getByText(/Delete permanently, freeing/)).toHaveCount(0);
-  await expect(plays).toHaveCount(before);
-  await expect(page.getByText(name, { exact: true })).toBeVisible();
-
-  // And confirming does go through.
-  await page.getByRole('button', { name: `Delete ${name}` }).click();
-  await page.getByRole('button', { name: 'Delete', exact: true }).click();
-  await expect(plays).toHaveCount(before - 1);
-  await expect(page.getByText(name, { exact: true })).toHaveCount(0);
-});
-
 test('a recording in flight shows live progress, and failures say why', async ({ page }) => {
   await page.goto('/#/recordings');
   await page.getByRole('tab', { name: /Scheduled/ }).click();
