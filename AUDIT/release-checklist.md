@@ -268,8 +268,12 @@ Several things can only be answered with an account:
   look like a flaky provider. The app now tells the two apart by asking the same host once
   without credentials, and names the products Windows reports.
 - **Recording.** The recorder has only ever met the test server.
-- **Logos.** F-12 widened `img-src` to allow `http:`. Confirm channel logos actually
-  appear now; that failure was invisible from a browser, which serves no CSP.
+- **Logos. Answered.** Every logo on Live TV decoded against the real panel — 18 of 18,
+  all of them over plain `http:` — so F-12's `img-src` widening does what it was meant
+  to. `real_panel` now asks the images themselves, since a blocked image is not a broken
+  one but an `<img>` that never decodes, and `naturalWidth` is the only thing that tells
+  them apart. It stays in the scenario rather than the browser suite because a browser
+  serves no CSP, which is exactly why this went unconfirmed for so long.
 
 ## 4. Decide about ARM64 (F-26, currently won't-fix)
 
