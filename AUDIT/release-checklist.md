@@ -269,7 +269,20 @@ Several things can only be answered with an account:
   WebAdvisor, and a phone on the same network worked. Intermittent, which is what made it
   look like a flaky provider. The app now tells the two apart by asking the same host once
   without credentials, and names the products Windows reports.
-- **Recording.** The recorder has only ever met the test server.
+- **Recording. Partly answered.** `real_panel` now schedules a 40-second recording on a
+  real channel and looks at what reached disk. A run got as far as the states: two
+  channels reached `completed` with no reason given, and a third came back `failed —
+  Your provider didn't respond`, which is the recorder meeting a stream that accepts the
+  request and sends nothing, reported in words a viewer could act on. So the recorder
+  does work against a provider.
+
+  What is **not** yet confirmed is the file: the check asserts the recording is larger
+  than 64 KB, because a recording that writes an empty file looks exactly like a working
+  one everywhere except on disk, and that assertion has not had a green run. The harness
+  wipes `target/release/data` before each run and could not, with the tree under OneDrive
+  and three real-time scanners on the machine holding handles on a directory written
+  moments earlier. Re-run `python tests-host/run.py real_panel` with the panel
+  credentials in the environment to close it.
 - **Logos. Answered.** Every logo on Live TV decoded against the real panel — 18 of 18,
   all of them over plain `http:` — so F-12's `img-src` widening does what it was meant
   to. `real_panel` now asks the images themselves, since a blocked image is not a broken
