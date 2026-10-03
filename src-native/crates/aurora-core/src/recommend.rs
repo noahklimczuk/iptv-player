@@ -32,6 +32,24 @@ use std::collections::HashMap;
 /// you, not enough to be evidence that it is.
 pub const MIN_ENGAGEMENT: f32 = 0.05;
 
+/// How long something sits barely-started before it counts as abandoned rather than
+/// in progress.
+///
+/// Both look identical in the database — a row with a tiny fraction — and the difference
+/// is entirely whether they came back. A film opened last night and left at four minutes
+/// is on Continue Watching and may well be finished tonight. The same row untouched for a
+/// fortnight is a film somebody bounced off, and pretending otherwise throws away the
+/// clearest opinion they ever expressed about it.
+pub const ABANDONED_AFTER_DAYS: f32 = 14.0;
+
+/// What an abandonment counts against an affinity of the same size.
+///
+/// Under one on purpose. Bouncing off a film says something about that film as much as
+/// about its genre — the print was bad, it was the wrong evening, somebody else put it on
+/// — whereas finishing one is unambiguous. Enough to pull a genre down and reorder a rail,
+/// not enough for three bad nights to erase a year of watching.
+const AVERSION_WEIGHT: f32 = 0.6;
+
 /// How long a signal takes to count half as much. Thirty days is roughly "last month
 /// still matters, last year mostly does not".
 pub const HALF_LIFE_DAYS: f32 = 30.0;
@@ -192,6 +210,10 @@ pub struct Recommendation {
 pub struct Taste {
     /// Genre to share of attention, summing to 1 when anything is known.
     genres: HashMap<String, f32>,
+    /// Genre to share of *abandonment* — what they started and left. Kept apart from
+    /// `genres` rather than subtracted into it, so "what they watch" stays a share of
+    /// attention that sums to one and can still be read on its own for a rail heading.
+    aversions: HashMap<String, f32>,
     /// The provider's categories, the same way. Kept separate from genres because
     /// they are a different kind of thing and must not be shown as one.
     categories: HashMap<String, f32>,
@@ -250,6 +272,23 @@ pub fn profile(history: &[Watched], now: i64) -> Taste {
     let mut rating_weight = 0.0f32;
 
     for item in history {
+        // Abandonment is evidence too, and used to be thrown away: anything under
+        // `MIN_ENGAGEMENT` simply did not count. Three horror films started and dropped
+        // left horror exactly where it was, so the rail kept offering it.
+        if let Some(aversion) = aversion_weight(item, now) {
+            let usable: Vec<&String> = item
+                .genres
+                .iter()
+                .filter(|g| !g.trim().is_empty())
+                .collect();
+            if !usable.is_empty() {
+                let share = aversion / usable.len() as f32;
+                for genre in &usable {
+                    *taste.aversions.entry(normalise(genre)).or_insert(0.0) += share;
+                }
+            }
+            continue;
+        }
         let Some(weight) = signal_weight(item, now) else {
             continue;
         };
@@ -299,6 +338,7 @@ pub fn profile(history: &[Watched], now: i64) -> Taste {
     normalise_shares(&mut taste.genres);
     normalise_shares(&mut taste.categories);
     normalise_shares(&mut taste.eras);
+    normalise_shares(&mut taste.aversions);
     // Heaviest first, so "because you watched…" names the thing they watched most
     // rather than whichever row came back first.
     taste.anchors.sort_by(|a, b| {
@@ -444,6 +484,26 @@ fn select_into(
     }
 }
 
+/// How much one *abandoned* item counts against its genres, if it is one.
+///
+/// Abandoned means three things at once: barely started, never marked a favourite, and
+/// not touched for [`ABANDONED_AFTER_DAYS`]. The last is what separates it from something
+/// still in progress, which looks identical in the database and means the opposite.
+///
+/// Decayed by the same half-life as everything else, because an opinion from a year ago
+/// should not outweigh last week's either way round.
+fn aversion_weight(item: &Watched, now: i64) -> Option<f32> {
+    if item.favourite || item.fraction >= MIN_ENGAGEMENT {
+        return None;
+    }
+    let age_days = ((now - item.updated_at).max(0) as f32) / SECS_PER_DAY;
+    if age_days < ABANDONED_AFTER_DAYS {
+        return None;
+    }
+    let recency = 0.5f32.powf(age_days / HALF_LIFE_DAYS);
+    (recency > 0.0).then_some(recency)
+}
+
 /// How much one watched item counts, or `None` if it should not count at all.
 fn signal_weight(item: &Watched, now: i64) -> Option<f32> {
     let engagement = item.fraction.clamp(0.0, 1.0);
@@ -483,7 +543,13 @@ fn score_one(
         return (score, reason);
     }
 
-    let genre_affinity = affinity(&taste.genres, genres);
+    // What they watch, less what they have walked out of. Floored at zero rather than
+    // allowed to go negative: a genre they dislike should drop out of the matched pass
+    // and be considered as discovery like anything else, not be pushed below titles that
+    // have nothing to do with them at all.
+    let genre_affinity = (affinity(&taste.genres, genres)
+        - AVERSION_WEIGHT * affinity(&taste.aversions, genres))
+    .max(0.0);
     let category_affinity = category
         .map(|c| affinity(&taste.categories, std::slice::from_ref(&c.to_string())))
         .unwrap_or(0.0);
@@ -745,6 +811,75 @@ mod tests {
 
         let taste = profile(&[watched("Dune", &["Sci-Fi"], 0.9, 1)], NOW);
         assert!(taste.is_known());
+    }
+
+    /// Something started, left at a couple of minutes, and never returned to is the
+    /// clearest opinion anybody ever expresses about a film — and it used to be discarded
+    /// outright, so three horror films bounced off left horror exactly where it was.
+    #[test]
+    fn walking_out_of_a_genre_counts_against_it() {
+        let liked = watched("Heat", &["Crime"], 1.0, 3);
+        let abandoned: Vec<Watched> = ["Saw", "Hostel", "Insidious"]
+            .iter()
+            .map(|t| watched(t, &["Horror"], 0.01, 40))
+            .collect();
+
+        let mut history = vec![liked];
+        history.extend(abandoned);
+        let taste = profile(&history, NOW);
+
+        let picks = rank(
+            &taste,
+            &[candidate(900, &["Horror"]), candidate(901, &["Crime"])],
+            &nothing_seen,
+            NOW,
+            2,
+        );
+        assert_eq!(
+            picks.first().map(|p| p.id),
+            Some(901),
+            "the genre they keep walking out of should not lead: {picks:?}"
+        );
+    }
+
+    /// The same row means the opposite thing depending on whether they came back. One
+    /// opened last night is on Continue Watching; the same fraction untouched for a
+    /// fortnight is a film somebody bounced off.
+    #[test]
+    fn something_started_last_night_is_not_an_abandonment() {
+        let started = watched("Dune", &["Sci-Fi"], 0.02, 1);
+        let taste = profile(&[started, watched("Arrival", &["Sci-Fi"], 1.0, 2)], NOW);
+        let picks = rank(&taste, &[candidate(7, &["Sci-Fi"])], &nothing_seen, NOW, 1);
+        assert!(
+            picks.first().is_some_and(|p| p.score > DISCOVERY_CEILING),
+            "a film still in progress must not count against its own genre: {picks:?}"
+        );
+    }
+
+    /// A favourite is a statement, whatever the position says. Putting something on a
+    /// list and never pressing play is not walking out of it.
+    #[test]
+    fn a_favourite_is_never_an_abandonment() {
+        let mut item = watched("Solaris", &["Sci-Fi"], 0.0, 90);
+        item.favourite = true;
+        let taste = profile(&[item], NOW);
+        assert_eq!(taste.top_genres(1), vec!["sci-fi"]);
+    }
+
+    /// Three bad nights must not erase a year of watching.
+    #[test]
+    fn an_aversion_is_weaker_than_the_taste_it_argues_with() {
+        let mut history: Vec<Watched> = (0..8)
+            .map(|i| watched(&format!("Crime {i}"), &["Crime"], 1.0, 5 + i))
+            .collect();
+        history.push(watched("One bad one", &["Crime"], 0.01, 40));
+        let taste = profile(&history, NOW);
+
+        let picks = rank(&taste, &[candidate(5, &["Crime"])], &nothing_seen, NOW, 1);
+        assert!(
+            picks.first().is_some_and(|p| p.score > DISCOVERY_CEILING),
+            "one walk-out against eight finished films should not sink the genre: {picks:?}"
+        );
     }
 
     #[test]
