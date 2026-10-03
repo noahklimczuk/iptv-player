@@ -44,6 +44,9 @@ pub struct ValidationResult {
     /// a dead host when the address says `https` — and a viewer has no way to tell those
     /// apart from a spinner that ends in a red box.
     pub suggested_url: Option<String>,
+    /// The provider type that address needs, when it is not the one being checked.
+    /// `"m3u"` when an Xtream panel's API is unusable but its playlist is fine.
+    pub suggested_kind: Option<String>,
 }
 
 /// README §13: recognise a pasted `get.php` URL and fill the form from it.
@@ -116,6 +119,174 @@ fn worth_probing(code: ErrorCode) -> bool {
     )
 }
 
+/// Whether the panel is refusing *us* rather than failing to be found.
+///
+/// A host that hangs up, rate-limits, or reports the line's connection limit has heard
+/// the request and declined it. Asking again — under another scheme, for a playlist,
+/// anything — cannot answer a question it has already answered, and on a panel that is
+/// throttling by volume it is the one thing guaranteed to make the situation worse.
+///
+/// This matters more than it looks. A failed check could previously send nine requests:
+/// three for the sign-in, which is retryable and retried with backoff, then three more
+/// for the scheme probe and three for the playlist probe, each of which is its own
+/// retrying fetch. Against a panel already refusing this address, that is a check that
+/// punishes the person running it.
+fn is_refusing_us(code: ErrorCode) -> bool {
+    matches!(
+        code,
+        ErrorCode::Dropped | ErrorCode::RateLimited | ErrorCode::ConnectionLimit
+    )
+}
+
+/// Does this host answer a request that carries no credentials?
+///
+/// The question that separates "the panel is down" from "something is killing my logins".
+/// A reply of any kind — 200, 403, 404 — means the host is up, reachable from here, and
+/// talking. If it answers that and then drops every request carrying a username and
+/// password, the difference is not the panel's health: it is something acting on the
+/// content of the request.
+///
+/// Observed on a real machine: `player_api.php` with no query returned 403 in 134 ms,
+/// while the same URL with credentials was cut after 8 ms, on both of the panel's
+/// addresses and under eight different User-Agents. The machine had Bitdefender, 360
+/// Total Security and McAfee WebAdvisor installed, all of which inspect plaintext HTTP,
+/// and the same subscription worked on a phone on the same network.
+fn host_answers_without_credentials(
+    http: &aurora_ingest::http::HttpClient,
+    base_url: &str,
+) -> bool {
+    let url = format!("{}/player_api.php", base_url.trim_end_matches('/'));
+    match http.fetch_bytes(&url) {
+        // Any HTTP reply at all, including a refusal, is the host speaking.
+        Ok(_) => true,
+        Err(e) => !matches!(
+            e.code,
+            ErrorCode::Dropped | ErrorCode::Timeout | ErrorCode::Dns | ErrorCode::Refused
+        ),
+    }
+}
+
+/// Borrow whichever client is available for a diagnostic request.
+fn http_for_probe<'a>(
+    one_shot: &'a Option<aurora_ingest::http::HttpClient>,
+    shared: &'a aurora_ingest::http::HttpClient,
+) -> Option<&'a aurora_ingest::http::HttpClient> {
+    Some(one_shot.as_ref().unwrap_or(shared))
+}
+
+/// The security products Windows knows about, by name.
+///
+/// Named rather than guessed at. "Security software such as Bitdefender, ESET or others"
+/// asks somebody to go and find out what is on their own machine; "Bitdefender Antivirus
+/// and 360 Total Security are running on this computer" tells them where to go. Windows
+/// keeps the list in the Security Center, which is where every one of them registers.
+///
+/// Best effort, and the sentence reads fine without it. This only runs on the one failure
+/// already diagnosed as local, which is rare and always something a person just asked for.
+#[cfg(windows)]
+fn installed_security_products() -> Vec<String> {
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct \
+             -ErrorAction SilentlyContinue | Select-Object -ExpandProperty displayName",
+        ])
+        .output();
+    let Ok(out) = out else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        // Windows Defender is on every machine and is not the one doing this: it does not
+        // inspect plaintext HTTP for credential submission. Naming it would send people
+        // to the wrong settings page.
+        //
+        // Matched by its full name, not by the word "defender" — which is also inside
+        // *Bit*defender, the product most likely to be the actual cause. Filtering on the
+        // substring hid the one name worth printing.
+        .filter(|l| {
+            let lower = l.to_ascii_lowercase();
+            !lower.contains("windows defender") && !lower.contains("microsoft defender")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn installed_security_products() -> Vec<String> {
+    Vec::new()
+}
+
+/// "A and B", "A, B and C" — a list a person reads rather than parses.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The failure to report when the host is plainly up and only *our* logins are dying.
+fn locally_blocked(url: &str, took: std::time::Duration) -> aurora_core::neterr::NetFailure {
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url);
+    let products = installed_security_products();
+    let culprits = if products.is_empty() {
+        "Security software that inspects web traffic (Bitdefender, 360 Total Security, \
+         McAfee WebAdvisor, ESET and others) commonly blocks"
+            .to_string()
+    } else {
+        format!(
+            "{} {} running on this computer, and software like it blocks",
+            and_list(&products),
+            if products.len() == 1 { "is" } else { "are" }
+        )
+    };
+    aurora_core::neterr::NetFailure {
+        code: ErrorCode::Dropped,
+        message: "Something on this computer is blocking the sign-in".into(),
+        cause: format!(
+            "{host} answers normally when asked without a username and password, and \
+             drops the connection the moment one carries both ({} ms). That is not your \
+             provider being down. {culprits} sign-ins sent over plain http:// to protect \
+             you from putting a password on an unencrypted connection — allow {host} in \
+             its web protection and try again. The same subscription working on a phone \
+             on this network confirms it.",
+            took.as_millis()
+        ),
+        actions: vec![
+            aurora_core::neterr::ErrorAction::Retry,
+            aurora_core::neterr::ErrorAction::OpenSettings,
+        ],
+        retryable: true,
+    }
+}
+
+/// A client for a single probe: one attempt, and a short wait for it.
+///
+/// The shared client retries three times with backoff, which is right for an import that
+/// must survive a provider's bad minute and wrong for a question being asked on the
+/// viewer's behalf while they watch a spinner — and wrong three times over when the
+/// answer is already known to be "no".
+fn probe_client() -> Option<aurora_ingest::http::HttpClient> {
+    aurora_ingest::http::HttpClient::new(aurora_ingest::http::HttpConfig {
+        max_attempts: 1,
+        connect_timeout: std::time::Duration::from_secs(8),
+        read_timeout: std::time::Duration::from_secs(20),
+        ..Default::default()
+    })
+    .ok()
+}
+
 /// Does this host answer under the other scheme?
 ///
 /// Asked **without credentials**, deliberately. The thing being established is whether
@@ -136,6 +307,58 @@ fn probe_other_scheme(http: &aurora_ingest::http::HttpClient, url: &str) -> Opti
         Err(e) if !worth_probing(e.code) => Some(alternative),
         Err(_) => None,
     }
+}
+
+/// The M3U address an Xtream panel serves the same subscription at.
+///
+/// `get.php` is the other half of the Xtream protocol, and on plenty of panels it is the
+/// half that works: `player_api.php` can be disabled, restricted to certain clients, or
+/// simply broken, while the playlist it would have described is served perfectly well.
+/// Most other IPTV players use this endpoint and never touch the API at all, which is why
+/// a subscription can be "working everywhere else" and fail here.
+fn m3u_url(base_url: &str, username: &str, password: &str) -> String {
+    format!(
+        "{}/get.php?username={}&password={}&type=m3u_plus&output=ts",
+        base_url.trim_end_matches('/'),
+        urlencoding(username),
+        urlencoding(password),
+    )
+}
+
+/// Percent-encode a credential for a query string.
+///
+/// Small and local rather than a dependency: the characters that matter in a panel's
+/// username and password are the handful below, and `aurora_ingest` already has its own
+/// copy for the same reason.
+fn urlencoding(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for b in raw.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Does this panel serve a usable playlist, even though its API would not answer?
+///
+/// Returns the address when it does. The credentials go with it, which is no new
+/// exposure: they were just sent to the same host, over the same scheme, by the API call
+/// that failed.
+fn probe_m3u(
+    http: &aurora_ingest::http::HttpClient,
+    base_url: &str,
+    username: &str,
+    password: &str,
+) -> Option<String> {
+    let url = m3u_url(base_url, username, password);
+    let parsed = aurora_ingest::playlist::fetch(http, &url).ok()?;
+    // Entries, not merely a 200. A panel that refuses returns an error page, and an error
+    // page parses as a playlist with nothing in it.
+    (!parsed.result.entries.is_empty()).then_some(url)
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,18 +394,90 @@ pub fn providers_validate(
                     is_trial: false,
                     credentials_detected: false,
                     suggested_url: None,
+                    suggested_kind: None,
                 });
             }
-            let client = XtreamClient::new(&services.http, &draft.url, &username, &password);
-            let outcome = client.authenticate(now_unix());
+            // One attempt, not three.
+            //
+            // The shared client retries with a 1s, 3s, 7s backoff, which is right for an
+            // import that has to survive a provider's bad minute. For a button somebody
+            // just pressed it is wrong twice: they wait eleven seconds to be told no, and
+            // the panel gets three sign-in attempts per press — which is the opposite of
+            // helpful when the reason for the failure is that it is already throttling
+            // this address.
+            //
+            // It also makes the timing below mean something: three attempts and two sleeps
+            // measure the backoff, not the network.
+            let one_shot = probe_client();
+            let http = one_shot.as_ref().unwrap_or(&services.http);
+            let client = XtreamClient::new(http, &draft.url, &username, &password);
+            let started = std::time::Instant::now();
+            let mut outcome = client.authenticate(now_unix());
+            let took = started.elapsed();
+
+            // A refusal that arrives faster than a round trip did not come from the
+            // provider.
+            //
+            // Observed on a real machine: every credentialed request to a panel was
+            // closed in 8-24 ms, while the same panel answered un-credentialed requests
+            // in 130-150 ms. Nothing across the internet can decline in a tenth of the
+            // time it takes to say hello; the connection was being cut locally. The
+            // machine had Bitdefender, 360 Total Security and McAfee WebAdvisor on it,
+            // all of which inspect plaintext HTTP, and an IPTV panel login is exactly
+            // the shape of request their filters act on. The same subscription worked on
+            // a phone on the same network.
+            //
+            // The app had been blaming the provider for it, which sends somebody to
+            // their provider's support instead of to the thing that is actually in the
+            // way.
+            if let Err(e) = &outcome {
+                if e.code == ErrorCode::Dropped
+                    && http_for_probe(&one_shot, &services.http)
+                        .is_some_and(|h| host_answers_without_credentials(h, &draft.url))
+                {
+                    outcome = Err(locally_blocked(&draft.url, took));
+                }
+            }
             // Before reporting "it did not answer", find out whether it answers somewhere
             // else. A panel published on plain HTTP — which many are — is indistinguishable
             // from a dead one when the address says `https`, and the viewer has nothing to
             // tell those apart with but a spinner that ends in a red box.
-            let suggested_url = match &outcome {
-                Err(e) if worth_probing(e.code) => probe_other_scheme(&services.http, &draft.url),
+            let mut suggested_kind = None;
+            let probe = one_shot;
+            let suggested_url = match (&outcome, probe.as_ref()) {
+                // Heard and declined. Nothing further to ask, and asking is what makes a
+                // throttled panel throttle harder.
+                (Err(e), _) if is_refusing_us(e.code) => None,
+                (Err(e), Some(http)) if worth_probing(e.code) => {
+                    probe_other_scheme(http, &draft.url)
+                }
+                // The API said no but the host is there. Before reporting a dead
+                // subscription, ask whether the playlist half of the same protocol works
+                // — on plenty of panels `player_api.php` is disabled or restricted while
+                // `get.php` serves the whole library, which is why a line can work in
+                // every other player and fail here.
+                (Err(_), Some(http)) => {
+                    let found = probe_m3u(http, &draft.url, &username, &password);
+                    if found.is_some() {
+                        suggested_kind = Some("m3u".to_string());
+                    }
+                    found
+                }
                 _ => None,
             };
+            if let Err(e) = &outcome {
+                // The request is logged and its outcome was not, so a check that failed
+                // left `aurora.log` saying only that something had been asked — which is
+                // no help at all to the one person who needs it, reading the log after
+                // the fact to find out why their provider will not connect.
+                tracing::warn!(
+                    code = ?e.code,
+                    suggested = suggested_url.is_some(),
+                    "provider check failed: {} — {}",
+                    e.message,
+                    e.cause
+                );
+            }
             match outcome {
                 Ok(status) => Ok(ValidationResult {
                     ok: true,
@@ -195,6 +490,7 @@ pub fn providers_validate(
                     is_trial: status.is_trial,
                     credentials_detected: false,
                     suggested_url: None,
+                    suggested_kind: None,
                 }),
                 Err(e) => Ok(ValidationResult {
                     ok: false,
@@ -207,6 +503,7 @@ pub fn providers_validate(
                     is_trial: false,
                     credentials_detected: false,
                     suggested_url,
+                    suggested_kind,
                 }),
             }
         }
@@ -234,6 +531,7 @@ pub fn providers_validate(
                         is_trial: false,
                         credentials_detected: false,
                         suggested_url: None,
+                        suggested_kind: None,
                     })
                 }
                 Err(e) => Ok(ValidationResult {
@@ -247,6 +545,7 @@ pub fn providers_validate(
                     is_trial: false,
                     credentials_detected: false,
                     suggested_url: None,
+                    suggested_kind: None,
                 }),
             }
         }
@@ -665,6 +964,54 @@ fn now_unix() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod local_cut_tests {
+    use super::*;
+
+    /// A playlist on this machine, or on a box in the cupboard, really can refuse in
+    /// twenty milliseconds. Telling those people their antivirus is at fault would be a
+    /// And a panel on the internet is not local, including the ones whose addresses look
+    /// The message has to point at the thing that is actually in the way, and name the
+    /// host so it can be allowed.
+    #[test]
+    fn the_message_names_the_host_and_the_likely_cause() {
+        let f = locally_blocked(
+            "http://64582429.max-jbnott.online/player_api.php",
+            std::time::Duration::from_millis(9),
+        );
+        assert!(f.message.contains("this computer"), "{f:?}");
+        assert!(f.cause.contains("64582429.max-jbnott.online"), "{f:?}");
+        assert!(f.cause.contains("9 ms"), "{f:?}");
+        // Either the products this machine actually has, or the generic list when the
+        // Security Center has nothing to say.
+        assert!(
+            f.cause.contains("running on this computer") || f.cause.contains("Bitdefender"),
+            "{f:?}"
+        );
+        // It names what the rule is about, which is what makes it findable in a settings
+        // screen full of toggles.
+        assert!(f.cause.contains("http://"), "{f:?}");
+        // It must not accuse the provider, which is the whole point of the distinction.
+        assert!(!f.message.contains("provider"), "{f:?}");
+        // Retryable: allowing it in the filter and pressing the button again is the fix.
+        assert!(f.retryable);
+    }
+
+    #[test]
+    fn a_list_of_products_reads_like_a_sentence() {
+        assert_eq!(and_list(&[]), "");
+        assert_eq!(and_list(&["Bitdefender".into()]), "Bitdefender");
+        assert_eq!(
+            and_list(&["Bitdefender".into(), "360 Total Security".into()]),
+            "Bitdefender and 360 Total Security"
+        );
+        assert_eq!(
+            and_list(&["A".into(), "B".into(), "C".into()]),
+            "A, B and C"
+        );
+    }
 }
 
 #[cfg(test)]

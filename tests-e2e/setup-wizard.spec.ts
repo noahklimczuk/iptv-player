@@ -67,3 +67,31 @@ test('a panel that only answers on http is found and offered', async ({ page }) 
   await page.getByTestId('use-suggested-url').click();
   await expect(page.getByLabel('Provider address')).toHaveValue('http://panel.invalid');
 });
+
+test('a panel whose API is off but whose playlist works is offered the playlist', async ({
+  page,
+}) => {
+  await page.goto('/?setup#/');
+  await expect(page.getByRole('heading', { name: /Welcome to Aurora/i })).toBeVisible();
+
+  // The shape of a subscription that runs in every other player and not in this one:
+  // `player_api.php` will not answer, `get.php` serves the whole library.
+  await page.getByRole('textbox').first().fill('http://panel.m3uonly');
+  await page.getByRole('button', { name: 'Xtream / panel login' }).click();
+  await page.getByLabel('Username').fill('someone');
+  await page.getByLabel('Password').fill('secret');
+  await page.getByRole('button', { name: 'Check connection' }).click();
+
+  await expect(page.getByText(/Its playlist does work/)).toBeVisible({ timeout: 20_000 });
+  // Why it works elsewhere, which is the question somebody actually has.
+  await expect(page.getByText(/never touch the API/)).toBeVisible();
+
+  await page.getByRole('button', { name: 'Use its playlist instead' }).click();
+  // The address becomes the playlist, and the type goes with it — a `get.php` URL
+  // checked as an Xtream panel would fail all over again.
+  await expect(page.getByLabel('Provider address')).toHaveValue(/get\.php\?username=someone/);
+  await expect(page.getByRole('button', { name: 'M3U playlist URL' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+});

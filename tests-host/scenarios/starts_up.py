@@ -9,11 +9,32 @@ check either compiles the host without running it, or runs the UI against a mock
 Asserts on a *fresh* library, because that is the state a new install is in and the one
 no test had ever exercised end to end.
 """
+import os
+import re
 import time
 
-# Must match `LATEST_VERSION` in `aurora-db/src/schema.rs`. A migration added without
-# this moving is a migration that a real launch has never run.
-EXPECT_SCHEMA = 8
+# Read from `aurora-db/src/schema.rs` rather than copied here.
+#
+# It used to be a literal that had to be edited alongside every migration, and it was
+# not: migrations 9 and 10 both landed while this still said 8, so the one scenario that
+# proves a real launch migrates a real database failed for a reason that had nothing to
+# do with the app. A number that must be kept in step by hand, in a file nobody opens
+# unless it is already broken, is a number that will be wrong.
+#
+# What this is still testing is the thing worth testing — that a launch applies every
+# migration the source declares — and it now cannot be wrong about what that is.
+def _latest_schema_version() -> int:
+    schema = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "src-native", "crates", "aurora-db", "src", "schema.rs",
+    )
+    with open(schema, encoding="utf-8") as f:
+        found = re.search(r"pub const LATEST_VERSION:\s*u32\s*=\s*(\d+)", f.read())
+    assert found, "could not read LATEST_VERSION from schema.rs"
+    return int(found.group(1))
+
+
+EXPECT_SCHEMA = _latest_schema_version()
 
 
 def run(d, ctx):

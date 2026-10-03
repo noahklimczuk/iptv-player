@@ -1839,7 +1839,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     const base: ValidationResult = {
       ok: false, message: '', detail: null, expiresAt: null, daysUntilExpiry: null,
       maxConnections: null, activeConnections: null, isTrial: false,
-      credentialsDetected: false, suggestedUrl: null,
+      credentialsDetected: false, suggestedUrl: null, suggestedKind: null,
     };
     if (!/^https?:\/\//i.test(draft.url.trim())) {
       return { ...base, message: 'That does not look like a URL',
@@ -1869,6 +1869,21 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       if (!draft.username || !draft.password) {
         return { ...base, message: 'Username and password are required',
           detail: 'An Xtream panel needs both.' };
+      }
+      // A panel whose API is off but whose playlist works — the shape of a subscription
+      // that runs in every other player and not in this one. `.m3uonly` is a marker for
+      // the preview, the way `.invalid` marks an unreachable host.
+      if (/\.m3uonly(\/|:|$)/i.test(draft.url.trim())) {
+        const base_ = draft.url.trim().replace(/\/$/, '');
+        return {
+          ...base,
+          message: 'Your provider sent something Aurora could not read',
+          detail: 'The response to the account check was not valid JSON.',
+          suggestedUrl:
+            `${base_}/get.php?username=${encodeURIComponent(draft.username)}`
+            + `&password=${encodeURIComponent(draft.password)}&type=m3u_plus&output=ts`,
+          suggestedKind: 'm3u',
+        };
       }
       return {
         ...base, ok: true, message: 'Connected',

@@ -413,16 +413,27 @@ function SourceStep({
             {!validation.ok && validation.suggestedUrl && (
               <div style={{ marginTop: 'var(--sp-3)' }}>
                 <div style={{ color: 'var(--text)', marginBottom: 6 }}>
-                  It does answer at <strong>{validation.suggestedUrl}</strong>.
-                  {validation.suggestedUrl.startsWith('http://')
+                  {validation.suggestedKind === 'm3u'
+                    ? 'Its playlist does work, even though its API does not. Most other'
+                      + ' players use the playlist and never touch the API, which is why'
+                      + ' this subscription works elsewhere.'
+                    : <>It does answer at <strong>{validation.suggestedUrl}</strong>.</>}
+                  {validation.suggestedKind !== 'm3u'
+                    && validation.suggestedUrl.startsWith('http://')
                     && ' That is an unencrypted address, so your sign-in would be sent in'
                       + ' clear text — which is how most panels work.'}
                 </div>
                 <Button
                   data-testid="use-suggested-url"
-                  onClick={() => onCheck({ ...draft, url: validation.suggestedUrl! })}
+                  onClick={() => onCheck({
+                    ...draft,
+                    url: validation.suggestedUrl!,
+                    kind: validation.suggestedKind ?? draft.kind,
+                  })}
                 >
-                  Use that address
+                  {validation.suggestedKind === 'm3u'
+                    ? 'Use its playlist instead'
+                    : 'Use that address'}
                 </Button>
               </div>
             )}
