@@ -117,6 +117,8 @@ def run(d, ctx):
         if page == "Live TV":
             _logos_render(d, ctx)
 
+    _records_a_real_stream(d, ctx)
+
 
 def _logos_render(d, ctx):
     """
@@ -168,6 +170,97 @@ def _logos_render(d, ctx):
             f"decoded, while https ones did — that is the CSP, not the network. "
             f"Sample: {stats['sample']}"
         )
+
+
+def _records_a_real_stream(d, ctx):
+    """
+    Record a real channel, briefly, and look at what landed on disk.
+
+    The recorder has only ever met the test server, which serves a handful of canned
+    bytes over localhost and answers instantly. A provider is none of those things: it
+    redirects, it hands back a playlist of segments, it can refuse a second connection,
+    and it can accept the request and then send nothing at all. A recording that writes
+    an empty file is indistinguishable from a working one everywhere except here.
+
+    Scheduled through `dvr_schedule` rather than the guide, because the guide needs EPG
+    for the channel and the point is the recorder, not the listing. The scheduler ticks
+    every ten seconds, so the window is wide enough to survive landing between two of
+    them at each end.
+
+    Up to three channels, spread across the list, because a dead channel is the
+    provider's problem and not this app's — but all three failing is worth knowing, and
+    the reasons are printed rather than swallowed.
+    """
+    picks = ctx.rows(
+        "SELECT id, name FROM channels WHERE hidden = 0"
+        " ORDER BY id LIMIT 3 OFFSET 20"
+    )
+    assert picks, "no channels in the library to record from"
+
+    window = 40
+    failures = []
+    for cid, cname in picks:
+        start = int(time.time())
+        rid = d.invoke(
+            "dvr_schedule",
+            {
+                "channelId": cid,
+                "title": "Harness recording",
+                "airStart": start,
+                "airStop": start + window,
+                "prePaddingSecs": 0,
+                "postPaddingSecs": 0,
+            },
+        )
+        if not rid:
+            failures.append(f"{cname}: the scheduler refused it")
+            continue
+
+        # Two ticks past the end, so a reap that lands just after the window still
+        # counts. Polling the state rather than sleeping the whole time: a failure
+        # settles early and there is no reason to wait for it.
+        rec = None
+        deadline = time.time() + window + 45
+        while time.time() < deadline:
+            listed = [r for r in d.invoke("dvr_list", {}) if r["id"] == rid]
+            if listed:
+                rec = listed[0]
+                if rec["state"] in ("completed", "failed", "skipped"):
+                    break
+            time.sleep(3)
+        ctx.assert_no_panic()
+
+        if not rec:
+            failures.append(f"{cname}: never appeared in dvr_list")
+            continue
+        if rec["state"] != "completed":
+            failures.append(f"{cname}: {rec['state']} — {rec.get('reason')}")
+            continue
+
+        path, size = rec.get("filePath"), rec.get("bytes") or 0
+        assert path, f"{cname} completed but the recording has no file path"
+        assert os.path.exists(path), f"{cname} recorded to {path}, which is not there"
+        on_disk = os.path.getsize(path)
+        # A file that exists and is empty is the failure this whole check is for: the
+        # recorder opened the stream, wrote nothing, and reported success.
+        assert on_disk > 64 * 1024, (
+            f"{cname} recorded {on_disk} bytes in {window}s — the stream was opened and "
+            f"produced nothing worth keeping"
+        )
+        print(
+            f"   recording: {cname} -> {on_disk / 1024 / 1024:.1f} MB in {window}s"
+            f" (host reported {size} bytes), {os.path.basename(path)}"
+        )
+        d.click(d.by_text("nav a", "Recordings", timeout=30))
+        time.sleep(3)
+        d.shot(ctx.shot("recorded"))
+        ctx.assert_no_panic()
+        return
+
+    raise AssertionError(
+        "no channel could be recorded. This is the recorder meeting a real provider "
+        "for the first time, so the reasons matter: " + "; ".join(failures)
+    )
 
 
 class Skipped(Exception):
