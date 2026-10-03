@@ -588,8 +588,36 @@ Changing the arithmetic blind would swap a known-wrong offset for an unverified 
 What *is* actionable — storing `server_info.timezone` at authentication so the fix has
 its input ready — is a small change that belongs with the fix, not before it.
 
-**To close it:** a panel whose `timeshift.php` answers, and a recording whose first
-frame is checked against the programme's advertised start.
+**A second panel, 2026-10-03, and it does not close this either.** It looked like the
+one: 6,698 live streams, of which **127 advertise `tv_archive=1`** with two or three
+days of archive each, and the app draws catch-up badges on them. It also publishes
+everything the fix would need — `timezone: Europe/Paris`, `timestamp_now: 1791031148`
+(a true UTC epoch) and `time_now: 2026-10-03 14:39:08` (its own wall clock), which
+confirms the +2h offset from the panel's own two clocks rather than by inference.
+
+But it serves no archive. Three of the advertised channels, at 20, 60 and 180 minutes
+back, with `start` spelled both in UTC and in the panel's local time — eighteen requests,
+not one byte of video:
+
+| stream | what came back |
+|---|---|
+| 269683 (NBC HD, 2 days) | `timeshift.php` 302s to an upstream that 404s, every offset, both frames |
+| 95083 (FOX HD, 3 days) | the same |
+| 269913 (ABC HD, 3 days) | HTTP **200**, and an empty body, every offset, both frames |
+
+The path form `/timeshift/<user>/<pass>/<duration>/<start>/<id>.ts` redirects to the
+same upstream and 404s with it.
+
+The discriminator was built and never got to run: a moment one hour in the *future* is
+one hour in the *past* when read as Europe/Paris, so whichever spelling the panel
+accepts is the frame it reads. It accepted neither, because it serves nothing.
+
+So this is now two panels that advertise catch-up and do not serve it, which is worth
+knowing on its own: **the badge reflects the provider's claim, not a tested capability.**
+
+**To close it:** still a panel whose `timeshift.php` answers. The probe is written down
+above — ask for a moment an hour ahead in UTC, and see whether the panel treats it as an
+hour ago.
 
 ---
 
