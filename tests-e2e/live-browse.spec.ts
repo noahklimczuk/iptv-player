@@ -29,7 +29,11 @@ test('groups are a list beside the channels, with their counts', async ({ page }
   );
 
   const groups = sidebar.getByTestId('group-list').getByRole('button');
-  expect(await groups.count()).toBeGreaterThan(1);
+  // Polled, not counted once. `live()` waits for a channel row, which says the channels
+  // have arrived but not that the groups derived from them have been laid out — and the
+  // sidebar is virtualised, so this counts what is mounted rather than what exists.
+  // `count()` is the one read here that does not retry.
+  await expect.poll(async () => groups.count()).toBeGreaterThan(1);
   // Each row carries how many channels are in it, which the strip only did in brackets.
   await expect(groups.first()).toHaveText(/\d/);
 

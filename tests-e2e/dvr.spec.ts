@@ -19,6 +19,10 @@ async function selectUpcoming(page: Page) {
   // The first cell in the grid is usually on air; pick one further right so Record
   // and Remind me are both meaningful.
   const cells = page.locator('button[title*="·"]');
+  // `settle` is a fixed wait, so on a slow run the grid can still be empty when this
+  // counts it. Nothing then enters the loop and the throw below blames the fixture for
+  // having no upcoming programme, when the guide had simply not arrived.
+  await expect(cells.first()).toBeVisible();
   const count = await cells.count();
   for (let i = 0; i < count; i += 1) {
     const cell = cells.nth(i);
