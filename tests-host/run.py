@@ -50,13 +50,32 @@ if WINDOWS:
         except (AttributeError, OSError):
             pass
 
+# Where the build tree is, which on this project's own machine cannot be the default.
+#
+# A portable copy keeps its library beside the executable, so the harness's data
+# directory is `<target>/release/data` — and `wipe` between scenarios needs to actually
+# delete it. Under OneDrive it cannot: cloud placeholders deny `rmdir` on a directory
+# written moments earlier, so every run after the first is handed the previous run's
+# library (`AUDIT/test-report.md` §12). The fix is to build outside the synced tree,
+# and honouring `CARGO_TARGET_DIR` here means saying that once rather than also having
+# to point `AURORA_TEST_EXE` at the result:
+#
+#     CARGO_TARGET_DIR=C:/aurora-target cargo build --release -p aurora-app #         --manifest-path src-native/Cargo.toml
+#     CARGO_TARGET_DIR=C:/aurora-target python tests-host/run.py
+#
+# A relative value is resolved against the current directory, which is what cargo does
+# with it too, and both commands above are documented as run from the repository root.
+TARGET_DIR = os.path.abspath(
+    os.environ.get("CARGO_TARGET_DIR") or os.path.join(ROOT, "src-native", "target")
+)
+
 # `AURORA_TEST_EXE=…/target/debug/aurora-app` runs the same scenarios against a debug
 # build. Worth having for one reason: a debug build unwinds where a release build
 # aborts, so a panic that kills the shipped app can be inspected in a live window here.
 EXE = os.environ.get(
     "AURORA_TEST_EXE",
     os.path.join(
-        ROOT, "src-native", "target", "release",
+        TARGET_DIR, "release",
         "aurora-app.exe" if WINDOWS else "aurora-app",
     ),
 )
