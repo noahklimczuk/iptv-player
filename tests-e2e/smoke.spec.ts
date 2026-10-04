@@ -232,8 +232,28 @@ test('command palette searches across every content kind', async ({ page }) => {
   await expect(dialog).toBeVisible();
   await dialog.getByRole('textbox').fill('the');
   await page.waitForTimeout(400);
-  await expect(dialog.getByText('Movies')).toBeVisible();
+
+  // By the group's own test id rather than by its heading text. `getByText('Movies')`
+  // also matches "Show 8 more movies", and — more to the point — Playwright calls an
+  // element inside a scroller visible whether or not it is scrolled into view, so this
+  // assertion passed the whole time the library was being pushed below the fold.
+  const movies = dialog.getByTestId('palette-group-movies');
+  await expect(movies).toBeVisible();
+  await expect(movies.getByRole('button')).not.toHaveCount(0);
+
+  // Before anything is unfolded, so the shot shows what a search actually looks like.
   await page.screenshot({ path: `${SHOTS}/10-search.png` });
+
+  // Capped per group, so the guide's matches cannot bury the library. The rest are a
+  // click away rather than thrown away.
+  const onNow = dialog.getByTestId('palette-group-onNow');
+  const more = onNow.getByRole('button', { name: /^Show \d+ more on now$/ });
+  if (await more.count()) {
+    const before = await onNow.getByRole('button').count();
+    await more.click();
+    await expect(more).toHaveCount(0);
+    expect(await onNow.getByRole('button').count()).toBeGreaterThan(before);
+  }
 });
 
 test('picking a film in the palette opens that film', async ({ page }) => {
