@@ -190,6 +190,22 @@ test('typing digits opens the channel-entry overlay and tunes', async ({ page })
   await page.screenshot({ path: `${SHOTS}/08-player-banner.png` });
 });
 
+test('the channel banner goes away while the player keeps ticking', async ({ page }) => {
+  await page.goto('/#/live');
+  await settle(page, 600);
+  await page.getByRole('button', { name: /^Watch / }).first().click();
+
+  // The banner is the thing that carries the channel number and the now/next line.
+  const banner = page.getByTestId('channel-banner');
+  await expect(banner).toBeVisible();
+
+  // It is supposed to fade after five seconds. The player's state arrives four times a
+  // second the whole time, and that is the point: the auto-hide used to depend on the
+  // whole UI store, so every heartbeat cancelled the pending timeout and started a new
+  // five seconds. The banner then stayed up for the entire programme.
+  await expect(banner).toBeHidden({ timeout: 15_000 });
+});
+
 test('player OSD exposes transport, tracks and stats', async ({ page }) => {
   await page.goto('/#/live');
   await settle(page, 600);
