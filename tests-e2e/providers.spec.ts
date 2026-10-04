@@ -119,6 +119,11 @@ test('a channel can be favourited, and the filter then shows only it', async ({ 
   await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
 
   const rows = page.getByTestId('channel-row');
+  // Wait for a row, not for the heading. The heading is static markup and is on screen
+  // before the channel list has been asked for, so counting on the strength of it reads
+  // zero whenever the host is a moment slower than usual — which under a loaded suite is
+  // often. Same mistake, same fix, as the provider rows in #45.
+  await expect(rows.first()).toBeVisible();
   const before = await rows.count();
   expect(before).toBeGreaterThan(1);
 

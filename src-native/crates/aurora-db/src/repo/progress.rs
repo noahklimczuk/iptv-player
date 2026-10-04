@@ -238,6 +238,86 @@ pub fn forget_series(conn: &Connection, profile_id: i64, series_id: i64) -> Resu
     )?)
 }
 
+/// Where one episode of a show got to, for the episode list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodeProgress {
+    pub episode_id: i64,
+    pub position_secs: i64,
+    pub duration_secs: i64,
+    pub completed: bool,
+}
+
+/// Every episode of one show that has a position, in one query.
+///
+/// The episode list needs to draw a tick on what is watched and a bar on what is
+/// partway through, and asking `get` once per episode is a round trip per row — forty of
+/// them for a season of a long-running show, every time the modal opens.
+pub fn for_series(
+    conn: &Connection,
+    profile_id: i64,
+    series_id: i64,
+) -> Result<Vec<EpisodeProgress>> {
+    let mut stmt = conn.prepare(
+        "SELECT w.item_id, w.position_secs, w.duration_secs, w.completed
+           FROM watch_progress w
+           JOIN episodes e ON e.id = w.item_id
+          WHERE w.profile_id = ?1 AND w.item_kind = 'episode' AND e.series_id = ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![profile_id, series_id], |r| {
+            Ok(EpisodeProgress {
+                episode_id: r.get(0)?,
+                position_secs: r.get(1)?,
+                duration_secs: r.get(2)?,
+                completed: r.get::<_, i64>(3)? != 0,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Which episode Play should open for a show, and where in it to start.
+///
+/// Pressing Play on a show someone is partway through used to open episode one, because
+/// the caller took the first row of the episode list when it was given no episode. For
+/// anyone past the pilot that is the one thing it must not do.
+///
+/// Three cases, in order:
+///
+///   1. **An episode left unfinished** — the most recently touched one. Resuming the
+///      half-watched episode beats starting the next, because the viewer stopped in the
+///      middle of it and that is where they are.
+///   2. **The first unwatched episode**, from the beginning. Finished the last one, so
+///      the next one is what Play means.
+///   3. **Nothing**, when the show has never been touched or every episode is watched,
+///      and the caller opens episode one as it always did.
+///
+/// The position is only honoured past a minute, the same threshold `resumeAt` uses in
+/// the UI: forty seconds in is a mis-click to start again, not a place to return to.
+pub fn resume_point(
+    conn: &Connection,
+    profile_id: i64,
+    series_id: i64,
+) -> Result<Option<(i64, i64)>> {
+    let unfinished: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT w.item_id, w.position_secs
+               FROM watch_progress w
+               JOIN episodes e ON e.id = w.item_id
+              WHERE w.profile_id = ?1 AND w.item_kind = 'episode'
+                AND e.series_id = ?2 AND w.completed = 0 AND w.position_secs > 60
+              ORDER BY w.updated_at DESC LIMIT 1",
+            params![profile_id, series_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some(found) = unfinished {
+        return Ok(Some(found));
+    }
+    Ok(next_episode(conn, profile_id, series_id)?.map(|id| (id, 0)))
+}
+
 pub fn mark_watched(
     conn: &Connection,
     profile_id: i64,
@@ -597,5 +677,97 @@ mod tests {
         save(&conn, 1, ItemKind::Channel, 1, 500, 0, 0).unwrap();
         let p = get(&conn, 1, ItemKind::Channel, 1).unwrap().unwrap();
         assert_eq!(p.percent(), 0.0);
+    }
+
+    /// Seeding helper: a position on one episode, as `save` would leave it.
+    fn watched_to(conn: &Connection, episode_id: i64, position: i64, duration: i64, at: i64) {
+        conn.execute(
+            "INSERT INTO watch_progress
+               (profile_id, item_kind, item_id, position_secs, duration_secs, completed, updated_at)
+             VALUES (1,'episode',?1,?2,?3,0,?4)",
+            params![episode_id, position, duration, at],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn play_on_an_untouched_show_has_no_resume_point() {
+        let conn = db();
+        seeded_series(&conn, 7, 3);
+        // Nothing watched: the caller opens episode one, which is what it already did.
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7001, 0)));
+    }
+
+    #[test]
+    fn play_returns_to_the_episode_left_unfinished_rather_than_the_next_one() {
+        let conn = db();
+        seeded_series(&conn, 7, 4);
+        // Episode 1 finished, episode 2 abandoned twenty minutes in.
+        mark_watched(&conn, 1, ItemKind::Episode, 7001, true, 10).unwrap();
+        watched_to(&conn, 7002, 1200, 2400, 20);
+
+        // Not 7003. They stopped in the middle of 7002 and that is where they are.
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7002, 1200)));
+    }
+
+    #[test]
+    fn play_moves_on_once_the_episode_is_finished() {
+        let conn = db();
+        seeded_series(&conn, 7, 4);
+        mark_watched(&conn, 1, ItemKind::Episode, 7001, true, 10).unwrap();
+        mark_watched(&conn, 1, ItemKind::Episode, 7002, true, 20).unwrap();
+
+        // The first unwatched one, from the beginning.
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7003, 0)));
+    }
+
+    #[test]
+    fn a_minute_in_is_not_a_place_to_come_back_to() {
+        let conn = db();
+        seeded_series(&conn, 7, 3);
+        // Forty seconds is a mis-click. Start the show, not that moment.
+        watched_to(&conn, 7002, 40, 2400, 20);
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7001, 0)));
+    }
+
+    #[test]
+    fn a_show_watched_to_the_end_has_nowhere_left_to_resume() {
+        let conn = db();
+        seeded_series(&conn, 7, 2);
+        mark_watched(&conn, 1, ItemKind::Episode, 7001, true, 10).unwrap();
+        mark_watched(&conn, 1, ItemKind::Episode, 7002, true, 20).unwrap();
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), None);
+    }
+
+    #[test]
+    fn unmarking_an_episode_puts_it_back_in_the_way_of_play() {
+        let conn = db();
+        seeded_series(&conn, 7, 3);
+        mark_watched(&conn, 1, ItemKind::Episode, 7001, true, 10).unwrap();
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7002, 0)));
+
+        mark_watched(&conn, 1, ItemKind::Episode, 7001, false, 30).unwrap();
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7001, 0)));
+    }
+
+    #[test]
+    fn the_episode_list_gets_every_position_for_one_show_and_no_others() {
+        let conn = db();
+        seeded_series(&conn, 7, 3);
+        seeded_series(&conn, 8, 2);
+        watched_to(&conn, 7002, 1200, 2400, 20);
+        mark_watched(&conn, 1, ItemKind::Episode, 7001, true, 10).unwrap();
+        watched_to(&conn, 8001, 300, 2400, 30);
+
+        let mut rows = for_series(&conn, 1, 7).unwrap();
+        rows.sort_by_key(|r| r.episode_id);
+        assert_eq!(
+            rows.len(),
+            2,
+            "the other show's episode must not be here: {rows:?}"
+        );
+        assert!(rows[0].completed, "7001 was marked watched");
+        assert_eq!(rows[1].position_secs, 1200);
+        assert!(!rows[1].completed);
     }
 }

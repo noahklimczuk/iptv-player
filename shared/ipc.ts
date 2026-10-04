@@ -106,6 +106,20 @@ export interface Episode {
   airDate: number | null;
 }
 
+/** Where one episode of a show got to, for the episode list. */
+export interface EpisodeProgress {
+  episodeId: number;
+  positionSecs: number;
+  durationSecs: number;
+  completed: boolean;
+}
+
+/** Which episode Play opens for a show, and where to start in it. */
+export interface ResumePoint {
+  episodeId: number;
+  positionSecs: number;
+}
+
 /** README §9: intro / recap / credits regions the Skip button can jump. */
 export type MarkerKind = 'intro' | 'recap' | 'credits';
 /** Where a marker came from, so the UI can explain itself. */
@@ -1037,6 +1051,33 @@ export interface Commands {
     kind: 'movie' | 'series';
     id: number;
   }) => boolean;
+
+  /**
+   * Every position this profile holds for one show, for the episode list.
+   *
+   * One call rather than one per episode: a season of a long-running show is forty rows.
+   */
+  'progress.forSeries': (args: {
+    profileId: number;
+    seriesId: number;
+  }) => EpisodeProgress[];
+  /**
+   * Which episode Play should open for a show, and where to start in it.
+   *
+   * Null when the show has never been touched or is watched to the end; the caller then
+   * opens the first episode.
+   */
+  'progress.resumePoint': (args: {
+    profileId: number;
+    seriesId: number;
+  }) => ResumePoint | null;
+  /** Mark one thing watched, or put it back to unwatched. Any position is left alone. */
+  'progress.setWatched': (args: {
+    profileId: number;
+    kind: 'movie' | 'episode';
+    id: number;
+    watched: boolean;
+  }) => void;
 
   'mylist.toggle': (args: {
     profileId: number;

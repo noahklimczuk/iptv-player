@@ -420,3 +420,90 @@ pub fn progress_forget(services: State<'_, Services>, args: ForgetProgressArgs) 
     };
     Ok(removed > 0)
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesProgressArgs {
+    pub profile_id: i64,
+    pub series_id: i64,
+}
+
+/// Every position this profile holds for one show, for the episode list.
+///
+/// One call rather than one per episode: a season of a long-running show is forty rows,
+/// and the modal would open with forty round trips before it could draw a single tick.
+#[tauri::command(async)]
+pub fn progress_for_series(
+    services: State<'_, Services>,
+    args: SeriesProgressArgs,
+) -> Result<Vec<progress::EpisodeProgress>> {
+    let db = services.db.lock();
+    Ok(progress::for_series(&db, args.profile_id, args.series_id)?)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumePoint {
+    pub episode_id: i64,
+    pub position_secs: i64,
+}
+
+/// Which episode Play should open for a show, and where in it to start.
+///
+/// Null when the show has never been touched or has been watched to the end, and the
+/// caller opens the first episode — which is what it used to do unconditionally, and is
+/// the bug: pressing Play on a show you are four episodes into started the pilot again.
+#[tauri::command(async)]
+pub fn progress_resume_point(
+    services: State<'_, Services>,
+    args: SeriesProgressArgs,
+) -> Result<Option<ResumePoint>> {
+    let db = services.db.lock();
+    Ok(
+        progress::resume_point(&db, args.profile_id, args.series_id)?.map(
+            |(episode_id, position_secs)| ResumePoint {
+                episode_id,
+                position_secs,
+            },
+        ),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkWatchedArgs {
+    pub profile_id: i64,
+    /// `episode` or `movie`.
+    pub kind: String,
+    pub id: i64,
+    pub watched: bool,
+}
+
+/// Mark one thing watched, or put it back to unwatched.
+///
+/// Marking sets the flag and leaves any position alone, so a show marked watched by
+/// mistake still remembers where it got to when it is unmarked. Both directions matter:
+/// a provider that re-lists a show, or an episode watched somewhere else, are the two
+/// reasons anyone reaches for this.
+#[tauri::command(async)]
+pub fn progress_set_watched(services: State<'_, Services>, args: MarkWatchedArgs) -> Result<()> {
+    let kind = match args.kind.as_str() {
+        "episode" => progress::ItemKind::Episode,
+        "movie" => progress::ItemKind::Movie,
+        other => {
+            return Err(crate::AppError::Other(format!(
+                "{other:?} is not something that can be marked watched"
+            )))
+        }
+    };
+    let db = services.db.lock();
+    progress::mark_watched(
+        &db,
+        args.profile_id,
+        kind,
+        args.id,
+        args.watched,
+        now_unix(),
+    )?;
+    Ok(())
+}
