@@ -52,6 +52,11 @@ test('deleting a recording asks first, and backing out keeps the file', async ({
   await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
 
   const plays = page.getByRole('button', { name: /^Play$/ });
+  // Wait for a recording, not for the heading. The heading is static markup and is on
+  // screen before the recordings have been asked for, so counting on the strength of it
+  // reads zero whenever the host is a moment slower than usual — which under a loaded
+  // suite is often. Same mistake, same fix, as the channel rows beside it.
+  await expect(plays.first()).toBeVisible();
   const before = await plays.count();
   expect(before).toBeGreaterThan(0);
 
