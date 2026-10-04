@@ -253,11 +253,14 @@ were built first.
 1. **Run the Phase 0 spike on Windows.** The wiring is done; the answer is not, and
    everything else is downstream of it. If there is no picture, the log says which step
    failed: `video surface ready`, `no video surface: …`, or `no main window at setup`.
-2. **Import the series.** A full import has now been run — see "What a real import
-   cost" above. The gap it found is the one worth closing next: 28,693 series are
-   fetched from the panel and thrown away, so the Series screen is empty on a real
-   subscription while Phase 7 is marked Done. The listings are already in hand; writing
-   them is not the part that needs one request per show.
+2. **Import the series. Done.** A full import found 28,693 series fetched from the
+   panel and thrown away, so the Series screen was empty on a real subscription while
+   Phase 7 was marked Done. The rows are written now, with everything `get_series`
+   already sent and nothing ever kept — genre, plot, rating, added date
+   (`docs/DECISIONS.md` D26). Their *episode* listings are a separate request each,
+   28,693 of them, so they are fetched when a show is opened and swept in bounded
+   batches in the background (`aurora-app/src/series.rs`); a card no longer sits at
+   "0 seasons" for ever.
 
    Earlier attempts found: a bare panel host could not be entered in the wizard at all,
    and every refused connection was reported as a DNS failure because reqwest's error
