@@ -9,12 +9,36 @@ import { Icon, type IconName } from '@/components/Icon';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 
+/**
+ * How many results of one kind are shown before the rest are folded away.
+ *
+ * Every group used to render in full into a 52vh scroller, and the guide groups are the
+ * big ones: searching a common word returned eight programmes on now and eight more
+ * upcoming, which filled the panel and pushed Movies and Series below the fold with
+ * nothing on screen to say they existed. On a library of twenty-four thousand films,
+ * searching for a film and seeing only live TV reads as "my films are not searchable".
+ *
+ * Four of each, so every kind that matched is visible at once, with the true count beside
+ * the heading and the rest one click away. Narrowing the query is the other way out, and
+ * is the one a palette is for.
+ */
+const PER_GROUP = 4;
+
+/**
+ * Order matters more than it looks, because the panel is 52vh and the list is long.
+ *
+ * The library goes above the guide. Someone who opens search and types a title is
+ * usually looking for the title; the guide's matches are every airing of every
+ * programme whose name contains the word, which on a real subscription is the bulk of
+ * the results and almost never the thing being asked for. With the guide first, a film
+ * search ended below the fold and the panel looked like it only knew about live TV.
+ */
 const GROUPS: { key: keyof SearchResults; label: string; icon: IconName }[] = [
   { key: 'channels', label: 'Live Channels', icon: 'tv' },
-  { key: 'onNow', label: 'On Now', icon: 'clock' },
-  { key: 'upcoming', label: 'Upcoming', icon: 'bell' },
   { key: 'movies', label: 'Movies', icon: 'film' },
   { key: 'series', label: 'Series', icon: 'stack' },
+  { key: 'onNow', label: 'On Now', icon: 'clock' },
+  { key: 'upcoming', label: 'Upcoming', icon: 'bell' },
   { key: 'people', label: 'People', icon: 'heart' },
 ];
 
@@ -30,6 +54,7 @@ export function CommandPalette({
   const [text, setText] = useState('');
   const [results, setResults] = useState<SearchResults | null>(null);
   const [cursor, setCursor] = useState(0);
+  const [expanded, setExpanded] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -37,6 +62,7 @@ export function CommandPalette({
       setText(initialQuery);
       setResults(null);
       setCursor(0);
+      setExpanded([]);
       requestAnimationFrame(() => {
         inputRef.current?.focus();
         // Selected rather than appended to: the seed is a starting point, and typing
@@ -56,12 +82,31 @@ export function CommandPalette({
     return () => window.clearTimeout(t);
   }, [text, open]);
 
-  const flat = useMemo(() => {
-    if (!results) return [] as SearchHit[];
-    return GROUPS.flatMap((g) => results[g.key]);
-  }, [results]);
+  /** What each group is showing right now — the first few, or all of them. */
+  const shown = useMemo(() => {
+    const out = new Map<string, SearchHit[]>();
+    for (const g of GROUPS) {
+      const hits = results?.[g.key] ?? [];
+      out.set(g.key, expanded.includes(g.key) ? hits : hits.slice(0, PER_GROUP));
+    }
+    return out;
+  }, [results, expanded]);
+
+  /**
+   * The keyboard's view of the list, which has to be what is on screen.
+   *
+   * Built from the visible hits rather than from every result: arrow keys walking rows
+   * that are folded away would move the highlight to nothing and pick something the
+   * viewer never saw.
+   */
+  const flat = useMemo(
+    () => GROUPS.flatMap((g) => shown.get(g.key) ?? []),
+    [shown],
+  );
 
   useEffect(() => setCursor(0), [flat.length]);
+  // A new query is a new set of groups; whatever was unfolded no longer applies.
+  useEffect(() => setExpanded([]), [text]);
 
   if (!open) return null;
 
@@ -153,10 +198,14 @@ export function CommandPalette({
             )}
 
             {results && GROUPS.map((g) => {
-              const hits = results[g.key];
-              if (hits.length === 0) return null;
+              const all = results[g.key];
+              if (all.length === 0) return null;
+              const hits = shown.get(g.key) ?? [];
+              // Counted over what is drawn, not over what matched, so the keyboard
+              // index and the rows on screen stay the same list.
               const offset = GROUPS.slice(0, GROUPS.indexOf(g))
-                .reduce((n, gg) => n + results[gg.key].length, 0);
+                .reduce((n, gg) => n + (shown.get(gg.key)?.length ?? 0), 0);
+              const folded = all.length - hits.length;
               return (
                 <div
                   key={g.key}
@@ -176,7 +225,7 @@ export function CommandPalette({
                   >
                     <Icon name={g.icon} size={13} />
                     {g.label}
-                    <span style={{ opacity: 0.6 }}>{hits.length}</span>
+                    <span style={{ opacity: 0.6 }}>{all.length}</span>
                   </div>
                   {hits.map((hit, i) => {
                     const idx = offset + i;
@@ -202,6 +251,19 @@ export function CommandPalette({
                       </button>
                     );
                   })}
+                  {folded > 0 && (
+                    <button
+                      onClick={() => setExpanded((e) => [...e, g.key])}
+                      style={{
+                        width: '100%', padding: 'var(--sp-2) var(--sp-3)',
+                        background: 'transparent', border: 'none', cursor: 'pointer',
+                        textAlign: 'left', color: 'var(--text-faint)',
+                        fontSize: 'var(--fs-sm)', borderRadius: 'var(--r-md)',
+                      }}
+                    >
+                      Show {folded} more {g.label.toLowerCase()}
+                    </button>
+                  )}
                 </div>
               );
             })}
