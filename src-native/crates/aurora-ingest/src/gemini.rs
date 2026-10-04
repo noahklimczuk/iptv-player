@@ -35,6 +35,17 @@ pub const MODEL: &str = "gemini-flash-latest";
 /// Where the API lives. Overridable so the tests can point it at a local server.
 pub const DEFAULT_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta";
 
+/// The header the key travels in.
+///
+/// Google accepts the key either as `?key=` or in this header, and the query string is
+/// the wrong one of the two. A URL is the part of a request that gets logged: `redact`
+/// scrubs the parameters this codebase knows panels use — `password`, `token`, `api_key`
+/// and the rest — and a bare `key` was not among them, so a retried generation wrote the
+/// key into the debug log in full. A header is not in the URL, so it cannot be logged by
+/// anything that logs URLs, and that holds for the next secret-bearing parameter too
+/// without anyone having to remember to add it to a denylist.
+const API_KEY_HEADER: &str = "x-goog-api-key";
+
 /// How many titles to ask for.
 ///
 /// More than the rail shows, because some of them will not be in this library and are
@@ -107,11 +118,9 @@ impl<'a> GeminiClient<'a> {
         self
     }
 
+    /// No key in here: it goes in [`API_KEY_HEADER`].
     fn url(&self) -> String {
-        format!(
-            "{}/models/{}:generateContent?key={}",
-            self.endpoint, self.model, self.api_key
-        )
+        format!("{}/models/{}:generateContent", self.endpoint, self.model)
     }
 }
 
@@ -199,7 +208,11 @@ impl Recommender for GeminiClient<'_> {
             },
         });
 
-        let raw = self.http.post_json(&self.url(), &body.to_string())?;
+        let raw = self.http.post_json(
+            &self.url(),
+            &body.to_string(),
+            &[(API_KEY_HEADER, self.api_key.as_str())],
+        )?;
         parse_reply(&raw)
     }
 }
@@ -323,6 +336,36 @@ mod tests {
         assert_eq!(out[0].kind.as_deref(), Some("movie"));
         assert!(out[0].reason.contains("Arrival"));
         assert_eq!(out[1].kind.as_deref(), Some("series"));
+    }
+
+    /// The key is a header, and the URL is clean.
+    ///
+    /// Not a style point. The URL is the part of a request that gets logged — on a retry
+    /// `send_with_retry` writes it through `redact`, which scrubs the parameters panels
+    /// use and never knew about a bare `key`. Asserting on the request target is what
+    /// stops it going back there.
+    #[test]
+    fn the_key_travels_in_a_header_and_not_in_the_url() {
+        let server = TestServer::always(Reply::ok(envelope("[]")));
+        let http = client();
+        GeminiClient::new(&http, "sekrit-123")
+            .with_endpoint(&server.url(""))
+            .suggest(&watched(), &[])
+            .expect("an empty list is still a reply");
+
+        let seen = server.requests();
+        assert_eq!(seen.len(), 1, "one request, so one place to look");
+        assert_eq!(seen[0].header(API_KEY_HEADER), Some("sekrit-123"));
+        assert!(
+            !seen[0].path.contains("sekrit-123"),
+            "the key is not in the request target: {}",
+            seen[0].path
+        );
+        assert!(
+            !seen[0].path.contains("key="),
+            "no key parameter at all, so there is nothing for a log to spill: {}",
+            seen[0].path
+        );
     }
 
     /// Asking with no key is a question about Settings, not a request to send.
