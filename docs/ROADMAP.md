@@ -331,7 +331,8 @@ supply, and `AUDIT/release-checklist.md` is the authority on it:
 - **Code signing** (item 2) — accepted, not fixed, while the publisher and the user are
   the same person. Revisit the moment anyone else is asked to install this.
 - **Not built, by choice rather than oversight:** Stalker portals; drag-to-reorder,
-  custom logos, named favourite lists and the user-defined rules engine (Phase 4);
-  multi-view, PiP, sleep timer, tray and backup/restore (Phase 10); a UI for the
-  per-channel and per-category locks already stored (Phase 9); media keys and global
-  shortcuts.
+  custom logos, named favourite lists and the user-defined rules engine (Phase 4); PiP,
+  sleep timer, tray and backup/restore (Phase 10); a UI for the per-channel and
+  per-category locks already stored (Phase 9); media keys and global shortcuts. The
+  phase table above is the authority on each of these — a second list that has to be
+  kept in step with it is the next thing to go stale.
