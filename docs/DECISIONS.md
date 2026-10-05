@@ -626,3 +626,47 @@ audio focus, the per-tile failures and the saved layouts are all tested — 20 s
 tests against `NullBackend`, 9 for the layout arithmetic, 7 for the saved rows, 6 browser
 journeys — and every one of them runs without a display. Nine instances compositing at
 once on real hardware is the open question, and the same one Phase 0 answered for one.
+## D28 — The assistant reads the library through tools, and can only offer what the host resolved
+
+Two decisions, and the second is the one that makes the feature trustworthy.
+
+**Tools, not a bigger prompt.** The library this was built against holds 24,658 films and
+8,054 series. Listing them is about a megabyte of titles, which is too expensive to send
+on every turn and the wrong shape besides: a model handed thirty thousand names
+pattern-matches on the list instead of reasoning about what somebody asked for. So the
+model gets a digest in its system prompt — counts, the shelves, the genres that actually
+exist — and seven functions it can call to look things up. It decides what to ask; the
+host answers from SQLite.
+
+Bounded in three places, because every round is a request somebody is paying for and
+waiting on: six rounds per message, fourteen lookups, twenty-five rows per lookup. A model
+that asks for a fifteenth lookup is *told* it has run out rather than silently ignored —
+otherwise it asks again and spends the remaining rounds doing it.
+
+**Nothing becomes playable that the host did not hand out.** A card exists only if the
+model passed an id to `show_titles`, those ids come from its own earlier lookups, and each
+one is re-resolved against the library before the card is drawn. So three things cannot
+happen: an invented title cannot become a play button, an id from a row a refresh has
+since removed cannot either, and the model cannot address anything it was not shown. A
+made-up film can still appear in the prose, where it reads as a suggestion rather than as
+something with a stream behind it — and the `show_titles` result says how many ids did not
+resolve, so the model can mention it instead of quietly showing fewer than it meant to.
+
+This is the same property D26's rail gets by looking every suggested name up in the
+library. The rail achieves it by filtering the answer; this achieves it by construction,
+which is stronger: there is no path from a model's words to a playable card at all.
+
+**What is remembered.** Only the readable conversation, in the settings table, per
+profile. Tool calls and their results are deliberately not persisted: they are the model's
+working out, they are far larger than the conversation, and Gemini requires a call and its
+response to appear as a matched pair — so trimming them by age is exactly how a stored
+history becomes invalid. A later turn that needs the same facts looks them up again, which
+is cheap and, unlike a cached answer, current.
+
+**What leaves the machine**, since this sends more than D26 does and the difference should
+be written down rather than inferred: the conversation, plus whatever a tool call asks for
+within its bound — titles, years, genres, ratings, shelf names. Never credentials, the
+provider's address, stream URLs, or anything identifying the subscription or the person.
+Every tool result is assembled field by field by the host, so a tool cannot leak a column
+it was not written to return, and there is a test that asserts no tool result contains a
+URL.

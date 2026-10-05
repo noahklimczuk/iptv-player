@@ -3,7 +3,8 @@
  * Mirrors the real host's behaviour closely enough to develop and screenshot every screen.
  */
 import type {
-  CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
+  CatalogItem, ChatItem, ChatMessage, Channel, CommandArgs, CommandName, CommandResult,
+  DetectedSource,
   ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
   MetadataReport, MetadataStatus, MosaicBudget, MosaicLayout, MosaicRect,
   MosaicView, ParentalSettings, PinOutcome, Profile, SavedMosaicLayout,
@@ -1231,6 +1232,56 @@ function buildMosaic(layout: MosaicLayout, channelIds: (number | null)[]): Mosai
 
 const playableChannel = (id: number) => fx.channels.some((c) => c.id === id);
 
+/* ── The assistant ───────────────────────────────────────────────────────────
+      A scripted stand-in. It cannot reason, so it answers by keyword — but it
+      answers in exactly the shape the host does, including the lookup steps and
+      cards whose ids are real library rows, because that shape is what the UI and
+      the journeys are testing. ──────────────────────────────────────────────── */
+
+const assistantHistory = new Map<number, ChatMessage[]>();
+const assistantSteps = new Set<(p: { step: string }) => void>();
+export function onAssistantStep(fn: (p: { step: string }) => void) {
+  assistantSteps.add(fn);
+  return () => assistantSteps.delete(fn);
+}
+
+/** Pick library rows by a crude keyword match, so a question gets relevant cards. */
+function assistantPicks(text: string): ChatItem[] {
+  const q = text.toLowerCase();
+  const wantsSeries = /series|show|episode|binge/.test(q);
+  const wantsLive = /live|channel|on now|whats on|what's on/.test(q);
+
+  if (wantsLive) {
+    return visibleChannels()
+      .slice(0, 3)
+      .map((c) => ({
+        kind: 'live' as const,
+        id: c.id,
+        title: c.name,
+        year: null,
+        poster: c.logo ?? null,
+        note: 'On now, and close to what you usually put on.',
+      }));
+  }
+
+  const pool = wantsSeries ? visibleSeries() : visibleMovies();
+  const matched = pool.filter(
+    (x) =>
+      x.title.toLowerCase().includes(q) ||
+      x.genres.some((g) => q.includes(g.toLowerCase())),
+  );
+  return (matched.length > 0 ? matched : pool)
+    .slice(0, 3)
+    .map((x) => ({
+      kind: wantsSeries ? ('series' as const) : ('movie' as const),
+      id: x.id,
+      title: x.title,
+      year: x.year ?? null,
+      poster: x.poster ?? null,
+      note: `${x.genres[0] ?? 'A good one'} — close to what you finished last.`,
+    }));
+}
+
 const ARTWORK_MAX_BYTES = 2 * 1024 ** 3;
 /** A plausible average across w342 posters and w1280 backdrops. */
 const ARTWORK_AVG_BYTES = 90 * 1024;
@@ -1293,6 +1344,51 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     hasHistory: progress.size > 0,
   }),
   'gemini.setKey': ({ key }) => { mockGeminiKey = key.trim(); },
+
+  'assistant.status': ({ profileId }) => ({
+    hasKey: mockGeminiKey.length > 0,
+    model: 'gemini-flash-latest',
+    messages: (assistantHistory.get(profileId) ?? []).length,
+  }),
+  'assistant.history': ({ profileId }) => [...(assistantHistory.get(profileId) ?? [])],
+  'assistant.clear': ({ profileId }) => { assistantHistory.delete(profileId); },
+  'assistant.send': ({ profileId, text }) => {
+    const asked = text.trim();
+    if (!asked) throw new Error('Ask me something first.');
+    if (!mockGeminiKey) {
+      throw new Error('The assistant needs a Gemini key, which is set in Settings.');
+    }
+
+    const log = assistantHistory.get(profileId) ?? [];
+    const at = Math.floor(Date.now() / 1000);
+    log.push({ role: 'user', text: asked, items: [], at });
+
+    // A question about the library is answered from it, the way the host's
+    // `library_digest` tool would.
+    const counts = /how many|what have i got|library/.test(asked.toLowerCase());
+    const items = counts ? [] : assistantPicks(asked);
+    const steps = counts
+      ? [`looked over your library — ${visibleMovies().length} films, ${visibleSeries().length} series, ${visibleChannels().length} channels`]
+      : [
+          `searched your library for “${asked}” — ${items.length} found`,
+          items.length === 1 ? 'put one title in front of you' : `put ${items.length} titles in front of you`,
+        ];
+    for (const step of steps) assistantSteps.forEach((l) => l({ step }));
+
+    const message: ChatMessage = {
+      role: 'assistant',
+      text: counts
+        ? `You have ${visibleMovies().length} films, ${visibleSeries().length} series and ${visibleChannels().length} live channels.`
+        : items.length > 0
+          ? 'Here is what I would put on tonight.'
+          : 'I could not find anything for that — try asking another way.',
+      items,
+      at,
+    };
+    log.push(message);
+    assistantHistory.set(profileId, log.slice(-40));
+    return { message, steps };
+  },
   'gemini.recommendations': ({ refresh }) => {
     if (!mockGeminiKey) throw new Error('No Gemini key is set. Add one in Settings.');
     // The real thing asks a model for titles and then looks each one up here, dropping

@@ -44,7 +44,8 @@ pub const DEFAULT_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1
 /// key into the debug log in full. A header is not in the URL, so it cannot be logged by
 /// anything that logs URLs, and that holds for the next secret-bearing parameter too
 /// without anyone having to remember to add it to a denylist.
-const API_KEY_HEADER: &str = "x-goog-api-key";
+/// Shared with `chat.rs`, which talks to the same API with the same key.
+pub(crate) const API_KEY_HEADER: &str = "x-goog-api-key";
 
 /// How many titles to ask for.
 ///

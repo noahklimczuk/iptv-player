@@ -17,6 +17,7 @@ import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
 import { MosaicOverlay } from '@/features/mosaic/MosaicOverlay';
 import { MosaicPage, SaveLayoutDialog } from '@/features/mosaic/MosaicPage';
+import { AssistantPage } from '@/features/assistant/AssistantPage';
 import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { ProfilePicker } from '@/features/profiles/ProfilePicker';
@@ -29,7 +30,7 @@ import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { invoke, onMosaicState } from '@/ipc';
-import { report } from '@/lib/errors';
+import { notify, report } from '@/lib/errors';
 import { useMarks } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
@@ -65,6 +66,7 @@ const NAV: { to: string; icon: IconName; label: string }[] = [
   { to: '/series', icon: 'stack', label: 'Series' },
   { to: '/recordings', icon: 'record', label: 'Recordings' },
   { to: '/multiview', icon: 'pip', label: 'Multi-view' },
+  { to: '/assistant', icon: 'sparkle', label: 'Assistant' },
   { to: '/playlist', icon: 'layers', label: 'Playlist' },
   { to: '/settings', icon: 'settings', label: 'Settings' },
 ];
@@ -258,6 +260,52 @@ export default function App() {
 
   const episode = useEpisodeAids(ui.player, (id) => void playEpisode(id));
   const fullscreen = useFullscreen();
+
+  /**
+   * Play something the assistant offered (README §8.5).
+   *
+   * Straight to `player.play` rather than through `play`, which takes a whole
+   * `CatalogItem` the chat does not have and does not need: a card is a kind and an id,
+   * which is exactly what the host wants. A channel goes through the zapper so the
+   * banner and last-channel behave as they do everywhere else.
+   */
+  const playChatItem = useCallback(
+    (item: { kind: 'movie' | 'series' | 'live'; id: number }) => {
+      if (item.kind === 'live') {
+        const ch = (channels ?? []).find((c) => c.id === item.id);
+        if (ch) {
+          tune(ch);
+          return;
+        }
+        // A channel the list does not have (hidden, or removed by a refresh) is not
+        // something `library.item` can answer for either.
+        notify('That channel is no longer in your library');
+        return;
+      }
+      const kind = item.kind;
+      // A film or a show goes through `play`, not straight to the host: Play on a
+      // series means the episode they are up to, and that question is already answered
+      // properly there. One lookup to turn the card back into a library row is cheaper
+      // than a second implementation of it.
+      invoke('library.item', { kind, id: item.id })
+        .then((found) => {
+          if (found) return play(found);
+          notify('That is no longer in your library');
+        })
+        .catch(report('Could not play that'));
+    },
+    [channels, tune, play],
+  );
+
+  const openChatItem = useCallback(
+    (item: { kind: 'movie' | 'series' | 'live'; id: number }) => {
+      if (item.kind === 'live') return;
+      invoke('library.item', { kind: item.kind, id: item.id })
+        .then((found) => { if (found) ui.openDetail(found); })
+        .catch(report('Could not open that'));
+    },
+    [ui],
+  );
 
   const onPick = useCallback((hit: SearchHit) => {
     // A programme hit carries the channel it is on, not the programme id: what the
@@ -565,6 +613,10 @@ export default function App() {
                 }}
               />
             }
+          />
+          <Route
+            path="/assistant"
+            element={<AssistantPage onPlay={playChatItem} onOpen={openChatItem} />}
           />
           <Route path="/playlist" element={<PlaylistPage />} />
           <Route

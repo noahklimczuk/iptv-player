@@ -878,6 +878,42 @@ export interface SavedMosaicLayout {
   createdAt: number;
 }
 
+/* ── The assistant (README §11) ──────────────────────────────────────────── */
+
+/**
+ * Something the assistant offered, which the viewer can play.
+ *
+ * Always a real library row: the host resolves every id before it becomes one of these,
+ * so a title the model invented appears in the prose and never as a card.
+ */
+export interface ChatItem {
+  kind: 'movie' | 'series' | 'live';
+  id: number;
+  title: string;
+  year: number | null;
+  poster: string | null;
+  /** The model's one line on why this one, for this viewer. */
+  note: string | null;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  items: ChatItem[];
+  at: number;
+}
+
+export interface AssistantReply {
+  message: ChatMessage;
+  /**
+   * The lookups it ran, in order — "searched your library for “heist” — 11 found".
+   *
+   * Shown rather than hidden: it turns a multi-second pause into visible thinking, and it
+   * is how somebody notices the assistant went looking for the wrong thing.
+   */
+  steps: string[];
+}
+
 export interface Commands {
   'library.rails': (args: { profileId: number }) => Rail[];
   'library.recommended': (args: { profileId: number; limit?: number }) => Recommended;
@@ -950,6 +986,21 @@ export interface Commands {
   };
   /** Empty clears the stored key. */
   'gemini.setKey': (args: { key: string }) => void;
+
+  /* ── The assistant ──────────────────────────────────────────────────────── */
+
+  'assistant.status': (args: { profileId: number }) => {
+    hasKey: boolean;
+    model: string;
+    messages: number;
+  };
+  'assistant.history': (args: { profileId: number }) => ChatMessage[];
+  /**
+   * Ask it something. One call is a whole turn: the model may look through the library
+   * several times before answering, so this can take seconds and reports what it did.
+   */
+  'assistant.send': (args: { profileId: number; text: string }) => AssistantReply;
+  'assistant.clear': (args: { profileId: number }) => void;
 
   'library.episodes': (args: { seriesId: number; season?: number }) => Episode[];
   /**
@@ -1389,6 +1440,8 @@ export interface Events {
    * dying is something the host notices and the UI cannot ask about often enough.
    */
   'mosaic.state': MosaicView;
+  /** One lookup the assistant just ran, so a long turn shows its working. */
+  'assistant.step': { step: string };
   /** Emitted shortly after launch when a newer build turns out to be published. */
   'update.available': {
     current: string;

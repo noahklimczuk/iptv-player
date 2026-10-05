@@ -659,6 +659,39 @@ sleep" scheduling, a downloads library that plays offline, and auto-delete-after
   genres, cast, and recency; drive the "Because you watched" and match % features; include a
   "Why am I seeing this?" affordance and a "Not interested" action that actually changes results.
 
+### 11.1 The assistant — **built, beyond this brief**
+
+The local engine above is what ships by default and needs no key. Two things sit on top of it, both
+opt-in behind a Gemini API key, because what a local scorer cannot do is *know what a film is*: it
+has genres and ratings, so it can tell that somebody likes science fiction, and it cannot tell that
+somebody who watched *Arrival* and *Primer* wants ideas rather than spaceships.
+
+- **A recommendation rail.** One request, built from watch history, every suggested title looked up
+  in the library so an invented one cannot survive (`aurora-app/src/gemini.rs`).
+- **A conversation** (`aurora-app/src/assistant.rs`). The rail is one answer to one implicit
+  question; this can be *asked*. "Something under ninety minutes", "what's on now", "more like that
+  but lighter", "how many films have I actually got" — and its answers carry cards with a play
+  button.
+
+The conversation reads the library through **tools the model calls**, not through a bigger prompt: a
+real library here holds 24,658 films and 8,054 series, which is about a megabyte of titles and the
+wrong shape anyway — a model handed thirty thousand names pattern-matches on the list instead of
+reasoning about the request. So it gets a digest in its system prompt and seven functions
+(`library_digest`, `search_library`, `browse_library`, `watch_history`, `title_details`,
+`whats_on_now`, `show_titles`) and decides what to ask. Bounded at six rounds, fourteen lookups per
+message and twenty-five rows per lookup.
+
+**Nothing becomes playable that the host did not hand out.** A card only exists if the model passed
+an id through `show_titles`, and those ids come from its own earlier lookups and are re-resolved
+against the library before the card is drawn — so a title the model made up appears in the prose,
+where it reads as a suggestion, and never as a play button that does nothing.
+
+**What leaves the machine.** The conversation, and whatever a tool call asks for within its bound:
+titles, years, genres, shelf names. Never credentials, the provider's address, stream URLs, or
+anything identifying the subscription or the person — every tool result is built field by field by
+the host, so a tool cannot leak something it was not written to return. `docs/DECISIONS.md` D26
+covers the one-shot rail; D28 covers this.
+
 ---
 
 ## 12. Design System & Visual Language

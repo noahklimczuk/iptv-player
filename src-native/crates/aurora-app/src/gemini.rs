@@ -86,7 +86,7 @@ fn built_in() -> Option<&'static str> {
 }
 
 /// The key to use, preferring the viewer's own.
-fn resolve_key(services: &Services) -> Option<String> {
+pub(crate) fn resolve_key(services: &Services) -> Option<String> {
     services
         .credentials
         .get(CREDENTIAL_KEY)

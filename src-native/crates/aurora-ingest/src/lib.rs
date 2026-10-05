@@ -1,4 +1,5 @@
 pub mod artwork;
+pub mod chat;
 pub mod credentials;
 pub mod enrich;
 pub mod epg;
