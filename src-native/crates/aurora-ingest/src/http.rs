@@ -188,8 +188,17 @@ impl HttpClient {
     /// No gzip handling, unlike `fetch_reader`: the APIs this talks to answer in JSON over
     /// an encoding the client negotiates, and a `.gz` *file* is not something anything
     /// POSTs for.
-    pub fn post_json(&self, url: &str, body: &str) -> Result<String, NetFailure> {
-        let response = self.send_with_retry(url, Some(body))?;
+    ///
+    /// `headers` is for the ones the caller has to set per-request — an API key among
+    /// them, which belongs in a header rather than in the query string so that it is not
+    /// in the URL that `redact` and every other log line handle.
+    pub fn post_json(
+        &self,
+        url: &str,
+        body: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<String, NetFailure> {
+        let response = self.send_with_retry(url, Some(body), headers)?;
         let capped = response.take(self.config.max_bytes);
         let mut out = Vec::new();
         let mut capped = capped;
@@ -205,7 +214,7 @@ impl HttpClient {
     /// client) and a plain `.xml.gz` *file*, which is just gzip bytes over an
     /// otherwise ordinary response and has to be inflated here.
     pub fn fetch_reader(&self, url: &str) -> Result<Box<dyn Read + Send>, NetFailure> {
-        let response = self.send_with_retry(url, None)?;
+        let response = self.send_with_retry(url, None, &[])?;
 
         let declared_gzip_file = looks_gzipped(url)
             || response
@@ -254,6 +263,7 @@ impl HttpClient {
         &self,
         url: &str,
         json: Option<&str>,
+        headers: &[(&str, &str)],
     ) -> Result<reqwest::blocking::Response, NetFailure> {
         let attempts = self.config.max_attempts.max(1);
         let mut last: Option<NetFailure> = None;
@@ -268,13 +278,20 @@ impl HttpClient {
                 (self.sleep)(Duration::from_secs(wait));
             }
 
-            let build = || match json {
-                Some(body) => self
-                    .inner
-                    .post(url)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .body(body.to_string()),
-                None => self.inner.get(url),
+            let build = || {
+                let mut request = match json {
+                    Some(body) => self
+                        .inner
+                        .post(url)
+                        .header(reqwest::header::CONTENT_TYPE, "application/json")
+                        .body(body.to_string()),
+                    None => self.inner.get(url),
+                };
+                // Per attempt, like the body: a retry is a new request.
+                for (name, value) in headers {
+                    request = request.header(*name, *value);
+                }
+                request
             };
             match blocking(|| build().send()) {
                 Ok(response) => {

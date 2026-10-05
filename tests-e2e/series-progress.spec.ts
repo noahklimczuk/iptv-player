@@ -55,6 +55,10 @@ test('finishing a season moves Play on to the next one', async ({ page }) => {
 
   // The list shows one season at a time, so this marks season one and nothing else.
   const marks = dialog.getByRole('button', { name: /^Mark S01E\d+ as played$/ });
+  // `openSeries` returns as soon as the episodes tab is clicked, so seeding the loop
+  // from an unwaited count can start it at zero: nothing is marked, and the assertion
+  // below then reports Play as still on season one rather than saying why.
+  await expect(marks.first()).toBeVisible();
   for (let left = await marks.count(); left > 0; left = await marks.count()) {
     await marks.first().click();
     await expect(marks).toHaveCount(left - 1);

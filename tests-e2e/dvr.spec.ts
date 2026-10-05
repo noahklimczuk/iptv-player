@@ -19,6 +19,10 @@ async function selectUpcoming(page: Page) {
   // The first cell in the grid is usually on air; pick one further right so Record
   // and Remind me are both meaningful.
   const cells = page.locator('button[title*="·"]');
+  // `settle` is a fixed wait, so on a slow run the grid can still be empty when this
+  // counts it. Nothing then enters the loop and the throw below blames the fixture for
+  // having no upcoming programme, when the guide had simply not arrived.
+  await expect(cells.first()).toBeVisible();
   const count = await cells.count();
   for (let i = 0; i < count; i += 1) {
     const cell = cells.nth(i);
@@ -52,6 +56,11 @@ test('deleting a recording asks first, and backing out keeps the file', async ({
   await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
 
   const plays = page.getByRole('button', { name: /^Play$/ });
+  // Wait for a recording, not for the heading. The heading is static markup and is on
+  // screen before the recordings have been asked for, so counting on the strength of it
+  // reads zero whenever the host is a moment slower than usual — which under a loaded
+  // suite is often. Same mistake, same fix, as the channel rows beside it.
+  await expect(plays.first()).toBeVisible();
   const before = await plays.count();
   expect(before).toBeGreaterThan(0);
 
