@@ -460,10 +460,12 @@ Say so on the release page; people ask.
 ## Already done, so you do not have to check
 
 - Zero compiler warnings, `clippy -D warnings` clean, `cargo fmt --check` clean.
-- 974 Rust tests (808 run here in `aurora-core`, `aurora-db` and `aurora-ingest`; the
-  166 in `aurora-player` and `aurora-app` need `mpv.lib` to link, which CI has and a
-  bare checkout does not), 154 Playwright journeys of 155 with one skipped, 14
-  TypeScript units. All green — see `AUDIT/test-report.md` for the pasted output.
+- 995 Rust tests (827 of them runnable without `mpv.lib`, in `aurora-core`, `aurora-db`
+  and `aurora-ingest`; the 168 in `aurora-player` and `aurora-app` need it to link,
+  which CI has and a bare checkout does not — point `RUSTFLAGS=-L native=…` at a
+  directory holding one and `cargo test --workspace` runs here too), 154 Playwright
+  journeys of 155 with one skipped, 14 TypeScript units. All green — see
+  `AUDIT/test-report.md` for the pasted output.
 - Soak: 2,000 zaps always end on the right channel; 2,400 concurrent tunes across 8
   threads never wedge; 20,000 tunes grow RSS by 0 kB.
 - No `todo!`, `unimplemented!` or `dbg!` anywhere in `src`; every fixture host is
