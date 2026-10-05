@@ -5,20 +5,20 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 — Spike | libmpv behind transparent WebView2 | **Written, compiles for Windows, NOT run.** See the caveat below. |
+| 0 — Spike | libmpv behind transparent WebView2 | **Run on Windows 11, and it works.** WebView2 153 and libmpv v0.41: 1920x1080 H.264 at 60fps on `d3d11va-copy`, composited behind the UI, input still reaching the UI over it, and the surface following a resize and a move to a display of another scale factor. `AUDIT/test-report.md` §11 has the numbers and `tests-host/scenarios/video_surface.py` keeps them honest. One miss: a channel change took 1.91s against the 1.5s budget. |
 | 1 — Foundation | Workspace, typed IPC, SQLite + migrations, tokens, app shell, CI | **Done** |
-| 2 — Ingestion | M3U + Xtream + XMLTV fetching and parsing, classification, series grouping, rules | **Done.** aurora-ingest fetches, parses, reconciles and indexes; credentials go to the OS store. Stalker portals (§4.3, Optional) and per-series episode listings are not built. |
-| 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Tuning now tries a channel's sources in order and rolls over when one dies, and a host-side heartbeat emits the `player.state` event the UI has always listened for and nothing ever sent. Real decoding is still unverified. |
+| 2 — Ingestion | M3U + Xtream + XMLTV fetching and parsing, classification, series grouping, rules | **Done.** aurora-ingest fetches, parses, reconciles and indexes; credentials go to the OS store. Stalker portals (§4.3, Optional) are not built. Episode listings are: a request each, 28,693 of them on the panel this was measured against, so they are fetched when a show is opened and swept in bounded batches in the background (`aurora-app/src/series.rs`). |
+| 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Tuning now tries a channel's sources in order and rolls over when one dies, and a host-side heartbeat emits the `player.state` event the UI has always listened for and nothing ever sent. **Real decoding is verified** (Phase 0, above). Running it also closed the two failures no suite could reach: a dead stream left the player `Loading` for ever because the event pump stopped at the first `Err` (F-30), and a missing libmpv killed the process in the loader with no window and no log, which the `NullBackend` fallback could not possibly report (F-34). |
 | 4 — Live TV | Channel list, zap, banner, number entry, favorites | **Done.** The playlist editor (§7.3) adds rename, renumber, regroup, hide and bulk edit over channels, movies and series; drag-to-reorder, custom logos, named favourite lists and the user-defined rules engine are not built. |
 | 5 — EPG | XMLTV ingest, matching, guide grid, info pane | **Done** |
-| 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, but unverified against the real API.** TMDB matching, the client, credits storage, the artwork disk cache and the settings panel are built and tested; nothing has run with a real key. The cache downloads, evicts and reports — but the UI still renders from remote URLs, because *serving* from it needs Tauri's asset protocol confirmed on hardware (same gate as Phase 0). |
+| 6 — Movies | Metadata enrichment, rails, hero, hover preview, detail modal, browse | **Done, and run against the real API.** TMDB was called with a real key for the first time, matching 39 of 80 titles from a panel's catalogue. Artwork is served from the cache: `assetProtocol` is granted at startup rather than in the manifest, because a portable copy keeps its artwork beside the exe and an installed one under `%LOCALAPPDATA%`, and `useAssetSrc` starts from the remote URL so an ungranted scope degrades to what shipped before. The cache warms **on view**, not by prefetching — an unordered `LIMIT` over 117,587 rows cached 39 posters against 117 on screen with no overlap at all (F-35). `AUDIT/test-report.md` §14. |
 | 7 — Series | Seasons, episodes, detail tabs, skip markers, Up Next | **Done.** Skip Intro/Recap/Credits, the Next Episode button, Up Next autoplay, and per-show auto-skip/autoplay preferences. |
-| 8 — DVR | Recording, timeshift, catch-up | **Done.** Scheduling with padding, conflict detection against the connection limit, series rules, reminders, a quota, and a recordings library. The recorder writes MPEG-TS to disk and has never been pointed at a real provider. Catch-up builds the four common URL conventions and plays from the guide; the conventions come from documentation, not from observed traffic. Timeshift pauses, rewinds and returns to live on mpv's own on-disk cache (D21); the arithmetic behind its scrub bar is tested, the cache itself has never been filled by a real stream. |
+| 8 — DVR | Recording, timeshift, catch-up | **Done.** Scheduling with padding, conflict detection against the connection limit, series rules, reminders, a quota, and a recordings library. The recorder has now met a real provider: two channels reached `completed` and a third came back `failed — Your provider didn't respond`, which is a stream that accepts the request and sends nothing, reported in words a viewer could act on. What is still unconfirmed is the *file* — the assertion that a recording is larger than 64 kB has not had a green run, because the harness's per-scenario wipe keeps failing on a checkout under OneDrive. Catch-up builds the four common URL conventions and plays from the guide; the conventions come from documentation, not from observed traffic. Timeshift pauses, rewinds and returns to live on mpv's own on-disk cache (D21); the arithmetic behind its scrub bar is tested, and running it found that mpv has no `cache-dir` option at all — `cache-on-disk=yes` was accepted and the directory beside it refused, so the buffer had been landing in mpv's own folder and `bytes_on_disk` was measuring an empty directory. Fixed to `demuxer-cache-dir`, asked of libmpv v0.41 directly. No stream has yet been buffered and seeked into. |
 | 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
 | 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette. Multi-view, PiP, sleep timer, tray, backup/restore not built. |
-| 11 — Hardening | Perf budgets, soak, diagnostics | **Partial.** A 1.0 audit pass fixed 23 findings, two of them Critical (every command on the main thread; a playlist panicking the process) — see `AUDIT/findings.md`. Soak numbers are measured: 2,000 zaps always end on the right channel, 2,400 concurrent tunes across 8 threads never wedge, 20,000 tunes grow RSS by 0 kB. Diagnostics, log rotation and log export exist. The §16 budgets that need a window — zap time, startup — still need Windows. |
-| 12 — Release | Installers, signing, auto-update | **Partial.** A merge builds and publishes an NSIS installer *and* the portable zip, both carrying the GPL/LGPL texts and `THIRD-PARTY-NOTICES.md`, which Settings → About reads from beside the executable. Both kinds of copy update themselves in-app — the installed one runs the installer, the portable one replaces its own files (D25). Nothing is code-signed, and neither path has been run on Windows. |
+| 11 — Hardening | Perf budgets, soak, diagnostics | **Partial.** A 1.0 audit pass fixed 23 findings, two of them Critical (every command on the main thread; a playlist panicking the process) — see `AUDIT/findings.md`. Soak numbers are measured: 2,000 zaps always end on the right channel, 2,400 concurrent tunes across 8 threads never wedge, 20,000 tunes grow RSS by 0 kB. Diagnostics, log rotation and log export exist, and Settings → Diagnostics now names the video engine, because a black rectangle has two completely different causes. Of the §16 budgets that need a window, **zap time has a number and it is over**: 1.91s, 1.96s and 2.13s against 1.5s, on one machine against a public CDN rather than a provider. Startup is still unmeasured. |
+| 12 — Release | Installers, signing, auto-update | **Partial.** A merge builds and publishes an NSIS installer *and* the portable zip, both carrying the GPL/LGPL texts and `THIRD-PARTY-NOTICES.md`, which Settings → About reads from beside the executable. **Both kinds of copy swap their own files** — the installed one used to run the installer, which for a standard user meant UAC asking for administrator credentials they do not have, so an installed copy simply could not update itself (D25, checklist 1c). Both paths have now run on Windows: a portable 0.11.0 renamed its own running exe and came back as 0.11.1, and an MSI per-user upgrade kept a real library of 22,121 channels, 117,510 films and 453,072 programmes intact. The per-machine NSIS install, its Start-menu entry and the uninstall sweep need an administrator account, not another machine. Nothing is code-signed — accepted rather than fixed, since the publisher and the user are the same person (checklist 2). |
 
 ## What is actually verified
 
@@ -45,12 +45,12 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | TMDB responses are parsed, including the ones missing half their fields | 16 `aurora-ingest` tests |
 | Enrichment records every outcome and never asks twice | 15 `aurora-db` + 11 `aurora-ingest` tests |
 | Artwork is cached, evicted and survives a crashed download | 21 `aurora-ingest` tests |
-| Every screen renders and the journeys work | 82 Playwright runs against the production bundle |
-| Video actually decodes and composites | **Not verified anywhere yet** — Phase 0 |
-| A recording survives a real provider's stream | **Not verified** — the recorder has only met the test server |
-| TMDB's real responses match what the client expects | **Not verified** — parsed from the documented shape, never called with a key |
-| The WebView can load a cached image | **Not verified** — `artwork::asset_url` builds the URL from Tauri's documented format, and nothing has run the app to confirm the asset protocol serves it |
-| mpv keeps a live stream on disk and can be seeked into it | **Not verified** — `cache-on-disk`, `demuxer-max-back-bytes` and `force-seekable` are set from mpv's documentation, and `demuxer-cache-state` is read from its documented shape; no stream has been buffered |
+| Every screen renders and the journeys work | 154 Playwright runs against the production bundle |
+| Video actually decodes and composites | **Verified on Windows 11** — 1920x1080 H.264 60fps, `d3d11va-copy`, 95.4% of a sampled grid over the middle of the window changing between two desktop captures (a still window measures 0.0%). `AUDIT/test-report.md` §11 |
+| A recording survives a real provider's stream | **Partly** — two channels reached `completed` and one failed with a reason a viewer could act on, so the recorder works against a provider; the assertion that the file on disk exceeds 64 kB has not had a green run |
+| TMDB's real responses match what the client expects | **Verified** — called with a real key, matching 39 of 80 titles from a panel's catalogue and returning posters that downloaded and displayed. `AUDIT/test-report.md` §14 |
+| The WebView can load a cached image | **Verified** — `http://asset.localhost/C:/…/artwork/2bf6d0` decoded at 600x900; 117 of 117 images on a screen came from the cache, 0 from the network, 0 broken. The form this project builds leaves `/` and `:` unencoded where Tauri's own `convertFileSrc` percent-encodes them, and it is the one that was run |
+| mpv keeps a live stream on disk and can be seeked into it | **Not verified** — but the options are no longer taken from documentation alone: asked directly, libmpv v0.41 has no `cache-dir`, so the buffer had been going to mpv's own folder (fixed to `demuxer-cache-dir`). No stream has yet been buffered and seeked |
 
 ## The refresh lock — fixed
 
@@ -230,29 +230,37 @@ no video for reasons that have nothing to do with compositing. **They are wired 
 nothing, and the OSD painted an opaque gradient over the whole window — the difference
 between floating over live video and being a gradient with buttons on it.
 
-What is left is the part that was always going to need the machine. `aurora-player`
+The part that was always going to need the machine has had it. `aurora-player`
 type-checks for `x86_64-pc-windows-msvc`, but `aurora-app` cannot be cross-compiled off
-Windows — rustls's `ring` wants an MSVC C compiler — so CI's Windows job is the first
-thing that will compile `window.rs` and `main.rs`. Expect a compile error or two there
-before anything runs.
+Windows — rustls's `ring` wants an MSVC C compiler — so CI's Windows job was the first
+thing ever to compile `window.rs` and `main.rs`.
 
-Then, running `cargo tauri dev` on Windows, confirm:
+The four questions this section asked, answered on the machine (`AUDIT/test-report.md`
+§11):
 
-1. Video renders behind the UI, not in a separate window.
-2. The UI receives input while video plays underneath.
-3. Resizing, snapping and alt-tab do not tear the two surfaces apart.
-4. Zap time is under the 1.5 s budget in README §16.
+1. **Video renders behind the UI, not in a separate window.** One top-level window for
+   the process; mpv's `STATIC` surface is a `WS_CHILD` of it, last of two children in
+   z-order.
+2. **The UI receives input while video plays underneath.** A click on the OSD changes
+   what is on screen.
+3. **Resizing does not tear the two apart.** After a resize, client `1220x740` and
+   surface `1220x740`; moved to a second display of a different scale factor the surface
+   follows exactly. Snapping and alt-tab were not separately exercised.
+4. **Zap time is 1.91s, against the 1.5s budget** — the one answer that missed.
 
-If (1) or (3) fails, the fallback is a native XAML/WinUI shell for the player surface
-with the web layer confined to non-playback screens. `aurora-core`, `aurora-db` and
-`aurora-player` are all backend-agnostic and would port unchanged — which is why they
-were built first.
+So the fallback is not needed: a native XAML/WinUI shell for the player surface, with
+the web layer confined to non-playback screens, was what (1) or (3) failing would have
+cost. `aurora-core`, `aurora-db` and `aurora-player` are all backend-agnostic and would
+have ported unchanged — which is why they were built first, and it remains the reason
+the option is still open if compositing ever stops working.
 
 ## Nearest useful next steps
 
-1. **Run the Phase 0 spike on Windows.** The wiring is done; the answer is not, and
-   everything else is downstream of it. If there is no picture, the log says which step
-   failed: `video surface ready`, `no video surface: …`, or `no main window at setup`.
+1. **Run the Phase 0 spike on Windows. Done — there is a picture.** Everything else was
+   downstream of it. The diagnostic it left behind is still the right one if a build ever
+   comes up black: Settings → Diagnostics names the video engine, and the log says which
+   step failed — `video surface ready`, `no video surface: …`, or `no main window at
+   setup`.
 2. **Import the series. Done.** A full import found 28,693 series fetched from the
    panel and thrown away, so the Series screen was empty on a real subscription while
    Phase 7 was marked Done. The rows are written now, with everything `get_series`
@@ -294,9 +302,36 @@ were built first.
    0.04% of the list; tightening it to known codes would break this provider's own
    non-standard `QFR`, `LAT` and `CAF` prefixes, so it stays.
 
-5. **Serve artwork from the cache.** The cache downloads and evicts; the UI still
-   points at remote URLs. Closing that needs `assetProtocol` enabled in
-   `tauri.conf.json`, scoped to the cache folder, and the swap done with a fallback to
-   the remote URL so a misconfigured protocol degrades to today's behaviour rather than
-   breaking every image. It is one config flag and one component change, but neither is
-   verifiable without running the app.
+5. **Serve artwork from the cache. Done, and the plan was wrong about one thing.** The
+   scope is granted at startup rather than in `tauri.conf.json`, because no single path
+   in the manifest covers both a portable copy's folder and an installed one's
+   `%LOCALAPPDATA%`; `useAssetSrc` starts from the remote URL, so an ungranted scope
+   degrades to the old behaviour rather than breaking every image. What only running it
+   could show: **prefetching cannot work at this size** — an unordered `LIMIT` over
+   117,587 rows cached 39 posters while 117 were on screen, with no overlap at all
+   (F-35) — so the cache warms on view instead.
+
+### What is actually left
+
+Everything above is answered. What remains needs something this repository cannot
+supply, and `AUDIT/release-checklist.md` is the authority on it:
+
+- **Catch-up on a panel that answers** (item 3, F-23). Two subscriptions now advertise
+  `tv_archive` and neither serves one: eighteen requests across three channels at 20, 60
+  and 180 minutes back, with `start` spelled both ways, returned 404 or an empty 200. The
+  UTC/local timezone fix cannot be made against evidence until a panel answers.
+- **That a recording is a file, not just a state** (item 3). Needs a run of
+  `python tests-host/run.py real_panel` with panel credentials, on a checkout that is not
+  under OneDrive — its cloud placeholders deny the per-scenario wipe.
+- **The zap budget.** 1.91s against 1.5s, measured against a public CDN rather than a
+  provider. Worth re-measuring against a real panel before optimising anything, since the
+  number may be the CDN.
+- **Install and uninstall** (item 5). Needs an administrator account: Tauri's NSIS build
+  requests elevation before it parses `/CURRENTUSER`. The upgrade half is done.
+- **Code signing** (item 2) — accepted, not fixed, while the publisher and the user are
+  the same person. Revisit the moment anyone else is asked to install this.
+- **Not built, by choice rather than oversight:** Stalker portals; drag-to-reorder,
+  custom logos, named favourite lists and the user-defined rules engine (Phase 4);
+  multi-view, PiP, sleep timer, tray and backup/restore (Phase 10); a UI for the
+  per-channel and per-category locks already stored (Phase 9); media keys and global
+  shortcuts.

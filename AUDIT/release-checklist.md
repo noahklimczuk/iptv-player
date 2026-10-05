@@ -37,11 +37,13 @@ What is **not** retired is everything about whether the app works: items 1, 1b, 
 
 ---
 
-Items 1, 6 and 8 are **done**: item 1 was run on a Windows machine and is reported in
-`AUDIT/test-report.md` §11, with one number outside its budget. Item 3 is **mostly
-answered** — a real subscription imported and drew — with catch-up, recording and logos
-still open. Items 2, 4 and 5 are blocking and untouched; 1b, 7, 9 and 10 are the
-difference between shipping and shipping well.
+Items 1, 1b, 1c, 6, 7 and 8 are **done**: item 1 was run on a Windows machine and is
+reported in `AUDIT/test-report.md` §11, with one number outside its budget, and item 7
+is reported in §14. Item 3 is **mostly answered** — a real subscription imported and
+drew, logos decoded, the recorder reached a provider — with catch-up and the recording's
+file on disk still open. Item 5 is half done: the upgrade is verified, the install and
+uninstall need an administrator. Items 2, 4, 9 and 10 are closed by the scoping decision
+above rather than by work.
 
 ---
 
@@ -458,8 +460,12 @@ Say so on the release page; people ask.
 ## Already done, so you do not have to check
 
 - Zero compiler warnings, `clippy -D warnings` clean, `cargo fmt --check` clean.
-- 776 Rust tests, 96 Playwright journeys, 12 TypeScript units, 14 release-tooling
-  tests. All green — see `AUDIT/test-report.md` for the pasted output.
+- 995 Rust tests (827 of them runnable without `mpv.lib`, in `aurora-core`, `aurora-db`
+  and `aurora-ingest`; the 168 in `aurora-player` and `aurora-app` need it to link,
+  which CI has and a bare checkout does not — point `RUSTFLAGS=-L native=…` at a
+  directory holding one and `cargo test --workspace` runs here too), 154 Playwright
+  journeys of 155 with one skipped, 14 TypeScript units. All green — see
+  `AUDIT/test-report.md` for the pasted output.
 - Soak: 2,000 zaps always end on the right channel; 2,400 concurrent tunes across 8
   threads never wedge; 20,000 tunes grow RSS by 0 kB.
 - No `todo!`, `unimplemented!` or `dbg!` anywhere in `src`; every fixture host is
