@@ -2,8 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, gemini, library, metadata, mosaic, now_unix, playlist, profiles, providers,
-    recommend,
+    assistant, commands, dvr, gemini, library, metadata, mosaic, now_unix, playlist, profiles,
+    providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
     timeshift, updates, window,
@@ -446,6 +446,10 @@ fn main() {
             library::progress_resume_point,
             library::progress_set_watched,
             gemini::gemini_recommendations,
+            assistant::assistant_status,
+            assistant::assistant_history,
+            assistant::assistant_send,
+            assistant::assistant_clear,
             gemini::gemini_status,
             gemini::gemini_set_key,
             timeshift::timeshift_settings,

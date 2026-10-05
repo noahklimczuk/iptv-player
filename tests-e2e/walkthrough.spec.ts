@@ -25,6 +25,7 @@ const SCREENS = [
   { path: '/series', nav: 'Series', heading: 'Series', region: null },
   { path: '/recordings', nav: 'Recordings', heading: 'Recordings', region: null },
   { path: '/multiview', nav: 'Multi-view', heading: 'Multi-view', region: null },
+  { path: '/assistant', nav: 'Assistant', heading: 'Assistant', region: null },
   { path: '/playlist', nav: 'Playlist', heading: 'Playlist', region: null },
   { path: '/settings', nav: 'Settings', heading: 'Settings', region: null },
 ] as const;

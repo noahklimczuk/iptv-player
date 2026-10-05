@@ -3,6 +3,7 @@
 //! README §3: the UI never touches the network or the database directly, and playback
 //! state is owned here and mirrored to the UI.
 
+pub mod assistant;
 pub mod commands;
 pub mod dvr;
 pub mod error;
@@ -137,6 +138,7 @@ mod event_name_tests {
     const EVENTS: &[&str] = &[
         "player.state",
         "mosaic.state",
+        "assistant.step",
         "ingest.progress",
         "update.available",
         "update.download",

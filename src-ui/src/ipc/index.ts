@@ -15,6 +15,7 @@ import {
   onMetadataProgress as onMockMetadataProgress,
   onIngestProgress as onMockIngestProgress,
   onMosaicState as onMockMosaicState,
+  onAssistantStep as onMockAssistantStep,
   onPlayerState as onMockPlayerState,
 } from './mock';
 
@@ -73,6 +74,17 @@ export async function invoke<K extends CommandName>(
 export function onMosaicState(fn: (v: Events['mosaic.state']) => void): () => void {
   if (!isNativeHost()) return onMockMosaicState(fn);
   return subscribe<Events['mosaic.state']>('mosaic.state', fn);
+}
+
+/**
+ * One lookup the assistant just ran (README §11).
+ *
+ * An event rather than part of the reply, because the point is that it arrives *while*
+ * the turn is still in flight — the reply carries the same list, for history.
+ */
+export function onAssistantStep(fn: (p: Events['assistant.step']) => void): () => void {
+  if (!isNativeHost()) return onMockAssistantStep(fn);
+  return subscribe<Events['assistant.step']>('assistant.step', fn);
 }
 
 export function onPlayerState(fn: (s: PlayerState) => void): () => void {
