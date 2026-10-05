@@ -23,6 +23,9 @@ pub struct Services {
     pub credentials: Arc<dyn CredentialStore>,
     /// The recording scheduler. Holds its own handle on `db`.
     pub dvr: Arc<crate::dvr::Dvr>,
+    /// Multi-view (README §7.4). Holds one backend per open tile, so it is empty — and
+    /// costs nothing — until a mosaic is opened.
+    pub mosaic: Arc<crate::mosaic::Mosaic>,
     /// Downloaded posters and backdrops. Deletable at any time — the library stores
     /// remote URLs, so this is only an accelerator.
     pub artwork: Arc<artwork::Cache>,
@@ -92,19 +95,33 @@ impl Services {
 
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(create_backend()));
 
+        let dvr = Arc::new(
+            crate::dvr::Dvr::new(Arc::clone(&db), Arc::new(StreamRecorder), folder)
+                .with_max_concurrent(max_concurrent),
+        );
+
+        // One instance per tile, made on demand. `create_backend` rather than a clone of
+        // the main player, because each tile needs its own mpv and its own child surface
+        // — which is also README §6.1's shape: one long-lived instance for the main
+        // surface, short-lived ones for the tiles.
+        let mosaic = Arc::new(crate::mosaic::Mosaic::new(
+            Arc::clone(&db),
+            Arc::clone(&dvr),
+            Arc::new(create_backend),
+            data_dir.clone(),
+        ));
+
         Ok(Self {
             playback: Arc::new(crate::playback::Playback::new(
                 Arc::clone(&db),
                 Arc::clone(&player),
                 data_dir.clone(),
             )),
+            mosaic,
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             updates: Arc::new(crate::updates::Downloads::default()),
-            dvr: Arc::new(
-                crate::dvr::Dvr::new(Arc::clone(&db), Arc::new(StreamRecorder), folder)
-                    .with_max_concurrent(max_concurrent),
-            ),
+            dvr,
             db,
             player,
             http: Arc::new(http),

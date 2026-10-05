@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use aurora_core::markers::Chapter;
+use aurora_core::mosaic::Rect;
 use aurora_core::timeshift::{Budget, Reading, Window};
 
 use crate::error::PlayerError;
@@ -182,6 +183,20 @@ pub trait PlayerBackend: Send {
     /// Re-attach the video surface after the window is resized or moved.
     fn resize(&mut self, width: u32, height: u32) -> Result<(), PlayerError>;
 
+    /// Put this backend's surface somewhere other than over the whole window.
+    ///
+    /// Multi-view (README §7.4) is several backends sharing one window, each drawing
+    /// into its own tile, so `resize` — which has no origin and means "fill the client
+    /// area" — cannot express it. The default does nothing, which is correct for a
+    /// backend that renders nothing.
+    ///
+    /// A tile may be zero-sized: the window can be dragged narrower than the layout
+    /// has columns. That is a surface that draws nothing, not an error.
+    fn place(&mut self, rect: Rect) -> Result<(), PlayerError> {
+        let _ = rect;
+        Ok(())
+    }
+
     /// Give the backend a window to render into.
     ///
     /// `parent` is the host window's native handle as an integer — on Windows, the
@@ -233,9 +248,18 @@ pub struct NullBackend {
     live_secs: f64,
     /// The playhead when the stream was loaded. Nothing older than this was buffered.
     tuned_at_secs: f64,
+    /// Where the host last put this surface, so a mosaic's tile geometry can be
+    /// asserted off Windows. Nothing is drawn either way; what is worth testing is
+    /// that every tile was told where it goes, exactly once, with the right rectangle.
+    placed: Option<Rect>,
 }
 
 impl NullBackend {
+    /// The tile this surface was last given, if any.
+    pub fn placed(&self) -> Option<Rect> {
+        self.placed
+    }
+
     /// Stand in for a file's chapter list, so marker handling can be exercised
     /// without a decoder.
     pub fn set_chapters(&mut self, chapters: Vec<Chapter>) {
@@ -395,6 +419,11 @@ impl PlayerBackend for NullBackend {
     }
 
     fn resize(&mut self, _width: u32, _height: u32) -> Result<(), PlayerError> {
+        Ok(())
+    }
+
+    fn place(&mut self, rect: Rect) -> Result<(), PlayerError> {
+        self.placed = Some(rect);
         Ok(())
     }
 }

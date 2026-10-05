@@ -8,6 +8,7 @@ pub mod filtering;
 pub mod library;
 pub mod lists;
 pub mod markers;
+pub mod mosaic;
 pub mod playlist;
 pub mod profiles;
 pub mod progress;

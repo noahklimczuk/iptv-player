@@ -14,6 +14,7 @@ import {
   onArtworkProgress as onMockArtworkProgress,
   onMetadataProgress as onMockMetadataProgress,
   onIngestProgress as onMockIngestProgress,
+  onMosaicState as onMockMosaicState,
   onPlayerState as onMockPlayerState,
 } from './mock';
 
@@ -61,6 +62,17 @@ export async function invoke<K extends CommandName>(
   // commands that take arguments fail to deserialize on Windows, which the mock
   // transport could never show because it reads the flat object.
   return host.invoke(cmd, args === undefined ? {} : { args }) as Promise<CommandResult<K>>;
+}
+
+/**
+ * The mosaic, on the same heartbeat as the player (README §7.4).
+ *
+ * Subscribed rather than polled for the same reason: a tile's stream dying is something
+ * the host notices and the UI cannot ask about often enough.
+ */
+export function onMosaicState(fn: (v: Events['mosaic.state']) => void): () => void {
+  if (!isNativeHost()) return onMockMosaicState(fn);
+  return subscribe<Events['mosaic.state']>('mosaic.state', fn);
 }
 
 export function onPlayerState(fn: (s: PlayerState) => void): () => void {

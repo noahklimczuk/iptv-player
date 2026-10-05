@@ -14,6 +14,7 @@ pub mod lang;
 pub mod m3u;
 pub mod markers;
 pub mod model;
+pub mod mosaic;
 pub mod neterr;
 pub mod parental;
 pub mod pin;

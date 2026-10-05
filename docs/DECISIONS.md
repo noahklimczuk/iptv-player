@@ -582,3 +582,47 @@ So genres are trimmed to their first and last letter or digit on the way in, and
 filter offers them **commonest first with a count**, exactly as it offers the
 provider's shelves. Order is the difference between a usable control and a wall:
 alphabetical put punctuation above `Drama`.
+
+---
+
+## D27 — Multi-view counts streams, not tiles, and refuses before it opens
+
+A mosaic is several simultaneous streams, and a provider's line has a number. The
+subscription in `docs/ROADMAP.md` allows **one** connection — so on that line a 2×2 is
+not slow or degraded, it is impossible, and three of its four tiles would be a 403 each.
+
+Two decisions follow, and both are about which number to compare.
+
+**What is counted is tiles that will carry a stream, plus recordings in flight.** Not
+the layout's capacity: an empty tile opens nothing, so a 3×3 with two channels in it is
+two streams, and refusing that on a four-connection line would be arithmetic nobody
+could argue with and everybody would be annoyed by. Recordings *are* counted, because
+the DVR holds a connection for the whole of one, and a mosaic that cut somebody's
+recording to draw a ninth tile would have made the wrong trade on their behalf. The
+main player is stopped before a mosaic opens, which is the third stream nobody would
+have thought of — it is in `mosaic_open` rather than inside the service, where it would
+have made the mosaic depend on `Playback` and `Playback` depend back on it to promote a
+tile.
+
+**An undeclared limit is `unknown`, not `fine`.** Every M3U playlist carries no
+`max_connections` at all, so this is the ordinary case rather than the exotic one.
+Guessing a limit would refuse layouts that work; assuming none would be the optimistic
+open this whole check exists to avoid. So the attempt is allowed and labelled: opening
+six streams may work, and may get the line cut.
+
+**Why the host computes the tile rectangles.** Each tile is a real child window that mpv
+draws into, positioned with `SetWindowPos` — so the geometry is load-bearing twice, once
+for the video and once for the chrome drawn over it. A UI that laid the grid out in CSS
+would be a second implementation of the same arithmetic, and the first time the two
+rounded differently the labels would sit a pixel into the wrong picture.
+`aurora_core::mosaic` computes proportional edges shared between neighbours and has the
+test that says the tiles cover the window exactly, with no overlap, at sizes that divide
+by neither two nor three. The overlay's one job is physical pixels to CSS pixels, which
+on a 150% display is the difference between a border on a tile and a border a third of
+the way into the next one.
+
+**What is not verified.** No tile has decoded a frame. The budget, the geometry, the
+audio focus, the per-tile failures and the saved layouts are all tested — 20 service
+tests against `NullBackend`, 9 for the layout arithmetic, 7 for the saved rows, 6 browser
+journeys — and every one of them runs without a display. Nine instances compositing at
+once on real hardware is the open question, and the same one Phase 0 answered for one.

@@ -305,6 +305,38 @@ pub fn attach_video_surface(
     Ok(())
 }
 
+/// Tell the mosaic which window its tiles are children of, and how big it is
+/// (README §7.4).
+///
+/// Everything here fails soft for the same reason `attach_video_surface` does: a window
+/// that has no handle yet means multi-view will open tiles with no picture and say so,
+/// which is a worse app than it should be rather than one that would not start.
+#[cfg(windows)]
+pub fn record_mosaic_window(window: &tauri::WebviewWindow, mosaic: &crate::mosaic::Mosaic) {
+    let size = window.inner_size().ok();
+    match window.hwnd() {
+        Ok(hwnd) => mosaic.set_window(
+            hwnd.0 as isize,
+            size.map(|s| s.width).unwrap_or(1280),
+            size.map(|s| s.height).unwrap_or(720),
+        ),
+        Err(e) => tracing::warn!("multi-view will have no video surfaces: {e}"),
+    }
+}
+
+/// Off Windows there is no handle to be a child of, and `NullBackend::attach` is never
+/// called — so the size is all the mosaic needs, and it needs that only so the tile
+/// rectangles it reports to the UI are the right shape.
+#[cfg(not(windows))]
+pub fn record_mosaic_window(window: &tauri::WebviewWindow, mosaic: &crate::mosaic::Mosaic) {
+    let size = window.inner_size().ok();
+    mosaic.set_window(
+        0,
+        size.map(|s| s.width).unwrap_or(1280),
+        size.map(|s| s.height).unwrap_or(720),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -776,15 +776,30 @@ impl PlayerBackend for MpvBackend {
     /// Keep the video child window exactly on the WebView2's client rect. Called from
     /// the host's WM_SIZE handler so the two never tear apart during a drag or snap.
     fn resize(&mut self, width: u32, height: u32) -> Result<(), PlayerError> {
+        self.place(aurora_core::mosaic::Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        })
+    }
+
+    /// Move this surface to a tile of the window (README §7.4).
+    ///
+    /// `HWND_BOTTOM` for the same reason `attach` uses it: every video surface has to
+    /// stay underneath the WebView, which is what composites the UI over them. Tiles do
+    /// not need an order among themselves, because the layout gives them disjoint
+    /// rectangles — `aurora_core::mosaic` has the test that says so.
+    fn place(&mut self, rect: aurora_core::mosaic::Rect) -> Result<(), PlayerError> {
         if let Some(hwnd) = self.video_hwnd {
             unsafe {
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_BOTTOM,
-                    0,
-                    0,
-                    width as i32,
-                    height as i32,
+                    rect.x,
+                    rect.y,
+                    rect.width as i32,
+                    rect.height as i32,
                     SWP_NOACTIVATE,
                 );
             }
