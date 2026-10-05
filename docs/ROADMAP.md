@@ -29,7 +29,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | Playback state machine and error taxonomy | 13 `aurora-player` tests |
 | Fetching, retry, gzip, credential redaction | 109 `aurora-ingest` tests, against a server that simulates 401/403/404/429/timeout/mid-stream disconnect |
 | A refresh never destroys user data | `aurora-ingest::sync` tests assert renames, numbers and hidden flags survive |
-| Skip markers: chapter parsing, learning, merge | 25 `aurora-core` + 13 `aurora-db` tests |
+| Skip markers: chapter parsing, learning, merge, and the conventional credits | 33 `aurora-core` + 20 `aurora-db` tests |
 | The Tauri host compiles and its URL resolution works | 21 `aurora-app` tests (Linux, with GTK dev packages) |
 | An update is only kept if its length and SHA-256 match what GitHub published, and only fetched from this project's own releases | 10 `aurora-ingest` + 8 `aurora-app` tests: a wrong digest, a wrong length, a cut connection and four lookalike hosts, each leaving nothing executable behind |
 | The host answers every command the UI declares, and sends every `PlayerState` field it declares | `aurora-app/tests/contract.rs`, which reads `shared/ipc.ts` and diffs it against the handler list and against the serialized struct |

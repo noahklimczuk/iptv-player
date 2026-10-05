@@ -3,16 +3,33 @@
 //! README §9 asks for "Skip Intro / Skip Recap / Skip Credits buttons where chapters
 //! exist or where a black-frame/silence heuristic can detect them".
 //!
-//! Aurora derives markers from three sources, in descending order of trust:
+//! Aurora derives markers from four sources, in descending order of trust:
 //!
 //! 1. **Chapters** embedded in the file — exact, when the release has them.
 //! 2. **The user** — when someone skips manually, where they skipped is recorded.
-//! 3. **Learned from the series** — the median of the user's own skips on other
-//!    episodes of the same show, applied to episodes that have no marker yet.
+//! 3. **Learned from the series** — the median of the evidence from *other* episodes of
+//!    the same show, applied to episodes that have no marker yet. Chapters on a sibling
+//!    count here as much as a manual skip does, which is what makes a show whose first
+//!    file has chapters give every other episode its buttons for free.
+//! 4. **Convention** — the credits, from the clock alone.
 //!
 //! Frame/audio fingerprinting is deliberately *not* implemented: it needs decoding
 //! passes this crate cannot do, and a wrong "Skip Intro" button is worse than none.
-//! Tier 3 gets most of the benefit from one manual skip per show.
+//!
+//! ## Why the credits can be guessed and an intro cannot
+//!
+//! The credits are *defined* by being at the end, so a clock locates them: `duration -
+//! CREDITS_TAIL_SECS` is within a few seconds of right on almost every episode ever
+//! made, and the action it offers — go to the next episode — costs nothing when it is
+//! early, because what it skips is the credits.
+//!
+//! An intro has no such definition. It is usually near the front and usually about a
+//! minute, but "usually" is doing load-bearing work there: a cold open before the titles
+//! is common, and a Skip Intro button that cuts the first ninety seconds of a cold open
+//! has destroyed the one part of the episode that cannot be inferred. So an intro is
+//! offered only where there is evidence for it — a chapter, or a skip somebody made —
+//! and tier 4 stays silent about it. [`conventional`] says so in code rather than
+//! leaving it to be discovered.
 
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +83,8 @@ pub enum MarkerSource {
     Chapters,
     User,
     Learned,
+    /// From the episode's own duration and nothing else. Only ever the credits.
+    Convention,
 }
 
 impl MarkerSource {
@@ -74,6 +93,7 @@ impl MarkerSource {
             MarkerSource::Chapters => "chapters",
             MarkerSource::User => "user",
             MarkerSource::Learned => "learned",
+            MarkerSource::Convention => "convention",
         }
     }
 
@@ -82,6 +102,7 @@ impl MarkerSource {
             "chapters" => Some(MarkerSource::Chapters),
             "user" => Some(MarkerSource::User),
             "learned" => Some(MarkerSource::Learned),
+            "convention" => Some(MarkerSource::Convention),
             _ => None,
         }
     }
@@ -89,10 +110,24 @@ impl MarkerSource {
     /// Higher wins when two sources describe the same region.
     pub fn trust(self) -> u8 {
         match self {
-            MarkerSource::Chapters => 3,
-            MarkerSource::User => 2,
-            MarkerSource::Learned => 1,
+            MarkerSource::Chapters => 4,
+            MarkerSource::User => 3,
+            MarkerSource::Learned => 2,
+            // Last, so anything with evidence behind it wins. A conventional credits
+            // marker exists to fill a hole, not to argue with a chapter.
+            MarkerSource::Convention => 1,
         }
+    }
+
+    /// Whether a marker from this source may be skipped *without being asked*.
+    ///
+    /// The per-show "always skip" preferences act on evidence, not on guesses. A
+    /// conventional credits marker is a button, and pressing it is the viewer agreeing
+    /// with the guess — auto-skipping one would mean a clock silently cutting the last
+    /// minute of an episode whose runtime was wrong, which is how somebody loses the
+    /// final scene of a finale.
+    pub fn may_auto_skip(self) -> bool {
+        !matches!(self, MarkerSource::Convention)
     }
 }
 
@@ -307,6 +342,53 @@ pub fn active_marker(markers: &[SkipMarker], position_secs: f64) -> Option<&Skip
     markers.iter().find(|m| m.contains(position_secs))
 }
 
+/// How long before the end the conventional credits marker starts.
+///
+/// Sixty seconds, which is a touch generous for broadcast television and about right for
+/// streaming. Being early costs the viewer the credits; being late costs them the button,
+/// so the error is asymmetric and this leans early.
+pub const CREDITS_TAIL_SECS: f64 = 60.0;
+
+/// Below this, an episode is too short to assume anything about.
+///
+/// A six-minute file is a trailer, a recap reel, or an episode the provider has truncated
+/// — and `duration - 60` on any of those is a "Skip Credits" button over the middle of it.
+pub const MIN_EPISODE_FOR_CONVENTION_SECS: f64 = 600.0;
+
+/// The markers a clock alone can justify: the credits, and nothing else.
+///
+/// This is tier 4, and it is why "Skip Credits" and Up Next work on a library whose
+/// provider ships no chapters and whose viewer has never skipped anything — which is the
+/// ordinary case, not the exotic one.
+///
+/// It deliberately returns no intro and no recap. See the module header: an intro has no
+/// definition a clock can use, and a Skip Intro button that cuts a cold open has removed
+/// the one part of an episode nobody can infer. Those two stay evidence-only.
+pub fn conventional(duration_secs: f64) -> Vec<SkipMarker> {
+    if !duration_secs.is_finite() || duration_secs < MIN_EPISODE_FOR_CONVENTION_SECS {
+        return Vec::new();
+    }
+    let start = duration_secs - CREDITS_TAIL_SECS;
+    // Belt and braces: `MIN_EPISODE_FOR_CONVENTION_SECS` already guarantees this, and a
+    // future smaller minimum should not silently produce a marker over the second act.
+    if start <= duration_secs * 0.5 {
+        return Vec::new();
+    }
+    let marker = SkipMarker::new(
+        MarkerKind::Credits,
+        start,
+        duration_secs,
+        MarkerSource::Convention,
+    );
+    // Through the same gate every other marker goes through, so a tail longer than
+    // `MAX_MARKER_SECS` cannot arrive here by the back door.
+    if marker.is_plausible() {
+        vec![marker]
+    } else {
+        Vec::new()
+    }
+}
+
 /// When the "Up Next" card should appear.
 ///
 /// Prefers the start of the credits; otherwise falls back to a fixed tail. README §9
@@ -323,6 +405,112 @@ pub fn up_next_at(
         return Some(credits.start_secs);
     }
     Some((duration_secs - fallback_tail_secs).max(duration_secs * 0.5))
+}
+
+#[cfg(test)]
+mod convention_tests {
+    use super::*;
+
+    /// The case this tier exists for: a provider that ships no chapters, a viewer who
+    /// has never skipped anything, and a Skip Credits button anyway.
+    #[test]
+    fn an_ordinary_episode_gets_credits_from_the_clock_alone() {
+        let markers = conventional(45.0 * 60.0);
+        assert_eq!(markers.len(), 1);
+        let credits = markers[0];
+        assert_eq!(credits.kind, MarkerKind::Credits);
+        assert_eq!(credits.source, MarkerSource::Convention);
+        assert_eq!(credits.start_secs, 45.0 * 60.0 - CREDITS_TAIL_SECS);
+        assert_eq!(credits.end_secs, 45.0 * 60.0);
+        assert!(credits.is_plausible());
+    }
+
+    /// No intro and no recap, ever. A clock cannot find either, and a Skip Intro button
+    /// over a cold open removes the part of an episode nobody can infer.
+    #[test]
+    fn convention_never_invents_an_intro_or_a_recap() {
+        for minutes in [10.0, 22.0, 45.0, 90.0, 180.0] {
+            let markers = conventional(minutes * 60.0);
+            assert!(
+                markers.iter().all(|m| m.kind == MarkerKind::Credits),
+                "{minutes} minutes produced {markers:?}"
+            );
+        }
+    }
+
+    /// A short file is a trailer or a truncated episode, and `duration - 60` on one of
+    /// those is a button over the middle of it.
+    #[test]
+    fn something_too_short_to_be_an_episode_gets_nothing() {
+        for secs in [0.0, 30.0, 120.0, MIN_EPISODE_FOR_CONVENTION_SECS - 1.0] {
+            assert!(conventional(secs).is_empty(), "{secs}s produced a marker");
+        }
+        // And exactly at the threshold it does appear, so the boundary is not a cliff
+        // nobody tested.
+        assert_eq!(conventional(MIN_EPISODE_FOR_CONVENTION_SECS).len(), 1);
+    }
+
+    /// A stream that reports no duration — which an IPTV provider often does — must not
+    /// produce a marker at zero.
+    #[test]
+    fn an_unknown_duration_is_not_a_marker_at_the_start() {
+        assert!(conventional(0.0).is_empty());
+        assert!(conventional(-1.0).is_empty());
+        assert!(conventional(f64::NAN).is_empty());
+        assert!(conventional(f64::INFINITY).is_empty());
+    }
+
+    /// Evidence always wins: a chapter saying the credits start at 38 minutes beats a
+    /// clock saying 44.
+    #[test]
+    fn a_real_credits_marker_outranks_the_conventional_one() {
+        let duration = 45.0 * 60.0;
+        // Two minutes, not seven: `MAX_MARKER_SECS` rejects a seven-minute credits
+        // region as a mis-parsed chapter, which is the existing rule and the right one.
+        let from_chapters = SkipMarker::new(
+            MarkerKind::Credits,
+            43.0 * 60.0,
+            duration,
+            MarkerSource::Chapters,
+        );
+        let merged = merge(&[vec![from_chapters], conventional(duration)]);
+        let credits: Vec<&SkipMarker> = merged
+            .iter()
+            .filter(|m| m.kind == MarkerKind::Credits)
+            .collect();
+        assert_eq!(credits.len(), 1, "two credits markers survived: {merged:?}");
+        assert_eq!(credits[0].source, MarkerSource::Chapters);
+        assert_eq!(credits[0].start_secs, 43.0 * 60.0);
+    }
+
+    /// The whole point of Up Next working without anyone teaching it anything.
+    #[test]
+    fn up_next_follows_the_conventional_credits() {
+        let duration = 45.0 * 60.0;
+        let at = up_next_at(&conventional(duration), duration, 45.0).unwrap();
+        assert_eq!(at, duration - CREDITS_TAIL_SECS);
+    }
+
+    /// A guess may be pressed; it may not fire by itself.
+    #[test]
+    fn a_guess_is_never_auto_skipped_but_evidence_is() {
+        assert!(!MarkerSource::Convention.may_auto_skip());
+        for source in [
+            MarkerSource::Chapters,
+            MarkerSource::User,
+            MarkerSource::Learned,
+        ] {
+            assert!(source.may_auto_skip(), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_source_round_trips_through_its_name() {
+        assert_eq!(
+            MarkerSource::parse(MarkerSource::Convention.as_str()),
+            Some(MarkerSource::Convention)
+        );
+    }
 }
 
 #[cfg(test)]

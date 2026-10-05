@@ -873,7 +873,22 @@ pub fn library_playback_aids(
 ) -> Result<EpisodePlaybackAids> {
     let db = services.db.lock();
 
-    let resolved = markers::resolve(&db, args.episode_id, markers::DEFAULT_MIN_SAMPLES)?;
+    // How long this episode is, which decides whether Up Next and Skip Credits exist at
+    // all.
+    //
+    // The player's own number first, because it is the file in front of us. But a
+    // provider's VOD stream very often reports no duration — mpv has nothing to read it
+    // from until the whole thing is buffered, and on some streams never — and the
+    // consequence was that an episode with no chapters and no learned markers had no Up
+    // Next either, so autoplay never fired on an ordinary library. The episode's own
+    // runtime, which enrichment or the provider supplied, is the fallback.
+    let duration = if args.duration_secs > 0.0 {
+        Some(args.duration_secs)
+    } else {
+        library::episode_runtime_secs(&db, args.episode_id)?
+    };
+
+    let resolved = markers::resolve(&db, args.episode_id, markers::DEFAULT_MIN_SAMPLES, duration)?;
     let prefs = match markers::series_id_of(&db, args.episode_id)? {
         Some(series_id) => markers::prefs(&db, args.profile_id, series_id)?,
         None => markers::SeriesPrefs::default(),
@@ -882,7 +897,7 @@ pub fn library_playback_aids(
     Ok(EpisodePlaybackAids {
         up_next_at_secs: aurora_core::markers::up_next_at(
             &resolved,
-            args.duration_secs,
+            duration.unwrap_or(0.0),
             UP_NEXT_TAIL_SECS,
         ),
         markers: resolved,

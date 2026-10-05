@@ -12,7 +12,16 @@ use crate::error::Result;
 
 /// How many of the user's own skips a series needs before Aurora extrapolates to
 /// episodes it has never seen skipped.
-pub const DEFAULT_MIN_SAMPLES: usize = 2;
+/// How many of the viewer's own skips it takes before the rest of the show inherits them.
+///
+/// One. The median of one observation is that observation, and a deliberate skip is a far
+/// better guess than nothing — which is what the alternative was, since a library with no
+/// chapters got no intro button until somebody had skipped on two separate episodes.
+///
+/// The cost is that one mis-drag colours the show. It is a small cost and it corrects
+/// itself: a skip on another episode moves the median, and the viewer can press again.
+/// Chapters, where they exist, outrank this entirely.
+pub const DEFAULT_MIN_SAMPLES: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,23 +122,25 @@ pub fn for_episode(conn: &Connection, episode_id: i64) -> Result<Vec<SkipMarker>
     Ok(rows)
 }
 
-/// The user's own skips on *other* episodes of the same series.
+/// Evidence of one kind, from one source, on *other* episodes of the same series.
 pub fn series_observations(
     conn: &Connection,
     series_id: i64,
     kind: MarkerKind,
+    source: MarkerSource,
     excluding_episode: i64,
 ) -> Result<Vec<(f64, f64)>> {
     let mut stmt = conn.prepare(
         "SELECT m.start_secs, m.end_secs
          FROM skip_markers m
          JOIN episodes e ON e.id = m.episode_id
-         WHERE e.series_id = ?1 AND m.kind = ?2 AND m.source = 'user' AND m.episode_id != ?3",
+         WHERE e.series_id = ?1 AND m.kind = ?2 AND m.source = ?3 AND m.episode_id != ?4",
     )?;
     let rows = stmt
-        .query_map(params![series_id, kind.as_str(), excluding_episode], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?
+        .query_map(
+            params![series_id, kind.as_str(), source.as_str(), excluding_episode],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -146,13 +157,34 @@ pub fn series_id_of(conn: &Connection, episode_id: i64) -> Result<Option<i64>> {
 
 /// The markers the Skip button should use for this episode.
 ///
-/// Stored rows win; for any kind with nothing stored, the series' learned median fills
-/// in — which is how the second episode of a show gets a Skip Intro button from one
-/// press on the first.
-pub fn resolve(conn: &Connection, episode_id: i64, min_samples: usize) -> Result<Vec<SkipMarker>> {
+/// Four sources, each tried only where the one before it has nothing to say:
+///
+/// 1. **Stored on this episode** — its own chapters, or a skip somebody made here.
+/// 2. **Chapters on a sibling episode.** One is enough: a chapter is evidence, not an
+///    opinion, and a show whose first file carries them should give every other episode
+///    its buttons without anybody pressing anything. This is the tier that was missing —
+///    `series_observations` only ever looked at `source = 'user'`, so a library with
+///    chapters on half its files learned nothing from them.
+/// 3. **Skips the viewer made on other episodes**, median, needing `min_samples`.
+/// 4. **Convention**, which can only ever produce the credits, and only when
+///    `duration_secs` is known. See `aurora_core::markers::conventional` for why an
+///    intro is not guessed.
+///
+/// `duration_secs` is what the player reports, or the episode's own runtime where the
+/// stream does not say — `None` where neither is known, which simply skips tier 4.
+pub fn resolve(
+    conn: &Connection,
+    episode_id: i64,
+    min_samples: usize,
+    duration_secs: Option<f64>,
+) -> Result<Vec<SkipMarker>> {
     let stored = for_episode(conn, episode_id)?;
+    let conventional = duration_secs
+        .map(aurora_core::markers::conventional)
+        .unwrap_or_default();
+
     let Some(series_id) = series_id_of(conn, episode_id)? else {
-        return Ok(merge(&[stored]));
+        return Ok(merge(&[stored, conventional]));
     };
 
     let mut learned = Vec::new();
@@ -160,12 +192,21 @@ pub fn resolve(conn: &Connection, episode_id: i64, min_samples: usize) -> Result
         if stored.iter().any(|m| m.kind == kind) {
             continue;
         }
-        let obs = series_observations(conn, series_id, kind, episode_id)?;
-        if let Some(m) = learn_from_series(&obs, kind, min_samples) {
+        // Chapters first, and with a sample size of one, because they are the thing
+        // this show actually says about itself.
+        let from_chapters =
+            series_observations(conn, series_id, kind, MarkerSource::Chapters, episode_id)?;
+        if let Some(m) = learn_from_series(&from_chapters, kind, 1) {
+            learned.push(m);
+            continue;
+        }
+        let from_viewer =
+            series_observations(conn, series_id, kind, MarkerSource::User, episode_id)?;
+        if let Some(m) = learn_from_series(&from_viewer, kind, min_samples) {
             learned.push(m);
         }
     }
-    Ok(merge(&[stored, learned]))
+    Ok(merge(&[stored, learned, conventional]))
 }
 
 pub fn prefs(conn: &Connection, profile_id: i64, series_id: i64) -> Result<SeriesPrefs> {
@@ -270,6 +311,122 @@ mod tests {
         SkipMarker::new(MarkerKind::Intro, start, end, source)
     }
 
+    /// The tier that was missing. A provider that ships chapters on one file should give
+    /// every other episode its buttons, with nobody pressing anything — and before this
+    /// `series_observations` only ever looked at `source = 'user'`, so it did not.
+    #[test]
+    fn chapters_on_one_episode_give_the_whole_show_its_buttons() {
+        let (conn, _sid, eps) = seeded(4);
+        record(&conn, eps[0], &intro(30.0, 95.0, MarkerSource::Chapters), 0).unwrap();
+
+        for other in &eps[1..] {
+            let resolved = resolve(&conn, *other, DEFAULT_MIN_SAMPLES, None).unwrap();
+            let found = resolved
+                .iter()
+                .find(|m| m.kind == MarkerKind::Intro)
+                .unwrap_or_else(|| panic!("episode {other} got no intro"));
+            assert_eq!(found.start_secs, 30.0);
+            assert_eq!(found.end_secs, 95.0);
+            assert_eq!(found.source, MarkerSource::Learned);
+        }
+    }
+
+    /// One skip, not two. The alternative was no intro button at all until somebody had
+    /// skipped on two separate episodes of the same show.
+    #[test]
+    fn one_skip_by_the_viewer_is_enough_for_the_rest_of_the_show() {
+        let (conn, _sid, eps) = seeded(3);
+        record(&conn, eps[0], &intro(10.0, 80.0, MarkerSource::User), 0).unwrap();
+
+        let resolved = resolve(&conn, eps[1], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = resolved
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .unwrap();
+        assert_eq!(found.start_secs, 10.0);
+        assert_eq!(found.source, MarkerSource::Learned);
+    }
+
+    /// A chapter is evidence and a skip is an opinion, so the chapter wins even when the
+    /// viewer has skipped more often.
+    #[test]
+    fn a_sibling_chapter_outranks_the_viewers_own_skips() {
+        let (conn, _sid, eps) = seeded(4);
+        record(&conn, eps[0], &intro(5.0, 40.0, MarkerSource::User), 0).unwrap();
+        record(&conn, eps[1], &intro(6.0, 41.0, MarkerSource::User), 0).unwrap();
+        record(&conn, eps[2], &intro(30.0, 95.0, MarkerSource::Chapters), 0).unwrap();
+
+        let resolved = resolve(&conn, eps[3], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = resolved
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .unwrap();
+        assert_eq!(found.start_secs, 30.0, "the chapter should have won");
+    }
+
+    /// An episode's own marker is never overridden by what the rest of the show says.
+    #[test]
+    fn this_episodes_own_marker_wins_over_the_series() {
+        let (conn, _sid, eps) = seeded(3);
+        record(&conn, eps[0], &intro(30.0, 95.0, MarkerSource::Chapters), 0).unwrap();
+        record(&conn, eps[1], &intro(0.0, 20.0, MarkerSource::User), 0).unwrap();
+
+        let resolved = resolve(&conn, eps[1], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = resolved
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .unwrap();
+        assert_eq!(found.start_secs, 0.0);
+        assert_eq!(found.source, MarkerSource::User);
+    }
+
+    /// The whole point: no chapters anywhere, nothing ever skipped, and a Skip Credits
+    /// button regardless — which is what makes autoplay work on an ordinary library.
+    #[test]
+    fn a_duration_alone_gives_credits_and_nothing_else() {
+        let (conn, _sid, eps) = seeded(2);
+        let resolved = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES, Some(45.0 * 60.0)).unwrap();
+
+        let credits = resolved
+            .iter()
+            .find(|m| m.kind == MarkerKind::Credits)
+            .expect("credits from the clock");
+        assert_eq!(credits.source, MarkerSource::Convention);
+        assert_eq!(credits.start_secs, 45.0 * 60.0 - 60.0);
+
+        // And still no intro, because nothing has said where one is.
+        assert!(!resolved.iter().any(|m| m.kind == MarkerKind::Intro));
+    }
+
+    #[test]
+    fn a_stream_with_no_duration_gets_no_conventional_marker() {
+        let (conn, _sid, eps) = seeded(2);
+        let resolved = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES, None).unwrap();
+        assert!(resolved.is_empty(), "{resolved:?}");
+    }
+
+    /// Evidence beats the clock, end to end through the database.
+    #[test]
+    fn a_real_credits_chapter_beats_the_clock() {
+        let (conn, _sid, eps) = seeded(2);
+        record(
+            &conn,
+            eps[0],
+            &SkipMarker::new(MarkerKind::Credits, 2000.0, 2100.0, MarkerSource::Chapters),
+            0,
+        )
+        .unwrap();
+
+        let resolved = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES, Some(45.0 * 60.0)).unwrap();
+        let credits: Vec<&SkipMarker> = resolved
+            .iter()
+            .filter(|m| m.kind == MarkerKind::Credits)
+            .collect();
+        assert_eq!(credits.len(), 1, "{resolved:?}");
+        assert_eq!(credits[0].start_secs, 2000.0);
+        assert_eq!(credits[0].source, MarkerSource::Chapters);
+    }
+
     #[test]
     fn records_and_reads_back_a_marker() {
         let (conn, _, eps) = seeded(1);
@@ -296,7 +453,7 @@ mod tests {
         // Both rows are kept — the user's still feeds series learning.
         assert_eq!(for_episode(&conn, eps[0]).unwrap().len(), 2);
 
-        let resolved = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES).unwrap();
+        let resolved = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES, None).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].source, MarkerSource::Chapters);
         assert_eq!(resolved[0].start_secs, 45.0);
@@ -320,20 +477,41 @@ mod tests {
         record(&conn, eps[1], &intro(32.0, 118.0, MarkerSource::User), 0).unwrap();
 
         // Episode 3 has no marker of its own, so it inherits the series median.
-        let resolved = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES).unwrap();
+        let resolved = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES, None).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].source, MarkerSource::Learned);
         assert_eq!(resolved[0].start_secs, 31.0);
         assert_eq!(resolved[0].end_secs, 119.0);
     }
 
+    /// This used to assert the opposite — that one skip was *not* enough — and the
+    /// behaviour was deliberately changed: a library with no chapters got no intro
+    /// button until somebody had skipped on two separate episodes, which is two episodes
+    /// of watching an intro to earn the right to skip the third.
+    ///
+    /// The cost is that one mis-drag colours the show, and it is a cheap one: a skip on
+    /// another episode moves the median, and a chapter anywhere in the series outranks
+    /// the lot. Kept as a test rather than deleted, because the old rule was a
+    /// deliberate choice too and the reversal should be legible.
     #[test]
-    fn one_skip_is_not_enough_to_extrapolate() {
+    fn one_skip_is_now_enough_to_extrapolate() {
         let (conn, _, eps) = seeded(3);
         record(&conn, eps[0], &intro(30.0, 120.0, MarkerSource::User), 0).unwrap();
-        assert!(resolve(&conn, eps[1], DEFAULT_MIN_SAMPLES)
-            .unwrap()
-            .is_empty());
+
+        let resolved = resolve(&conn, eps[1], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = resolved
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .expect("one skip should carry to the next episode");
+        assert_eq!(found.start_secs, 30.0);
+        assert_eq!(found.end_secs, 120.0);
+        assert_eq!(found.source, MarkerSource::Learned);
+
+        // Two samples still work, and still produce the median rather than the latest.
+        record(&conn, eps[1], &intro(40.0, 130.0, MarkerSource::User), 0).unwrap();
+        let third = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = third.iter().find(|m| m.kind == MarkerKind::Intro).unwrap();
+        assert_eq!(found.start_secs, 35.0, "the median of 30 and 40");
     }
 
     #[test]
@@ -344,7 +522,7 @@ mod tests {
 
         // Episode 1 already has its own row; the merge must use that, not a median
         // that includes itself.
-        let resolved = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES).unwrap();
+        let resolved = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES, None).unwrap();
         assert_eq!(resolved[0].source, MarkerSource::User);
         assert_eq!(resolved[0].start_secs, 30.0);
     }
@@ -381,7 +559,7 @@ mod tests {
         .unwrap();
         let other_ep = crate::repo::library::episodes_for(&conn, other, None).unwrap()[0].id;
 
-        assert!(resolve(&conn, other_ep, DEFAULT_MIN_SAMPLES)
+        assert!(resolve(&conn, other_ep, DEFAULT_MIN_SAMPLES, None)
             .unwrap()
             .is_empty());
     }

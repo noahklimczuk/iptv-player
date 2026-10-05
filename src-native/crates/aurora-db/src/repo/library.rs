@@ -2158,3 +2158,144 @@ mod tests {
         assert_eq!(a, b, "same provider_key must map to the same row");
     }
 }
+
+/// How long an episode is, in seconds, from what the library knows.
+///
+/// The fallback for a stream that reports no duration of its own, which is the ordinary
+/// case for provider VOD: without it an episode has no credits marker and no Up Next, so
+/// autoplay never fires.
+///
+/// Two steps, because a provider fills `runtime_mins` unevenly — often on some episodes
+/// of a show and not others:
+///
+/// 1. This episode's own runtime.
+/// 2. The median runtime of its siblings. Episodes of a series are nearly all the same
+///    length, so a show with runtimes on half its files can answer for the other half.
+///    The median rather than the average, so one feature-length finale does not stretch
+///    every other episode's credits marker past its actual end.
+///
+/// `series` has no runtime column — only `movies` and `episodes` do — which is worth
+/// stating because the obvious join is to the show, and SQLite would not have objected
+/// until it ran.
+pub fn episode_runtime_secs(conn: &Connection, episode_id: i64) -> Result<Option<f64>> {
+    let own: Option<i64> = conn
+        .query_row(
+            "SELECT runtime_mins FROM episodes WHERE id = ?1",
+            [episode_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(mins) = own.filter(|m| *m > 0) {
+        return Ok(Some(mins as f64 * 60.0));
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT e.runtime_mins FROM episodes e
+         WHERE e.series_id = (SELECT series_id FROM episodes WHERE id = ?1)
+           AND e.id != ?1 AND e.runtime_mins > 0
+         ORDER BY e.runtime_mins",
+    )?;
+    let mins = stmt
+        .query_map([episode_id], |r| r.get::<_, i64>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if mins.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(mins[mins.len() / 2] as f64 * 60.0))
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    fn seeded() -> (Connection, i64) {
+        let mut conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','xtream','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        let series_id = upsert_series(
+            &mut conn,
+            1,
+            &NewSeries {
+                provider_key: "s1",
+                title: "A Show",
+                match_key: "ashow",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        (conn, series_id)
+    }
+
+    fn add_episode(conn: &Connection, series_id: i64, number: u16, runtime: Option<i64>) -> i64 {
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, url, runtime_mins)
+             VALUES (?1, 1, ?2, 'u', ?3)",
+            params![series_id, number, runtime],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    /// The query runs. Worth asserting on its own, because `series` has no runtime
+    /// column and the obvious join to the show would only have failed at runtime.
+    #[test]
+    fn an_episodes_own_runtime_is_used() {
+        let (conn, series_id) = seeded();
+        let id = add_episode(&conn, series_id, 1, Some(45));
+        assert_eq!(episode_runtime_secs(&conn, id).unwrap(), Some(45.0 * 60.0));
+    }
+
+    /// A provider that filled the runtime on some episodes answers for the rest.
+    #[test]
+    fn a_sibling_runtime_fills_in_for_an_episode_that_has_none() {
+        let (conn, series_id) = seeded();
+        add_episode(&conn, series_id, 1, Some(42));
+        add_episode(&conn, series_id, 2, Some(44));
+        let bare = add_episode(&conn, series_id, 3, None);
+
+        assert_eq!(
+            episode_runtime_secs(&conn, bare).unwrap(),
+            Some(44.0 * 60.0),
+            "the median of 42 and 44"
+        );
+    }
+
+    /// One feature-length finale must not stretch every other episode's credits marker
+    /// past where the episode actually ends.
+    #[test]
+    fn the_median_ignores_one_long_outlier() {
+        let (conn, series_id) = seeded();
+        for n in 1..=5 {
+            add_episode(&conn, series_id, n, Some(42));
+        }
+        add_episode(&conn, series_id, 6, Some(150));
+        let bare = add_episode(&conn, series_id, 7, None);
+        assert_eq!(
+            episode_runtime_secs(&conn, bare).unwrap(),
+            Some(42.0 * 60.0)
+        );
+    }
+
+    #[test]
+    fn nothing_known_is_none_rather_than_zero() {
+        let (conn, series_id) = seeded();
+        let bare = add_episode(&conn, series_id, 1, None);
+        assert_eq!(episode_runtime_secs(&conn, bare).unwrap(), None);
+        // A zero or negative runtime is a provider filling the field with nonsense, and
+        // is not a duration.
+        let zero = add_episode(&conn, series_id, 2, Some(0));
+        assert_eq!(episode_runtime_secs(&conn, zero).unwrap(), None);
+    }
+
+    #[test]
+    fn an_episode_that_does_not_exist_is_not_an_error() {
+        let (conn, _series_id) = seeded();
+        assert_eq!(episode_runtime_secs(&conn, 9999).unwrap(), None);
+    }
+}

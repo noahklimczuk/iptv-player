@@ -108,7 +108,7 @@ for (const p of fx.seedProgress) {
  * Skip-marker state, mirroring aurora-core::markers and aurora-db::repo::markers so
  * the browser build behaves the same as the Windows one.
  */
-const MIN_SAMPLES = 2;
+const MIN_SAMPLES = 1;
 const UP_NEXT_TAIL_SECS = 45;
 
 /** Chapter-derived markers, keyed by episode id. */
@@ -145,9 +145,27 @@ function resolveMarkers(episodeId: number): SkipMarker[] {
 
   for (const kind of ['intro', 'recap', 'credits'] as MarkerKind[]) {
     if (out.some((m) => m.kind === kind)) continue;
-    // Learn from the viewer's own skips elsewhere in this series.
-    const observations = userSkips.get(`${ep.seriesId}:${kind}`) ?? [];
-    if (observations.length < MIN_SAMPLES) continue;
+
+    // Chapters on a sibling episode first, and one is enough: a chapter is evidence,
+    // so a show whose first file has them gives every other episode its buttons with
+    // nobody pressing anything. The host does the same, in the same order.
+    const siblingChapters: [number, number][] = [];
+    for (const other of fx.episodes.filter(
+      (e) => e.seriesId === ep.seriesId && e.id !== episodeId,
+    )) {
+      for (const m of chapterMarkers.get(other.id) ?? []) {
+        if (m.kind === kind && plausible(m)) siblingChapters.push([m.startSecs, m.endSecs]);
+      }
+    }
+
+    // Then the viewer's own skips elsewhere in this series.
+    const observations =
+      siblingChapters.length > 0
+        ? siblingChapters
+        : userSkips.get(`${ep.seriesId}:${kind}`) ?? [];
+    const needed = siblingChapters.length > 0 ? 1 : MIN_SAMPLES;
+    if (observations.length < needed) continue;
+
     const learned: SkipMarker = {
       kind,
       startSecs: median(observations.map(([start]) => start)),
@@ -157,6 +175,28 @@ function resolveMarkers(episodeId: number): SkipMarker[] {
     if (plausible(learned)) out.push(learned);
   }
   return out.sort((a, b) => a.startSecs - b.startSecs);
+}
+
+/**
+ * The credits, from the clock alone — `aurora_core::markers::conventional`.
+ *
+ * Why there is no conventional intro here either: a clock cannot find one, and a Skip
+ * Intro button over a cold open removes the part of an episode nobody can infer.
+ */
+const CREDITS_TAIL_SECS = 60;
+const MIN_EPISODE_FOR_CONVENTION_SECS = 600;
+
+function conventionalMarkers(durationSecs: number): SkipMarker[] {
+  if (!Number.isFinite(durationSecs) || durationSecs < MIN_EPISODE_FOR_CONVENTION_SECS) {
+    return [];
+  }
+  const marker: SkipMarker = {
+    kind: 'credits',
+    startSecs: durationSecs - CREDITS_TAIL_SECS,
+    endSecs: durationSecs,
+    source: 'convention',
+  };
+  return plausible(marker) ? [marker] : [];
 }
 
 function upNextAt(markers: SkipMarker[], durationSecs: number): number | null {
@@ -1368,7 +1408,14 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'library.playbackAids': ({ episodeId }): PlaybackAids => {
     const ep = fx.episodes.find((e) => e.id === episodeId);
     const duration = (ep?.runtimeMins ?? 45) * 60;
-    const markers = resolveMarkers(episodeId);
+    const resolved = resolveMarkers(episodeId);
+    // Convention fills what nothing else said, and loses to anything that did.
+    const markers = [
+      ...resolved,
+      ...conventionalMarkers(duration).filter(
+        (c) => !resolved.some((m) => m.kind === c.kind),
+      ),
+    ].sort((a, b) => a.startSecs - b.startSecs);
     return {
       markers,
       upNextAtSecs: upNextAt(markers, duration),
