@@ -71,7 +71,7 @@ test('every screen draws its happy path', async ({ page }) => {
   expect(errors, `console errors across the walkthrough:\n${errors.join('\n')}`).toEqual([]);
 });
 
-test('every screen is reachable from the sidebar by keyboard', async ({ page }) => {
+test('every screen is reachable from the nav by keyboard', async ({ page }) => {
   await page.goto('/#/');
   const nav = page.getByRole('navigation', { name: 'Main' });
   for (const screen of SCREENS) {
