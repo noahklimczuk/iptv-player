@@ -146,6 +146,9 @@ export const CatalogCard = memo(function CatalogCard({
         }}
         transition={{ duration: animations ? 0.22 : 0, ease: [0.16, 1, 0.3, 1] }}
         style={{
+          // So the expanded panel below anchors to the card it belongs to rather than
+          // to whatever happens to be positioned above it.
+          position: 'relative',
           transformOrigin: index === 0 ? 'left center' : 'center center',
           borderRadius: 'var(--r-md)',
           cursor: 'pointer',
@@ -208,61 +211,50 @@ export const CatalogCard = memo(function CatalogCard({
               <ProgressBar percent={pct} />
             </div>
           )}
-        </div>
-
-        {showTitle && (
-          <div
-            data-testid="card-title"
-            style={{
-              padding: '6px 2px 0',
-              fontSize: 'var(--fs-sm)',
-              fontWeight: 600,
-              lineHeight: 1.25,
-              // Two lines, then ellipsis: a long title must not push its neighbours
-              // out of the grid's rows.
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}
-          >
-            {item.title}
-          </div>
-        )}
-        {showTitle && year && (
-          <div style={{ padding: '1px 2px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
-            {year}
-          </div>
-        )}
-
-        {reason && (
-          <div
-            data-testid="card-reason"
-            title={reason}
-            style={{
-              padding: '4px 2px 0', fontSize: 'var(--fs-xs)',
-              color: 'var(--accent)', fontWeight: 600,
-              // One line: a reason that wraps to three pushes the card below it out of
-              // line, and the rail stops being a row.
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}
-          >
-            {reason}
-          </div>
-        )}
-
-        {/* Expanded panel: quick actions + metadata, Netflix-style. */}
+        {/*
+          * Expanded panel: quick actions + metadata, Netflix-style.
+          *
+          * **Absolutely positioned, and that is the fix for two visible bugs.** It used
+          * to animate `height: 0 -> auto`, which is a change in *layout*: the card grew
+          * taller, so the rail's scroll box grew with it — measured at 308px to 412px —
+          * and every row below the rail was shoved down and then pulled back as the
+          * pointer moved along. That is the jumpiness.
+          *
+          * It also made the clipping worse. The card is scaled 1.32x on top of its
+          * layout height, so a taller card overflows the scroller's padding by more, and
+          * `overflow-x: auto` forces `overflow-y` to compute as `auto` whatever the
+          * stylesheet asks for — so the surplus is cut rather than allowed to hang out.
+          *
+          * Out of flow, the card's layout height never changes, the rail never reflows,
+          * and the only thing that has to fit is the transform. `RAIL_EXPANSION_PAD` in
+          * Rail.tsx is derived from that and nothing else.
+          */}
         <AnimatePresence>
           {expanded && (
             <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
               transition={{ duration: animations ? 0.18 : 0 }}
               style={{
+                position: 'absolute',
+                // Inside the card, over the foot of the poster — not below it.
+                //
+                // Hanging it below meant the panel left the card's box, and an
+                // absolutely positioned child still counts towards a scroll
+                // container's `scrollHeight`: 105px of overflow, measured, which
+                // `overflow-x: auto` then clipped. Reserving that much padding would
+                // only have swapped the clipping for a 105px band over the next rail
+                // that swallowed its hovers.
+                left: 0,
+                right: 0,
+                bottom: 0,
                 overflow: 'hidden',
-                background: 'var(--bg-elevated)',
                 borderRadius: '0 0 var(--r-md) var(--r-md)',
+                // Fades into the artwork rather than sitting on a hard edge, since it
+                // is now over the poster instead of under it.
+                background:
+                  'linear-gradient(to top, var(--bg-elevated) 72%, transparent)',
               }}
             >
               <div style={{ padding: '8px 9px 10px' }}>
@@ -379,6 +371,49 @@ export const CatalogCard = memo(function CatalogCard({
             </motion.div>
           )}
         </AnimatePresence>
+        </div>
+
+        {showTitle && (
+          <div
+            data-testid="card-title"
+            style={{
+              padding: '6px 2px 0',
+              fontSize: 'var(--fs-sm)',
+              fontWeight: 600,
+              lineHeight: 1.25,
+              // Two lines, then ellipsis: a long title must not push its neighbours
+              // out of the grid's rows.
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
+            {item.title}
+          </div>
+        )}
+        {showTitle && year && (
+          <div style={{ padding: '1px 2px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+            {year}
+          </div>
+        )}
+
+        {reason && (
+          <div
+            data-testid="card-reason"
+            title={reason}
+            style={{
+              padding: '4px 2px 0', fontSize: 'var(--fs-xs)',
+              color: 'var(--accent)', fontWeight: 600,
+              // One line: a reason that wraps to three pushes the card below it out of
+              // line, and the rail stops being a row.
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >
+            {reason}
+          </div>
+        )}
+
       </motion.div>
     </div>
   );
