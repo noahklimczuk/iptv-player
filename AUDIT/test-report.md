@@ -496,6 +496,20 @@ whose cloud placeholders deny `rmdir` on a directory written moments ago. That b
 harness's per-scenario wipe, and it means every build artefact under `target/` is being
 synced. `CARGO_TARGET_DIR` belongs somewhere outside it.
 
+**`run.py` honours it now**, so that is one environment variable rather than two — the
+data directory follows the executable, and pointing the build elsewhere used to mean also
+pointing `AURORA_TEST_EXE` at the result. Measured both ways on the same directory:
+
+```
+OneDrive tree : FAILED after 30.5s   (wipe exhausts its 120 retries)
+external tree : wiped ok in 0.00s
+```
+
+With `CARGO_TARGET_DIR=C:/aurora-target`, the three scenarios that need no subscription
+— `starts_up`, `first_run_import`, `update_download` — pass on Windows 11, and the wipe
+between all eleven invoked scenarios succeeds. The other eight skip for want of panel
+credentials, which is what they should do.
+
 ---
 
 ## 13. The portable self-update (checklist item 1b)

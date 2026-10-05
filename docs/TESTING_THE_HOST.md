@@ -50,13 +50,41 @@ the next scenario the previous one's library.
 
 ```powershell
 cargo install tauri-driver --locked
-# msedgedriver must match the WebView2 runtime the app loads. Check the runtime's
-# version under "C:\Program Files (x86)\Microsoft\EdgeWebView\Application" and fetch
-# the matching driver:
-#   https://msedgedriver.microsoft.com/<version>/edgedriver_win64.zip
+# msedgedriver must match the WebView2 *runtime*, which is not the same build as the
+# installed Edge browser — on 2026-10-03 Edge was 154.0.4258.48 while the runtime was
+# 154.0.4258.53, and only the latter matters. The runtime registers its version under
+# EdgeUpdate with a fixed GUID, which is the authoritative answer:
+$guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+$pv = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$guid").pv
+#   https://msedgedriver.microsoft.com/$pv/edgedriver_win64.zip
 $env:AURORA_MSEDGEDRIVER = "C:\tools\msedgedriver.exe"   # unless it is on PATH
 python tests-host/run.py
 ```
+
+#### Where the build tree goes, which is not optional on a synced checkout
+
+A portable copy keeps its library beside the executable, so the harness's data directory
+is `<target>/release/data` and the per-scenario wipe has to be able to delete it. **Under
+OneDrive it cannot.** Cloud placeholders deny `rmdir` on a directory written moments
+earlier, so the wipe exhausts its retries and the run stops. Measured on this project's
+own checkout:
+
+```
+OneDrive tree : FAILED after 30.5s
+external tree : wiped ok in 0.00s
+```
+
+So build outside the synced tree. `run.py` honours `CARGO_TARGET_DIR`, which means saying
+that once rather than also pointing `AURORA_TEST_EXE` at the result:
+
+```powershell
+$env:CARGO_TARGET_DIR = "C:\aurora-target"
+cargo build --release -p aurora-app --manifest-path src-native/Cargo.toml
+python tests-host/run.py
+```
+
+It is worth doing for its own sake too: every build artefact under `target/` is otherwise
+being uploaded.
 
 `libmpv-2.dll` has to be beside `aurora-app.exe`, and **not in the way that
 `create_backend` suggests**: libmpv is a load-time import, so without the DLL the Windows
@@ -76,8 +104,8 @@ And only a release build writes a log this harness can read. `init_logging` give
 debug build the console it already has — but `tauri-driver` launches the app itself and
 that console goes nowhere. A release build logs to `aurora.log` beside its data, so
 `portable.txt` beside the executable puts both the log and `library.db` in
-`src-native/target/release/data`, where a scenario can open them. `run.py` writes that
-marker itself.
+`<target>/release/data` — `src-native/target/release/data` unless `CARGO_TARGET_DIR`
+says otherwise — where a scenario can open them. `run.py` writes that marker itself.
 
 ## What it cannot show, off Windows
 

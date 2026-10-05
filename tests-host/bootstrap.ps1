@@ -202,7 +202,7 @@ Write-Host "`nReady. From this shell:" -ForegroundColor Green
 Write-Host @"
 
   `$env:AURORA_TEST_EXE      = "$AppExe"
-  `$env:AURORA_NATIVE_DRIVER = "$DriverExe"
+  `$env:AURORA_MSEDGEDRIVER = "$DriverExe"
 
   # The real panel, for the scenarios that need one. Typed straight into the
   # window — never written to a file, an argument or a log.
