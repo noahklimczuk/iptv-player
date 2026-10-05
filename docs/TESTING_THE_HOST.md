@@ -144,6 +144,25 @@ python tests-host/run.py video_surface
 The captures land in `screenshots/host/` as PNGs, which is worth looking at even when it
 passes: a frame of the stream, with no OSD over it, is the whole of Phase 0 in one file.
 
+### And it is how multi-view's commands are checked at all
+
+`tests-host/scenarios/multiview.py` asks the real host for every `mosaic.*` command with
+no provider configured. That is not a formality: eleven commands were added to
+`shared/ipc.ts` at once, the mock answers all of them, and **that is the exact shape of
+F-04** — eight commands were once declared and never registered, so the browser preview
+looked complete and the shipped app answered "command not found". `contract.rs` pins the
+names now; this checks that the things behind them answer, including that an unknown
+layout is refused by name and that a command needing an open mosaic says so rather than
+panicking a release build.
+
+It asserts the budget comes back **`unknown`** for every layout, because no provider has
+declared a limit — the host claiming `fits` there would be claiming to know something it
+cannot (docs/DECISIONS.md D27).
+
+Note that `d.invoke` takes the *host* spelling: `mosaic_check`, not `mosaic.check`. The
+driver calls `__TAURI_INTERNALS__.invoke` directly, so the translation
+`src-ui/src/ipc/index.ts` does is not in the way.
+
 ## What driving it for real found immediately
 
 The first time the first-run wizard was driven against a real host rather than a mock,
