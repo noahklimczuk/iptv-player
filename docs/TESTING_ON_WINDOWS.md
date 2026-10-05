@@ -99,8 +99,12 @@ What it does, and what to do by hand if it fails:
 ```powershell
 $env:AURORA_TEST_EXE = "$PWD\.windows\app\aurora-app.exe"
 
+# Or, if you built it yourself: point the build somewhere outside OneDrive and let
+# run.py find it. Cloud placeholders deny the `rmdir` the per-scenario wipe needs.
+$env:CARGO_TARGET_DIR = "C:\aurora-target"
+
 # Only if msedgedriver.exe is not on PATH:
-$env:AURORA_NATIVE_DRIVER = "$PWD\.windows\msedgedriver.exe"
+$env:AURORA_MSEDGEDRIVER = "$PWD\.windows\msedgedriver.exe"
 
 # The real panel, for the scenarios that need one. Typed straight into the window;
 # never written to a file, an argument or a log.
