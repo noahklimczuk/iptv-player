@@ -799,6 +799,85 @@ export interface Alternate {
 }
 
 /** The typed command surface. Every UI data need goes through exactly one of these. */
+/* ── Multi-view (README §7.4) ─────────────────────────────────────────────── */
+
+/** The arrangements a mosaic can take. The names match `aurora_core::mosaic::Layout`. */
+export type MosaicLayout = 'grid2x2' | 'grid3x3' | 'onePlusThree' | 'onePlusFive';
+
+/** How many tiles each layout has, and so how many connections it needs. */
+export const MOSAIC_TILES: Record<MosaicLayout, number> = {
+  grid2x2: 4,
+  onePlusThree: 4,
+  onePlusFive: 6,
+  grid3x3: 9,
+};
+
+/**
+ * Where a tile goes, in physical pixels of the window's client area.
+ *
+ * The host computes these rather than the UI, because the same numbers position the
+ * real video surfaces: a layout the UI drew differently from where mpv put the picture
+ * would be chrome that does not line up with its own video.
+ */
+export interface MosaicRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface MosaicTile {
+  index: number;
+  rect: MosaicRect;
+  channelId: number | null;
+  name: string | null;
+  /** The one tile with audio. Exactly one, whenever any tile has a picture. */
+  focused: boolean;
+  status: PlayerState['status'];
+  /**
+   * Why this tile has no picture. A tile failing is ordinary — it is one stream of
+   * several — so it is reported here rather than failing the whole mosaic.
+   */
+  error: string | null;
+}
+
+export interface MosaicView {
+  open: boolean;
+  layout: MosaicLayout | null;
+  tiles: MosaicTile[];
+  focused: number;
+}
+
+/**
+ * Whether the provider's line can carry a layout.
+ *
+ * `unknown` is the common case rather than the odd one: an M3U playlist declares no
+ * `max_connections` at all, so the honest answer is that opening six streams may work
+ * and may get the line cut. Only `exceeds` blocks an attempt.
+ */
+export type MosaicBudget =
+  | { verdict: 'fits'; needed: number; limit: number }
+  | { verdict: 'exceeds'; needed: number; limit: number; over: number; recordings: number }
+  | { verdict: 'unknown'; needed: number };
+
+export type MosaicCheck = MosaicBudget & {
+  layout: MosaicLayout;
+  tiles: number;
+  /** The largest layout that would fit right now, or `null` when none does. */
+  largestFitting: MosaicLayout | null;
+  /** Recordings in flight, so the UI can say why the budget is tighter than the line. */
+  recordings: number;
+};
+
+export interface SavedMosaicLayout {
+  id: number;
+  name: string;
+  layout: MosaicLayout;
+  /** Channel id per tile, in tile order. `null` is an empty tile. */
+  channels: (number | null)[];
+  createdAt: number;
+}
+
 export interface Commands {
   'library.rails': (args: { profileId: number }) => Rail[];
   'library.recommended': (args: { profileId: number; limit?: number }) => Recommended;
@@ -1029,6 +1108,33 @@ export interface Commands {
   'player.setSubtitleTrack': (args: { trackId: number | null }) => PlayerState;
   'player.setAspect': (args: { aspect: PlayerState['aspect'] }) => PlayerState;
   'player.state': () => PlayerState;
+
+  /* ── Multi-view (README §7.4) ───────────────────────────────────────────── */
+
+  /** What the picker should say about a layout, before any channel is chosen. */
+  'mosaic.check': (args: { layout: MosaicLayout }) => MosaicCheck;
+  /**
+   * Open a mosaic. `channelIds` is positional: index 2 is tile 2, and `null` leaves
+   * that tile empty. Refused when the streams it would open exceed a limit the
+   * provider actually declared.
+   */
+  'mosaic.open': (args: {
+    layout: MosaicLayout;
+    channelIds: (number | null)[];
+  }) => MosaicView;
+  'mosaic.close': () => MosaicView;
+  'mosaic.state': () => MosaicView;
+  /** Move audio to a tile — `1`–`9`, or a click. */
+  'mosaic.focus': (args: { index: number }) => MosaicView;
+  /** Put a different channel in one tile, or `null` to empty it. */
+  'mosaic.setTile': (args: { index: number; channelId: number | null }) => MosaicView;
+  /** Promote a tile to the main player, closing the mosaic. */
+  'mosaic.promote': (args: { index: number }) => PlayerState;
+  /** Save the mosaic as it stands. Saving over an existing name replaces it. */
+  'mosaic.save': (args: { name: string }) => number;
+  'mosaic.layouts': () => SavedMosaicLayout[];
+  'mosaic.openSaved': (args: { id: number }) => MosaicView;
+  'mosaic.deleteLayout': (args: { id: number }) => boolean;
 
   'progress.save': (args: {
     profileId: number;
@@ -1276,6 +1382,13 @@ export type CommandResult<K extends CommandName> = ReturnType<Commands[K]>;
 /** Push events from the host. */
 export interface Events {
   'player.state': PlayerState;
+  /**
+   * The mosaic, on the same heartbeat as the player.
+   *
+   * Pushed rather than polled for the same reason `player.state` is: a tile's stream
+   * dying is something the host notices and the UI cannot ask about often enough.
+   */
+  'mosaic.state': MosaicView;
   /** Emitted shortly after launch when a newer build turns out to be published. */
   'update.available': {
     current: string;

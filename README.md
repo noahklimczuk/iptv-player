@@ -342,7 +342,8 @@ This is the heart of the app. Get it right before you make anything pretty.
 ### 6.1 Core requirements
 
 - One long-lived libmpv instance for the main surface, plus short-lived instances for PiP, multi-view
-  tiles, and thumbnail generation. Pool and reuse them.
+  tiles, and thumbnail generation. Pool and reuse them. *(Multi-view does this: one instance per open
+  tile, created on open and dropped on close, which is what releases the provider's connections.)*
 - **Fast channel zapping:** target **< 1.5 s** from keypress to first frame on a typical HTTP-TS
   stream. Techniques: keep the mpv instance warm, pre-resolve URLs, tune `cache-secs`,
   `demuxer-lavf-probesize`, `demuxer-lavf-analyzeduration`, and `--vd-lavc-threads`; optionally
@@ -463,11 +464,27 @@ that auto-hide, auto-group, auto-rename, or auto-favorite on every refresh. Ship
 > card offers its other sources. Still to build: drag-to-reorder, custom logos, named favourite
 > lists, and the user-defined rules engine itself.
 
-### 7.4 Multi-view / mosaic
+### 7.4 Multi-view / mosaic — **built**
 
 2×2, 3×3, 1+3, and 1+5 layouts. Independent channel per tile, one tile has audio focus (click or
-`1–9` to switch), click a tile to promote it to fullscreen, save and name layouts, and an explicit
-warning when the layout would exceed the provider's connection limit.
+`1–9` to switch), double-click a tile to promote it to the main player, save and name layouts, and
+an explicit warning when the layout would exceed the provider's connection limit.
+
+How it is put together, because two parts of it are not obvious:
+
+- **One mpv instance per tile**, each with its own child surface positioned by
+  `aurora_core::mosaic::Layout` — §6.1's "short-lived instances for multi-view tiles". The tile
+  rectangles are computed by the host rather than by CSS, because the same numbers position the
+  real video; a grid the UI laid out itself would be chrome that does not line up with its own
+  picture. The overlay converts them from physical to CSS pixels, which is the one thing it has to
+  get right on a scaled display.
+- **The connection warning is the feature, not a footnote.** A 3×3 is nine simultaneous streams
+  and the subscription in `docs/ROADMAP.md` allows one, so on that line no layout can be opened at
+  all and the picker says so rather than failing nine times. Recordings in flight count against the
+  same budget — the DVR holds a connection for the whole of one — and an *empty* tile counts for
+  nothing, so a 3×3 with two channels in it is two streams. Where no provider declares a limit,
+  which is every M3U playlist, the attempt is allowed and labelled as unknown rather than guessed
+  at.
 
 ### 7.5 Catch-up / Archive TV
 

@@ -10,6 +10,7 @@ pub mod gemini;
 pub mod library;
 pub mod logging;
 pub mod metadata;
+pub mod mosaic;
 pub mod playback;
 pub mod playlist;
 pub mod profiles;
@@ -135,6 +136,7 @@ mod event_name_tests {
     /// without a line here is a new one nobody has checked.
     const EVENTS: &[&str] = &[
         "player.state",
+        "mosaic.state",
         "ingest.progress",
         "update.available",
         "update.download",

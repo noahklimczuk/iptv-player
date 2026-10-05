@@ -5,7 +5,8 @@
 import type {
   CatalogItem, Channel, CommandArgs, CommandName, CommandResult, DetectedSource,
   ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
-  MetadataReport, MetadataStatus, ParentalSettings, PinOutcome, Profile,
+  MetadataReport, MetadataStatus, MosaicBudget, MosaicLayout, MosaicRect,
+  MosaicView, ParentalSettings, PinOutcome, Profile, SavedMosaicLayout,
   Recording, RecordingConflict, RecordingRule, Reminder,
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
@@ -14,6 +15,7 @@ import type {
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
+import { MOSAIC_TILES } from '@shared/ipc';
 import * as fx from './fixtures';
 
 /**
@@ -1104,6 +1106,131 @@ export function onMetadataProgress(fn: (p: { done: number; total: number }) => v
    nothing else. On the host the same commands drive a real content-addressed
    store under the data directory. ─────────────────────────────────────────── */
 
+/* ── Multi-view (README §7.4) ─────────────────────────────────────────────────
+      One mosaic, modelled rather than decoded. The arithmetic is the host's — the
+      tile rectangles come from the same proportional-edge rule as
+      `aurora_core::mosaic`, and the budget counts *filled* tiles plus recordings
+      against the tightest declared `maxConnections`, because an empty tile opens no
+      connection. Getting either of those wrong here is how a browser journey passes
+      against a mosaic the real app would refuse. ──────────────────────────────── */
+
+const MOSAIC_WINDOW = { width: 1280, height: 720 };
+
+/** The `i`th of `of` proportional boundaries, the way the host computes them. */
+const edge = (total: number, i: number, of: number) => Math.floor((total * i) / of);
+
+function mosaicRects(layout: MosaicLayout): MosaicRect[] {
+  const { width: w, height: h } = MOSAIC_WINDOW;
+  const col = (i: number, of: number) => edge(w, i, of);
+  const row = (i: number, of: number) => edge(h, i, of);
+  const cell = (x0: number, y0: number, x1: number, y1: number): MosaicRect => ({
+    x: x0,
+    y: y0,
+    width: Math.max(0, x1 - x0),
+    height: Math.max(0, y1 - y0),
+  });
+
+  const uniform = (cols: number, rows: number) => {
+    const out: MosaicRect[] = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        out.push(cell(col(c, cols), row(r, rows), col(c + 1, cols), row(r + 1, rows)));
+      }
+    }
+    return out;
+  };
+
+  if (layout === 'grid2x2') return uniform(2, 2);
+  if (layout === 'grid3x3') return uniform(3, 3);
+  if (layout === 'onePlusThree') {
+    const out = [cell(0, 0, col(3, 4), row(3, 3))];
+    for (let r = 0; r < 3; r++) out.push(cell(col(3, 4), row(r, 3), col(4, 4), row(r + 1, 3)));
+    return out;
+  }
+  const out = [cell(0, 0, col(2, 3), row(2, 3))];
+  for (let r = 0; r < 3; r++) out.push(cell(col(2, 3), row(r, 3), col(3, 3), row(r + 1, 3)));
+  for (let c = 0; c < 2; c++) out.push(cell(col(c, 3), row(2, 3), col(c + 1, 3), row(3, 3)));
+  return out;
+}
+
+/** The tightest limit across enabled providers, or `null` where none declares one. */
+function connectionLimit(): number | null {
+  const declared = fx.providers
+    .filter((p) => p.enabled && (p.maxConnections ?? 0) > 0)
+    .map((p) => p.maxConnections as number);
+  return declared.length > 0 ? Math.min(...declared) : null;
+}
+
+function mosaicBudget(streams: number): MosaicBudget {
+  // The DVR holds a connection for the whole of a recording, so a mosaic that
+  // ignored them would be one over the limit and cut somebody's recording.
+  const inFlight = recordings.filter((r) => r.state === 'recording').length;
+  const needed = streams + inFlight;
+  const limit = connectionLimit();
+  if (limit === null) return { verdict: 'unknown', needed };
+  if (needed > limit) {
+    return { verdict: 'exceeds', needed, limit, over: needed - limit, recordings: inFlight };
+  }
+  return { verdict: 'fits', needed, limit };
+}
+
+/** The refusal, word for word as the host builds it. */
+function mosaicRefusal(b: Extract<MosaicBudget, { verdict: 'exceeds' }>): string {
+  let msg =
+    `That needs ${b.needed} ${b.needed === 1 ? 'stream' : 'streams'} at once and your ` +
+    `provider allows ${b.limit}. Remove ${b.over} channel${b.over === 1 ? '' : 's'} and try again`;
+  if (b.recordings > 0) {
+    msg +=
+      ` — ${b.recordings === 1 ? '1 recording is' : `${b.recordings} recordings are`}` +
+      ' using the line as well';
+  }
+  return `${msg}.`;
+}
+
+const savedLayouts: SavedMosaicLayout[] = [];
+let nextLayoutId = 1;
+
+let mosaic: MosaicView = { open: false, layout: null, tiles: [], focused: 0 };
+const mosaicListeners = new Set<(v: MosaicView) => void>();
+export function onMosaicState(fn: (v: MosaicView) => void) {
+  mosaicListeners.add(fn);
+  return () => mosaicListeners.delete(fn);
+}
+function setMosaic(next: MosaicView) {
+  mosaic = next;
+  mosaicListeners.forEach((l) => l(mosaic));
+  return mosaic;
+}
+
+function buildMosaic(layout: MosaicLayout, channelIds: (number | null)[]): MosaicView {
+  const rects = mosaicRects(layout);
+  const wanted: (number | null)[] = rects.map((_, i) => channelIds[i] ?? null);
+  let focused = wanted.findIndex((id) => id !== null && playableChannel(id));
+  if (focused < 0) focused = 0;
+
+  return {
+    open: true,
+    layout,
+    focused,
+    tiles: rects.map((rect, index) => {
+      const channelId = wanted[index] ?? null;
+      const channel = channelId === null ? undefined : fx.channels.find((c) => c.id === channelId);
+      const missing = channelId !== null && !channel;
+      return {
+        index,
+        rect,
+        channelId,
+        name: channel?.name ?? null,
+        focused: index === focused,
+        status: channelId === null ? 'idle' : missing ? 'error' : 'playing',
+        error: missing ? 'That channel is no longer in your library.' : null,
+      };
+    }),
+  };
+}
+
+const playableChannel = (id: number) => fx.channels.some((c) => c.id === id);
+
 const ARTWORK_MAX_BYTES = 2 * 1024 ** 3;
 /** A plausible average across w342 posters and w1280 backdrops. */
 const ARTWORK_AVG_BYTES = 90 * 1024;
@@ -1492,6 +1619,101 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'player.setSubtitleTrack': ({ trackId }) => setPlayer({ activeSubtitleTrack: trackId }),
   'player.setAspect': ({ aspect }) => setPlayer({ aspect }),
   'player.state': () => player,
+
+  /* ── Multi-view ─────────────────────────────────────────────────────────── */
+
+  'mosaic.check': ({ layout }) => {
+    const tiles = MOSAIC_TILES[layout];
+    const inFlight = recordings.filter((r) => r.state === 'recording').length;
+    // The largest that fits, which is what the picker offers instead when one does not.
+    const fitting = (Object.keys(MOSAIC_TILES) as MosaicLayout[])
+      .filter((l) => mosaicBudget(MOSAIC_TILES[l]).verdict !== 'exceeds')
+      .sort((a, b) => MOSAIC_TILES[b] - MOSAIC_TILES[a]);
+    return {
+      ...mosaicBudget(tiles),
+      layout,
+      tiles,
+      largestFitting: fitting[0] ?? null,
+      recordings: inFlight,
+    };
+  },
+  'mosaic.open': ({ layout, channelIds }) => {
+    const filled = channelIds.slice(0, MOSAIC_TILES[layout]).filter((id) => id !== null).length;
+    if (filled === 0) throw new Error('Pick at least one channel to show in the mosaic.');
+    const budget = mosaicBudget(filled);
+    if (budget.verdict === 'exceeds') throw new Error(mosaicRefusal(budget));
+    // The main player gives up its connection, exactly as `mosaic_open` does.
+    setPlayer({ status: 'idle', channelId: null, itemKind: null, itemId: null, title: null });
+    return setMosaic(buildMosaic(layout, channelIds));
+  },
+  'mosaic.close': () => setMosaic({ open: false, layout: null, tiles: [], focused: 0 }),
+  'mosaic.state': () => mosaic,
+  'mosaic.focus': ({ index }) => {
+    if (!mosaic.open) throw new Error('The mosaic is not open.');
+    const tile = mosaic.tiles[index];
+    if (!tile) throw new Error(`There is no tile ${index + 1} in this layout.`);
+    if (tile.channelId === null || tile.error) {
+      throw new Error('That tile has no picture, so there is no sound to move to it.');
+    }
+    return setMosaic({
+      ...mosaic,
+      focused: index,
+      tiles: mosaic.tiles.map((t) => ({ ...t, focused: t.index === index })),
+    });
+  },
+  'mosaic.setTile': ({ index, channelId }) => {
+    if (!mosaic.open) throw new Error('The mosaic is not open.');
+    if (!mosaic.tiles[index]) throw new Error(`There is no tile ${index + 1} in this layout.`);
+    const wasEmpty = mosaic.tiles[index]!.channelId === null;
+    if (wasEmpty && channelId !== null) {
+      const filled = mosaic.tiles.filter((t) => t.channelId !== null).length;
+      const budget = mosaicBudget(filled + 1);
+      if (budget.verdict === 'exceeds') throw new Error(mosaicRefusal(budget));
+    }
+    const next = mosaic.tiles.map((t) => t.channelId);
+    next[index] = channelId;
+    return setMosaic(buildMosaic(mosaic.layout!, next));
+  },
+  'mosaic.promote': ({ index }) => {
+    if (!mosaic.open) throw new Error('The mosaic is not open.');
+    const channelId = mosaic.tiles[index]?.channelId ?? null;
+    if (channelId === null) throw new Error('That tile has no channel in it.');
+    setMosaic({ open: false, layout: null, tiles: [], focused: 0 });
+    return handlers['player.play']({ kind: 'live', id: channelId });
+  },
+  'mosaic.save': ({ name }) => {
+    if (!mosaic.open) throw new Error('The mosaic is not open.');
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Give the layout a name.');
+    const channels = mosaic.tiles.map((t) => t.channelId);
+    const existing = savedLayouts.find((l) => l.name === trimmed);
+    if (existing) {
+      existing.layout = mosaic.layout!;
+      existing.channels = channels;
+      return existing.id;
+    }
+    const id = nextLayoutId++;
+    savedLayouts.unshift({
+      id,
+      name: trimmed,
+      layout: mosaic.layout!,
+      channels,
+      createdAt: Math.floor(Date.now() / 1000),
+    });
+    return id;
+  },
+  'mosaic.layouts': () => savedLayouts.map((l) => ({ ...l })),
+  'mosaic.openSaved': ({ id }) => {
+    const saved = savedLayouts.find((l) => l.id === id);
+    if (!saved) throw new Error('That saved layout is gone.');
+    return handlers['mosaic.open']({ layout: saved.layout, channelIds: saved.channels });
+  },
+  'mosaic.deleteLayout': ({ id }) => {
+    const i = savedLayouts.findIndex((l) => l.id === id);
+    if (i < 0) return false;
+    savedLayouts.splice(i, 1);
+    return true;
+  },
 
   'progress.save': ({ kind, id, positionSecs, durationSecs }) => {
     const ratio = kind === 'episode' ? 0.95 : 0.92;

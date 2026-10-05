@@ -540,6 +540,36 @@ ALTER TABLE movies ADD COLUMN trailer_key TEXT;
 ALTER TABLE series ADD COLUMN trailer_key TEXT;
 "#,
     },
+    Migration {
+        version: 11,
+        name: "mosaic_layouts",
+        sql: r#"
+-- A named multi-view layout (README §7.4).
+--
+-- The channels are a JSON array of ids rather than rows in a child table, because
+-- what is being saved is an *ordered, positional* list where the index is the tile and
+-- a gap is meaningful: a 2x2 with three channels chosen has tile 3 empty, and that is
+-- a layout somebody deliberately saved rather than a row that failed to insert. A
+-- child table would make the order a sort column and the gap unrepresentable.
+--
+-- No foreign key on the ids for the same reason favourites survive a refresh: a
+-- provider dropping a channel for a day should leave the layout alone and show that
+-- tile as unavailable, not silently rewrite what the viewer saved. `mosaic::open`
+-- resolves ids at open time and says which ones are gone.
+CREATE TABLE mosaic_layouts (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT    NOT NULL,
+    layout      TEXT    NOT NULL,
+    -- JSON array of channel ids, tile order, `null` for an empty tile.
+    channels    TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+
+-- Names are how the viewer picks one, so two with the same name is a bug rather than
+-- a choice. Saving over an existing name replaces it (`upsert_layout`).
+CREATE UNIQUE INDEX idx_mosaic_layouts_name ON mosaic_layouts(name);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 10;
+pub const LATEST_VERSION: u32 = 11;

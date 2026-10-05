@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import type { CatalogItem, SearchHit } from '@shared/ipc';
+import type { CatalogItem, MosaicView, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
@@ -15,6 +15,8 @@ import { LivePage } from '@/features/live/LivePage';
 import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
 import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
+import { MosaicOverlay } from '@/features/mosaic/MosaicOverlay';
+import { MosaicPage, SaveLayoutDialog } from '@/features/mosaic/MosaicPage';
 import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { ProfilePicker } from '@/features/profiles/ProfilePicker';
@@ -26,7 +28,7 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
-import { invoke } from '@/ipc';
+import { invoke, onMosaicState } from '@/ipc';
 import { report } from '@/lib/errors';
 import { useMarks } from '@/state/marks';
 import { useProfile } from '@/state/profile';
@@ -62,6 +64,7 @@ const NAV: { to: string; icon: IconName; label: string }[] = [
   { to: '/movies', icon: 'film', label: 'Movies' },
   { to: '/series', icon: 'stack', label: 'Series' },
   { to: '/recordings', icon: 'record', label: 'Recordings' },
+  { to: '/multiview', icon: 'pip', label: 'Multi-view' },
   { to: '/playlist', icon: 'layers', label: 'Playlist' },
   { to: '/settings', icon: 'settings', label: 'Settings' },
 ];
@@ -105,6 +108,25 @@ export default function App() {
   const tune = zapper.tune;
 
   useEffect(() => bindPlayerState(), []);
+
+  // Multi-view (README §7.4). The host pushes the mosaic on the player's heartbeat, so
+  // a tile whose stream died updates here without this screen asking.
+  const [mosaic, setMosaic] = useState<MosaicView | null>(null);
+  const [savingLayout, setSavingLayout] = useState(false);
+  const [layoutsVersion, setLayoutsVersion] = useState(0);
+  useEffect(() => onMosaicState(setMosaic), []);
+  // And once at mount, because the heartbeat only reports a mosaic that is *open* —
+  // without this, a reload while one is open would draw no tile chrome over live video.
+  useEffect(() => {
+    invoke('mosaic.state').then(setMosaic).catch(() => {});
+  }, []);
+  const mosaicOpen = mosaic?.open === true;
+
+  const closeMosaic = useCallback(() => {
+    invoke('mosaic.close')
+      .then(setMosaic)
+      .catch(report('Could not close multi-view'));
+  }, []);
 
   const profile = useProfile();
   useEffect(() => { void profile.load(); }, [profile.load]);
@@ -269,7 +291,23 @@ export default function App() {
   }, [channels, navigate, tune, ui]);
 
   const handlers = useMemo(() => ({
-    onDigit: (d: string) => ui.pushDigit(d),
+    /**
+     * Digits are channel entry — except while a mosaic is open, where README §7.4 gives
+     * `1`–`9` to audio focus. Both cannot have them, and a mosaic on screen is the more
+     * specific context: the viewer is looking at nine numbered tiles.
+     */
+    onDigit: (d: string) => {
+      if (mosaicOpen) {
+        const index = Number(d) - 1;
+        if (index >= 0) {
+          invoke('mosaic.focus', { index })
+            .then(setMosaic)
+            .catch(report('That tile has no sound to move to'));
+        }
+        return;
+      }
+      ui.pushDigit(d);
+    },
     onChannelUp: () => zapper.step(1),
     onChannelDown: () => zapper.step(-1),
     onLastChannel: () => zapper.lastChannel(),
@@ -277,6 +315,7 @@ export default function App() {
     onPalette: () => ui.setPalette(true),
     onBack: () => {
       if (ui.detail) ui.openDetail(null);
+      else if (mosaicOpen) closeMosaic();
       else if (playerOpen) closePlayer();
     },
     onPlayPause: () => {
@@ -342,7 +381,7 @@ export default function App() {
         .catch(report('Could not look that up'));
     },
     onNavigate: (to: string) => { closePlayer(); navigate(to); },
-  }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle]);
+  }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle, mosaicOpen, closeMosaic]);
 
   useHotkeys(handlers, !ui.paletteOpen);
 
@@ -425,7 +464,10 @@ export default function App() {
   // `showingPicture` rather than `hasVideoSurface`: the surface exists from startup, but
   // for the second or two a tune takes to open a stream there is nothing on it, and a
   // transparent shell in that moment is a hole through to the desktop.
-  const videoBehind = playerOpen && showingPicture(ui.player);
+  //
+  // A mosaic is the same question with more surfaces: while one is open there is video
+  // behind the whole client area, so the shell has to let it through.
+  const videoBehind = (playerOpen && showingPicture(ui.player)) || mosaicOpen;
 
   return (
     <div
@@ -512,6 +554,18 @@ export default function App() {
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/recordings" element={<RecordingsPage />} />
+          <Route
+            path="/multiview"
+            element={
+              <MosaicPage
+                layoutsVersion={layoutsVersion}
+                onOpened={() => {
+                  setPlayerOpen(false);
+                  invoke('mosaic.state').then(setMosaic).catch(() => {});
+                }}
+              />
+            }
+          />
           <Route path="/playlist" element={<PlaylistPage />} />
           <Route
             path="/settings"
@@ -520,6 +574,40 @@ export default function App() {
         </Routes>
         </div>
       </main>
+
+      {mosaic?.open && (
+        <MosaicOverlay
+          view={mosaic}
+          onFocus={(index) =>
+            invoke('mosaic.focus', { index })
+              .then(setMosaic)
+              .catch(report('That tile has no sound to move to'))
+          }
+          onPromote={(index) =>
+            invoke('mosaic.promote', { index })
+              .then(() => {
+                setMosaic(null);
+                setPlayerOpen(true);
+              })
+              .catch(report('Could not open that channel on its own'))
+          }
+          onClose={closeMosaic}
+          onSave={() => setSavingLayout(true)}
+        />
+      )}
+
+      <SaveLayoutDialog
+        open={savingLayout}
+        onCancel={() => setSavingLayout(false)}
+        onSave={(name) => {
+          invoke('mosaic.save', { name })
+            .then(() => {
+              setSavingLayout(false);
+              setLayoutsVersion((v) => v + 1);
+            })
+            .catch(report('Could not save the layout'));
+        }}
+      />
 
       {playerOpen && ui.player && (
         <PlayerOverlay

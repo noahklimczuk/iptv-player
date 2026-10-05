@@ -2,7 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    commands, dvr, gemini, library, metadata, now_unix, playlist, profiles, providers, recommend,
+    commands, dvr, gemini, library, metadata, mosaic, now_unix, playlist, profiles, providers,
+    recommend,
     services::Services,
     supervise::{log_panics, supervised},
     timeshift, updates, window,
@@ -183,6 +184,7 @@ fn main() {
             }
             let scheduler = std::sync::Arc::clone(&services.dvr);
             let playback_handle = std::sync::Arc::clone(&services.playback);
+            let mosaic_handle = std::sync::Arc::clone(&services.mosaic);
             let player_backend = std::sync::Arc::clone(&services.player);
 
             // The Phase 0 spike, finally connected (docs/ROADMAP.md). `attach` creates
@@ -196,11 +198,20 @@ fn main() {
             // that never appears is not.
             match app.get_webview_window("main") {
                 Some(main_window) => {
-                    let mut player = player_backend.lock();
-                    match window::attach_video_surface(&main_window, player.as_mut()) {
-                        Ok(()) => tracing::info!("video surface ready"),
-                        Err(e) => tracing::error!("no video surface: {e}"),
+                    {
+                        let mut player = player_backend.lock();
+                        match window::attach_video_surface(&main_window, player.as_mut()) {
+                            Ok(()) => tracing::info!("video surface ready"),
+                            Err(e) => tracing::error!("no video surface: {e}"),
+                        }
                     }
+
+                    // Multi-view's tiles are children of the same window (README §7.4),
+                    // so the mosaic needs its handle and its size. Recorded here rather
+                    // than asked for on open, because by then the only thing holding a
+                    // reference to the window is Tauri's own state and the mosaic would
+                    // have to be handed an `AppHandle` to get at it.
+                    window::record_mosaic_window(&main_window, &services.mosaic);
                 }
                 None => tracing::error!("no main window at setup; video cannot composite"),
             }
@@ -238,6 +249,7 @@ fn main() {
             // would ever notice a live channel needs rolling to its next source.
 
             let playback = std::sync::Arc::clone(&playback_handle);
+            let mosaic = std::sync::Arc::clone(&mosaic_handle);
             let player_handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("aurora-player".into())
@@ -246,6 +258,15 @@ fn main() {
                     supervised("player", || {
                         if let Some(state) = playback.tick(now_unix()) {
                             aurora_app::emit(&player_handle, "player.state", &state);
+                        }
+                    });
+                    // The tiles share the heartbeat rather than having one each: `pump`
+                    // is the only thing that turns a tile's stream dying into something
+                    // the UI can be told about, and nine threads doing it four times a
+                    // second would cost more than the mosaic does.
+                    supervised("mosaic", || {
+                        if let Some(view) = mosaic.tick() {
+                            aurora_app::emit(&player_handle, "mosaic.state", &view);
                         }
                     });
                 })
@@ -301,6 +322,9 @@ fn main() {
                         if let Err(e) = services.player.lock().resize(size.width, size.height) {
                             tracing::warn!("could not resize the video surface: {e}");
                         }
+                        // And every mosaic tile, for the same reason: the surfaces are
+                        // siblings of the WebView and nothing moves them on their own.
+                        services.mosaic.relayout(size.width, size.height);
                     }
                 }
                 _ => {}
@@ -342,6 +366,17 @@ fn main() {
             commands::player_set_aspect,
             commands::player_state,
             commands::progress_save,
+            mosaic::mosaic_check,
+            mosaic::mosaic_open,
+            mosaic::mosaic_close,
+            mosaic::mosaic_state,
+            mosaic::mosaic_focus,
+            mosaic::mosaic_set_tile,
+            mosaic::mosaic_promote,
+            mosaic::mosaic_save,
+            mosaic::mosaic_layouts,
+            mosaic::mosaic_open_saved,
+            mosaic::mosaic_delete_layout,
             dvr::dvr_list,
             dvr::dvr_schedule,
             dvr::dvr_cancel,
