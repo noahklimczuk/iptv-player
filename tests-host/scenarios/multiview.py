@@ -50,39 +50,62 @@ def run(d, ctx):
         # Nothing declared means every layout is worth offering.
         assert check["largestFitting"] == "grid3x3", check
 
+    # A host refusal arrives as an `AssertionError` from `driver.invoke`, so it cannot be
+    # caught by type apart from a scenario's own failed assertion. Hence the sentinel:
+    # raising inside the `try` would be swallowed by the `except` meant for the host.
+    def refusal_of(command, args=None):
+        """The host's own words for refusing `command`, or `None` if it answered."""
+        try:
+            d.invoke(command, args)
+            return None
+        except AssertionError as e:
+            return str(e)
+
     # An unknown layout name is refused rather than guessed at.
-    try:
-        d.invoke("mosaic_check", {"layout": "grid4x4"})
-        raise AssertionError("an unknown layout was accepted")
-    except AssertionError:
-        raise
-    except Exception as e:
-        assert "grid4x4" in str(e), f"the refusal should name the layout: {e}"
+    unknown = refusal_of("mosaic_check", {"layout": "grid4x4"})
+    assert unknown is not None, "an unknown layout was accepted"
+    assert "grid4x4" in unknown, f"the refusal should name the layout: {unknown}"
 
     # Commands that need an open mosaic say so, in words, rather than panicking the
-    # host — which on a release build would take the process with it.
+    # host — which on a release build is an abort and takes the process with it.
     for command, args in (
         ("mosaic_focus", {"index": 0}),
         ("mosaic_set_tile", {"index": 0, "channelId": None}),
         ("mosaic_promote", {"index": 0}),
         ("mosaic_save", {"name": "x"}),
     ):
-        try:
-            d.invoke(command, args)
-            raise AssertionError(f"{command} answered with no mosaic open")
-        except AssertionError:
-            raise
-        except Exception as e:
-            assert "not open" in str(e), f"{command} said {e!r}"
+        said = refusal_of(command, args)
+        assert said is not None, f"{command} answered with no mosaic open"
+        assert "not open" in said, f"{command} said {said!r}"
 
     # The saved-layout table exists and is empty, which is migration 11 having run.
     assert d.invoke("mosaic_layouts") == [], "a fresh library has saved layouts"
 
-    # The screen itself is left to the browser suite, which can drive it properly.
-    # Getting there on a fresh host means dismissing the wizard, and "Skip for now" does
-    # not work on this build — `needsSetup` is also true while no provider exists, so
-    # dismissing it puts it straight back (fixed separately). Opening a real mosaic
-    # belongs in `real_panel` anyway: it needs channels with playable URLs, and as many
-    # provider connections as the layout has tiles.
+    # And the screen draws on the real host.
+    #
+    # Reaching it on a fresh install means dismissing the wizard, which is only possible
+    # since "Skip for now" was fixed — `needsSetup` is also true while no provider
+    # exists, so dismissing it used to put it straight back.
+    d.click(d.by_text("button", "Skip for now"))
+    assert d.wait_body(lambda b: "Welcome to Aurora TV" not in b, timeout=20), (
+        "Skip for now left the wizard where it was"
+    )
 
+    d.click(d.by_text("a", "Multi-view"))
+    # With no channels the screen is its empty state rather than four empty pickers —
+    # which is also why this waits for *that* and not for the intro paragraph: the page
+    # returns before rendering it.
+    assert d.wait_body(lambda b: "No channels to show" in b, timeout=20), (
+        f"the Multi-view screen did not draw; body was {d.body()[:300]!r}"
+    )
+    assert "needs live channels" in d.body()
+    d.shot(ctx.shot("multiview"))
+
+    # Opening a real mosaic belongs in `real_panel`: it needs channels with playable
+    # URLs, and as many provider connections as the layout has tiles.
+    # Seen once on the way through here and not reproduced since: a toast reading
+    # "Could not seek - mpv command failed: seek: Raw(-12)" on a fresh install with
+    # nothing playing. Nothing in this scenario asks for a seek, and `assert_no_panic`
+    # cannot catch it because it is a refused command rather than a panic. Recorded
+    # rather than chased: it is on `main`, and intermittent.
     ctx.assert_no_panic()
