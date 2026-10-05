@@ -1150,7 +1150,10 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       kind === 'series' ? visibleSeries() : visibleMovies();
     return {
       categories: mockCategories(all),
-      genres: [...new Set(all.flatMap((x) => x.genres))].sort(),
+      // The same helper, because the host counts and orders genres exactly as it
+      // counts and orders categories — commonest first, name breaking the tie. A
+      // second implementation here is how a mock and a host come to disagree.
+      genres: mockCategories(all),
       total: browseFilter(all, { genre, category, query, letter }).length,
     };
   },
@@ -1392,6 +1395,11 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     dataDir: 'C:\\Users\\You\\AppData\\Local\\Aurora TV',
     libraryWasReplaced: null,
     credentialsPersist: true,
+    // Consistent with the rest of this fiction, which is an installed Windows copy.
+    // The other answer — no engine, no picture — is not mocked on purpose: a mock
+    // that can produce it would be testing itself. `tests-host` on Linux reports it
+    // for real, because there the backend genuinely is the null one.
+    videoEngine: { name: 'mpv', version: 'mpv 0.40.0', rendersVideo: true },
   }),
 
   'search.query': ({ text }) => search(text),

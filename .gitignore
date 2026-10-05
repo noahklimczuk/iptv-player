@@ -17,3 +17,7 @@ screenshots/host/
 
 __pycache__/
 *.pyc
+
+# What tests-host/bootstrap.ps1 stages on a Windows machine: a release build unpacked
+# from GitHub and a matching Edge WebDriver. Both are downloads, neither is ours.
+.windows/

@@ -363,8 +363,13 @@ pub struct BrowseFacetsArgs {
 pub struct BrowseFacets {
     /// The provider's own categories, biggest first.
     pub categories: Vec<library::Category>,
-    /// Genres, where TMDB enrichment has produced any. Usually empty.
-    pub genres: Vec<String>,
+    /// Genres for *this* kind, commonest first — films and shows do not share a
+    /// list, and offering one the other's is a filter that matches nothing.
+    ///
+    /// Counted, like the categories beside them: on a real panel this is 326 genres
+    /// of which 201 are on two shows or fewer, and a count is how a viewer tells the
+    /// one worth picking from the long tail.
+    pub genres: Vec<library::Category>,
     /// The real total for these filters, so the heading is a number rather than
     /// "120+" — which was the page size wearing a library's clothes.
     pub total: u32,
@@ -401,7 +406,9 @@ pub fn library_browse_facets(
         // `q.library` rather than a second load: the count below is computed through that
         // one, and two reads of the settings table could in principle straddle a change.
         categories: library::categories(&db, kind, &q.library)?,
-        genres: library::genres(&db, &q.library)?,
+        // Scoped by kind as the categories are: Movies offering shows' genres is a
+        // filter that matches nothing (docs/DECISIONS.md D26).
+        genres: library::genres(&db, kind, &q.library)?,
         total: if series {
             library::count_series(&db, &q)?
         } else {
@@ -413,7 +420,18 @@ pub fn library_browse_facets(
 #[tauri::command(async)]
 pub fn library_genres(services: State<'_, Services>) -> Result<Vec<String>> {
     let db = services.db.lock();
-    Ok(library::genres(&db, &filtering::LibraryFilter::load(&db)?)?)
+    let filter = filtering::LibraryFilter::load(&db)?;
+    // Both halves: this one is "every genre in the library". A browse screen wants
+    // only its own kind's and asks `library_browse_facets`, which is where offering
+    // the other half's became a filter that matched nothing.
+    let mut all: Vec<String> = library::genres(&db, filtering::Kind::Movies, &filter)?
+        .into_iter()
+        .chain(library::genres(&db, filtering::Kind::Series, &filter)?)
+        .map(|g| g.name)
+        .collect();
+    all.sort();
+    all.dedup();
+    Ok(all)
 }
 
 #[derive(Debug, Deserialize)]

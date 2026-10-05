@@ -4,9 +4,12 @@ Browse, on a library of 146,000 rows.
 Everything here was found by opening the page against a real subscription rather than
 a fixture:
 
-  * the genre filter was an empty dropdown, because genres come from TMDB enrichment
+  * the genre filter was an empty dropdown, because genres came from TMDB enrichment
     and a viewer may never set a key — while the panel had been filing everything
-    under 202 named shelves the whole time;
+    under 202 named shelves the whole time. Since docs/DECISIONS.md D26 the panel's
+    own genres are kept, which splits this in two: `get_series` sends a genre for
+    27,488 of the 28,529 shows here, and `get_vod_streams` sends none at all, so
+    Series has the filter and Movies still does not;
   * the count read "120+", which is the page size wearing a library's clothes, and
     turned into a number that climbed as you scrolled;
   * there was no way to narrow a hundred thousand rows at all.
@@ -122,9 +125,10 @@ def run(d, ctx):
     d.shot(ctx.shot("searched"))
     print(f"   {biggest[0]!r} narrowed to {narrowed:,}, {needle!r} to {searched:,}")
 
-    # Genres do not exist on this library, so the control must not either.
+    # No film on this panel has a genre — `get_vod_streams` does not send one and
+    # nothing here has been enriched — so the control must stay off this screen.
     assert not d.find_all('[data-testid="select-genre"]'), (
-        "a genre filter is on screen for a library with no genres"
+        "Movies offers a genre filter, but no film in this library has a genre"
     )
 
     # The category picker holds the rest of the 202 shelves and is searchable, because
@@ -144,3 +148,66 @@ def run(d, ctx):
     assert any("ALBANIA" in r for r in narrowed_rows), narrowed_rows
     d.shot(ctx.shot("picker"))
     print(f"   picker: {len(rows)} shelves, 'ALBANIA' narrows to {len(narrowed_rows)}")
+
+    # Series, which does have genres — and must offer its own.
+    #
+    # This is the bug that escaped into the run before this one. `library::genres`
+    # unioned both tables while `categories` was scoped by kind, which did not matter
+    # while nothing had genres at all; the moment shows had them, Movies grew a
+    # dropdown of 28,529 shows' genres and filtering a film by one matched nothing.
+    # So: the filter is here, its contents belong to this half of the library, and
+    # choosing one actually narrows the count.
+    d.click(d.by_text("nav a", "Series", timeout=30))
+    assert d.wait_body(lambda b: "Series" in b, timeout=60)
+    time.sleep(5)
+    picker = d.find_all('[data-testid="select-genre"]')
+    assert picker, (
+        "Series has a genre for almost every show on this panel and offers no filter"
+    )
+
+    shows = ctx.count("series")
+    d.click(picker[0])
+    time.sleep(1)
+
+    # Each genre row is a name and a count, like a shelf. The placeholder row that
+    # clears the filter carries neither, so pairing on the spans drops it.
+    offered = d.js(
+        'return [...document.querySelectorAll("[data-testid=select-row]")]'
+        '  .map((e) => [...e.querySelectorAll("span")].map((s) => s.textContent.trim()))'
+        '  .filter((p) => p.length === 2);'
+    )
+    assert len(offered) > 5, f"only {len(offered)} genres across {shows:,} shows"
+
+    # Commonest first. Alphabetical order opened this list with '. ﺟﺮﻳﻤﺔ دراما' and
+    # '.الرسوم المتحركة' — a full stop stuck to a genre, on one show each — while
+    # Drama's eleven thousand sat in the middle of 326 entries.
+    counts = [int("".join(c for c in n if c.isdigit()) or 0) for _, n in offered]
+    assert counts == sorted(counts, reverse=True), (
+        f"genres are not offered commonest first: {offered[:6]}"
+    )
+    assert offered[0][0][:1].isalnum(), (
+        f"the genre list opens with {offered[0][0]!r}, which starts with punctuation"
+    )
+
+    # And the one at the top filters to exactly the number printed beside it.
+    #
+    # Exactly, not roughly: the picker used to list `Drama`, `DRAMA` and `drama` as
+    # three rows while SQLite's `LIKE` — which folds ASCII — treated them as one, so
+    # a filter labelled 11,259 came back with 11,267. Seven genres on this panel have
+    # more than one spelling, and a count that is not what picking it does is a count
+    # worth nothing.
+    d.click(d.find_all('[data-testid="select-row"]')[1])
+    filtered = wait_for_count(d, lambda n: n == counts[0], timeout=30)
+    assert filtered == counts[0], (
+        f"the picker says {counts[0]:,} shows carry {offered[0][0]!r} and filtering "
+        f"by it returns {filtered:,}"
+    )
+    assert 0 < filtered < shows, (
+        f"filtering by {offered[0][0]!r} left {filtered:,} of {shows:,} shows — a "
+        f"genre that matches nothing is what a list from the other table looks like"
+    )
+    d.shot(ctx.shot("series-genre"))
+    print(
+        f"   series: {len(offered)} genres, commonest {offered[0][0]!r} "
+        f"({counts[0]:,}) narrows {shows:,} to {filtered:,}"
+    )

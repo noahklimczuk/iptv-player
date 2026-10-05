@@ -52,6 +52,18 @@ export function DiagnosticsPanel() {
         </div>
       )}
 
+      {data && !data.videoEngine.rendersVideo && (
+        <div
+          role="alert"
+          data-testid="no-video-engine"
+          style={{ color: 'var(--text-muted)', fontSize: 'var(--fs-sm)' }}
+        >
+          No video engine loaded, so the player will show no picture — sound still
+          plays. On Windows that means <code>libmpv-2.dll</code> could not be loaded;
+          the log says which. Export it below.
+        </div>
+      )}
+
       {data && !data.credentialsPersist && (
         <div style={{ color: 'var(--text-muted)', fontSize: 'var(--fs-sm)' }}>
           This platform has no credential store, so provider passwords are kept in
@@ -77,6 +89,13 @@ export function DiagnosticsPanel() {
       {data && (
         <div style={{ color: 'var(--text-faint)', fontSize: 'var(--fs-xs)' }}>
           Data folder: <code style={{ wordBreak: 'break-all' }}>{data.dataDir}</code>
+          <br />
+          {/* The first thing to establish about "there is no picture", and until now
+              only findable by reading the log. */}
+          Video engine:{' '}
+          <code data-testid="video-engine">
+            {data.videoEngine.version ?? data.videoEngine.name}
+          </code>
         </div>
       )}
     </div>

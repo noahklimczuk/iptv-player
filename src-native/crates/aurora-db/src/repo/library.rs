@@ -39,6 +39,9 @@ pub struct NewMovie {
     pub url: String,
     pub poster: Option<String>,
     pub added_at: Option<i64>,
+    /// The provider's own score out of ten. Enrichment overwrites it when TMDB has
+    /// an opinion; until then it is the only rating the library has.
+    pub rating: Option<f32>,
 }
 
 pub fn upsert_movies(
@@ -55,8 +58,8 @@ pub fn upsert_movies(
         let mut stmt = tx.prepare(
             r#"INSERT INTO movies
                (provider_id, provider_key, title, match_key, year, quality, group_title,
-                url, poster, added_at, last_seen_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                url, poster, added_at, rating, last_seen_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
                ON CONFLICT (provider_id, provider_key) DO UPDATE SET
                  title        = excluded.title,
                  match_key    = excluded.match_key,
@@ -65,6 +68,9 @@ pub fn upsert_movies(
                  group_title  = excluded.group_title,
                  url          = excluded.url,
                  poster       = COALESCE(excluded.poster, movies.poster),
+                 -- The existing one wins: by the second refresh it may be TMDB's, and
+                 -- a playlist must not undo enrichment. The panel only fills a gap.
+                 rating       = COALESCE(movies.rating, excluded.rating),
                  last_seen_at = excluded.last_seen_at"#,
         )?;
         for m in movies {
@@ -79,6 +85,7 @@ pub fn upsert_movies(
                 m.url,
                 m.poster,
                 m.added_at.unwrap_or(now),
+                m.rating,
                 now
             ])?;
             n += 1;
@@ -595,34 +602,94 @@ pub fn stats(conn: &Connection) -> Result<LibraryStats> {
     })
 }
 
-/// Every genre present in the library, for the browse filters.
-/// Every genre the visible library has, for the dropdown.
+/// Every genre the visible half of the library has, for that screen's browse filter.
 ///
-/// Filtered for the same reason the categories are: a genre whose every title the filters
-/// hide is an option that selects nothing.
+/// Scoped by kind, like `categories`. It used to union both tables, which did not
+/// matter while genres arrived only from TMDB and a library generally had none of
+/// them — and became wrong the moment the provider's own genres were kept
+/// (docs/DECISIONS.md D26): `get_vod_streams` sends no genre, so Movies would offer a
+/// dropdown of 28,529 shows' genres and filtering by one would return nothing at all.
+///
+/// Filtered for the same reason the categories are: a genre whose every title the
+/// filters hide is an option that selects nothing.
+///
+/// Commonest first, like `categories`, and for the same reason. Alphabetical order
+/// put `. ﺟﺮﻳﻤﺔ دراما` and `.الرسوم المتحركة` — one show each — at the top of a list
+/// of 326, so the first two entries a viewer saw were punctuation while `Drama`
+/// (11,259 shows) was somewhere in the middle. 201 of those 326 are on two shows or
+/// fewer and the top 25 cover 91% of all tagging, so the order is the difference
+/// between a usable control and a wall.
+///
+/// Grouped in SQL before the JSON is parsed, because tens of thousands of rows share
+/// a few hundred distinct genre strings and this runs again on every filter change.
 pub fn genres(
     conn: &Connection,
+    kind: crate::repo::filtering::Kind,
     filter: &crate::repo::filtering::LibraryFilter,
-) -> Result<Vec<String>> {
-    let mut out = std::collections::BTreeSet::new();
-    for (table, kind) in [
-        ("movies", crate::repo::filtering::Kind::Movies),
-        ("series", crate::repo::filtering::Kind::Series),
-    ] {
-        let visible = filter.where_sql(kind);
-        let mut stmt = conn.prepare(&format!(
-            "SELECT genres FROM {table} WHERE genres IS NOT NULL AND hidden = 0{visible}"
-        ))?;
-        let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for raw in rows {
-            if let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) {
-                out.extend(list.into_iter().filter(|g| !g.trim().is_empty()));
+) -> Result<Vec<Category>> {
+    let table = match kind {
+        crate::repo::filtering::Kind::Movies => "movies",
+        crate::repo::filtering::Kind::Series => "series",
+        _ => return Ok(Vec::new()),
+    };
+    let visible = filter.where_sql(kind);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT genres, count(*) FROM {table}
+          WHERE hidden = 0 AND genres IS NOT NULL AND genres != '' AND genres != '[]'{visible}
+          GROUP BY genres"
+    ))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Grouped the way the filter compares, which is the whole point of a count beside
+    // a name: SQLite's `LIKE` folds ASCII and nothing else, so `Drama`, `DRAMA` and
+    // `drama` are one thing to it. Listing them as three rows showed 11,259 beside a
+    // genre that returned 11,267, and put two near-duplicates in the list. Turkish
+    // `Aksiyon` and `AKSİYON` stay apart here because they stay apart there too.
+    //
+    // Keyed by the folded form, holding every spelling seen so the commonest can be
+    // the one displayed.
+    type Spellings = (std::collections::HashMap<String, u32>, u32);
+    let mut counts: std::collections::HashMap<String, Spellings> = std::collections::HashMap::new();
+    for (raw, n) in rows {
+        // A row whose genres are malformed loses its genres, not the whole filter.
+        let Ok(list) = serde_json::from_str::<Vec<String>>(&raw) else {
+            continue;
+        };
+        // Once per genre per row, however many times the row lists it. `LIKE` asks
+        // whether the column contains the genre, so a show tagged both `Drama` and
+        // `drama` is one show to the filter and was two here — which is the last one
+        // of these the count was out by.
+        let mut seen = std::collections::HashSet::new();
+        for g in list.into_iter().filter(|g| !g.trim().is_empty()) {
+            let key = g.to_ascii_lowercase();
+            if !seen.insert(key.clone()) {
+                continue;
             }
+            let entry = counts.entry(key).or_default();
+            *entry.0.entry(g).or_default() += n;
+            entry.1 += n;
         }
     }
-    Ok(out.into_iter().collect())
+
+    let mut out: Vec<Category> = counts
+        .into_values()
+        .map(|(spellings, count)| Category {
+            // The spelling most titles use. The name breaks a tie so a library that
+            // writes it both ways does not get a different answer on each call.
+            name: spellings
+                .into_iter()
+                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+                .map(|(name, _)| name)
+                .unwrap_or_default(),
+            count,
+        })
+        .collect();
+    // Name breaks the tie so the order is stable between calls; a `HashMap` alone
+    // would reshuffle equally-common genres on every keystroke in the filter.
+    out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    Ok(out)
 }
 
 /// README §13: the same film from three providers should be one card, not three.
@@ -658,6 +725,16 @@ pub struct NewSeries<'a> {
     pub group: Option<&'a str>,
     /// The best quality any of its episode streams advertised.
     pub quality: Option<&'a str>,
+    /// The provider's own score out of ten.
+    pub rating: Option<f32>,
+    /// The provider's plot summary.
+    pub overview: Option<&'a str>,
+    /// The provider's genres, already split. Stored as JSON, which is the shape
+    /// enrichment writes and `parse_genres` reads.
+    pub genres: &'a [String],
+    /// When the provider last touched this, in unix seconds — `get_series` sends no
+    /// added date, and this is the closest thing it has.
+    pub added_at: Option<i64>,
 }
 
 pub fn upsert_series(
@@ -674,17 +751,34 @@ pub fn upsert_series(
         poster,
         group,
         quality,
+        rating,
+        overview,
+        genres,
+        added_at,
     } = *series;
+    // Empty stays NULL rather than becoming `[]`: the recommender's candidate query
+    // treats both as "no genres", and NULL is what an un-enriched row already reads as.
+    let genres_json = if genres.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(genres)?)
+    };
     conn.execute(
         r#"INSERT INTO series (provider_id, provider_key, title, match_key, year, poster,
-                               group_title, quality, added_at, last_seen_at)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)
+                               group_title, quality, rating, overview, genres,
+                               added_at, last_seen_at)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
            ON CONFLICT (provider_id, provider_key) DO UPDATE SET
              title = excluded.title, match_key = excluded.match_key,
              year = COALESCE(excluded.year, series.year),
              poster = COALESCE(excluded.poster, series.poster),
              group_title = COALESCE(excluded.group_title, series.group_title),
              quality = COALESCE(excluded.quality, series.quality),
+             -- Existing wins on all three: enrichment may already have overwritten
+             -- them with TMDB's, and a refresh must not undo that.
+             rating = COALESCE(series.rating, excluded.rating),
+             overview = COALESCE(series.overview, excluded.overview),
+             genres = COALESCE(series.genres, excluded.genres),
              last_seen_at = excluded.last_seen_at"#,
         params![
             provider_id,
@@ -695,6 +789,10 @@ pub fn upsert_series(
             poster,
             group,
             quality,
+            rating,
+            overview,
+            genres_json,
+            added_at.unwrap_or(now),
             now
         ],
     )?;
@@ -1117,7 +1215,7 @@ mod tests {
     /// A genre whose every title the filters hide is an option that selects nothing.
     #[test]
     fn genres_come_from_the_visible_library() {
-        use crate::repo::filtering::LibraryFilter;
+        use crate::repo::filtering::{Kind, LibraryFilter};
 
         let conn = crate::open_memory().unwrap();
         conn.execute(
@@ -1135,19 +1233,25 @@ mod tests {
         )
         .unwrap();
 
+        // Names only: the counts are what `genres_are_offered_commonest_first` covers,
+        // and what this test is about is which genres the language filter leaves behind.
+        let names = |f: &LibraryFilter| -> Vec<String> {
+            genres(&conn, Kind::Movies, f)
+                .unwrap()
+                .into_iter()
+                .map(|g| g.name)
+                .collect()
+        };
+
         assert_eq!(
-            genres(&conn, &LibraryFilter::default()).unwrap(),
+            names(&LibraryFilter::default()),
             vec!["Chanson".to_string(), "Western".to_string()]
         );
         assert_eq!(
-            genres(
-                &conn,
-                &LibraryFilter {
-                    english_only: true,
-                    ..Default::default()
-                }
-            )
-            .unwrap(),
+            names(&LibraryFilter {
+                english_only: true,
+                ..Default::default()
+            }),
             vec!["Western".to_string()],
             "a genre only French films have was still offered under English only"
         );
@@ -1348,6 +1452,377 @@ mod tests {
         conn.last_insert_rowid()
     }
 
+    /// The panel in docs/ROADMAP.md scores 109,999 of its 122,499 films and dates all
+    /// 122,499, and the import used to parse both and drop them. That left `rating`
+    /// NULL on every row of a library with no TMDB key — which is most libraries —
+    /// and `added_at` set to the moment of the import, so Browse's default
+    /// "Recently added" order was sorting by a constant.
+    #[test]
+    fn a_films_own_score_and_date_are_kept() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let m = NewMovie {
+            rating: Some(6.97),
+            added_at: Some(1_784_596_062),
+            ..movie("m1", "Some Film", Some(2020))
+        };
+        upsert_movies(&mut conn, p, &[m], 99).unwrap();
+
+        let (rating, added): (Option<f64>, i64) = conn
+            .query_row("SELECT rating, added_at FROM movies", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(rating, Some(6.97_f32 as f64));
+        assert_eq!(
+            added, 1_784_596_062,
+            "dated by the import, not by the provider"
+        );
+    }
+
+    /// A refresh must not undo enrichment. TMDB's score is the better one and it is
+    /// written *after* the import that would otherwise overwrite it every time.
+    #[test]
+    fn a_refresh_leaves_an_enriched_rating_alone() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let from_panel = || NewMovie {
+            rating: Some(6.9),
+            ..movie("m1", "Some Film", None)
+        };
+        upsert_movies(&mut conn, p, &[from_panel()], 0).unwrap();
+        conn.execute("UPDATE movies SET rating = 8.4", []).unwrap(); // enrichment ran
+        upsert_movies(&mut conn, p, &[from_panel()], 1).unwrap();
+
+        let rating: Option<f64> = conn
+            .query_row("SELECT rating FROM movies", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rating,
+            Some(8.4),
+            "a playlist refresh undid what TMDB found"
+        );
+    }
+
+    /// And where enrichment never ran, the provider's fills the gap on the next
+    /// refresh rather than leaving the column empty for good.
+    #[test]
+    fn a_refresh_fills_a_rating_nothing_else_supplied() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        upsert_movies(&mut conn, p, &[movie("m1", "Some Film", None)], 0).unwrap();
+        upsert_movies(
+            &mut conn,
+            p,
+            &[NewMovie {
+                rating: Some(7.1),
+                ..movie("m1", "Some Film", None)
+            }],
+            1,
+        )
+        .unwrap();
+
+        let rating: Option<f64> = conn
+            .query_row("SELECT rating FROM movies", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rating, Some(7.1_f32 as f64));
+    }
+
+    /// Genres are the recommender's heaviest signal and came only from TMDB, so a
+    /// library without an API key had none at all. The panel sends them for 27,661 of
+    /// its 28,716 shows — stored in the same JSON shape enrichment writes, so the
+    /// candidate query matches either source without knowing which it got.
+    #[test]
+    fn a_shows_metadata_is_stored_the_way_the_recommender_looks_it_up() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let genres = vec!["Crime".to_string(), "Drama".to_string()];
+        upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Some Show",
+                match_key: "someshow",
+                rating: Some(9.0),
+                overview: Some("A plot."),
+                genres: &genres,
+                added_at: Some(1_741_614_903),
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        let (raw, overview, rating, added): (String, String, f64, i64) = conn
+            .query_row(
+                "SELECT genres, overview, rating, added_at FROM series",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(raw, r#"["Crime","Drama"]"#);
+        assert_eq!(overview, "A plot.");
+        assert_eq!(rating, 9.0);
+        assert_eq!(added, 1_741_614_903);
+
+        // Exactly the predicate `repo::recommend::candidates` builds.
+        let found: i64 = conn
+            .query_row(
+                r#"SELECT count(*) FROM series
+                    WHERE LOWER(genres) LIKE '%"' || ?1 || '"%'"#,
+                ["crime"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            found, 1,
+            "the recommender cannot find this show by its genre"
+        );
+    }
+
+    /// No genres stays NULL rather than becoming `[]`. Both read as "unknown"
+    /// downstream, and NULL is already what an un-enriched row holds — two spellings
+    /// of the same thing is how a query ends up missing one of them.
+    #[test]
+    fn a_show_with_no_genres_stores_nothing_rather_than_an_empty_list() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Some Show",
+                match_key: "someshow",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        let genres: Option<String> = conn
+            .query_row("SELECT genres FROM series", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(genres, None);
+    }
+
+    /// Films and shows do not share a genre list, and offering one the other's is a
+    /// filter that matches nothing.
+    ///
+    /// Invisible while genres came only from TMDB and most libraries had none. The
+    /// moment the provider's own were kept (D26) it became the Movies screen showing
+    /// a dropdown of 28,529 shows' genres on a panel that sends no film genre at all.
+    #[test]
+    fn each_half_of_the_library_offers_only_its_own_genres() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+
+        upsert_movies(&mut conn, p, &[movie("m1", "Some Film", None)], 0).unwrap();
+        conn.execute(r#"UPDATE movies SET genres = '["Western"]'"#, [])
+            .unwrap();
+        let shows = vec!["Crime".to_string(), "Drama".to_string()];
+        upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Some Show",
+                match_key: "someshow",
+                genres: &shows,
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        let names = |k| -> Vec<String> {
+            genres(&conn, k, &LibraryFilter::default())
+                .unwrap()
+                .into_iter()
+                .map(|g| g.name)
+                .collect()
+        };
+        assert_eq!(names(Kind::Movies), vec!["Western"]);
+        assert_eq!(names(Kind::Series), vec!["Crime", "Drama"]);
+    }
+
+    /// Commonest first, like the shelves beside them.
+    ///
+    /// Alphabetical order is what put a full stop at the top of a list of 326 on a
+    /// real panel, 201 of which are on two shows or fewer. The name breaks a tie so
+    /// the list does not reshuffle between keystrokes.
+    #[test]
+    fn genres_are_offered_commonest_first() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+
+        let mut add = |key: &str, genres: &[&str]| {
+            let g: Vec<String> = genres.iter().map(|s| s.to_string()).collect();
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title: key,
+                    match_key: key,
+                    genres: &g,
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap();
+        };
+        add("a", &["Drama", "Crime"]);
+        add("b", &["Drama"]);
+        add("c", &["Drama", "Comedy"]);
+        // Same count as Crime, and sorts after it.
+        add("d", &["Comedy"]);
+
+        let got: Vec<(String, u32)> = genres(&conn, Kind::Series, &LibraryFilter::default())
+            .unwrap()
+            .into_iter()
+            .map(|g| (g.name, g.count))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Drama".to_string(), 3),
+                ("Comedy".to_string(), 2),
+                ("Crime".to_string(), 1),
+            ]
+        );
+    }
+
+    /// The count beside a genre has to be what picking it returns.
+    ///
+    /// It was not. `Drama`, `DRAMA` and `drama` were three rows in the picker, and
+    /// SQLite's `LIKE` — which folds ASCII — treated them as one, so a filter labelled
+    /// 11,259 came back with 11,267 and two near-duplicate rows sat in the list.
+    /// Measured on a real panel: seven genres had more than one spelling.
+    #[test]
+    fn spellings_the_filter_cannot_tell_apart_are_one_row() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+
+        let mut add = |key: &str, genres: &[&str]| {
+            let g: Vec<String> = genres.iter().map(|s| s.to_string()).collect();
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title: key,
+                    match_key: key,
+                    genres: &g,
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap();
+        };
+        add("a", &["Drama"]);
+        add("b", &["Drama"]);
+        add("c", &["DRAMA"]);
+        add("d", &["drama"]);
+
+        let got = genres(&conn, Kind::Series, &LibraryFilter::default()).unwrap();
+        assert_eq!(got.len(), 1, "three spellings became {} rows", got.len());
+        assert_eq!(got[0].count, 4, "the count must be what the filter returns");
+        assert_eq!(got[0].name, "Drama", "and the spelling most titles use");
+    }
+
+    /// A show that lists the same genre twice is still one show.
+    ///
+    /// `LIKE` asks whether the column *contains* the genre, so `["Drama","drama"]`
+    /// matches once. Counting per element made it two, and left the picker one ahead
+    /// of what filtering returned — the last of several ways these two numbers had
+    /// of disagreeing.
+    #[test]
+    fn a_row_counts_once_per_genre_however_often_it_lists_it() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let g = vec![
+            "Drama".to_string(),
+            "drama".to_string(),
+            "Crime".to_string(),
+        ];
+        upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "a",
+                title: "a",
+                match_key: "a",
+                genres: &g,
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        let got = genres(&conn, Kind::Series, &LibraryFilter::default()).unwrap();
+        let drama = got.iter().find(|c| c.name == "Drama").unwrap();
+        assert_eq!(drama.count, 1, "one show, counted {} times", drama.count);
+        assert_eq!(got.len(), 2, "Drama and Crime, not three rows");
+    }
+
+    /// Only ASCII, because only ASCII is what `LIKE` folds. Turkish dotted and
+    /// dotless I are different letters to SQLite, so they are different rows here —
+    /// merging them would put a count on a filter that does not return it.
+    #[test]
+    fn folding_stops_where_the_filters_folding_stops() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = vec!["Aksiyon".to_string()];
+        let b = vec!["AKSİYON".to_string()];
+        for (key, g) in [("a", &a), ("b", &b)] {
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title: key,
+                    match_key: key,
+                    genres: g,
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            genres(&conn, Kind::Series, &LibraryFilter::default())
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    /// A hidden row is not on the screen, so its genres are not in the filter either —
+    /// a filter offering a value that yields nothing is the complaint this whole
+    /// facet exists to answer.
+    #[test]
+    fn a_hidden_rows_genres_are_not_offered() {
+        use crate::repo::filtering::{Kind, LibraryFilter};
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        upsert_movies(&mut conn, p, &[movie("m1", "Some Film", None)], 0).unwrap();
+        conn.execute(
+            r#"UPDATE movies SET genres = '["Western"]', hidden = 1"#,
+            [],
+        )
+        .unwrap();
+        assert!(genres(&conn, Kind::Movies, &LibraryFilter::default())
+            .unwrap()
+            .is_empty());
+    }
+
     fn movie(key: &str, title: &str, year: Option<i32>) -> NewMovie {
         NewMovie {
             provider_key: key.into(),
@@ -1458,6 +1933,7 @@ mod tests {
                 poster: None,
                 group: None,
                 quality: None,
+                ..Default::default()
             },
             0,
         )
@@ -1674,6 +2150,7 @@ mod tests {
                 poster: None,
                 group: None,
                 quality: None,
+                ..Default::default()
             },
             1,
         )
