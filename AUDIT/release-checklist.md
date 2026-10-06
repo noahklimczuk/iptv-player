@@ -47,6 +47,36 @@ above rather than by work.
 
 ---
 
+## 1.0.0 — what is shipping, and what is knowingly not
+
+The version is pinned in the manifests rather than derived: there is no sequence of
+commit subjects that turns 0.13.20 into 1.0.0, because below 1.0 a breaking marker is a
+minor. `scripts/version.mjs` treats the manifests as a floor, so committing the number is
+what makes this build 1.0.0 and the commit after the tag 1.0.1.
+
+**Shipping.** Everything in phases 1–9 and 13, verified as the table in `docs/ROADMAP.md`
+describes: the compositing spike run on real hardware, a real subscription imported and
+drawn, artwork served from the cache, both update paths swapping their own files, the
+licence obligation met, and advisories checked on both ecosystems in CI.
+
+**Knowingly not fixed, and why each is acceptable at 1.0:**
+
+| | Why it is not a blocker |
+|---|---|
+| **Code signing** | The publisher and the user are the same person on the same machine. SmartScreen warns somebody who built the app. The updater verifies the SHA-256 GitHub published. Revisit the moment anyone else is asked to install this. |
+| **Catch-up (F-23)** | Two subscriptions advertise `tv_archive`; neither serves one. Eighteen requests across three channels returned 404 or an empty 200. The timezone fix cannot be made against evidence, and a guessed URL that fails at the player is worse than the message the viewer gets now. |
+| **A recording's file on disk** | The recorder reaches a provider and reports its states correctly; the assertion that the file exceeds 64 kB has not had a green run, because the harness wipe needs a build outside OneDrive. One run with credentials closes it. |
+| **Per-machine install and uninstall** | The *upgrade* path is verified with a real library behind it. A per-machine NSIS install needs an administrator account, which this machine does not have. The per-user MSI path is what is actually used. |
+| **ARM64** | No ARM64 machine, and no ARM64 libmpv upstream. x64 only, said plainly on the release page. |
+| **Zap time** | 1.91s against the 1.5s in README §16, measured against a public CDN rather than a provider. Reported rather than asserted, and worth re-measuring on a real panel before anything is optimised. |
+
+**Not built, by choice:** Stalker portals; drag-to-reorder, custom logos, named favourite
+lists and the rules engine; PiP, sleep timer, tray, backup/restore; a UI for the
+per-channel locks already stored; media keys and global shortcuts. The phase table in
+`docs/ROADMAP.md` is the authority on each.
+
+---
+
 ## 1. Run the Phase 0 spike — **done**
 
 **Run on Windows 11 with libmpv v0.41, and it works.** The full account is in

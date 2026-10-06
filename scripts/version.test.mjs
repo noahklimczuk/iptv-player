@@ -111,3 +111,17 @@ test('the formatted version round-trips', () => {
     assert.equal(format(parse(raw)), raw);
   }
 });
+
+test('the manifests pin a release the arithmetic cannot reach', () => {
+  // There is no sequence of commit subjects that turns 0.13.20 into 1.0.0: below 1.0 a
+  // breaking marker is a minor, so derivation can only ever add one. Committing the
+  // number is how a deliberate release says so, and `next()` has to honour it.
+  const derived = { major: 0, minor: 13, patch: 21 };
+  const pinned = { major: 1, minor: 0, patch: 0 };
+  assert.equal(compare(pinned, derived) > 0, true);
+
+  // And a floor rather than an override: a manifest left behind must not hold a
+  // release back.
+  const stale = { major: 0, minor: 9, patch: 0 };
+  assert.equal(compare(stale, derived) > 0, false);
+});
