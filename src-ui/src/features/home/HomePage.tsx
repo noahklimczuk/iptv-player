@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { CatalogItem } from '@shared/ipc';
 import { AiRail } from './AiRail';
 import { HeroBillboard } from '@/components/HeroBillboard';
@@ -24,10 +24,62 @@ export function HomePage({
     [profileId, catalogVersion],
   );
 
+  /**
+   * A seed that changes every time Home is opened, and not while it is open.
+   *
+   * The hero used to be `recentlyAdded.slice(0, 6)`: the same six titles, in the same
+   * order, every launch until the library gained something. It rotated between them,
+   * which reads as a carousel that is working and a library that is not.
+   *
+   * Picked once per mount rather than per render, because a `Math.random()` in the memo
+   * below would reshuffle on every state change — the trailer starting, a card being
+   * removed — and the billboard would jump to another film while somebody was reading it.
+   */
+  const heroSeed = useRef(Date.now());
+
   const heroItems = useMemo(() => {
     if (!rails) return [];
-    const pool = rails.find((r) => r.kind === 'recentlyAdded')?.items ?? rails[0]?.items ?? [];
-    return pool.slice(0, 6);
+
+    // Everything the home screen is already showing, rather than one shelf of it.
+    //
+    // `continueWatching` and `upNext` are excluded on purpose: they are things the
+    // viewer is part-way through, and a billboard inviting them to start one is
+    // offering them something they did not finish. `myList` is excluded for the
+    // opposite reason — they have already decided about those.
+    const skip = new Set(['continueWatching', 'upNext', 'myList']);
+    const seen = new Set<string>();
+    const pool: CatalogItem[] = [];
+    for (const rail of rails) {
+      if (skip.has(rail.kind)) continue;
+      for (const item of rail.items) {
+        const key = `${item.kind}:${item.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        pool.push(item);
+      }
+    }
+
+    // A billboard is mostly its artwork, so one without a backdrop is a grey panel with
+    // a title on it. Preferred rather than required: a small library might have none.
+    const withArt = pool.filter((i) => i.backdrop);
+    const chosen = withArt.length >= 6 ? withArt : pool;
+
+    // A seeded shuffle, so the set is different each time Home is opened and stable
+    // while it is open. Mulberry32 — small, and good enough to pick six films.
+    let state = heroSeed.current >>> 0;
+    const random = () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const shuffled = [...chosen];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+    }
+    return shuffled.slice(0, 6);
   }, [rails]);
 
   /**
