@@ -46,6 +46,38 @@ async function seekTo(page: Page, seconds: number) {
   }, seconds);
 }
 
+/**
+ * Open a series that ships **no** chapters and start its first episode.
+ *
+ * The fixtures give odd-numbered series chapters and even-numbered ones none, so this is
+ * the state an ordinary library is in: no chapters anywhere, nothing ever skipped. The
+ * card is found by asking the mock which series is even rather than by its position on
+ * the page, because the grid's order is a sort and not an id.
+ */
+async function playEpisodeWithoutChapters(page: Page) {
+  await page.goto('/#/series');
+  await expect(page.getByRole('heading', { name: 'Series' })).toBeVisible();
+
+  const title = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke?: (c: string, a?: unknown) => Promise<unknown>;
+    };
+    const rows = (await w.__auroraInvoke!('library.series', {
+      sort: 'title',
+      limit: 200,
+      offset: 0,
+    })) as { id: number; title: string }[];
+    return rows.find((r) => r.id % 2 === 0)!.title;
+  });
+
+  await page.getByRole('button', { name: new RegExp(title.slice(0, 18), 'i') }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('tab', { name: 'episodes' }).click();
+  await dialog.locator('button', { hasText: /^\d/ }).first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+}
+
 test('Skip Intro appears inside the intro and seeks past it', async ({ page }) => {
   await playFirstEpisode(page);
 
@@ -183,4 +215,47 @@ test('auto-skip jumps the intro without being pressed', async ({ page }) => {
     )
     .toBeGreaterThanOrEqual(92);
   await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+});
+
+/**
+ * The point of the conventional tier: a library with no chapters and a viewer who has
+ * never skipped anything still gets Skip Credits — and therefore Up Next, and therefore
+ * autoplay. Before this there was nothing at all.
+ */
+test('an episode with no chapters still gets Skip Credits from its runtime', async ({
+  page,
+}) => {
+  await playEpisodeWithoutChapters(page);
+
+  // Nothing has said where an intro is, so there is no Skip Intro. A clock cannot find
+  // one, and guessing would mean cutting a cold open.
+  await seekTo(page, 60);
+  await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+
+  // The credits, though, are defined by being at the end — so ask the host how long
+  // this episode is rather than assuming every fixture episode is the same length.
+  const duration = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke?: (c: string, a?: unknown) => Promise<unknown>;
+    };
+    const state = (await w.__auroraInvoke!('player.state')) as { durationSecs: number };
+    return state.durationSecs;
+  });
+  expect(duration).toBeGreaterThan(600);
+  await seekTo(page, duration - 30);
+  await expect(page.getByRole('button', { name: 'Skip Credits' })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/skip-credits-from-convention.png` });
+});
+
+test('Up Next appears on an episode nobody has taught anything', async ({ page }) => {
+  await playEpisodeWithoutChapters(page);
+  const duration = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke?: (c: string, a?: unknown) => Promise<unknown>;
+    };
+    const state = (await w.__auroraInvoke!('player.state')) as { durationSecs: number };
+    return state.durationSecs;
+  });
+  await seekTo(page, duration - 30);
+  await expect(page.getByText(/Up next/i).first()).toBeVisible();
 });

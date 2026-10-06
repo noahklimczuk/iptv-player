@@ -83,9 +83,19 @@ export function useEpisodeAids(
     );
   }, [aids, position]);
 
+  /**
+   * Whether to jump without being asked.
+   *
+   * `source !== 'convention'` is the guard that matters: a conventional marker is placed
+   * by the clock rather than by evidence, so it is a button somebody may press and never
+   * something that fires on its own. Auto-skipping a guess would mean a wrong runtime
+   * silently cutting the last minute of an episode — which is how you lose the final
+   * scene of a finale.
+   */
   const autoSkip =
     !!activeMarker &&
     !!aids &&
+    activeMarker.source !== 'convention' &&
     ((activeMarker.kind === 'intro' && aids.prefs.alwaysSkipIntro) ||
       (activeMarker.kind === 'recap' && aids.prefs.alwaysSkipRecap));
 
@@ -107,10 +117,20 @@ export function useEpisodeAids(
     [episodeId],
   );
 
+  /**
+   * Whether the Up Next card is up.
+   *
+   * It used to also require `duration > 0` — the *player's* duration — and that is why
+   * autoplay never fired on an ordinary library: a provider's VOD stream frequently
+   * reports no duration at all, so the card could not appear however long the episode
+   * ran. The host already refuses to produce `upNextAtSecs` without knowing a duration
+   * from somewhere (the stream, the episode's runtime, or a sibling's), so having it is
+   * the condition, and asking the player again was second-guessing an answer that had
+   * already accounted for this.
+   */
   const upNextVisible =
     !!aids?.nextEpisode &&
     aids.upNextAtSecs != null &&
-    duration > 0 &&
     position >= aids.upNextAtSecs &&
     dismissed !== episodeId;
 
