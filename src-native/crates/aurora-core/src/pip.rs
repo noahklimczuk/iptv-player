@@ -119,9 +119,7 @@ impl Geometry {
         // margins the minimum is larger than the maximum, and `clamp` panics on that —
         // which in a release build is an abort, so dragging the window thin would close
         // the app. The window always wins.
-        let mut tile_w = wanted
-            .max(u64::from(MIN_WIDTH))
-            .min(u64::from(room_w)) as u32;
+        let mut tile_w = wanted.max(u64::from(MIN_WIDTH)).min(u64::from(room_w)) as u32;
         let mut tile_h = (u64::from(tile_w) * u64::from(ASPECT_H) / u64::from(ASPECT_W)) as u32;
 
         // The window can be shorter than the tile is tall — a wide, squat window, or one
@@ -260,7 +258,7 @@ mod tests {
     #[test]
     fn a_squat_window_shrinks_the_tile_rather_than_overflowing_it() {
         let r = Geometry::default().rect(1920, 200);
-        assert!(r.height as u32 + 48 <= 200, "{r:?}");
+        assert!(r.height + 48 <= 200, "{r:?}");
         assert!(r.y >= 0 && r.y + r.height as i32 <= 200, "{r:?}");
         // Aspect still holds, so it is a small picture rather than a squashed one.
         let ratio = f64::from(r.width) / f64::from(r.height);
@@ -274,7 +272,7 @@ mod tests {
             let r = Geometry::default().rect(w, h);
             assert!(r.x >= 0 && r.y >= 0, "{w}x{h}: {r:?}");
             assert!(
-                r.x + r.width as i32 <= w.max(0) as i32 || r.width == 0,
+                r.x + r.width as i32 <= w as i32 || r.width == 0,
                 "{w}x{h}: {r:?}"
             );
         }

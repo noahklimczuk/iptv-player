@@ -192,9 +192,10 @@ pub fn pip_set_enabled(services: State<'_, Services>, args: EnabledArgs) -> Resu
 pub fn pip_set_corner(services: State<'_, Services>, args: CornerArgs) -> Result<PipView> {
     let corner = match args.corner.as_deref() {
         None => None,
-        Some(name) => Some(Corner::parse(name).ok_or_else(|| {
-            crate::AppError::Other(format!("unknown corner {name:?}"))
-        })?),
+        Some(name) => Some(
+            Corner::parse(name)
+                .ok_or_else(|| crate::AppError::Other(format!("unknown corner {name:?}")))?,
+        ),
     };
     services.pip.set_corner(corner)
 }
@@ -409,7 +410,10 @@ mod tests {
         assert_eq!(view.rect.width, 0);
 
         let back = p.relayout(1600, 900).unwrap();
-        assert!(back.rect.width > 0, "a bigger window gives the picture back");
+        assert!(
+            back.rect.width > 0,
+            "a bigger window gives the picture back"
+        );
     }
 
     /// A backend that refuses to move must not leave the flag saying it did.
@@ -427,16 +431,29 @@ mod tests {
             fn stop(&mut self) -> std::result::Result<(), aurora_player::PlayerError> {
                 Ok(())
             }
-            fn set_paused(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            fn set_paused(
+                &mut self,
+                _: bool,
+            ) -> std::result::Result<(), aurora_player::PlayerError> {
                 Ok(())
             }
-            fn seek(&mut self, _: f64, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            fn seek(
+                &mut self,
+                _: f64,
+                _: bool,
+            ) -> std::result::Result<(), aurora_player::PlayerError> {
                 Ok(())
             }
-            fn set_volume(&mut self, _: u32) -> std::result::Result<(), aurora_player::PlayerError> {
+            fn set_volume(
+                &mut self,
+                _: u32,
+            ) -> std::result::Result<(), aurora_player::PlayerError> {
                 Ok(())
             }
-            fn set_muted(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            fn set_muted(
+                &mut self,
+                _: bool,
+            ) -> std::result::Result<(), aurora_player::PlayerError> {
                 Ok(())
             }
             fn set_speed(&mut self, _: f64) -> std::result::Result<(), aurora_player::PlayerError> {
@@ -466,7 +483,11 @@ mod tests {
             fn chapters(&self) -> Vec<aurora_core::markers::Chapter> {
                 Vec::new()
             }
-            fn resize(&mut self, _: u32, _: u32) -> std::result::Result<(), aurora_player::PlayerError> {
+            fn resize(
+                &mut self,
+                _: u32,
+                _: u32,
+            ) -> std::result::Result<(), aurora_player::PlayerError> {
                 Err(aurora_player::PlayerError::Command("stuck".into()))
             }
             fn place(&mut self, _: Rect) -> std::result::Result<(), aurora_player::PlayerError> {

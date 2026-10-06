@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    assistant, commands, dvr, gemini, library, metadata, mosaic, now_unix, playlist, profiles,
+    assistant, commands, dvr, gemini, library, metadata, mosaic, now_unix, pip, playlist, profiles,
     providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
@@ -212,6 +212,9 @@ fn main() {
                     // reference to the window is Tauri's own state and the mosaic would
                     // have to be handed an `AppHandle` to get at it.
                     window::record_mosaic_window(&main_window, &services.mosaic);
+                    if let Ok(size) = main_window.inner_size() {
+                        services.pip.set_window(size.width, size.height);
+                    }
                 }
                 None => tracing::error!("no main window at setup; video cannot composite"),
             }
@@ -319,7 +322,13 @@ fn main() {
                 // resize arrives on is what stops the two tearing apart (README §2.1).
                 tauri::WindowEvent::Resized(size) => {
                     if let Some(services) = win.try_state::<Services>() {
-                        if let Err(e) = services.player.lock().resize(size.width, size.height) {
+                        // Through `Pip` rather than straight to the backend: `resize`
+                        // means "fill the client area" and has no origin to put a corner
+                        // at, so with picture-in-picture on it is exactly the wrong call
+                        // — it would snap the small picture back to full-window on the
+                        // first drag of a window edge. `Pip::relayout` decides which of
+                        // the two the surface should get.
+                        if let Err(e) = services.pip.relayout(size.width, size.height) {
                             tracing::warn!("could not resize the video surface: {e}");
                         }
                         // And every mosaic tile, for the same reason: the surfaces are
@@ -450,6 +459,10 @@ fn main() {
             assistant::assistant_history,
             assistant::assistant_send,
             assistant::assistant_clear,
+            pip::pip_state,
+            pip::pip_toggle,
+            pip::pip_set_enabled,
+            pip::pip_set_corner,
             gemini::gemini_status,
             gemini::gemini_set_key,
             timeshift::timeshift_settings,
