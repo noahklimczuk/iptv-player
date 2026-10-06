@@ -31,11 +31,33 @@ export function HomePage({
    * order, every launch until the library gained something. It rotated between them,
    * which reads as a carousel that is working and a library that is not.
    *
-   * Picked once per mount rather than per render, because a `Math.random()` in the memo
-   * below would reshuffle on every state change — the trailer starting, a card being
-   * removed — and the billboard would jump to another film while somebody was reading it.
+   * Picked once per *session*, not per render and not per mount.
+   *
+   * Per render would reshuffle on every state change — the trailer starting, a card
+   * being removed — and the billboard would jump to another film while somebody was
+   * reading it.
+   *
+   * Per mount is subtler and was wrong too: going to Movies and back remounts Home, so
+   * the billboard changed every time the viewer glanced away, which is disorienting
+   * rather than fresh — and it meant a title opened from the hero could not be found
+   * there again a moment later. "Different each time" means each time the app is
+   * opened, which is what a session is.
+   *
+   * `sessionStorage` can throw — a private window, blocked site data — so a failure
+   * falls back to a seed for this mount, and the billboard is merely as fresh as it
+   * was before.
    */
-  const heroSeed = useRef(Date.now());
+  const heroSeed = useRef(0);
+  if (heroSeed.current === 0) {
+    const fresh = Date.now();
+    try {
+      const stored = window.sessionStorage.getItem('aurora.heroSeed');
+      heroSeed.current = stored ? Number(stored) || fresh : fresh;
+      window.sessionStorage.setItem('aurora.heroSeed', String(heroSeed.current));
+    } catch {
+      heroSeed.current = fresh;
+    }
+  }
 
   const heroItems = useMemo(() => {
     if (!rails) return [];
