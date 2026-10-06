@@ -150,7 +150,30 @@ export function next() {
   const from = last?.version ?? current();
   const subjects = subjectsSince(last?.tag ?? null);
   const bump = bumpFor(subjects);
-  return { from, bump, version: bumped(from, bump), since: last?.tag ?? null, subjects };
+  const derived = bumped(from, bump);
+
+  // The manifests are a floor, not just a starting point.
+  //
+  // Derivation can only ever add one to the last release, which is right for the
+  // ordinary case and cannot express a deliberate one: there is no sequence of commit
+  // subjects that turns 0.13.20 into 1.0.0, because "breaking" below 1.0 is a minor by
+  // the rule above. Committing the number says it instead, and the arithmetic then
+  // carries on from there — 1.0.0 in the manifests makes this build 1.0.0, and the next
+  // commit after the tag makes 1.0.1.
+  //
+  // A floor rather than an override, so a stale manifest cannot hold a release back: if
+  // the manifests say less than the derivation, the derivation wins and nothing changes.
+  const pinned = current();
+  const pin = compare(pinned, derived) > 0;
+
+  return {
+    from,
+    bump,
+    version: pin ? pinned : derived,
+    pinned: pin,
+    since: last?.tag ?? null,
+    subjects,
+  };
 }
 
 /**
