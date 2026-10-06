@@ -254,6 +254,46 @@ fn the_field_scan_reads_names_and_not_the_prose_around_them() {
 /// Invisible from a browser: `vite preview` serves no CSP at all, which is what every
 /// Playwright journey runs against.
 #[test]
+/// Every command the UI sends is a `fetch` to Tauri's own IPC origin, and the CSP has to
+/// allow it.
+///
+/// It did not. `default-src 'self'` with no `connect-src` meant the WebView refused
+/// *every* call before it reached the host — "Connecting to 'http://ipc.localhost/
+/// providers_list' violates the following Content Security Policy directive" — so the
+/// app launched, painted its boot screen, and sat on "Opening your library…" for ever
+/// with the host completely idle.
+///
+/// Nothing caught it. The suite runs against a browser and a mock transport, where there
+/// is no custom protocol and no CSP; the only other test of this string checks `img-src`,
+/// which is the directive that was last got wrong (F-12). A policy is a list of
+/// directives and testing one of them is testing one of them.
+#[test]
+fn the_csp_allows_the_ipc_the_ui_actually_uses() {
+    let config =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+            .expect("tauri.conf.json");
+    let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
+    let csp = parsed["app"]["security"]["csp"]
+        .as_str()
+        .expect("a csp is set");
+
+    let connect = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("connect-src"))
+        .expect(
+            "connect-src is declared: without it `default-src` applies and every command              the UI sends is refused by the WebView",
+        );
+
+    // Windows serves the IPC over this origin; the scheme covers the other platforms.
+    for source in ["ipc:", "http://ipc.localhost"] {
+        assert!(
+            connect.contains(source),
+            "connect-src must allow {source}, or the UI cannot talk to the host at all:              {connect}"
+        );
+    }
+}
+
 fn the_csp_allows_the_image_schemes_providers_actually_use() {
     let config =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
