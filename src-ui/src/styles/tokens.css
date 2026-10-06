@@ -26,7 +26,9 @@
   --shadow-4: 0 24px 64px rgb(0 0 0 / 0.65);
 
   /* Layout */
-  --sidebar-w: 88px;
+  /* Height the floating nav pill occupies, plus the air under it: what the content
+     pane keeps clear so its last row is not hidden behind the nav. */
+  --navpill-space: 96px;
   --topbar-h: 64px;
   --guide-channel-w: 220px;
   --guide-row-h: 64px;
@@ -110,7 +112,7 @@
 :root[data-density='tv'] {
   --fs-xs: 15px; --fs-sm: 18px; --fs-md: 21px; --fs-lg: 26px;
   --fs-xl: 32px; --fs-2xl: 42px; --fs-3xl: 60px; --fs-4xl: 80px;
-  --sidebar-w: 132px; --topbar-h: 88px;
+  --navpill-space: 124px; --topbar-h: 88px;
   --guide-channel-w: 300px; --guide-row-h: 88px;
 }
 

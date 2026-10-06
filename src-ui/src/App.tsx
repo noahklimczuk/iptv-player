@@ -501,7 +501,7 @@ export default function App() {
 
   // Playing, with libmpv rendering into a window behind this page. The shell has to
   // get out of the way of it — `body` is transparent, but everything below repainted
-  // that away: an opaque root, an opaque sidebar and a page still holding the grid
+  // that away: an opaque root, an opaque nav and a page still holding the grid
   // the viewer pressed play from. The result on Windows was sound, an OSD, and no
   // picture, with the poster grid sitting exactly where the film should have been.
   //
@@ -526,28 +526,49 @@ export default function App() {
         background: videoBehind ? 'transparent' : 'var(--bg)',
       }}
     >
+      {/*
+        * Navigation, as a floating pill near the bottom rather than a rail down the side.
+        *
+        * Three things it has to keep doing, because the suite and a remote control both
+        * depend on them: the accessible name stays "Main", every destination stays a
+        * link with its label as its accessible name, and tab order stays the reading
+        * order. The change is where it sits and what it looks like, not what it is.
+        *
+        * `position: fixed` and not part of the flex row, so the content pane is the full
+        * width of the window — which is the point of moving it. `main` carries bottom
+        * padding instead, so the last row of a grid is not parked underneath the pill.
+        *
+        * It scrolls horizontally rather than wrapping or shrinking: there are ten
+        * destinations and a narrow window cannot show them all, and a pill that reflowed
+        * to two lines would stop being a pill.
+        */}
       <nav
         aria-label="Main"
+        data-testid="nav-pill"
         style={{
-          width: 'var(--sidebar-w)', flexShrink: 0, background: 'var(--bg-elevated)',
-          borderRight: '1px solid var(--border)',
+          position: 'fixed',
+          bottom: 'var(--sp-5)',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          maxWidth: 'calc(100vw - var(--sp-6) * 2)',
           display: videoBehind ? 'none' : 'flex',
-          flexDirection: 'column', alignItems: 'center', padding: 'var(--sp-4) 0',
-          gap: 'var(--sp-2)', zIndex: 50,
+          alignItems: 'center',
+          gap: 2,
+          padding: 6,
+          borderRadius: 'var(--r-full)',
+          // Translucent over whatever is behind it, which is what makes it read as
+          // floating rather than as a bar stuck to the bottom.
+          background: 'color-mix(in srgb, var(--bg-elevated) 82%, transparent)',
+          backdropFilter: 'blur(24px) saturate(140%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(140%)',
+          border: '1px solid color-mix(in srgb, var(--text) 10%, transparent)',
+          boxShadow: 'var(--shadow-4)',
+          zIndex: 50,
+          overflowX: 'auto',
+          scrollbarWidth: 'none',
         }}
+        className="no-scrollbar"
       >
-        <div
-          style={{
-            width: 38, height: 38, borderRadius: 'var(--r-md)', display: 'grid',
-            placeItems: 'center', marginBottom: 'var(--sp-4)',
-            background: 'linear-gradient(135deg, var(--accent), var(--accent-2))',
-            color: '#fff', fontWeight: 900, fontSize: 18,
-          }}
-          title="Aurora TV"
-        >
-          A
-        </div>
-
         {NAV.map((n) => (
           <NavLink
             key={n.to}
@@ -555,15 +576,24 @@ export default function App() {
             end={n.to === '/'}
             onClick={closePlayer}
             style={({ isActive }) => ({
-              width: 'calc(var(--sidebar-w) - 20px)', padding: 'var(--sp-2) 0',
-              display: 'grid', placeItems: 'center', gap: 3, borderRadius: 'var(--r-md)',
-              textDecoration: 'none', fontSize: 10, fontWeight: 600,
-              color: isActive ? 'var(--text)' : 'var(--text-faint)',
-              background: isActive ? 'var(--surface-hover)' : 'transparent',
-              marginTop: n.to === '/settings' ? 'auto' : undefined,
+              display: 'grid',
+              placeItems: 'center',
+              gap: 2,
+              // Wide enough for the longest label at this size without the row
+              // reflowing when the active item changes.
+              minWidth: 62,
+              padding: '7px 10px 6px',
+              borderRadius: 'var(--r-full)',
+              textDecoration: 'none',
+              fontSize: 10,
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              color: isActive ? 'var(--accent-text)' : 'var(--text-faint)',
+              background: isActive ? 'var(--accent)' : 'transparent',
+              transition: 'background var(--t-fast) var(--ease), color var(--t-fast) var(--ease)',
             })}
           >
-            <Icon name={n.icon} size={21} />
+            <Icon name={n.icon} size={20} />
             {n.label}
           </NavLink>
         ))}
@@ -573,6 +603,12 @@ export default function App() {
         style={{
           flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative',
           display: videoBehind ? 'none' : undefined,
+          // Room for the floating pill, so the last row of a grid is reachable rather
+          // than parked underneath it. Scroll padding too, because keyboard navigation
+          // scrolls a focused card into view and "in view" has to mean "not under the
+          // nav".
+          paddingBottom: 'var(--navpill-space)',
+          scrollPaddingBottom: 'var(--navpill-space)',
         }}
       >
         <TopBar
@@ -750,6 +786,18 @@ function TopBar({
         pointerEvents: 'none',
       }}
     >
+      <div
+        title="Aurora TV"
+        aria-hidden
+        style={{
+          width: 30, height: 30, borderRadius: 'var(--r-md)', display: 'grid',
+          placeItems: 'center', flexShrink: 0,
+          background: 'linear-gradient(135deg, var(--accent), var(--accent-2))',
+          color: '#fff', fontWeight: 900, fontSize: 15,
+        }}
+      >
+        A
+      </div>
       <span style={{ fontWeight: 700, fontSize: 'var(--fs-md)', opacity: 0.85 }}>{title}</span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', pointerEvents: 'auto' }}>
         <button
