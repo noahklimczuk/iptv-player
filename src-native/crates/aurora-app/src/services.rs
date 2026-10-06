@@ -26,6 +26,9 @@ pub struct Services {
     /// Multi-view (README §7.4). Holds one backend per open tile, so it is empty — and
     /// costs nothing — until a mosaic is opened.
     pub mosaic: Arc<crate::mosaic::Mosaic>,
+    /// Picture-in-picture (README §6.2). The *same* player in a corner rather than a
+    /// second one, so unlike a mosaic tile it opens no connection and cannot be refused.
+    pub pip: Arc<crate::pip::Pip>,
     /// Downloaded posters and backdrops. Deletable at any time — the library stores
     /// remote URLs, so this is only an accelerator.
     pub artwork: Arc<artwork::Cache>,
@@ -111,7 +114,10 @@ impl Services {
             data_dir.clone(),
         ));
 
+        let pip = Arc::new(crate::pip::Pip::new(Arc::clone(&player)));
+
         Ok(Self {
+            pip,
             playback: Arc::new(crate::playback::Playback::new(
                 Arc::clone(&db),
                 Arc::clone(&player),
