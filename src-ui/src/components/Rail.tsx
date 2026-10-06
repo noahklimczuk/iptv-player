@@ -11,6 +11,25 @@ import { Icon } from './Icon';
 const CARD_W = 168;
 const GAP = 10;
 
+/**
+ * How far an expanded card reaches past its own box, and therefore how much room the
+ * scroller has to keep for it.
+ *
+ * Derived rather than picked, because this is the number that was wrong: a card is a 2:3
+ * poster plus its title, it is scaled by `CARD_SCALE` about its centre, and it is lifted
+ * by `CARD_LIFT`. Half the growth goes each way, and the lift adds to the top.
+ *
+ * It has to be derived because a scrolling container cannot let the surplus hang out:
+ * `overflow-x: auto` forces `overflow-y` to `auto` too, so anything outside the padding
+ * box is clipped. A hand-picked 28px was 16px short, which is exactly the sort of number
+ * that is right when it is written and wrong after the card gains a line of text.
+ */
+const CARD_SCALE = 1.32;
+const CARD_LIFT = 12;
+/** A 2:3 poster at `CARD_W`, plus two lines of title and a year. */
+const CARD_H = Math.round(CARD_W * 1.5) + 46;
+export const RAIL_EXPANSION_PAD = Math.ceil((CARD_H * (CARD_SCALE - 1)) / 2) + CARD_LIFT;
+
 export function Rail({
   rail, onOpen, onPlay, onRemove,
 }: {
@@ -113,10 +132,21 @@ export function Rail({
           className="no-scrollbar"
           style={{
             display: 'flex', gap: GAP,
-            // Vertical padding so the ~1.32x expanded card is not clipped by overflow-x.
-            padding: '28px var(--sp-6)',
-            margin: '-28px 0',
-            overflowX: 'auto', overflowY: 'visible',
+            // Room for the expanded card, and `overflowY` spelled as what it actually
+            // computes to.
+            //
+            // `overflow-y: visible` was a wish, not a rule: CSS forces the other axis to
+            // `auto` when one axis scrolls, so a browser reports `auto` here whatever is
+            // asked for, and anything past the padding box is cut. Measured on the home
+            // rails before this, an expanded card overflowed by 16px — the bottom of the
+            // poster and the top of the shadow.
+            //
+            // So the padding is the whole mechanism, and it is derived rather than
+            // guessed: see `RAIL_EXPANSION_PAD`. The negative margin cancels it, so the
+            // rail still occupies the height it looks like it occupies.
+            padding: `${RAIL_EXPANSION_PAD}px var(--sp-6)`,
+            margin: `-${RAIL_EXPANSION_PAD}px 0`,
+            overflowX: 'auto', overflowY: 'auto',
             scrollSnapType: 'x proximity',
           }}
         >
