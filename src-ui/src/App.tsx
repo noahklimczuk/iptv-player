@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { CatalogItem, MosaicView, PipView, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
@@ -6,24 +6,42 @@ import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
 import { BootScreen } from '@/components/BootScreen';
 import { ConnectionBudget } from '@/components/ConnectionBudget';
-import { BrowsePage } from '@/features/browse/BrowsePage';
-import { RecordingsPage } from '@/features/dvr/RecordingsPage';
-import { GuidePage } from '@/features/guide/GuidePage';
 import { HomePage } from '@/features/home/HomePage';
-import { PlaylistPage } from '@/features/playlist/PlaylistPage';
-import { LivePage } from '@/features/live/LivePage';
+
+/*
+ * Every screen but Home, loaded when it is first opened.
+ *
+ * Launch lands on Home, and before this the chunk it had to parse first was 602 kB —
+ * the guide grid, the playlist editor, the settings panels, the assistant and the
+ * multi-view picker, none of which the first paint needs. The build has been warning
+ * about the chunk size since there was one.
+ *
+ * `PipTile` stays eager: it is part of the shell rather than a route, and it has to be
+ * ready the moment `P` is pressed.
+ *
+ * `Suspense` falls back to the same `BootScreen` the shell already shows while the
+ * library opens, so a screen still arriving looks like one still loading.
+ */
+const BrowsePage = lazy(() => import('@/features/browse/BrowsePage').then((m) => ({ default: m.BrowsePage })));
+const RecordingsPage = lazy(() => import('@/features/dvr/RecordingsPage').then((m) => ({ default: m.RecordingsPage })));
+const GuidePage = lazy(() => import('@/features/guide/GuidePage').then((m) => ({ default: m.GuidePage })));
+const PlaylistPage = lazy(() => import('@/features/playlist/PlaylistPage').then((m) => ({ default: m.PlaylistPage })));
+const LivePage = lazy(() => import('@/features/live/LivePage').then((m) => ({ default: m.LivePage })));
+const AssistantPage = lazy(() => import('@/features/assistant/AssistantPage').then((m) => ({ default: m.AssistantPage })));
+const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const MosaicPage = lazy(() =>
+  import('@/features/mosaic/MosaicPage').then((m) => ({ default: m.MosaicPage })),
+);
 import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
 import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
 import { MosaicOverlay } from '@/features/mosaic/MosaicOverlay';
 import { PipTile } from '@/features/player/PipTile';
-import { MosaicPage, SaveLayoutDialog } from '@/features/mosaic/MosaicPage';
-import { AssistantPage } from '@/features/assistant/AssistantPage';
+import { SaveLayoutDialog } from '@/features/mosaic/MosaicPage';
 import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { ProfilePicker } from '@/features/profiles/ProfilePicker';
 import { SetupWizard } from '@/features/setup/SetupWizard';
-import { SettingsPage } from '@/features/settings/SettingsPage';
 import { useCommand } from '@/hooks/useCommand';
 import { useEpisodeAids } from '@/hooks/useEpisodeAids';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -656,6 +674,7 @@ export default function App() {
             The playlist editor went from 28 rows in the DOM to 42, and on a real
             panel that is twenty thousand. */}
         <div key={location.pathname} className="aurora-page" style={{ height: '100%' }}>
+        <Suspense fallback={<BootScreen label="Opening…" />}>
         <Routes>
           <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
@@ -685,6 +704,7 @@ export default function App() {
             element={<SettingsPage onAddProvider={() => setAddingProvider(true)} />}
           />
         </Routes>
+        </Suspense>
         </div>
       </main>
 
