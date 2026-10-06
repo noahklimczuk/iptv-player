@@ -219,6 +219,18 @@ jobs:
       # That is inherent to shipping with a key; TMDB keys are free and revocable, so
       # rotating means changing the secret and merging anything.
       AURORA_TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
+      # The same arrangement for the assistant and the recommendation rail
+      # (docs/DECISIONS.md D19). Without this the shipped build has no key at all, so
+      # both features correctly report that they need one and neither has ever worked
+      # in a release — which is what "the assistant doesn't work" turned out to be.
+      #
+      # Unset is still a valid build: `option_env!` gives `None`, the app treats that as
+      # no key, and it asks for one exactly as it did before.
+      #
+      # Unlike TMDB's, a Gemini key is billable, so it is a secret rather than a literal
+      # in the repository — this repository is public, and a key committed here would be
+      # in the history for good as well as in the binary.
+      AURORA_GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:

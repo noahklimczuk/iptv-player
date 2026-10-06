@@ -4,6 +4,10 @@ fn main() {
     // compiled into the binary, and nothing says so. CI rebuilds from a cache often
     // enough for that to be a real way to ship the wrong one.
     println!("cargo:rerun-if-env-changed=AURORA_TMDB_KEY");
+    // And the Gemini key, for the same reason: `option_env!` is baked at compile time,
+    // so without this a warm target directory ships whatever key the last build saw.
+    // That was found the hard way for TMDB (AUDIT/test-report.md §12).
+    println!("cargo:rerun-if-env-changed=AURORA_GEMINI_KEY");
 
     // Delay-load libmpv, so that a missing or unreadable DLL is something the app can
     // report rather than something the Windows loader kills it for.

@@ -298,6 +298,18 @@ is that the key is absent from the source, rotatable by changing one secret, and
 never typed by a viewer. What it does not buy is secrecy from anyone holding the
 installer.
 
+**The assistant's key works the same way, and did not exist until 1.0.0.** CI passed
+`AURORA_TMDB_KEY` and nothing for Gemini, so every shipped build had `BUILT_IN_KEY =
+None`: the recommendation rail and the assistant both reported, correctly, that they
+needed a key, and neither had ever worked in a release. `AURORA_GEMINI_KEY` is wired from
+`secrets.GEMINI_API_KEY` now.
+
+One difference from TMDB, and it is the reason this is a repository secret rather than a
+literal in the source: a TMDB key is free and revocable, and a Gemini key is billable.
+This repository is public, so a key committed here would be in the history for good as
+well as in the binary — and `strings` finds the baked one either way, which is a risk
+worth taking for the first and not the second.
+
 ## D20 — A refresh downloads before it takes the database
 
 `sync::run` is two halves that cannot be confused: `fetch` takes an `HttpClient` and no
