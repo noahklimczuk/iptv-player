@@ -18,7 +18,6 @@ pub mod mosaic;
 pub mod neterr;
 pub mod parental;
 pub mod pin;
-pub mod pip;
 pub mod recommend;
 pub mod rules;
 pub mod series;

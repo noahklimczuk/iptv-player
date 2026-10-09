@@ -7,7 +7,7 @@ import type {
   DetectedSource,
   ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
   MetadataReport, MetadataStatus, MosaicBudget, MosaicLayout, MosaicRect,
-  MosaicView, ParentalSettings, PipCorner, PipView, PinOutcome, Profile, SavedMosaicLayout,
+  MosaicView, ParentalSettings, PinOutcome, Profile, SavedMosaicLayout,
   Recording, RecordingConflict, RecordingRule, Reminder,
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
@@ -1322,41 +1322,6 @@ function assistantPicks(text: string): ChatItem[] {
     }));
 }
 
-/* ── Picture-in-picture ──────────────────────────────────────────────────────
-      The same arithmetic as `aurora_core::pip`: a 16:9 tile a fraction of the
-      window wide, inset by a margin, in one of four corners. Mirrored rather than
-      invented, because the UI frames the real video surface with these numbers and
-      a mock that disagreed would be testing a layout the app never draws. ─────── */
-
-const PIP_WINDOW = { width: 1280, height: 720 };
-const PIP_MARGIN = 24;
-const PIP_FRACTION = 0.28;
-const PIP_MIN_WIDTH = 160;
-const PIP_CORNERS: PipCorner[] = ['topLeft', 'topRight', 'bottomRight', 'bottomLeft'];
-
-let pip: { enabled: boolean; corner: PipCorner } = { enabled: false, corner: 'bottomRight' };
-
-function pipRect(corner: PipCorner): MosaicRect {
-  const { width, height } = PIP_WINDOW;
-  const roomW = Math.max(0, width - PIP_MARGIN * 2);
-  const roomH = Math.max(0, height - PIP_MARGIN * 2);
-  if (roomW === 0 || roomH === 0) return { x: 0, y: 0, width: 0, height: 0 };
-
-  // `max` then `min`, not a clamp: in a window narrower than the minimum plus its
-  // margins the minimum is the larger of the two, and the window has to win.
-  let w = Math.min(Math.max(Math.round(width * PIP_FRACTION), PIP_MIN_WIDTH), roomW);
-  let h = Math.floor((w * 9) / 16);
-  if (h > roomH) {
-    h = roomH;
-    w = Math.min(Math.floor((h * 16) / 9), roomW);
-  }
-  const x = corner === 'topLeft' || corner === 'bottomLeft' ? PIP_MARGIN : width - PIP_MARGIN - w;
-  const y = corner === 'topLeft' || corner === 'topRight' ? PIP_MARGIN : height - PIP_MARGIN - h;
-  return { x, y, width: w, height: h };
-}
-
-const pipView = (): PipView => ({ ...pip, rect: pipRect(pip.corner) });
-
 const ARTWORK_MAX_BYTES = 2 * 1024 ** 3;
 /** A plausible average across w342 posters and w1280 backdrops. */
 const ARTWORK_AVG_BYTES = 90 * 1024;
@@ -1891,26 +1856,6 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (i < 0) return false;
     savedLayouts.splice(i, 1);
     return true;
-  },
-
-  'pip.state': () => pipView(),
-  'pip.toggle': () => {
-    if (mosaic.open) throw new Error('Close multi-view first — it is already using the picture.');
-    pip = { ...pip, enabled: !pip.enabled };
-    return pipView();
-  },
-  'pip.setEnabled': ({ enabled }) => {
-    if (enabled && mosaic.open) {
-      throw new Error('Close multi-view first — it is already using the picture.');
-    }
-    pip = { ...pip, enabled };
-    return pipView();
-  },
-  'pip.setCorner': ({ corner }) => {
-    const next =
-      corner ?? PIP_CORNERS[(PIP_CORNERS.indexOf(pip.corner) + 1) % PIP_CORNERS.length]!;
-    pip = { ...pip, corner: next };
-    return pipView();
   },
 
   'progress.save': ({ kind, id, positionSecs, durationSecs }) => {

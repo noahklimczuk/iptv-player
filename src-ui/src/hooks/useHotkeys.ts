@@ -19,8 +19,6 @@ export interface HotkeyHandlers {
   onVolume: (delta: number) => void;
   onMute: () => void;
   onFullscreen: () => void;
-  /** README §14.1: `P` — the small picture, in a corner, while you use the rest. */
-  onPip: () => void;
   onInfo: () => void;
   onNavigate: (to: string) => void;
 }
@@ -70,7 +68,6 @@ export function useHotkeys(h: HotkeyHandlers, enabled = true) {
         case 'm': h.onMute(); break;
         case 't': h.onTimeshift(); break;
         case 'f': h.onFullscreen(); break;
-        case 'p': h.onPip(); break;
         case 'i': h.onInfo(); break;
         case 'g': h.onGuide(); break;
         case '/': e.preventDefault(); h.onPalette(); break;
