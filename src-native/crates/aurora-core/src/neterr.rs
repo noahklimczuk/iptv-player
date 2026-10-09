@@ -29,6 +29,14 @@ pub enum ErrorCode {
     Unauthorized,
     Forbidden,
     NotFound,
+    /// The server understood the request and would not accept it as sent.
+    ///
+    /// Its own code rather than borrowed from `NotFound`, because the two differ in the
+    /// thing that matters: a 404 is worth reporting as a broken source, and a 400 is the
+    /// request being wrong, which no retry and no other source will fix. Added when
+    /// every rejected Gemini call was surfacing as "Your provider didn't respond"
+    /// because 400 matched no branch at all.
+    BadRequest,
     RateLimited,
     ServerError,
     ConnectionLimit,
@@ -117,6 +125,16 @@ impl NetFailure {
                 ErrorCode::Unauthorized,
                 "Your provider rejected these credentials",
                 "The username or password may have changed, or the line may have expired.",
+            )
+        } else if is(400) {
+            // The one status the classifier had no answer for, which is how every
+            // rejected Gemini request became "Your provider didn't respond". A 400 is
+            // the *request* being wrong, so retrying an identical one cannot help --
+            // `retryable` follows from the code below.
+            (
+                ErrorCode::BadRequest,
+                "That request was rejected",
+                "The server would not accept it as sent. Nothing about retrying will                  change that; the log has what it said.",
             )
         } else if is(403) || l.contains("forbidden") {
             (
@@ -241,19 +259,31 @@ impl NetFailure {
                 "The codec may be unsupported, or the stream may be corrupt.",
             )
         } else {
+            // Nothing matched, so the raw text is the only thing that could explain this
+            // failure -- and until now it was dropped on the floor here. An assistant
+            // that answered "Your provider didn't respond" to every Gemini problem was
+            // this branch: the generic wording is not wrong for a stream, and for
+            // everything else it is a dead end with no way to find out more.
+            //
+            // Logged at `warn` with the text that fell through, so the next unrecognised
+            // failure is diagnosable from a log rather than from a rebuild.
+            tracing::warn!("unclassified network failure: {l}");
             (
                 ErrorCode::Unknown,
                 // Not "this channel", and not "this stream": the same classifier answers
                 // for a film, an episode, and a provider being checked before anything is
                 // playing at all.
-                "Your provider didn't respond",
-                "It may be temporarily offline.",
+                "Something went wrong with that request",
+                "Aurora could not tell what from the error it got back; the log has the                  details.",
             )
         };
 
         let retryable = !matches!(
             code,
-            ErrorCode::DrmProtected | ErrorCode::Unauthorized | ErrorCode::NotFound
+            ErrorCode::DrmProtected
+                | ErrorCode::Unauthorized
+                | ErrorCode::NotFound
+                | ErrorCode::BadRequest
         );
 
         let mut actions = Vec::new();
@@ -266,6 +296,10 @@ impl NetFailure {
         }
         if matches!(code, ErrorCode::NotFound | ErrorCode::UnsupportedCodec) {
             actions.push(ErrorAction::ReportBroken);
+        }
+        // Deliberately not `ReportBroken` for a 400: the source is not what is wrong.
+        if matches!(code, ErrorCode::BadRequest) {
+            actions.push(ErrorAction::OpenSettings);
         }
         if matches!(code, ErrorCode::Dropped) {
             // Worth reporting only if it keeps happening, which the viewer is the one

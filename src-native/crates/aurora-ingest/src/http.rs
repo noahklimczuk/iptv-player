@@ -198,7 +198,7 @@ impl HttpClient {
         body: &str,
         headers: &[(&str, &str)],
     ) -> Result<String, NetFailure> {
-        let response = self.send_with_retry(url, Some(body), headers)?;
+        let response = self.send_with_retry(url, Some(body), headers, false)?;
         let capped = response.take(self.config.max_bytes);
         let mut out = Vec::new();
         let mut capped = capped;
@@ -208,13 +208,45 @@ impl HttpClient {
         Ok(String::from_utf8_lossy(&out).into_owned())
     }
 
+    /// POST, and hand back the body even when the status says the request failed.
+    ///
+    /// For an API that explains itself in the body. Gemini answers a rejected request
+    /// with `400` and a JSON envelope whose `error.message` says precisely what was
+    /// wrong -- "API key not valid", "Invalid JSON payload received", a tool declaration
+    /// it would not accept -- and `post_json` throws all of that away, because
+    /// `send_with_retry` turns a non-2xx into a `NetFailure` before anything reads the
+    /// response. The assistant reported every one of them as "Your provider didn't
+    /// respond", which names the wrong party and offers nothing to act on.
+    ///
+    /// Retries still happen for the statuses worth retrying; this only changes what the
+    /// caller gets for the ones that are not. The status comes back with the body so the
+    /// caller can decide -- a 400 is the caller's own mistake, a 429 is not.
+    pub fn post_json_with_status(
+        &self,
+        url: &str,
+        body: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<(u16, String), NetFailure> {
+        // A transport failure -- DNS, TLS, a refused connection -- has no body to read,
+        // so it stays a `NetFailure` and comes back as `Err`.
+        let response = self.send_with_retry(url, Some(body), headers, true)?;
+        let status = response.status().as_u16();
+        let capped = response.take(self.config.max_bytes);
+        let mut out = Vec::new();
+        let mut capped = capped;
+        capped
+            .read_to_end(&mut out)
+            .map_err(|e| NetFailure::classify(&e.to_string()))?;
+        Ok((status, String::from_utf8_lossy(&out).into_owned()))
+    }
+
     /// Fetch a URL as a stream, transparently inflating a gzip payload.
     ///
     /// Handles both forms providers use: `Content-Encoding: gzip` (unwrapped by the
     /// client) and a plain `.xml.gz` *file*, which is just gzip bytes over an
     /// otherwise ordinary response and has to be inflated here.
     pub fn fetch_reader(&self, url: &str) -> Result<Box<dyn Read + Send>, NetFailure> {
-        let response = self.send_with_retry(url, None, &[])?;
+        let response = self.send_with_retry(url, None, &[], false)?;
 
         let declared_gzip_file = looks_gzipped(url)
             || response
@@ -259,11 +291,17 @@ impl HttpClient {
     /// `json` turns it into a POST carrying that body; `None` is the GET every other
     /// caller wants. The body is rebuilt per attempt rather than cloned, because a retry
     /// is a new request and sharing one would be a subtle way to send half of it twice.
+    /// `keep_error_body`: hand back a non-2xx response instead of classifying it.
+    ///
+    /// Only the statuses that are not worth retrying are handed back -- a 429 or a 503
+    /// still goes round the loop first, because the body of one of those says nothing the
+    /// caller could use. See `post_json_with_status`.
     fn send_with_retry(
         &self,
         url: &str,
         json: Option<&str>,
         headers: &[(&str, &str)],
+        keep_error_body: bool,
     ) -> Result<reqwest::blocking::Response, NetFailure> {
         let attempts = self.config.max_attempts.max(1);
         let mut last: Option<NetFailure> = None;
@@ -301,6 +339,9 @@ impl HttpClient {
                     }
                     let failure = NetFailure::classify(&format!("HTTP {}", status.as_u16()));
                     if !failure.retryable {
+                        if keep_error_body {
+                            return Ok(response);
+                        }
                         return Err(failure);
                     }
                     last = Some(failure);

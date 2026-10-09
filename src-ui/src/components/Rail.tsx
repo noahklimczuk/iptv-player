@@ -31,11 +31,20 @@ const CARD_H = Math.round(CARD_W * 1.5) + 46;
 export const RAIL_EXPANSION_PAD = Math.ceil((CARD_H * (CARD_SCALE - 1)) / 2) + CARD_LIFT;
 
 export function Rail({
-  rail, onOpen, onPlay, onRemove,
+  rail, onOpen, onPlay, onRemove, action,
 }: {
   rail: RailData;
   onOpen: (i: CatalogItem) => void;
   onPlay: (i: CatalogItem) => void;
+  /**
+   * Something to put beside the heading. Optional, and no rail has one by default.
+   *
+   * Here rather than in each rail's own wrapper so it lines up with the title on the
+   * same baseline as the count — a link stacked above or below the row reads as
+   * belonging to the screen rather than to this rail, and on a screen of five rails
+   * that is the difference between "ask about these" and "ask about what?".
+   */
+  action?: React.ReactNode;
   /**
    * Take an item off this rail, where that means anything. Passed down to the cards and
    * only ever supplied for Continue Watching — every other rail is derived from the
@@ -103,6 +112,13 @@ export function Rail({
         style={{
           display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
           padding: '0 var(--sp-6)', marginBottom: 'var(--sp-3)',
+          // Above the scroller below it, which is not as redundant as it looks: that
+          // scroller carries a large top padding to make room for an expanded card
+          // (`RAIL_EXPANSION_PAD`), and the padding overhangs *upward* across this row.
+          // Without this the heading row is covered by a transparent box that takes the
+          // clicks — which is exactly what happened to the first `action` put here.
+          position: 'relative',
+          zIndex: 1,
         }}
       >
         <h2
@@ -116,6 +132,7 @@ export function Rail({
         <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
           {rail.items.length}
         </span>
+        {action}
       </div>
 
       <div style={{ position: 'relative' }}>

@@ -104,6 +104,7 @@ impl Services {
             Arc::clone(&dvr),
             Arc::new(create_backend),
             data_dir.clone(),
+            Arc::clone(&player),
         ));
 
         let pip = Arc::new(crate::pip::Pip::new(Arc::clone(&player)));

@@ -250,7 +250,7 @@ pub fn gemini_recommendations(services: State<'_, Services>, args: AiArgs) -> Re
             let http = http_for_model()?;
             let fresh = GeminiClient::new(&http, &key)
                 .suggest(&watched, &avoid(&watched))
-                .map_err(|e| AppError::Other(format!("{} {}", e.message, e.cause)))?;
+                .map_err(|e| AppError::Other(format!("{} \u{2014} {}", e.message, e.cause)))?;
             let fresh: Vec<CachedSuggestion> = fresh.into_iter().map(Into::into).collect();
 
             let db = services.db.lock();

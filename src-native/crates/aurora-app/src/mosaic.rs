@@ -133,14 +133,34 @@ pub struct Mosaic {
     /// main player does.
     #[allow(dead_code)]
     data_dir: PathBuf,
+    /// The main player, so its surface can be got out of the way.
+    ///
+    /// Not for playing anything — the tiles have their own backends. It is here because
+    /// opening and closing a mosaic is exactly when the main surface has to be hidden and
+    /// shown again, and holding it means those two cannot drift apart. Done from the
+    /// commands instead, `open`, `open_saved`, `close` and `promote` would each have to
+    /// remember, and the one that forgot would be a mosaic nobody can see.
+    main: Arc<Mutex<Box<dyn PlayerBackend>>>,
 }
 
 impl Mosaic {
+    /// Hide or restore the main player's surface. Failure is logged, never fatal: a
+    /// mosaic that opened is better than one refused because a window would not hide.
+    fn hide_main(&self, hidden: bool) {
+        if let Err(e) = self.main.lock().set_surface_visible(!hidden) {
+            tracing::warn!(
+                "could not {} the main video surface: {e}",
+                if hidden { "hide" } else { "restore" }
+            );
+        }
+    }
+
     pub fn new(
         db: Arc<Mutex<Connection>>,
         dvr: Arc<crate::dvr::Dvr>,
         factory: TileFactory,
         data_dir: PathBuf,
+        main: Arc<Mutex<Box<dyn PlayerBackend>>>,
     ) -> Self {
         Self {
             db,
@@ -150,6 +170,7 @@ impl Mosaic {
             parent: AtomicIsize::new(0),
             size: Mutex::new((1280, 720)),
             data_dir,
+            main,
         }
     }
 
@@ -251,6 +272,15 @@ impl Mosaic {
         // leave its instances alive and its connections held, which is the failure this
         // whole module is trying to avoid.
         self.close();
+
+        // Out of the way before any tile is placed.
+        //
+        // `place` sends the surface it moves to the bottom of the z-order, so every tile
+        // ends up *behind* the main player's full-window surface. Stopping playback does
+        // not help: the window is still there, still full-window, still in front, and an
+        // mpv surface with nothing loaded is black — a mosaic you can hear and cannot
+        // see, which is exactly what was reported.
+        self.hide_main(true);
 
         let rects = layout.rects_now(*self.size.lock());
         let parent = self.parent.load(Ordering::SeqCst);
@@ -388,6 +418,10 @@ impl Mosaic {
                 tile.player = None;
             }
         }
+        // And the main surface comes back, whether or not there was a session to close:
+        // `close` is also the tidy-up path on a failed open, and leaving it hidden there
+        // would be a black window with no mosaic over it.
+        self.hide_main(false);
         MosaicView::closed()
     }
 
@@ -827,9 +861,132 @@ mod tests {
         ));
         let factory: TileFactory = Arc::new(|| Box::new(NullBackend::default()));
         (
-            Mosaic::new(Arc::clone(&db), dvr, factory, std::env::temp_dir()),
+            Mosaic::new(
+                Arc::clone(&db),
+                dvr,
+                factory,
+                std::env::temp_dir(),
+                Arc::new(Mutex::new(Box::new(NullBackend::default()))),
+            ),
             db,
         )
+    }
+
+    /// The same, with the main surface's visibility recorded.
+    ///
+    /// `NullBackend` has no window, so it cannot answer the question this is about: was
+    /// the main player's surface got out of the way before the tiles were placed.
+    fn mosaic_watching_main(limit: Option<i64>) -> (Mosaic, Arc<Mutex<Option<bool>>>) {
+        let (m, _db) = mosaic(limit);
+        let seen = Arc::new(Mutex::new(None));
+        let main: Arc<Mutex<Box<dyn PlayerBackend>>> =
+            Arc::new(Mutex::new(Box::new(VisibilitySpy(Arc::clone(&seen)))));
+        (Mosaic { main, ..m }, seen)
+    }
+
+    /// Records only the one call this is about; everything else is `NullBackend`'s.
+    struct VisibilitySpy(Arc<Mutex<Option<bool>>>);
+
+    impl PlayerBackend for VisibilitySpy {
+        fn load(
+            &mut self,
+            _: &str,
+            _: &aurora_player::backend::LoadOptions,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn stop(&mut self) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_paused(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn seek(&mut self, _: f64, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_volume(&mut self, _: u32) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_muted(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_speed(&mut self, _: f64) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_audio_track(
+            &mut self,
+            _: Option<i64>,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_subtitle_track(
+            &mut self,
+            _: Option<i64>,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_aspect(
+            &mut self,
+            _: aurora_player::state::Aspect,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn pump(&mut self, _: f64) {}
+        fn state(&self) -> aurora_player::PlayerState {
+            aurora_player::PlayerState::default()
+        }
+        fn chapters(&self) -> Vec<aurora_core::markers::Chapter> {
+            Vec::new()
+        }
+        fn resize(
+            &mut self,
+            _: u32,
+            _: u32,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_surface_visible(
+            &mut self,
+            visible: bool,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            *self.0.lock() = Some(visible);
+            Ok(())
+        }
+    }
+
+    /// The bug this exists for: a mosaic you could hear and could not see.
+    ///
+    /// Every `place` sends its surface to the bottom of the z-order, so each tile lands
+    /// behind the main player's full-window surface. Stopping playback leaves that window
+    /// in front, and an mpv surface with nothing loaded is black.
+    #[test]
+    fn opening_a_mosaic_gets_the_main_surface_out_of_the_way() {
+        let (m, seen) = mosaic_watching_main(Some(8));
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        assert_eq!(
+            *seen.lock(),
+            Some(false),
+            "the main surface was left in front"
+        );
+    }
+
+    #[test]
+    fn closing_it_gives_the_main_surface_back() {
+        let (m, seen) = mosaic_watching_main(Some(8));
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        m.close();
+        assert_eq!(*seen.lock(), Some(true), "the window would stay black");
+    }
+
+    /// `close` is also the tidy-up after a refused open, and a surface left hidden there
+    /// is a black window with no mosaic over it.
+    #[test]
+    fn closing_without_a_session_still_restores_the_surface() {
+        let (m, seen) = mosaic_watching_main(Some(8));
+        m.close();
+        assert_eq!(*seen.lock(), Some(true));
     }
 
     /// Nothing in here records: the DVR is present only so the mosaic can ask how many

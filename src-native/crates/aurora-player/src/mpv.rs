@@ -24,8 +24,8 @@ use libmpv2::mpv_node::MpvNode;
 use libmpv2::{events::Event, Format, Mpv};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SW_SHOW,
-    WINDOW_EX_STYLE, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DestroyWindow, SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SW_HIDE,
+    SW_SHOW, WINDOW_EX_STYLE, WS_CHILD, WS_VISIBLE,
 };
 
 use crate::backend::{Engine, LoadOptions, PlayerBackend};
@@ -802,6 +802,15 @@ impl PlayerBackend for MpvBackend {
                     rect.height as i32,
                     SWP_NOACTIVATE,
                 );
+            }
+        }
+        Ok(())
+    }
+
+    fn set_surface_visible(&mut self, visible: bool) -> Result<(), PlayerError> {
+        if let Some(hwnd) = self.video_hwnd {
+            unsafe {
+                let _ = ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
             }
         }
         Ok(())
