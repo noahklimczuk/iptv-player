@@ -349,6 +349,21 @@ def driver_env(github):
         env["DISPLAY"] = DISPLAY
     # Loopback only, which is the only thing the app will accept (see `test_api_base`).
     env["AURORA_UPDATE_API"] = github.url
+    # Somewhere other than the real vault.
+    #
+    # Windows Credential Manager is per user, not per data directory, so redirecting
+    # `AURORA_DATA_DIR` isolated everything about a run except its secrets: the app filed
+    # them under `AuroraTV` either way, which is where the *installed* copy keeps the
+    # viewer's provider passwords and API keys. A scenario could read them, and saving a
+    # provider in one would overwrite them.
+    #
+    # Caught by a scenario asking `gemini.status` against a brand new portable profile
+    # and being told `hasKey: true` -- which it could only have got from the real vault.
+    #
+    # One fixed name rather than a unique one per run: these entries are not cleaned up
+    # by the data-directory wipe, so a per-run name would leave a new orphan in Credential
+    # Manager every time the suite ran.
+    env.setdefault("AURORA_CREDENTIAL_SERVICE", "AuroraTV-tests-host")
     return env
 
 
