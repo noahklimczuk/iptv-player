@@ -161,6 +161,25 @@ python tests-host/run.py video_surface
 The captures land in `screenshots/host/` as PNGs, which is worth looking at even when it
 passes: a frame of the stream, with no OSD over it, is the whole of Phase 0 in one file.
 
+### And it is the only place the inlaid picture can be checked
+
+The guide's preview puts the real video surface inside a box on the page. The browser
+suite proves the page asks for the right rectangle — it measures its own box, converts to
+physical pixels and calls `preview.place` — but a browser has no surface, so nothing there
+can say whether mpv went where it was told. A preview that asks correctly and is ignored
+looks exactly like one that works.
+
+`guide_preview` asks the window tree instead. The surface is a child window, so where it
+is is a measurable fact: place it at a known rectangle, read the child's rect back
+relative to the client area, and compare. It came back pixel-exact —
+`{'x': 480, 'y': 72, 'width': 640, 'height': 300}` for the same numbers going in — and
+the clamping branches are checked the same way, against the real window rather than a
+unit test's idea of one.
+
+**It needs no stream**, deliberately. The surface is attached at startup, before anything
+is playing, so placement is answerable on any Windows machine rather than only one with a
+subscription. `video_surface` remains the scenario that proves frames actually reach it.
+
 ### And it is how multi-view's commands are checked at all
 
 `tests-host/scenarios/multiview.py` asks the real host for every `mosaic.*` command with

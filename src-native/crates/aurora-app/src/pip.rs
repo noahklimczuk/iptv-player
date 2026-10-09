@@ -42,6 +42,12 @@ pub struct PipView {
     /// Sent even when PiP is off — it is where the tile *would* go, which is what lets
     /// the UI animate into it rather than having it appear.
     pub rect: Rect,
+    /// Where a page has asked for the picture to be inlaid, if anywhere.
+    ///
+    /// The guide's preview panel, today. Echoed back rather than simply remembered by
+    /// the caller because the host clamps it: a page that asks for a rectangle half
+    /// outside the window gets the one it actually got, and can draw its frame there.
+    pub inlay: Option<Rect>,
 }
 
 pub struct Pip {
@@ -49,6 +55,13 @@ pub struct Pip {
     enabled: AtomicBool,
     geometry: Mutex<Geometry>,
     size: Mutex<(u32, u32)>,
+    /// A rectangle a page has asked the picture to sit in.
+    ///
+    /// This is here rather than in a service of its own because `apply` below is the one
+    /// function in the app that moves the surface, and three services each moving it
+    /// would be three things to arbitrate between on every window resize. The precedence
+    /// is stated once, in `apply`.
+    inlay: Mutex<Option<Rect>>,
 }
 
 impl Pip {
@@ -58,6 +71,7 @@ impl Pip {
             enabled: AtomicBool::new(false),
             geometry: Mutex::new(Geometry::default()),
             size: Mutex::new((1280, 720)),
+            inlay: Mutex::new(None),
         }
     }
 
@@ -90,18 +104,20 @@ impl Pip {
     /// wry's custom-protocol handler. That is what shipped in 1.0.1: a window that drew,
     /// a UI that mounted, and then no command, event or asset request ever answering
     /// again — "Opening your library…" forever.
-    fn snapshot(&self) -> ((u32, u32), Geometry) {
+    fn snapshot(&self) -> ((u32, u32), Geometry, Option<Rect>) {
         let size = *self.size.lock();
         let geometry = *self.geometry.lock();
-        (size, geometry)
+        let inlay = *self.inlay.lock();
+        (size, geometry, inlay)
     }
 
     pub fn state(&self) -> PipView {
-        let ((w, h), geometry) = self.snapshot();
+        let ((w, h), geometry, inlay) = self.snapshot();
         PipView {
             enabled: self.is_enabled(),
             corner: geometry.corner,
             rect: geometry.rect(w, h),
+            inlay,
         }
     }
 
@@ -113,15 +129,24 @@ impl Pip {
         // One snapshot rather than a size read and then `state`, so the rect handed to
         // the backend is from the same moment as the size it is measured against — and
         // so there stays exactly one place in this file that takes these two locks.
-        let ((w, h), geometry) = self.snapshot();
+        let ((w, h), geometry, inlay) = self.snapshot();
         let view = PipView {
             enabled: self.is_enabled(),
             corner: geometry.corner,
             rect: geometry.rect(w, h),
+            inlay,
         };
         let mut player = self.player.lock();
+        // The precedence, in one place.
+        //
+        // A corner beats an inlay: picture-in-picture is a mode the viewer turned on
+        // deliberately and can see, while an inlay is a page asking for the surface
+        // because it happens to be open. A page losing its preview to PiP is
+        // explainable; PiP silently moving because somebody opened the guide is not.
         if view.enabled {
             player.place(view.rect)?;
+        } else if let Some(rect) = inlay {
+            player.place(rect)?;
         } else {
             player.resize(w, h)?;
         }
@@ -162,11 +187,61 @@ impl Pip {
         self.apply()
     }
 
+    /// Inlay the picture into a rectangle a page has measured, or stop.
+    ///
+    /// The rectangle arrives in physical pixels of the client area, because that is what
+    /// the backend places surfaces in and the conversion from CSS pixels needs the device
+    /// pixel ratio, which only the page knows.
+    ///
+    /// Clamped rather than trusted. A page measures its own layout, and a box that is
+    /// mid-animation, mid-scroll or momentarily zero-sized will produce a rectangle that
+    /// is partly outside the window — and a surface placed outside its parent is not a
+    /// small mistake on Windows, it is a child window nobody can see and no amount of
+    /// re-measuring brings back. The clamped rectangle is returned so the page draws its
+    /// frame where the picture actually went.
+    ///
+    /// `None` gives the window back, which is what leaving the page has to do.
+    pub fn set_inlay(&self, rect: Option<Rect>) -> Result<PipView> {
+        let ((w, h), _, _) = self.snapshot();
+        *self.inlay.lock() = rect.and_then(|r| clamp_to_window(r, w, h));
+        self.apply()
+    }
+
     /// The window changed size. Called for every resize, PiP on or off.
     pub fn relayout(&self, width: u32, height: u32) -> Result<PipView> {
         self.set_window(width, height);
         self.apply()
     }
+}
+
+/// A rectangle trimmed to the client area, or `None` if nothing of it is left.
+///
+/// Separate and total: every branch has a test, because the failure it prevents is
+/// invisible. A surface placed outside its parent window simply is not drawn, and the
+/// symptom is "the preview is black" with nothing wrong anywhere a log would look.
+fn clamp_to_window(r: Rect, width: u32, height: u32) -> Option<Rect> {
+    let (win_w, win_h) = (width as i64, height as i64);
+    // The edges, before any of this is a size again.
+    let left = r.x as i64;
+    let top = r.y as i64;
+    let right = left + r.width as i64;
+    let bottom = top + r.height as i64;
+
+    let left_in = left.max(0);
+    let top_in = top.max(0);
+    let right_in = right.min(win_w);
+    let bottom_in = bottom.min(win_h);
+
+    // Entirely off one side, or asked for with no area in the first place.
+    if right_in <= left_in || bottom_in <= top_in {
+        return None;
+    }
+    Some(Rect {
+        x: left_in as i32,
+        y: top_in as i32,
+        width: (right_in - left_in) as u32,
+        height: (bottom_in - top_in) as u32,
+    })
 }
 
 /* ── Commands ──────────────────────────────────────────────────────────────── */
@@ -216,6 +291,45 @@ pub fn pip_set_enabled(services: State<'_, Services>, args: EnabledArgs) -> Resu
         ));
     }
     services.pip.set_enabled(args.enabled)
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlayArgs {
+    /// Physical pixels, relative to the client area. The page converts from CSS pixels.
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Put the picture in a rectangle this page has measured (the guide's preview).
+///
+/// Refused while a mosaic is open, for the same reason `pip.toggle` is: the tiles are
+/// already using the surfaces.
+#[tauri::command(async)]
+pub fn preview_place(services: State<'_, Services>, args: InlayArgs) -> Result<PipView> {
+    if services.mosaic.is_open() {
+        return Err(crate::AppError::Other(
+            "Close multi-view first — it is already using the picture.".into(),
+        ));
+    }
+    services.pip.set_inlay(Some(Rect {
+        x: args.x,
+        y: args.y,
+        width: args.width,
+        height: args.height,
+    }))
+}
+
+/// Give the window back. Called when the page that asked for an inlay goes away.
+///
+/// Not refused while a mosaic is open: this is how a page cleans up, and a cleanup that
+/// can fail leaves the surface stuck in a rectangle belonging to a screen nobody is
+/// looking at any more.
+#[tauri::command(async)]
+pub fn preview_clear(services: State<'_, Services>) -> Result<PipView> {
+    services.pip.set_inlay(None)
 }
 
 #[tauri::command(async)]
@@ -386,6 +500,122 @@ mod tests {
                 "Pip::{name} did not return within {DEADLINE:?} -- it is holding one of                  its locks across another. See `Pip::snapshot`.",
             );
         }
+    }
+
+    const WIN: (u32, u32) = (1920, 1080);
+
+    fn rect(x: i32, y: i32, w: u32, h: u32) -> Rect {
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
+    }
+
+    #[test]
+    fn a_rectangle_inside_the_window_is_left_alone() {
+        let r = rect(1200, 40, 640, 360);
+        assert_eq!(clamp_to_window(r, WIN.0, WIN.1), Some(r));
+    }
+
+    /// Flush against the right and bottom edges is inside, not outside.
+    #[test]
+    fn a_rectangle_touching_the_far_edges_is_still_inside() {
+        let r = rect(1280, 720, 640, 360);
+        assert_eq!(clamp_to_window(r, WIN.0, WIN.1), Some(r));
+    }
+
+    #[test]
+    fn a_rectangle_hanging_off_the_right_is_trimmed() {
+        let got = clamp_to_window(rect(1800, 100, 400, 200), WIN.0, WIN.1);
+        assert_eq!(got, Some(rect(1800, 100, 120, 200)));
+    }
+
+    /// Negative origins happen: a box measured while a panel is animating in.
+    #[test]
+    fn a_rectangle_starting_before_the_origin_is_trimmed_and_moved() {
+        let got = clamp_to_window(rect(-50, -20, 400, 200), WIN.0, WIN.1);
+        assert_eq!(got, Some(rect(0, 0, 350, 180)));
+    }
+
+    #[test]
+    fn a_rectangle_entirely_outside_is_nothing() {
+        for r in [
+            rect(1920, 100, 300, 200),
+            rect(-400, 100, 300, 200),
+            rect(100, 1080, 300, 200),
+            rect(100, -300, 300, 200),
+        ] {
+            assert_eq!(clamp_to_window(r, WIN.0, WIN.1), None, "{r:?}");
+        }
+    }
+
+    /// A box that has not been laid out yet measures zero, and a zero-sized surface is
+    /// not a picture.
+    #[test]
+    fn a_rectangle_with_no_area_is_nothing() {
+        assert_eq!(clamp_to_window(rect(10, 10, 0, 200), WIN.0, WIN.1), None);
+        assert_eq!(clamp_to_window(rect(10, 10, 200, 0), WIN.0, WIN.1), None);
+    }
+
+    /// The arithmetic is done in `i64`, so a page sending nonsense cannot overflow its
+    /// way to a rectangle that passes the checks.
+    #[test]
+    fn an_absurd_rectangle_does_not_wrap_around() {
+        let got = clamp_to_window(rect(i32::MAX - 10, 0, u32::MAX, 100), WIN.0, WIN.1);
+        assert_eq!(got, None);
+        let got = clamp_to_window(rect(i32::MIN, 0, u32::MAX, 100), WIN.0, WIN.1);
+        assert_eq!(got, Some(rect(0, 0, WIN.0, 100)));
+    }
+
+    #[test]
+    fn an_inlay_puts_the_surface_in_the_rectangle_the_page_asked_for() {
+        let (p, seen) = pip();
+        p.set_window(WIN.0, WIN.1);
+        let view = p.set_inlay(Some(rect(1200, 40, 640, 360))).unwrap();
+        assert_eq!(view.inlay, Some(rect(1200, 40, 640, 360)));
+        assert_eq!(placed(&seen), Some(rect(1200, 40, 640, 360)));
+    }
+
+    #[test]
+    fn clearing_an_inlay_gives_the_whole_window_back() {
+        let (p, seen) = pip();
+        p.set_window(WIN.0, WIN.1);
+        p.set_inlay(Some(rect(1200, 40, 640, 360))).unwrap();
+        let view = p.set_inlay(None).unwrap();
+        assert_eq!(view.inlay, None);
+        // Back to the whole client area, not left pinned to the box the page had.
+        assert_eq!(placed(&seen), Some(rect(0, 0, WIN.0, WIN.1)));
+    }
+
+    /// The precedence `apply` states: a corner the viewer turned on beats a page's inlay.
+    #[test]
+    fn picture_in_picture_wins_over_a_pages_inlay() {
+        let (p, seen) = pip();
+        p.set_window(WIN.0, WIN.1);
+        p.set_inlay(Some(rect(1200, 40, 640, 360))).unwrap();
+        let view = p.set_enabled(true).unwrap();
+        // The corner rect, not the inlay.
+        assert_eq!(placed(&seen), Some(view.rect));
+        assert_ne!(view.rect, rect(1200, 40, 640, 360));
+        // And the inlay is remembered, so turning PiP off hands the box back.
+        assert_eq!(view.inlay, Some(rect(1200, 40, 640, 360)));
+        let off = p.set_enabled(false).unwrap();
+        assert_eq!(placed(&seen), Some(rect(1200, 40, 640, 360)), "{off:?}");
+    }
+
+    /// A rectangle the page could not possibly have meant leaves the picture alone
+    /// rather than putting the surface somewhere it cannot be seen.
+    #[test]
+    fn an_inlay_off_the_window_is_refused_and_falls_back_to_full() {
+        let (p, seen) = pip();
+        p.set_window(WIN.0, WIN.1);
+        let view = p.set_inlay(Some(rect(5000, 5000, 640, 360))).unwrap();
+        assert_eq!(view.inlay, None, "nothing of that rectangle is on screen");
+        // So the picture fills the window, which is the safe reading of "nowhere I can
+        // put this" — the Spy records a `resize` as the full client area.
+        assert_eq!(placed(&seen), Some(rect(0, 0, WIN.0, WIN.1)));
     }
 
     #[test]

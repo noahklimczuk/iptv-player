@@ -371,6 +371,62 @@ fn the_background_passes_are_started_at_launch() {
     }
 }
 
+/// The playlist sweep asks more often than the staleness it is looking for.
+///
+/// Two numbers in two files that only make sense together: `REFRESH_AFTER_SECS` in
+/// `providers.rs` is how old a library may get, and `REFRESH_SWEEP_INTERVAL` in `main.rs`
+/// is how often anything checks. If the interval is the longer of the two, a provider
+/// that comes due just after a check waits almost twice as long as it should — a daily
+/// refresh that silently becomes every other day, which is the kind of thing nobody
+/// notices because the guide is only *sometimes* out of date.
+///
+/// Read out of the sources rather than compared as constants, because the interval lives
+/// in a binary this test cannot link against.
+#[test]
+fn the_refresh_sweep_runs_more_often_than_the_staleness_it_looks_for() {
+    let root = repo_root();
+    let main = std::fs::read_to_string(root.join("src-native/crates/aurora-app/src/main.rs"))
+        .expect("main.rs");
+    let providers =
+        std::fs::read_to_string(root.join("src-native/crates/aurora-app/src/providers.rs"))
+            .expect("providers.rs");
+
+    /// `60 * 60` and friends, evaluated.
+    fn product(expr: &str) -> i64 {
+        expr.split('*')
+            .map(|p| p.trim().replace('_', "").parse::<i64>().expect("a number"))
+            .product()
+    }
+
+    let find = |text: &str, name: &str| -> i64 {
+        let at = text
+            .find(&format!("{name}:"))
+            .unwrap_or_else(|| panic!("{name} is gone — this test is about it"));
+        let rest = &text[at..];
+        let open = rest.find('(').expect("a duration or a literal");
+        let close = rest.find(')').expect("a closing paren");
+        product(&rest[open + 1..close])
+    };
+
+    // `REFRESH_AFTER_SECS: i64 = 24 * 60 * 60;` has no parens, so it is read differently.
+    let after = {
+        let at = providers
+            .find("REFRESH_AFTER_SECS")
+            .expect("REFRESH_AFTER_SECS is gone — this test is about it");
+        let rest = &providers[at..];
+        let eq = rest.find('=').expect("an assignment");
+        let end = rest.find(';').expect("a statement");
+        product(&rest[eq + 1..end])
+    };
+    let sweep = find(&main, "REFRESH_SWEEP_INTERVAL");
+
+    assert!(
+        sweep < after,
+        "the sweep runs every {sweep}s but looks for libraries older than {after}s — a          provider coming due just after a check would wait up to {}s",
+        after + sweep
+    );
+}
+
 #[test]
 fn the_window_is_transparent_so_video_can_show_through() {
     let config =

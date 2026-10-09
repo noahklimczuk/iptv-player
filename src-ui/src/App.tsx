@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import type { CatalogItem, MosaicView, PipView, SearchHit } from '@shared/ipc';
+import type { CatalogItem, MosaicRect, MosaicView, PipView, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
@@ -148,6 +148,15 @@ export default function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  /**
+   * Where the guide has asked for the picture, if it has.
+   *
+   * Here rather than inside the page because the shell paints the opaque background
+   * behind every screen, and that background is over the video too — so a hole the
+   * guide punches is only a hole if this stops painting as well.
+   */
+  const [guideInlay, setGuideInlay] = useState<MosaicRect | null>(null);
 
   const pipOn = pip?.enabled === true;
   const togglePip = useCallback(() => {
@@ -560,13 +569,18 @@ export default function App() {
   // for — `PipTile` punches a hole for the tile instead, and the rest stays opaque.
   const videoBehind = !pipOn && ((playerOpen && showingPicture(ui.player)) || mosaicOpen);
 
+  // The guide's inlaid preview needs the same transparency for one rectangle rather than
+  // the whole window. The page paints the background around it (`SurfaceHole`), so this
+  // only has to stop painting — and only while the page says it has the surface.
+  const shellTransparent = videoBehind || guideInlay != null;
+
   return (
     <div
       data-testid="app-shell"
       style={{
         display: 'flex',
         height: '100%',
-        background: videoBehind ? 'transparent' : 'var(--bg)',
+        background: shellTransparent ? 'transparent' : 'var(--bg)',
       }}
     >
       {/*
@@ -678,7 +692,20 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
-          <Route path="/guide" element={<GuidePage onTune={tune} onCatchup={playCatchup} onSearch={(q) => ui.setPalette(true, q)} />} />
+          <Route
+            path="/guide"
+            element={
+              <GuidePage
+                onTune={tune}
+                // The same tune, without surfacing the player: the picture is going
+                // into a box on a page the viewer is still reading.
+                onPreview={(ch) => tune(ch, { reveal: false })}
+                onInlay={setGuideInlay}
+                onCatchup={playCatchup}
+                onSearch={(q) => ui.setPalette(true, q)}
+              />
+            }
+          />
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/recordings" element={<RecordingsPage />} />

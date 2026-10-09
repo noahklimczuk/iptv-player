@@ -20,6 +20,21 @@ export interface ZapperOptions {
   onTune?: (channel: Channel) => void;
 }
 
+/** How a tune should be presented once the stream is opening. */
+export interface TuneOptions {
+  /**
+   * Whether to surface the player.
+   *
+   * `false` tunes without opening it, which is what the guide's preview panel needs:
+   * the picture goes into a box on a page the viewer is still reading, so throwing the
+   * full-screen player over it would defeat the point. Everything else about the tune is
+   * identical, which is why this is a flag here rather than a second code path — a
+   * separate "preview tune" would be a second place for `player.play` to be called
+   * wrongly, and that is exactly how digit entry once tuned with no visible player.
+   */
+  reveal?: boolean;
+}
+
 export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
   const onTuneRef = useRef(options.onTune);
   onTuneRef.current = options.onTune;
@@ -30,7 +45,7 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
   const { digits, pushDigit, clearDigits, showBanner } = useUi();
 
   const tune = useCallback(
-    (ch: Channel) => {
+    (ch: Channel, { reveal = true }: TuneOptions = {}) => {
       if (current && current.id !== ch.id) previous.current = current;
       setCurrent(ch);
       showBanner(ch.id);
@@ -39,7 +54,7 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
       // why the picture was black.
       invoke('player.play', { kind: 'live', id: ch.id })
         .catch(report(`Could not tune ${ch.name}`));
-      onTuneRef.current?.(ch);
+      if (reveal) onTuneRef.current?.(ch);
     },
     [current, showBanner],
   );

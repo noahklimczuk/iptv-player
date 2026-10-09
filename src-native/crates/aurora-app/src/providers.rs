@@ -843,12 +843,27 @@ pub fn providers_refresh(
     services: State<'_, Services>,
     args: RefreshArgs,
 ) -> Result<SyncReport> {
+    refresh_provider(&app, &services, args.provider_id)
+}
+
+/// The refresh itself, reachable without a command.
+///
+/// Split out so the nightly sweep can run exactly what the button in Settings runs.
+/// A second implementation would be a second set of bugs: this one updates
+/// `last_refresh_at`, expands series rules against the new guide, emits
+/// `library.refreshed`, and starts enrichment and the episode sweep -- all of which the
+/// scheduled path needs too, and none of which is obvious from the outside.
+pub fn refresh_provider(
+    app: &tauri::AppHandle,
+    services: &Services,
+    provider_id: i64,
+) -> Result<SyncReport> {
     let (kind, base_url, username, credential_ref_value) = {
         let db = services.db.lock();
         db.query_row(
             "SELECT kind, base_url, COALESCE(username, '') , credential_ref
              FROM providers WHERE id = ?1",
-            params![args.provider_id],
+            params![provider_id],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -860,7 +875,7 @@ pub fn providers_refresh(
         )
         .optional()
         .map_err(aurora_db::DbError::from)?
-        .ok_or_else(|| AppError::Other(format!("no provider {}", args.provider_id)))?
+        .ok_or_else(|| AppError::Other(format!("no provider {}", provider_id)))?
     };
 
     let source = match kind.as_str() {
@@ -871,10 +886,10 @@ pub fn providers_refresh(
         _ => SourceKind::M3u { url: base_url },
     };
 
-    let mut options = SyncOptions::new(args.provider_id, source, now_unix());
+    let mut options = SyncOptions::new(provider_id, source, now_unix());
     options.password = stored_password(services.credentials.as_ref(), credential_ref_value)?;
 
-    let rules = load_rules(&services)?;
+    let rules = load_rules(services)?;
 
     // The download happens with no lock held. It used to run inside one, which froze
     // every other command for the length of a playlist and a guide — and because the
@@ -884,7 +899,7 @@ pub fn providers_refresh(
     // `sync::fetch` is handed no database, so it cannot reintroduce that by accident.
     let emit = |p: Progress| {
         // Best-effort: a dropped progress event must never fail an import.
-        crate::emit(&app, "ingest.progress", &p);
+        crate::emit(app, "ingest.progress", &p);
     };
     let fetched = sync::fetch(&services.http, &options, &rules, emit)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
@@ -896,7 +911,7 @@ pub fn providers_refresh(
 
     db.execute(
         "UPDATE providers SET last_refresh_at = ?2 WHERE id = ?1",
-        params![args.provider_id, now_unix()],
+        params![provider_id, now_unix()],
     )
     .map_err(aurora_db::DbError::from)?;
 
@@ -939,6 +954,73 @@ pub fn providers_refresh(
     crate::series::sweep_in_background(app.clone());
 
     Ok(report)
+}
+
+/// How stale a provider's library may get before it is refreshed without being asked.
+pub const REFRESH_AFTER_SECS: i64 = 24 * 60 * 60;
+
+/// Providers whose library is older than `REFRESH_AFTER_SECS`, oldest first.
+///
+/// `last_refresh_at` is null for a provider that has never finished one -- imported
+/// through the wizard and then interrupted, say -- and that counts as stale: never is
+/// older than a day.
+pub fn stale_providers(db: &aurora_db::rusqlite::Connection, now: i64) -> Result<Vec<i64>> {
+    let cutoff = now - REFRESH_AFTER_SECS;
+    let mut stmt = db
+        .prepare(
+            "SELECT id FROM providers
+              WHERE last_refresh_at IS NULL OR last_refresh_at <= ?1
+              ORDER BY COALESCE(last_refresh_at, 0)",
+        )
+        .map_err(aurora_db::DbError::from)?;
+    let ids = stmt
+        .query_map(params![cutoff], |r| r.get::<_, i64>(0))
+        .map_err(aurora_db::DbError::from)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(aurora_db::DbError::from)?;
+    Ok(ids)
+}
+
+/// Refresh every provider that is due, one at a time. Returns how many were refreshed.
+///
+/// Sequential on purpose. Two refreshes at once means two playlist downloads and two
+/// `sync::apply` passes competing for the single writer connection, on a machine whose
+/// owner is probably watching something.
+///
+/// A provider that fails is logged and skipped rather than retried here: the sweep comes
+/// round again, and a provider that is down stays down for longer than this loop.
+pub fn refresh_stale(app: &tauri::AppHandle, services: &Services, now: i64) -> usize {
+    let due = {
+        let db = services.db.lock();
+        match stale_providers(&db, now) {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("could not work out which providers are stale: {e}");
+                return 0;
+            }
+        }
+    };
+    if due.is_empty() {
+        return 0;
+    }
+    tracing::info!("{} provider(s) have a library over a day old", due.len());
+
+    let mut done = 0;
+    for id in due {
+        match refresh_provider(app, services, id) {
+            Ok(report) => {
+                done += 1;
+                tracing::info!(
+                    "provider {id} refreshed on schedule: {} channels, {} films, {} episodes",
+                    report.channels,
+                    report.movies,
+                    report.episodes
+                );
+            }
+            Err(e) => tracing::warn!("the scheduled refresh of provider {id} failed: {e}"),
+        }
+    }
+    done
 }
 
 fn load_rules(services: &Services) -> Result<RuleSet> {
@@ -1108,6 +1190,67 @@ mod tests {
         fn is_persistent(&self) -> bool {
             true
         }
+    }
+
+    /// Seed a provider with a given `last_refresh_at`. `None` means it never finished one.
+    fn provider_refreshed_at(db: &aurora_db::rusqlite::Connection, id: i64, at: Option<i64>) {
+        db.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at,last_refresh_at)
+             VALUES (?1,?2,'m3u','https://example.com/p.m3u',0,?3)",
+            params![id, format!("P{id}"), at],
+        )
+        .unwrap();
+    }
+
+    const DAY: i64 = 24 * 60 * 60;
+
+    #[test]
+    fn a_library_refreshed_today_is_not_due() {
+        let db = aurora_db::open_memory().unwrap();
+        let now = 10 * DAY;
+        provider_refreshed_at(&db, 1, Some(now - 3600));
+        assert_eq!(stale_providers(&db, now).unwrap(), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn a_library_a_day_old_is_due() {
+        let db = aurora_db::open_memory().unwrap();
+        let now = 10 * DAY;
+        provider_refreshed_at(&db, 1, Some(now - REFRESH_AFTER_SECS));
+        assert_eq!(stale_providers(&db, now).unwrap(), vec![1]);
+    }
+
+    /// The boundary, stated: a second under a day is not due, which is what keeps the
+    /// half-hourly sweep from refreshing the same provider twice in a row.
+    #[test]
+    fn a_second_under_a_day_is_not_due() {
+        let db = aurora_db::open_memory().unwrap();
+        let now = 10 * DAY;
+        provider_refreshed_at(&db, 1, Some(now - REFRESH_AFTER_SECS + 1));
+        assert!(stale_providers(&db, now).unwrap().is_empty());
+    }
+
+    /// Never counts as older than a day. A provider imported through the wizard and then
+    /// interrupted has no `last_refresh_at` at all, and it is exactly the one that most
+    /// needs picking up.
+    #[test]
+    fn a_provider_that_never_finished_one_is_due() {
+        let db = aurora_db::open_memory().unwrap();
+        provider_refreshed_at(&db, 1, None);
+        assert_eq!(stale_providers(&db, 10 * DAY).unwrap(), vec![1]);
+    }
+
+    /// Oldest first, so the worst library is fixed first if the sweep is interrupted.
+    #[test]
+    fn the_stalest_library_is_refreshed_first() {
+        let db = aurora_db::open_memory().unwrap();
+        let now = 10 * DAY;
+        provider_refreshed_at(&db, 1, Some(now - 2 * DAY));
+        provider_refreshed_at(&db, 2, None);
+        provider_refreshed_at(&db, 3, Some(now - 5 * DAY));
+        provider_refreshed_at(&db, 4, Some(now - 60));
+        // 2 never did, then 3 at five days, then 1 at two. 4 is not due at all.
+        assert_eq!(stale_providers(&db, now).unwrap(), vec![2, 3, 1]);
     }
 
     fn provider_count(db: &aurora_db::rusqlite::Connection) -> i64 {
