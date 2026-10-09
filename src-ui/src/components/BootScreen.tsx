@@ -26,12 +26,36 @@ import { useEffect, useState } from 'react';
  */
 const PATIENCE_MS = 2500;
 
+/**
+ * How long before this stops being "loading" and starts being "stuck".
+ *
+ * 1.0.1 shipped a build whose host stopped answering once the window was up, and this
+ * screen sat on "Opening your library…" for as long as anyone was willing to watch it,
+ * under a sweeping bar that said everything was fine. Nothing was logged where a viewer
+ * could see it and there was no way out but the task manager.
+ *
+ * No launch legitimately takes this long: the slowest thing behind it is two queries
+ * against a local SQLite file. So past here the honest thing is to say so and offer the
+ * one action that sometimes helps, rather than keep animating.
+ */
+const STUCK_MS = 20_000;
+
 export function BootScreen({ label = 'Starting Aurora…' }: { label?: string }) {
   const [slow, setSlow] = useState(false);
+  const [stuck, setStuck] = useState(false);
 
   useEffect(() => {
+    // Overridable so a test can assert on the stuck state without waiting out the real
+    // patience; see `main.tsx`, where `?bootStuck` sets it.
+    const stuckAfter =
+      (window as unknown as { __auroraBootStuckMs?: number }).__auroraBootStuckMs ??
+      STUCK_MS;
     const t = window.setTimeout(() => setSlow(true), PATIENCE_MS);
-    return () => window.clearTimeout(t);
+    const u = window.setTimeout(() => setStuck(true), stuckAfter);
+    return () => {
+      window.clearTimeout(t);
+      window.clearTimeout(u);
+    };
   }, []);
 
   return (
@@ -90,7 +114,7 @@ export function BootScreen({ label = 'Starting Aurora…' }: { label?: string })
         </div>
         <div style={{ color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>{label}</div>
         {/* Only once it has gone on long enough to be worth explaining. */}
-        {slow && (
+        {slow && !stuck && (
           <div
             style={{
               color: 'var(--text-faint)',
@@ -101,6 +125,44 @@ export function BootScreen({ label = 'Starting Aurora…' }: { label?: string })
             }}
           >
             A large library takes a moment to open.
+          </div>
+        )}
+        {/* Past the point where "loading" is still a fair description of this. */}
+        {stuck && (
+          <div
+            data-testid="boot-stuck"
+            style={{
+              display: 'grid',
+              gap: 'var(--sp-3)',
+              justifyItems: 'center',
+              maxWidth: 340,
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ color: 'var(--text)', fontSize: 'var(--fs-sm)' }}>
+              Aurora isn’t getting an answer from its library.
+            </div>
+            <div
+              style={{ color: 'var(--text-faint)', fontSize: 'var(--fs-xs)', opacity: 0.8 }}
+            >
+              Reloading usually clears it. If it keeps happening, the app will need to be
+              restarted.
+            </div>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '8px 18px',
+                borderRadius: 'var(--r-full)',
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                fontSize: 'var(--fs-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              Reload
+            </button>
           </div>
         )}
       </div>

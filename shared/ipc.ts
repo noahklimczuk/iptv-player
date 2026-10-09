@@ -914,6 +914,23 @@ export interface AssistantReply {
   steps: string[];
 }
 
+/* ── Picture-in-picture (README §6.2) ─────────────────────────────────────── */
+
+export type PipCorner = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight';
+
+export interface PipView {
+  enabled: boolean;
+  corner: PipCorner;
+  /**
+   * Where the small picture is, in **physical** pixels of the client area.
+   *
+   * The host computes it because the same numbers position the real video surface, and
+   * it is reported even while PiP is off — that is where the tile *would* go, which is
+   * what lets the UI frame it without a round-trip.
+   */
+  rect: MosaicRect;
+}
+
 export interface Commands {
   'library.rails': (args: { profileId: number }) => Rail[];
   'library.recommended': (args: { profileId: number; limit?: number }) => Recommended;
@@ -1186,6 +1203,15 @@ export interface Commands {
   'mosaic.layouts': () => SavedMosaicLayout[];
   'mosaic.openSaved': (args: { id: number }) => MosaicView;
   'mosaic.deleteLayout': (args: { id: number }) => boolean;
+
+  /* ── Picture-in-picture ─────────────────────────────────────────────────── */
+
+  'pip.state': () => PipView;
+  /** `P`. Refused while a mosaic is open — both want the same surfaces. */
+  'pip.toggle': () => PipView;
+  'pip.setEnabled': (args: { enabled: boolean }) => PipView;
+  /** `null` moves clockwise, which is what the button on the tile does. */
+  'pip.setCorner': (args: { corner: PipCorner | null }) => PipView;
 
   'progress.save': (args: {
     profileId: number;

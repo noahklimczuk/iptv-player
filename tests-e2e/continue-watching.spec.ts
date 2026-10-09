@@ -19,6 +19,24 @@ import { expect, test, type Page } from '@playwright/test';
 
 const SHOTS = 'screenshots';
 
+/**
+ * Wait for a set of cards to stop growing before anything reads it.
+ *
+ * `toBeVisible()` on the first card means the first page has *started* arriving, not
+ * that it is all there, and the grid pages in more as it goes. Reading the titles on
+ * that signal alone gave a short list, and a short list made this fail as "every film
+ * in the library was already resumable" — which is a confusing way to report that the
+ * grid had rendered four cards so far and all four happened to be seeded.
+ */
+async function settled(cards: ReturnType<Page['getByTestId']>): Promise<void> {
+  await expect(cards.first()).toBeVisible();
+  let seen = -1;
+  for (let i = 0; i < 20 && seen !== (await cards.count()); i += 1) {
+    seen = await cards.count();
+    await cards.page().waitForTimeout(100);
+  }
+}
+
 /** Each card's accessible name, one per card. */
 async function titles(cards: ReturnType<Page['getByTestId']>): Promise<string[]> {
   const n = await cards.count();
@@ -46,13 +64,8 @@ async function resumable(page: Page): Promise<string[]> {
   const rail = page.getByRole('region', { name: 'Continue Watching' });
   if ((await rail.count()) === 0) return [];
   const cards = rail.getByTestId('catalog-card');
-  await expect(cards.first()).toBeVisible();
-  // Settled: the count has to stop moving before the list means anything.
-  let seen = -1;
-  for (let i = 0; i < 20 && seen !== (await cards.count()); i += 1) {
-    seen = await cards.count();
-    await page.waitForTimeout(100);
-  }
+  // The count has to stop moving before the list means anything.
+  await settled(cards);
   return titles(cards);
 }
 
@@ -74,7 +87,7 @@ test('a film you watched joins Continue Watching, because the app saved where yo
   // caught zero of them about one run in three — and "no films are resumable" is a
   // confusing way for that to be reported. The rail helper above waits for the same
   // reason.
-  await expect(cards.first()).toBeVisible();
+  await settled(cards);
   const all = await titles(cards);
   const picked = all.find((t) => !before.includes(t)) ?? null;
   expect(picked, 'every film in the library was already resumable').not.toBeNull();
