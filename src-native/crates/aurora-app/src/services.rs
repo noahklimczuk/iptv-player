@@ -26,9 +26,6 @@ pub struct Services {
     /// Multi-view (README §7.4). Holds one backend per open tile, so it is empty — and
     /// costs nothing — until a mosaic is opened.
     pub mosaic: Arc<crate::mosaic::Mosaic>,
-    /// Picture-in-picture (README §6.2). The *same* player in a corner rather than a
-    /// second one, so unlike a mosaic tile it opens no connection and cannot be refused.
-    pub pip: Arc<crate::pip::Pip>,
     /// Downloaded posters and backdrops. Deletable at any time — the library stores
     /// remote URLs, so this is only an accelerator.
     pub artwork: Arc<artwork::Cache>,
@@ -62,17 +59,25 @@ impl Services {
             );
         }
 
-        // Two maintenance passes used to run here, before the window existed:
-        // reclassifying the library for the filters, and forgetting metadata answers
-        // recorded under an older query. Both are version-gated, so an ordinary launch
-        // paid a settings read for each — but the launch *after* an upgrade that bumped
-        // either version paid for a scan and an update of every channel, film and show.
-        // On the library this was measured against that is some 39,000 rows, and it
-        // happened with no window on screen and nothing to say why.
-        //
-        // They run on a thread after setup now (`main.rs`), which is where work nobody
-        // is waiting for belongs. See `catch_up`.
-        let db = db;
+        // A library imported before this build — or before the classifier last changed
+        // its mind — has no language or quality on its rows, so the filters would have
+        // nothing to read. Sync does this too; this is for the copy already on disk.
+        let mut db = db;
+        match aurora_db::repo::filtering::reclassify_if_stale(&mut db) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("classified {n} library rows for filtering"),
+            // Not being able to classify is not a reason to refuse to start: the
+            // filters simply hide nothing until the next sync.
+            Err(e) => tracing::warn!("could not classify the library: {e}"),
+        }
+
+        // A "nothing matched" recorded under an older way of asking is not evidence
+        // about the current one. See `enrichment::QUERY_VERSION`.
+        match aurora_db::repo::enrichment::forget_stale_nomatches(&db) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("{n} titles will be looked up again: the query changed"),
+            Err(e) => tracing::warn!("could not clear stale metadata answers: {e}"),
+        }
 
         let http = HttpClient::new(HttpConfig::default())
             .map_err(|e| crate::AppError::Other(e.message))?;
@@ -106,10 +111,7 @@ impl Services {
             data_dir.clone(),
         ));
 
-        let pip = Arc::new(crate::pip::Pip::new(Arc::clone(&player)));
-
         Ok(Self {
-            pip,
             playback: Arc::new(crate::playback::Playback::new(
                 Arc::clone(&db),
                 Arc::clone(&player),

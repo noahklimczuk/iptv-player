@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    assistant, commands, dvr, gemini, library, metadata, mosaic, now_unix, pip, playlist, profiles,
+    assistant, commands, dvr, gemini, library, metadata, mosaic, now_unix, playlist, profiles,
     providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
@@ -182,7 +182,6 @@ fn main() {
                     );
                 }
             }
-            let services_db = std::sync::Arc::clone(&services.db);
             let scheduler = std::sync::Arc::clone(&services.dvr);
             let playback_handle = std::sync::Arc::clone(&services.playback);
             let mosaic_handle = std::sync::Arc::clone(&services.mosaic);
@@ -213,9 +212,6 @@ fn main() {
                     // reference to the window is Tauri's own state and the mosaic would
                     // have to be handed an `AppHandle` to get at it.
                     window::record_mosaic_window(&main_window, &services.mosaic);
-                    if let Ok(size) = main_window.inner_size() {
-                        services.pip.set_window(size.width, size.height);
-                    }
                 }
                 None => tracing::error!("no main window at setup; video cannot composite"),
             }
@@ -246,43 +242,6 @@ fn main() {
             // so a library that was imported once and then just used never finished
             // either. See `catch_up_in_background`.
             aurora_app::catch_up_in_background(app.handle().clone());
-
-            // The library maintenance that used to run before the window existed.
-            //
-            // Both passes are version-gated and usually do nothing, so this costs a
-            // thread and two settings reads. The launch after an upgrade that bumped
-            // either version is the one that mattered: a scan and an update of every
-            // channel, film and show — some 39,000 rows on a real library — with no
-            // window on screen. Nobody is waiting for either result, so nobody should
-            // wait for them.
-            let maintenance = std::sync::Arc::clone(&services_db);
-            std::thread::Builder::new()
-                .name("aurora-maintenance".into())
-                .spawn(move || {
-                    supervised("maintenance", || {
-                        let mut db = maintenance.lock();
-                        // Filters read `lang_code` and `quality_rank`; a library
-                        // imported before the classifier last changed its mind has
-                        // neither, and would simply filter nothing until this runs.
-                        match aurora_db::repo::filtering::reclassify_if_stale(&mut db) {
-                            Ok(0) => {}
-                            Ok(n) => tracing::info!("classified {n} library rows for filtering"),
-                            Err(e) => tracing::warn!("could not classify the library: {e}"),
-                        }
-                        // A "nothing matched" recorded under an older way of asking is
-                        // not evidence about the current one.
-                        match aurora_db::repo::enrichment::forget_stale_nomatches(&db) {
-                            Ok(0) => {}
-                            Ok(n) => {
-                                tracing::info!(
-                                    "{n} titles will be looked up again: the query changed"
-                                )
-                            }
-                            Err(e) => tracing::warn!("could not clear stale metadata answers: {e}"),
-                        }
-                    });
-                })
-                .expect("spawning the maintenance thread");
 
             // The player's heartbeat. The backend only knows its state when asked, and
             // the UI's OSD is driven by a `player.state` event, so without this a
@@ -360,13 +319,7 @@ fn main() {
                 // resize arrives on is what stops the two tearing apart (README §2.1).
                 tauri::WindowEvent::Resized(size) => {
                     if let Some(services) = win.try_state::<Services>() {
-                        // Through `Pip` rather than straight to the backend: `resize`
-                        // means "fill the client area" and has no origin to put a corner
-                        // at, so with picture-in-picture on it is exactly the wrong call
-                        // — it would snap the small picture back to full-window on the
-                        // first drag of a window edge. `Pip::relayout` decides which of
-                        // the two the surface should get.
-                        if let Err(e) = services.pip.relayout(size.width, size.height) {
+                        if let Err(e) = services.player.lock().resize(size.width, size.height) {
                             tracing::warn!("could not resize the video surface: {e}");
                         }
                         // And every mosaic tile, for the same reason: the surfaces are
@@ -497,10 +450,6 @@ fn main() {
             assistant::assistant_history,
             assistant::assistant_send,
             assistant::assistant_clear,
-            pip::pip_state,
-            pip::pip_toggle,
-            pip::pip_set_enabled,
-            pip::pip_set_corner,
             gemini::gemini_status,
             gemini::gemini_set_key,
             timeshift::timeshift_settings,

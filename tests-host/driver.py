@@ -30,6 +30,18 @@ import base64, json, re, time, urllib.request, urllib.error
 BASE = "http://127.0.0.1:4444"
 
 
+class HostRefused(AssertionError):
+    """The host answered a command with an error.
+
+    Its own type, because a refusal is sometimes the thing a scenario is *asserting* --
+    and when `invoke` raised a plain `AssertionError`, `except AssertionError: raise`
+    (the guard that lets a scenario's own failure through) re-raised the correct refusal
+    as a failure. `multiview` could not pass for that reason while the host was right.
+
+    Still an `AssertionError` so an unexpected refusal fails the scenario as before.
+    """
+
+
 def wire_command(name):
     """The host's name for a command the UI spells in its own way.
 
@@ -114,7 +126,7 @@ class WD:
             wire_command(command), args,
         )
         if not got.get("ok"):
-            raise AssertionError(f"the host refused {command!r}: {got.get('error')}")
+            raise HostRefused(f"the host refused {command!r}: {got.get('error')}")
         return got["value"]
 
     def by_label(self, label, timeout=15):
