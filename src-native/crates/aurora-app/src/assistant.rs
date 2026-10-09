@@ -926,6 +926,8 @@ pub fn send(
             working.push(Turn::ToolCall {
                 name: call.name.clone(),
                 args: call.args.clone(),
+                // Carried back verbatim. The API rejects the next turn without it.
+                thought_signature: call.thought_signature.clone(),
             });
 
             match run_tool(db, profile_id, call, now) {
@@ -1114,6 +1116,7 @@ mod tests {
                 calls: vec![ToolCall {
                     name: name.into(),
                     args,
+                    thought_signature: None,
                 }],
             }
         }
@@ -1424,6 +1427,7 @@ mod tests {
             .map(|_| ToolCall {
                 name: "library_digest".into(),
                 args: json!({}),
+                thought_signature: None,
             })
             .collect();
         let script = Script::new(vec![

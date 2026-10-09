@@ -50,6 +50,8 @@ pub enum Turn {
     ToolCall {
         name: String,
         args: serde_json::Value,
+        /// Handed straight back to the API. See `ToolCall::thought_signature`.
+        thought_signature: Option<String>,
     },
     ToolResult {
         name: String,
@@ -67,10 +69,24 @@ pub struct ToolDecl {
 }
 
 /// What the model wants to call, and with what.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ToolCall {
     pub name: String,
     pub args: serde_json::Value,
+    /// The model's opaque record of its own reasoning for this call.
+    ///
+    /// Gemini returns one beside every `functionCall` part, and **requires it back** on
+    /// the next turn, in the same part it came from. Drop it and the next request is
+    /// rejected outright:
+    ///
+    /// > Function call is missing a thought_signature in functionCall parts. This is
+    /// > required for tools to work correctly…
+    ///
+    /// Which is a 400, and therefore was every tool-using question in the app failing on
+    /// its second round. Opaque on purpose — it is not for reading, only for handing
+    /// back. `None` for a model that does not send one, and for the scripted chatter in
+    /// the tests.
+    pub thought_signature: Option<String>,
 }
 
 /// One round's answer: either it is done talking, or it wants something looked up.
@@ -143,10 +159,19 @@ fn contents_of(history: &[Turn]) -> Vec<serde_json::Value> {
         .map(|turn| match turn {
             Turn::User { text } => json!({ "role": "user", "parts": [{ "text": text }] }),
             Turn::Model { text } => json!({ "role": "model", "parts": [{ "text": text }] }),
-            Turn::ToolCall { name, args } => json!({
-                "role": "model",
-                "parts": [{ "functionCall": { "name": name, "args": args } }],
-            }),
+            Turn::ToolCall {
+                name,
+                args,
+                thought_signature,
+            } => {
+                let mut part = json!({ "functionCall": { "name": name, "args": args } });
+                // Beside `functionCall`, not inside it: the signature is a property of
+                // the *part*, which is where the API looks for it.
+                if let Some(signature) = thought_signature {
+                    part["thoughtSignature"] = json!(signature);
+                }
+                json!({ "role": "model", "parts": [part] })
+            }
             Turn::ToolResult { name, result } => json!({
                 "role": "user",
                 "parts": [{
@@ -336,6 +361,10 @@ pub fn parse_reply(raw: &str) -> Result<ChatReply, NetFailure> {
                 calls.push(ToolCall {
                     name: name.to_string(),
                     args: call.get("args").cloned().unwrap_or_else(|| json!({})),
+                    thought_signature: part
+                        .get("thoughtSignature")
+                        .and_then(|t| t.as_str())
+                        .map(str::to_string),
                 });
             }
         }
@@ -500,6 +529,7 @@ mod tests {
             Turn::ToolCall {
                 name: "search_library".into(),
                 args: json!({ "query": "thriller" }),
+                thought_signature: Some("opaque-signature".into()),
             },
             Turn::ToolResult {
                 name: "search_library".into(),
@@ -513,6 +543,14 @@ mod tests {
         assert_eq!(
             contents[1]["parts"][0]["functionCall"]["name"],
             "search_library"
+        );
+        // Beside `functionCall`, which is where the API looks for it. Without this the
+        // next request is a 400: "Function call is missing a thought_signature in
+        // functionCall parts." That was every tool-using question failing on its second
+        // round, and it is the reason the assistant "gave errors".
+        assert_eq!(
+            contents[1]["parts"][0]["thoughtSignature"],
+            "opaque-signature"
         );
         // The result arrives from the user's side, which is what the API specifies.
         assert_eq!(contents[2]["role"], "user");
