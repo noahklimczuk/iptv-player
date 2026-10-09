@@ -207,12 +207,74 @@ impl Chatter for ChatClient<'_> {
             body["tools"] = json!([{ "functionDeclarations": declarations }]);
         }
 
-        let raw = self.http.post_json(
+        let (status, raw) = self.http.post_json_with_status(
             &self.url(),
             &body.to_string(),
             &[(super::gemini::API_KEY_HEADER, self.api_key.as_str())],
         )?;
+        if status >= 400 {
+            return Err(rejected(status, &raw));
+        }
         parse_reply(&raw)
+    }
+}
+
+/// What the API said about a request it would not accept.
+///
+/// Gemini answers a bad request with `400` and an envelope whose `error.message` names
+/// the problem exactly -- an invalid key, a malformed payload, a tool declaration it
+/// would not take. None of that used to reach anybody: a non-2xx became a `NetFailure`
+/// before the body was read, `400` matched no branch in the classifier, and every one of
+/// them surfaced as "Your provider didn't respond. It may be temporarily offline." --
+/// which blames the IPTV provider for something Google said, and gives the reader
+/// nothing to do about it.
+fn rejected(status: u16, raw: &str) -> NetFailure {
+    let said = serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        });
+
+    // A key problem is worth naming as one, because the action is different: nothing
+    // about waiting or retrying helps, and the viewer has somewhere to go and fix it.
+    let about_the_key = said
+        .as_deref()
+        .map(|m| {
+            let l = m.to_ascii_lowercase();
+            l.contains("api key") || l.contains("api_key") || l.contains("permission denied")
+        })
+        .unwrap_or(false);
+
+    if about_the_key || status == 401 || status == 403 {
+        return NetFailure {
+            code: ErrorCode::Unauthorized,
+            message: "The assistant's API key was refused".into(),
+            cause: said
+                .unwrap_or_else(|| "Google rejected the key this build was given.".to_string()),
+            actions: vec![ErrorAction::OpenSettings],
+            retryable: false,
+        };
+    }
+
+    // 429 and 5xx do pass through `send_with_retry` first, so arriving here means the
+    // retries are already spent.
+    let retryable = status == 429 || status >= 500;
+    NetFailure {
+        // `Unknown` rather than a new variant: the taxonomy is serialised to the UI and
+        // mirrored in `shared/ipc.ts`, and what the reader needs here is the sentence
+        // Google sent, not a new code to branch on.
+        code: ErrorCode::Unknown,
+        message: if retryable {
+            "The assistant is busy".into()
+        } else {
+            "The assistant could not answer that".into()
+        },
+        cause: said.unwrap_or_else(|| format!("The model's API returned HTTP {status}.")),
+        actions: vec![ErrorAction::Retry],
+        retryable,
     }
 }
 

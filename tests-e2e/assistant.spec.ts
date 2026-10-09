@@ -125,3 +125,47 @@ test('a refusal is reported rather than left as a silent nothing', async ({ page
   await expect(page.getByText('The model is over its quota')).toBeVisible();
   await expect(page.getByTestId('assistant-assistant')).toContainText(/could not answer/);
 });
+
+/**
+ * The link from the recommendation rail into the conversation.
+ *
+ * They were two features that happened to ask the same model and knew nothing about each
+ * other: the rail could not be questioned, and the assistant started every time from an
+ * empty box with no idea what had just been suggested. The obvious next thing to want
+ * from a list of suggestions is to argue with it.
+ */
+test('the recommendation rail hands its suggestions to the assistant', async ({ page }) => {
+  await giveItAKey(page);
+  // Navigated within the app rather than with `goto`: the mock's state lives in the
+  // page, so a fresh document load would throw the key away and the rail is gated on
+  // having one — it would appear and then vanish underneath the click.
+  await page.getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: 'Home' })
+    .click();
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+
+  const ask = page.getByTestId('ai-rail-ask');
+  await expect(ask).toBeVisible();
+
+  // The question carries what is on screen, so the first answer is about these titles
+  // rather than about the library in general.
+  // A hash route, so the question is inside the fragment rather than in `search`.
+  const href = (await ask.getAttribute('href'))!;
+  expect(decodeURIComponent(href)).toContain('You suggested');
+
+  await ask.click();
+  await expect(page.getByRole('heading', { name: 'Assistant' })).toBeVisible();
+
+  // Asked on arrival, as the viewer's own turn — not left sitting in the input box.
+  await expect(page.getByTestId('assistant-user')).toContainText('You suggested');
+  await expect(page.getByTestId('assistant-assistant')).toBeVisible();
+});
+
+test('arriving with no question leaves the openers up', async ({ page }) => {
+  await giveItAKey(page);
+  await openAssistant(page);
+  // The seeded question must not fire on an ordinary visit, or every trip to the
+  // assistant would spend a model call.
+  await expect(page.getByTestId('assistant-suggestion').first()).toBeVisible();
+  await expect(page.getByTestId('assistant-user')).toHaveCount(0);
+});

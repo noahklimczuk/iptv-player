@@ -13,7 +13,9 @@
  * apology on somebody's home page. Settings is where it says what is wrong.
  */
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { CatalogItem } from '@shared/ipc';
+import { Icon } from '@/components/Icon';
 import { Rail } from '@/components/Rail';
 import { invoke } from '@/ipc';
 import { useProfile } from '@/state/profile';
@@ -57,6 +59,53 @@ export function AiRail({
       }}
       onOpen={onOpen}
       onPlay={onPlay}
+      action={
+        /*
+         * The link from the rail into the conversation.
+         *
+         * The rail is a list, and the obvious next thing to want from a list of
+         * suggestions is to argue with it — "not those", "something shorter", "why that
+         * one?". Until now those were two unconnected features that happened to ask the
+         * same model: the rail could not be questioned, and the assistant started every
+         * time from an empty box with no idea what had just been suggested.
+         *
+         * The titles go with it, so the first answer is about what is on screen rather
+         * than about the library in general. Capped at four: the question is an opening,
+         * not a manifest, and the model has the library to look things up in anyway.
+         */
+        <Link
+          to={`/assistant?ask=${encodeURIComponent(askAbout(picks.items))}`}
+          data-testid="ai-rail-ask"
+          style={{
+            marginLeft: 'auto',
+            marginRight: 'var(--sp-2)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 'var(--fs-xs)',
+            fontWeight: 600,
+            color: 'var(--text-muted)',
+            textDecoration: 'none',
+          }}
+        >
+          <Icon name="sparkle" size={14} />
+          Ask about these
+        </Link>
+      }
     />
   );
+}
+
+/**
+ * The opening question, built from what the rail is showing.
+ *
+ * Phrased as something a person would actually say, because it goes into the thread as
+ * their turn and they will read it back. "Tell me more about these" with a list beats a
+ * bare "recommendations", which gives the model nothing to work from and reads like a
+ * command rather than a question.
+ */
+function askAbout(items: CatalogItem[]): string {
+  const titles = items.slice(0, 4).map((i) => i.title);
+  if (titles.length === 0) return 'What should I watch tonight?';
+  return `You suggested ${titles.join(', ')}. Why those, and what else is like them?`;
 }

@@ -18,6 +18,7 @@
  * and one that reads as broken.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { ChatItem, ChatMessage } from '@shared/ipc';
 import { Button, EmptyState, Poster, TextField } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
@@ -160,6 +161,21 @@ export function AssistantPage({
   // The steps arrive while the turn is in flight.
   useEffect(() => onAssistantStep(({ step }) => setSteps((s) => [...s, step])), []);
 
+  /**
+   * A question carried in on the URL, asked once.
+   *
+   * This is what links the recommendation rail to the assistant: "Because of what you
+   * watch" can hand over the thing it just suggested and the conversation starts there,
+   * rather than dumping somebody on an empty chat and expecting them to retype what was
+   * already on screen.
+   *
+   * Guarded by a ref rather than by clearing the hash. Navigating to replace the URL
+   * remounts the route under `HashRouter`, which would ask again, and asking twice costs
+   * a model call and puts the same question in the thread twice.
+   */
+  const askedFromUrl = useRef<string | null>(null);
+  const [params] = useSearchParams();
+
   const shown = messages ?? [];
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -199,6 +215,17 @@ export function AssistantPage({
     },
     [profileId, thinking],
   );
+
+  // Asked after `send` is defined, and only once the key is known — firing it before
+  // `status` has arrived would send a question the host is about to refuse for want of
+  // a key, and the refusal would be the first thing in the thread.
+  const question = params.get('ask');
+  useEffect(() => {
+    if (!question || !status?.hasKey) return;
+    if (askedFromUrl.current === question) return;
+    askedFromUrl.current = question;
+    void send(question);
+  }, [question, status?.hasKey, send]);
 
   const clear = useCallback(async () => {
     try {

@@ -197,6 +197,25 @@ pub trait PlayerBackend: Send {
         Ok(())
     }
 
+    /// Show or hide this surface without tearing it down.
+    ///
+    /// For the main player while a mosaic is open. The tiles are separate surfaces, and
+    /// every `place` sends the surface it moves to the *bottom* of the z-order so it
+    /// stays under the WebView — which means each tile, as it is placed, goes behind the
+    /// main player's full-window surface. Stopping playback is not enough: the window is
+    /// still there, still full-window, still in front, and an mpv surface with nothing
+    /// loaded is black. The symptom is a mosaic you can hear and cannot see.
+    ///
+    /// Hiding is the right tool rather than resizing to nothing: the instance keeps its
+    /// state, and a zero-sized child window is a thing Windows treats inconsistently.
+    ///
+    /// Default no-op, so a backend with no window — `NullBackend`, the test spies — is
+    /// unaffected.
+    fn set_surface_visible(&mut self, visible: bool) -> Result<(), PlayerError> {
+        let _ = visible;
+        Ok(())
+    }
+
     /// Give the backend a window to render into.
     ///
     /// `parent` is the host window's native handle as an integer — on Windows, the

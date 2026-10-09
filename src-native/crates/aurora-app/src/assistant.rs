@@ -33,7 +33,7 @@
 
 use aurora_db::repo::{filtering, library, recommend as store, search, settings};
 use aurora_db::rusqlite::Connection;
-use aurora_ingest::chat::{ChatClient, Chatter, ToolCall, ToolDecl, Turn};
+use aurora_ingest::chat::{ChatClient, ChatReply, Chatter, ToolCall, ToolDecl, Turn};
 use aurora_ingest::http::{HttpClient, HttpConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -792,6 +792,51 @@ fn turns_of(messages: &[ChatMessage]) -> Vec<Turn> {
 /// `chatter` is injected so the whole loop — the rounds, the bounds, the tool dispatch,
 /// the card resolution — can be driven in a test by a scripted model, with no key and no
 /// network.
+/// How many times a turn is attempted before the message gives up.
+///
+/// Three, and only for failures the taxonomy calls retryable -- a quota, a 5xx, an empty
+/// candidate list. A refused key or a rejected request is returned on the first attempt,
+/// because asking again with the same key and the same payload cannot do anything except
+/// cost another call.
+const TURN_ATTEMPTS: usize = 3;
+
+/// Between attempts. Short: somebody is watching a "thinking" indicator.
+const TURN_BACKOFF: [u64; 2] = [1, 3];
+
+fn turn_with_retries(
+    chatter: &dyn Chatter,
+    system: &str,
+    working: &[Turn],
+    tools: &[ToolDecl],
+) -> std::result::Result<ChatReply, aurora_core::neterr::NetFailure> {
+    let mut last = None;
+    for attempt in 0..TURN_ATTEMPTS {
+        if attempt > 0 {
+            let wait = TURN_BACKOFF
+                .get(attempt - 1)
+                .copied()
+                .unwrap_or(*TURN_BACKOFF.last().unwrap_or(&3));
+            std::thread::sleep(std::time::Duration::from_secs(wait));
+        }
+        match chatter.turn(system, working, tools) {
+            Ok(reply) => return Ok(reply),
+            Err(e) => {
+                if !e.retryable {
+                    return Err(e);
+                }
+                tracing::warn!(
+                    "assistant turn {} of {TURN_ATTEMPTS} failed: {} {}",
+                    attempt + 1,
+                    e.message,
+                    e.cause
+                );
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.expect("a failure to report after every attempt failed"))
+}
+
 pub fn send(
     db: &Connection,
     chatter: &dyn Chatter,
@@ -825,9 +870,31 @@ pub fn send(
     for round in 0..MAX_ROUNDS {
         // The model's own words for a failure, which `NetFailure` has already turned
         // into something a person can act on — a bad key, a quota, a safety stop.
-        let reply = chatter
-            .turn(&system, &working, &tools)
-            .map_err(|e| AppError::Other(format!("{} {}", e.message, e.cause)))?;
+        //
+        // Retried here, and not only in the HTTP client, because the failures that most
+        // often spoil a conversation are invisible from down there. A 200 whose body is
+        // an `error` envelope, and a response with no candidate at all, both arrive as a
+        // *successful* request: `send_with_retry` has already returned by the time
+        // anything notices. Those are the ones this loop is for.
+        let reply = match turn_with_retries(chatter, &system, &working, &tools) {
+            Ok(reply) => reply,
+            Err(e) => {
+                let why = format!("{} {}", e.message, e.cause);
+                // Work already done is not thrown away.
+                //
+                // A question that got as far as looking two things up and then lost the
+                // connection can still be answered with what was found, and that is a
+                // far better outcome than an error that discards it. With nothing found
+                // and nothing said there is no answer to give, so the failure is the
+                // answer — but that is the only case that still fails.
+                if items.is_empty() && said.is_empty() {
+                    return Err(AppError::Other(why));
+                }
+                tracing::warn!("answering with what was found after: {why}");
+                steps.push("could not finish thinking about this one".into());
+                break;
+            }
+        };
 
         if let Some(spoken) = reply.text.clone() {
             // Narration before a lookup is kept, but only as working text: the final
@@ -1066,6 +1133,113 @@ mod tests {
     }
 
     const NOW: i64 = 1_760_000_000;
+
+    /// A model that fails a given number of times and then behaves.
+    struct Flaky {
+        left: RefCell<usize>,
+        retryable: bool,
+        then: RefCell<Vec<ChatReply>>,
+    }
+
+    fn failure(retryable: bool) -> aurora_core::neterr::NetFailure {
+        aurora_core::neterr::NetFailure {
+            code: aurora_core::neterr::ErrorCode::Unknown,
+            message: "The assistant is busy".into(),
+            cause: "try again".into(),
+            actions: Vec::new(),
+            retryable,
+        }
+    }
+
+    impl Chatter for Flaky {
+        fn turn(
+            &self,
+            _system: &str,
+            _history: &[Turn],
+            _tools: &[ToolDecl],
+        ) -> std::result::Result<ChatReply, aurora_core::neterr::NetFailure> {
+            let mut left = self.left.borrow_mut();
+            if *left > 0 {
+                *left -= 1;
+                return Err(failure(self.retryable));
+            }
+            let mut then = self.then.borrow_mut();
+            if then.is_empty() {
+                return Err(failure(self.retryable));
+            }
+            Ok(then.remove(0))
+        }
+    }
+
+    /// A retryable failure is a hiccup, not an answer. The HTTP client cannot see these
+    /// -- a 200 carrying an `error` envelope, or a reply with no candidate, is a
+    /// *successful* request by the time it gets there -- so the retry has to be here.
+    #[test]
+    fn a_retryable_failure_is_tried_again_rather_than_reported() {
+        let db = db();
+        let chatter = Flaky {
+            left: RefCell::new(1),
+            retryable: true,
+            then: RefCell::new(vec![Script::text("Got there in the end.")]),
+        };
+        let out = send(&db, &chatter, 1, "anything", NOW, |_| {}).unwrap();
+        assert_eq!(out.message.text, "Got there in the end.");
+    }
+
+    /// And a refused key is not: asking again with the same key costs a call and cannot
+    /// succeed.
+    #[test]
+    fn a_failure_that_cannot_improve_is_not_retried() {
+        let db = db();
+        let chatter = Flaky {
+            left: RefCell::new(1),
+            retryable: false,
+            then: RefCell::new(vec![Script::text("never reached")]),
+        };
+        assert!(send(&db, &chatter, 1, "anything", NOW, |_| {}).is_err());
+    }
+
+    /// The commonest shape of "the assistant gives me errors": it found things, then the
+    /// next round failed, and the whole message was discarded along with the work.
+    #[test]
+    fn work_already_done_is_answered_with_rather_than_thrown_away() {
+        let mut db = db();
+        let id = seed_movie(&mut db, "Arrival", 2016, "Drama");
+        let chatter = Flaky {
+            left: RefCell::new(0),
+            // Not retryable, so the second round fails once and immediately.
+            retryable: false,
+            then: RefCell::new(vec![Script::call(
+                "show_titles",
+                json!({ "items": [{ "kind": "movie", "id": id, "note": "Tense." }] }),
+            )]),
+        };
+
+        let out = send(&db, &chatter, 1, "something tense", NOW, |_| {}).unwrap();
+        assert_eq!(out.message.items.len(), 1, "the card it had already found");
+        assert_eq!(out.message.items[0].title, "Arrival");
+        assert!(
+            out.steps.iter().any(|s| s.contains("could not finish")),
+            "the viewer is told it was cut short: {:?}",
+            out.steps
+        );
+    }
+
+    /// With nothing found and nothing said there is no answer to give, so that one case
+    /// still fails -- and says why.
+    #[test]
+    fn a_failure_with_nothing_to_show_is_still_a_failure() {
+        let db = db();
+        let chatter = Flaky {
+            left: RefCell::new(1),
+            retryable: false,
+            then: RefCell::new(Vec::new()),
+        };
+        let err = send(&db, &chatter, 1, "anything", NOW, |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("busy") || err.contains("try again"), "{err}");
+    }
 
     fn db() -> Connection {
         let db = aurora_db::open_memory().unwrap();

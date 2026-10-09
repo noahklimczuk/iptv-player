@@ -317,7 +317,8 @@ export interface Track {
 /** README §17: every error maps to a human sentence, a cause, and an action. */
 export interface PlaybackError {
   code:
-    | 'dns' | 'refused' | 'tls' | 'unauthorized' | 'forbidden' | 'notFound' | 'rateLimited'
+    | 'dns' | 'refused' | 'tls' | 'unauthorized' | 'forbidden' | 'notFound' | 'badRequest'
+    | 'rateLimited'
     | 'serverError' | 'connectionLimit' | 'timeout' | 'unsupportedCodec'
     | 'drmProtected' | 'dropped' | 'unknown';
   message: string;
