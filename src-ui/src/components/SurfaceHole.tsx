@@ -34,6 +34,40 @@ function cssRect(rect: MosaicRect, dpr: number) {
   };
 }
 
+/**
+ * A `clip-path` for a layer that should paint everywhere except one rectangle.
+ *
+ * The other way to make a hole, and the one to reach for when the rectangle sits *over*
+ * page content rather than in a region of its own. Bands cannot help there: content
+ * drawn above them covers the hole, and bands drawn above the content cover the page.
+ * Clipping removes the rectangle from the layer itself, so whatever is inside it —
+ * background, text, cards — simply is not painted there.
+ *
+ * `evenodd` with the outer ring followed by the inner one is what makes the inner ring a
+ * hole rather than a second filled shape.
+ *
+ * It also makes the clipped element a containing block for its `position: fixed`
+ * descendants. That is harmless here *because the element is exactly the viewport* — the
+ * app shell is `height: 100%` with its own scrolling pane inside — so a fixed child's
+ * containing block changes to a box of the same size in the same place. On an element
+ * that is not viewport-sized this would move things.
+ *
+ * Anything that must stay *visible over* the rectangle has to be outside the clipped
+ * subtree: it is clipped too, and a tile's own controls sit inside the hole by
+ * definition. `PipTile` is portalled to `document.body` for that reason.
+ */
+export function holeClipPath(rect: MosaicRect, dpr: number): string {
+  const left = rect.x / dpr;
+  const top = rect.y / dpr;
+  const right = left + rect.width / dpr;
+  const bottom = top + rect.height / dpr;
+  return (
+    'polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, ' +
+    `${left}px ${top}px, ${left}px ${bottom}px, ` +
+    `${right}px ${bottom}px, ${right}px ${top}px, ${left}px ${top}px)`
+  );
+}
+
 export function SurfaceHole({
   rect,
   dpr = window.devicePixelRatio || 1,

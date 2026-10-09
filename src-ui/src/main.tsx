@@ -5,6 +5,7 @@ import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
 import { failNextMock, hangMock, invoke, setSilentDurationMock } from './ipc';
+import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
 
 // Before the first render, so a failure during mount has somewhere to go too.
@@ -23,6 +24,10 @@ installGlobalErrorHandlers();
 // …and lets them make one go quiet rather than refuse, which is the failure the boot
 // screen exists to survive and the one nothing could express before.
 (window as unknown as { __auroraHang?: unknown }).__auroraHang = hangMock;
+// …and the icon set, so a test can measure every glyph's geometry rather than only the
+// handful that happen to be on one screen. `getBBox` needs a real SVG engine, so this is
+// the only place the measurement can be made from.
+(window as unknown as { __auroraIconPaths?: unknown }).__auroraIconPaths = ICON_PATHS;
 
 // …and on the query string as well as on `window`, because the commands that decide the
 // first screen are already in flight by the time a test can evaluate anything. Same

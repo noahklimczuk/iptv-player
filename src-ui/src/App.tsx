@@ -37,6 +37,7 @@ import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
 import { MosaicOverlay } from '@/features/mosaic/MosaicOverlay';
 import { PipTile } from '@/features/player/PipTile';
+import { holeClipPath } from '@/components/SurfaceHole';
 import { SaveLayoutDialog } from '@/features/mosaic/MosaicPage';
 import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/PlayerOverlay';
 import { CommandPalette } from '@/features/search/CommandPalette';
@@ -569,6 +570,33 @@ export default function App() {
   // for — `PipTile` punches a hole for the tile instead, and the rest stays opaque.
   const videoBehind = !pipOn && ((playerOpen && showingPicture(ui.player)) || mosaicOpen);
 
+  /**
+   * The hole the small picture shows through.
+   *
+   * Picture-in-picture never showed anything, and this is why. The shell is opaque while
+   * PiP is on — deliberately, since the point is to read a page with the stream still
+   * running — and an opaque layer cannot be given a see-through rectangle by putting a
+   * transparent child in it. CSS has no way to erase what is already painted.
+   *
+   * `PipTile` tried to solve it with four opaque bands around the tile at `z-index: 58`.
+   * That cannot work either, in two different ways at once: the bands are above the page
+   * so they cover the thing you are meant to be reading, and the shell is still painting
+   * under the tile so the rectangle they leave is shell, not video.
+   *
+   * Clipping the shell is the version that works. The rectangle is removed from the
+   * layer, so nothing in it — background, nav, cards, text — is painted there, and what
+   * is behind the WebView shows through. The tile's own frame and controls are portalled
+   * out of the clipped subtree, because they sit inside the hole by definition.
+   *
+   * Not while a mosaic is open or the player is full screen: `videoBehind` already makes
+   * the whole shell transparent for those, and clipping on top of it would be a hole in
+   * a window that is already a hole.
+   */
+  const pipCutout =
+    pipOn && !videoBehind && pip && pip.rect.width > 0
+      ? holeClipPath(pip.rect, dpr)
+      : undefined;
+
   // The guide's inlaid preview needs the same transparency for one rectangle rather than
   // the whole window. The page paints the background around it (`SurfaceHole`), so this
   // only has to stop painting — and only while the page says it has the surface.
@@ -581,6 +609,7 @@ export default function App() {
         display: 'flex',
         height: '100%',
         background: shellTransparent ? 'transparent' : 'var(--bg)',
+        clipPath: pipCutout,
       }}
     >
       {/*
@@ -611,15 +640,29 @@ export default function App() {
           display: videoBehind ? 'none' : 'flex',
           alignItems: 'center',
           gap: 2,
-          padding: 6,
+          padding: 7,
           borderRadius: 'var(--r-full)',
-          // Translucent over whatever is behind it, which is what makes it read as
-          // floating rather than as a bar stuck to the bottom.
-          background: 'color-mix(in srgb, var(--bg-elevated) 82%, transparent)',
-          backdropFilter: 'blur(24px) saturate(140%)',
-          WebkitBackdropFilter: 'blur(24px) saturate(140%)',
-          border: '1px solid color-mix(in srgb, var(--text) 10%, transparent)',
-          boxShadow: 'var(--shadow-4)',
+          /*
+           * Still translucent — that is what makes it read as floating rather than as a
+           * bar stuck to the bottom — but considerably more present than it was.
+           *
+           * At 82% over a dark page, against a 10%-of-text border and `--text-faint`
+           * labels, the whole thing receded into the background: on a page with a bright
+           * rail behind it there was nothing to tell you where the navigation was. Three
+           * things changed together, because raising any one alone just moves which part
+           * disappears:
+           *
+           *   - the fill to 94%, so it is a surface rather than a tint;
+           *   - the edge to a real border plus an inner highlight, which is what gives a
+           *     translucent panel a definite boundary at its top edge;
+           *   - the resting label colour to `--text-muted`, up from `--text-faint`.
+           */
+          background: 'color-mix(in srgb, var(--bg-elevated) 94%, transparent)',
+          backdropFilter: 'blur(28px) saturate(150%)',
+          WebkitBackdropFilter: 'blur(28px) saturate(150%)',
+          border: '1px solid var(--border-strong)',
+          boxShadow:
+            'var(--shadow-4), inset 0 1px 0 color-mix(in srgb, var(--text) 12%, transparent)',
           zIndex: 50,
           overflowX: 'auto',
           scrollbarWidth: 'none',
@@ -638,19 +681,23 @@ export default function App() {
               gap: 2,
               // Wide enough for the longest label at this size without the row
               // reflowing when the active item changes.
-              minWidth: 62,
-              padding: '7px 10px 6px',
+              minWidth: 66,
+              padding: '8px 12px 7px',
               borderRadius: 'var(--r-full)',
               textDecoration: 'none',
-              fontSize: 10,
-              fontWeight: 600,
+              // 11 rather than 10. At 10 the labels were decoration under the icons
+              // rather than something you read, which is most of why the bar was easy
+              // to miss.
+              fontSize: 11,
+              fontWeight: 650,
+              letterSpacing: '0.01em',
               whiteSpace: 'nowrap',
-              color: isActive ? 'var(--accent-text)' : 'var(--text-faint)',
+              color: isActive ? 'var(--accent-text)' : 'var(--text-muted)',
               background: isActive ? 'var(--accent)' : 'transparent',
               transition: 'background var(--t-fast) var(--ease), color var(--t-fast) var(--ease)',
             })}
           >
-            <Icon name={n.icon} size={20} />
+            <Icon name={n.icon} size={21} strokeWidth={2} />
             {n.label}
           </NavLink>
         ))}
