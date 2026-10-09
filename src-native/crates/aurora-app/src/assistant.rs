@@ -879,7 +879,10 @@ pub fn send(
         let reply = match turn_with_retries(chatter, &system, &working, &tools) {
             Ok(reply) => reply,
             Err(e) => {
-                let why = format!("{} {}", e.message, e.cause);
+                // An em dash between them: each is a sentence, and run together they read as
+                // one broken sentence -- "The assistant's API key was refused API
+                // key not valid".
+                let why = format!("{} \u{2014} {}", e.message, e.cause);
                 // Work already done is not thrown away.
                 //
                 // A question that got as far as looking two things up and then lost the
