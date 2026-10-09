@@ -124,8 +124,38 @@ mod windows_store {
 
     const SERVICE: &str = "AuroraTV";
 
+    /// The environment variable that moves this store somewhere else.
+    ///
+    /// Credential Manager is per *user*, not per data directory -- so a service name
+    /// fixed at `AuroraTV` meant every run of `tests-host` read, and could overwrite,
+    /// the real app's saved provider passwords and API keys. The data directory being
+    /// redirected (`AURORA_DATA_DIR`, or the portable marker) isolated everything except
+    /// this, which was the one store that ignored it.
+    ///
+    /// It was not hypothetical: a scenario asking for `gemini.status` against a brand new
+    /// portable profile came back `hasKey: true`, which it could only have got from the
+    /// real vault.
+    pub const SERVICE_ENV: &str = "AURORA_CREDENTIAL_SERVICE";
+
+    /// Where secrets are filed. Overridable, so a test run can be kept apart.
+    ///
+    /// Read per call rather than cached: cheap next to the vault round trip that follows
+    /// it, and a cached value would be read before a test could set one.
+    fn service() -> String {
+        service_from(std::env::var(SERVICE_ENV).ok())
+    }
+
+    /// The decision, separated from reading the environment so it can be tested without
+    /// one -- an env-var test races every other test in the binary.
+    fn service_from(override_name: Option<String>) -> String {
+        match override_name {
+            Some(name) if !name.trim().is_empty() => name,
+            _ => SERVICE.to_string(),
+        }
+    }
+
     fn entry(key: &str) -> Result<keyring::Entry, CredentialError> {
-        keyring::Entry::new(SERVICE, key).map_err(|e| CredentialError::Backend(e.to_string()))
+        keyring::Entry::new(&service(), key).map_err(|e| CredentialError::Backend(e.to_string()))
     }
 
     impl CredentialStore for KeyringStore {
@@ -167,6 +197,34 @@ mod windows_store {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// The default, which is where the real app's secrets live.
+        #[test]
+        fn with_no_override_it_is_the_real_vault() {
+            assert_eq!(service_from(None), SERVICE);
+        }
+
+        /// And the override, which is what keeps a test run out of it. Credential Manager
+        /// is per user rather than per data directory, so this is the only thing that
+        /// separates a harness run's secrets from the installed copy's.
+        #[test]
+        fn an_override_moves_the_store_somewhere_else() {
+            assert_eq!(
+                service_from(Some("AuroraTV-tests-host".into())),
+                "AuroraTV-tests-host"
+            );
+            assert_ne!(service_from(Some("AuroraTV-tests-host".into())), SERVICE);
+        }
+
+        /// An unset variable arrives as an empty string often enough -- an exported but
+        /// empty shell variable, a CI expression over a secret that is not set -- and
+        /// filing secrets under `""` is not a sensible reading of that.
+        #[test]
+        fn an_empty_or_blank_override_is_not_a_name() {
+            for blank in ["", " ", "	"] {
+                assert_eq!(service_from(Some(blank.into())), SERVICE, "{blank:?}");
+            }
+        }
 
         fn scratch_key() -> String {
             format!(

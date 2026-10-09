@@ -92,7 +92,24 @@ loader ends the process with `0xC0000135` before `main` runs. No window, no log,
 message — the `NullBackend` fallback never gets the chance to happen (F-34). If a run
 produces nothing at all, check that the DLL is there before looking anywhere else.
 
-### Why the release build
+#### What it keeps away from your own copy
+
+Every run gets its own data directory, so the library, settings and artwork cache are
+never the installed copy's. Secrets were the exception, and it took a while to notice:
+Windows Credential Manager is per *user*, not per data directory, so the app filed
+provider passwords and API keys under the service name `AuroraTV` whatever directory it
+had been pointed at — the same place the installed copy keeps them. A scenario could read
+them, and saving a provider in a scenario would overwrite them.
+
+It surfaced when a check asked `gemini.status` against a brand new portable profile and
+was told `hasKey: true`, which it could only have got from the real vault.
+
+`AURORA_CREDENTIAL_SERVICE` now moves the store, and `run.py` sets it to
+`AuroraTV-tests-host`. One fixed name rather than a unique one per run, because these
+entries are not swept up by the data-directory wipe and a per-run name would leave a new
+orphan in Credential Manager every time the suite ran. Set it for one-off scripts too.
+
+## Why the release build
 
 Two reasons, and both matter.
 

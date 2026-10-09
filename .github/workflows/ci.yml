@@ -352,6 +352,45 @@ jobs:
         working-directory: src-native
         run: cargo build --release -p aurora-app
 
+      - name: Check the built-in keys actually landed in the binary
+        # `option_env!` is read when the crate compiles, so a key can be missing from a
+        # release for reasons no test can see: an unset secret, a secret whose value is
+        # not what it should be, or a warm target directory from a build that ran without
+        # one. The result was that the assistant and the recommendation rail had never
+        # worked in any release, and nothing said so -- the app correctly reports "needs a
+        # key" either way, which looks identical to not having configured it.
+        #
+        # So the build states what it did. Lengths and a yes/no only: the key itself is
+        # masked in logs, and printing it would defeat the point of it being a secret.
+        shell: pwsh
+        run: |
+          $exe = 'src-native/target/release/aurora-app.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          foreach ($k in @(
+            @{ Name = 'Gemini'; Env = $env:AURORA_GEMINI_KEY },
+            @{ Name = 'TMDB';   Env = $env:AURORA_TMDB_KEY }
+          )) {
+            $set = -not [string]::IsNullOrWhiteSpace($k.Env)
+            # Set or not, and nothing else -- not even the length, which is still
+            # something about a secret that does not need to be in a public log.
+            if (-not $set) {
+              Write-Host "$($k.Name): no secret configured, so the build carries no key"
+              continue
+            }
+            Write-Host "$($k.Name): secret is set"
+
+            # Looked for by its own value rather than by a prefix, so this works for any
+            # key format. The comparison never reaches the log.
+            $inBinary = $text.Contains($k.Env)
+            Write-Host "$($k.Name): in the binary: $inBinary"
+            if (-not $inBinary) {
+              throw ("The $($k.Name) secret is set but is not in the built binary. " +
+                     'option_env! was evaluated without it -- check the job env block ' +
+                     'and that build.rs still has rerun-if-env-changed for it.')
+            }
+          }
+
       - name: Assemble the portable build
         shell: pwsh
         run: |
