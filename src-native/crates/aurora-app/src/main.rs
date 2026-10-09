@@ -182,7 +182,6 @@ fn main() {
                     );
                 }
             }
-            let services_db = std::sync::Arc::clone(&services.db);
             let scheduler = std::sync::Arc::clone(&services.dvr);
             let playback_handle = std::sync::Arc::clone(&services.playback);
             let mosaic_handle = std::sync::Arc::clone(&services.mosaic);
@@ -246,43 +245,6 @@ fn main() {
             // so a library that was imported once and then just used never finished
             // either. See `catch_up_in_background`.
             aurora_app::catch_up_in_background(app.handle().clone());
-
-            // The library maintenance that used to run before the window existed.
-            //
-            // Both passes are version-gated and usually do nothing, so this costs a
-            // thread and two settings reads. The launch after an upgrade that bumped
-            // either version is the one that mattered: a scan and an update of every
-            // channel, film and show — some 39,000 rows on a real library — with no
-            // window on screen. Nobody is waiting for either result, so nobody should
-            // wait for them.
-            let maintenance = std::sync::Arc::clone(&services_db);
-            std::thread::Builder::new()
-                .name("aurora-maintenance".into())
-                .spawn(move || {
-                    supervised("maintenance", || {
-                        let mut db = maintenance.lock();
-                        // Filters read `lang_code` and `quality_rank`; a library
-                        // imported before the classifier last changed its mind has
-                        // neither, and would simply filter nothing until this runs.
-                        match aurora_db::repo::filtering::reclassify_if_stale(&mut db) {
-                            Ok(0) => {}
-                            Ok(n) => tracing::info!("classified {n} library rows for filtering"),
-                            Err(e) => tracing::warn!("could not classify the library: {e}"),
-                        }
-                        // A "nothing matched" recorded under an older way of asking is
-                        // not evidence about the current one.
-                        match aurora_db::repo::enrichment::forget_stale_nomatches(&db) {
-                            Ok(0) => {}
-                            Ok(n) => {
-                                tracing::info!(
-                                    "{n} titles will be looked up again: the query changed"
-                                )
-                            }
-                            Err(e) => tracing::warn!("could not clear stale metadata answers: {e}"),
-                        }
-                    });
-                })
-                .expect("spawning the maintenance thread");
 
             // The player's heartbeat. The backend only knows its state when asked, and
             // the UI's OSD is driven by a `player.state` event, so without this a
