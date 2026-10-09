@@ -36,20 +36,38 @@ export function useEpisodeAids(
   const duration = player?.durationSecs ?? 0;
   const position = player?.positionSecs ?? 0;
 
-  // Fetch once per episode. Duration is only read on the first load that has one, so
-  // a late-arriving duration does not cause a refetch loop.
-  const fetchedFor = useRef<number | null>(null);
+  // Fetch as soon as there is an episode, with whatever duration the player has — which
+  // is routinely none.
+  //
+  // This used to wait for `duration > 0`, and that is the other half of the bug the
+  // `upNextVisible` comment below describes. A provider's VOD stream often reports no
+  // duration, sometimes never; the host was taught to fall back to the episode's stored
+  // runtime for exactly that case, but it was never asked, so `aids` stayed null for the
+  // whole episode. With no aids there is no `upNextAtSecs` *and* no markers and no next
+  // episode either — so Skip Intro, Skip Credits and autoplay were all dead together on
+  // any stream without a duration, however much evidence the library held. Fixing the
+  // guard downstream could not help while the request was never made.
+  //
+  // Asking with `durationSecs: 0` is the honest thing: it says "the player does not
+  // know", which is a question the host can answer.
+  //
+  // Refetched once if a real duration turns up later, because a conventional credits
+  // marker is placed off the end of the file and the player's own number is the better
+  // one. Tracked as a pair so that is a single extra call and not a loop: the second
+  // fetch is only ever from "asked without a duration" to "asked with one".
+  const fetchedFor = useRef<{ episodeId: number; withDuration: boolean } | null>(null);
   useEffect(() => {
-    if (episodeId == null || duration <= 0) {
-      if (episodeId == null) {
-        setAids(null);
-        fetchedFor.current = null;
-      }
+    if (episodeId == null) {
+      setAids(null);
+      fetchedFor.current = null;
       return;
     }
-    if (fetchedFor.current === episodeId) return;
-    fetchedFor.current = episodeId;
-    setDismissed(null);
+    const done = fetchedFor.current;
+    if (done?.episodeId === episodeId && (done.withDuration || duration <= 0)) return;
+    // Only when the episode itself changes: the refetch must not un-dismiss a card the
+    // viewer has already waved away.
+    if (done?.episodeId !== episodeId) setDismissed(null);
+    fetchedFor.current = { episodeId, withDuration: duration > 0 };
     const args = { profileId, episodeId, durationSecs: duration };
     // Chapters first, then ask what there is.
     //

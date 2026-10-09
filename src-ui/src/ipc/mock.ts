@@ -1726,7 +1726,9 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return setPlayer({
       status: 'playing', isLive: false, channelId: null, itemKind: kind, itemId: id,
       title: name, subtitle: null, timeshift: null,
-      positionSecs: positionSecs ?? 0, durationSecs: duration, error: null,
+      positionSecs: positionSecs ?? 0,
+      durationSecs: silentDuration ? 0 : duration,
+      error: null,
     });
   },
   'player.pause': () => setPlayer({ status: 'paused' }),
@@ -2437,6 +2439,24 @@ const faults = new Map<string, string>();
 
 export function failNextMock(name: string, message: string): void {
   faults.set(name, message);
+}
+
+/**
+ * Whether the player pretends not to know how long anything is.
+ *
+ * Not a hypothetical: a provider's VOD stream very often reports no duration, because
+ * mpv has nothing to read one from until the file is buffered and on some streams never
+ * gets one at all. That is the state in which Skip Credits and autoplay were dead, and
+ * it was invisible here because every fixture plays with a known runtime.
+ *
+ * The host answers `library.playbackAids` from the episode's *stored* runtime in this
+ * case, which the mock already mirrors — so flipping only the player's number reproduces
+ * the real asymmetry rather than a made-up one.
+ */
+let silentDuration = false;
+
+export function setSilentDurationMock(on: boolean): void {
+  silentDuration = on;
 }
 
 export async function invokeMock<K extends CommandName>(
