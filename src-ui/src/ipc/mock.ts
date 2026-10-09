@@ -1355,7 +1355,33 @@ function pipRect(corner: PipCorner): MosaicRect {
   return { x, y, width: w, height: h };
 }
 
-const pipView = (): PipView => ({ ...pip, rect: pipRect(pip.corner) });
+/**
+ * Where a page has asked the picture to be inlaid.
+ *
+ * There is no video surface in a browser, so this records the request and nothing moves.
+ * Worth answering anyway: the guide's preview is driven by whether this *succeeded*, and
+ * the two-click behaviour — preview, then full screen — is testable without a picture.
+ */
+let inlay: PipView['inlay'] = null;
+
+/** The same trim the host does, so a browser sees the same rectangle a release does. */
+function clampToWindow(r: NonNullable<PipView['inlay']>): PipView['inlay'] {
+  // The *real* window, not `PIP_WINDOW`. That constant is a stand-in for the client area
+  // when computing where a PiP corner would be, and it is not the browser's size — using
+  // it here trimmed a perfectly good preview box down to a sliver, because the page
+  // measures itself against the actual viewport.
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.round(window.innerWidth * dpr);
+  const height = Math.round(window.innerHeight * dpr);
+  const left = Math.max(r.x, 0);
+  const top = Math.max(r.y, 0);
+  const right = Math.min(r.x + r.width, width);
+  const bottom = Math.min(r.y + r.height, height);
+  if (right <= left || bottom <= top) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+const pipView = (): PipView => ({ ...pip, rect: pipRect(pip.corner), inlay });
 
 const ARTWORK_MAX_BYTES = 2 * 1024 ** 3;
 /** A plausible average across w342 posters and w1280 backdrops. */
@@ -1908,6 +1934,16 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     pip = { ...pip, enabled };
     return pipView();
   },
+  'preview.place': ({ x, y, width, height }) => {
+    if (mosaic.open) throw new Error('Close multi-view first — it is already using the picture.');
+    inlay = clampToWindow({ x, y, width, height });
+    return pipView();
+  },
+  'preview.clear': () => {
+    inlay = null;
+    return pipView();
+  },
+
   'pip.setCorner': ({ corner }) => {
     const next =
       corner ?? PIP_CORNERS[(PIP_CORNERS.indexOf(pip.corner) + 1) % PIP_CORNERS.length]!;

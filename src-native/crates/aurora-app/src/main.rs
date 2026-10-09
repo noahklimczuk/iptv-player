@@ -49,6 +49,21 @@ const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
 /// opens it.
 const UPDATE_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// How long after launch the first staleness check runs.
+///
+/// Well clear of the window appearing and the first screen's queries: a refresh is a
+/// playlist download and a `sync::apply` over tens of thousands of rows, and having it
+/// start while someone is still waiting for the library to draw would be a worse launch
+/// than the stale guide it is fixing.
+const REFRESH_SWEEP_DELAY: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How often the sweep asks again afterwards.
+///
+/// Not 24 hours: the interval has to be shorter than the staleness it is looking for, or
+/// a provider that comes due an hour after a check waits almost another full day. Half an
+/// hour costs one indexed query against a table with a handful of rows.
+const REFRESH_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 /// How long to wait for the UI to say it has painted before showing the window anyway.
 ///
 /// The window starts hidden so that its transparency is never a hole through to the
@@ -343,6 +358,36 @@ fn main() {
                 })
                 .expect("spawning the update thread");
 
+            // Keep the library from going stale on its own.
+            //
+            // A playlist is a snapshot: channels are renumbered, films are added and
+            // taken away, and the guide runs out. Until now the only thing that refreshed
+            // any of it was a button in Settings, so a library was exactly as old as the
+            // last time its owner thought to press it -- and an EPG grid with nothing in
+            // it looks like a broken app rather than a guide that expired.
+            //
+            // Per provider rather than globally, off `last_refresh_at`, so this follows
+            // whatever the button already did: refreshing by hand resets the clock, and a
+            // provider added today is not due tomorrow morning because another one was.
+            let refresh_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("aurora-refresh".into())
+                .spawn(move || {
+                    std::thread::sleep(REFRESH_SWEEP_DELAY);
+                    loop {
+                        // Supervised: a panic in here used to be the kind of thing that
+                        // stops a background loop with no symptom until somebody notices
+                        // the guide is a week old.
+                        supervised("playlist refresh", || {
+                            if let Some(services) = refresh_handle.try_state::<Services>() {
+                                providers::refresh_stale(&refresh_handle, &services, now_unix());
+                            }
+                        });
+                        std::thread::sleep(REFRESH_SWEEP_INTERVAL);
+                    }
+                })
+                .expect("spawning the refresh thread");
+
             Ok(())
         })
         .on_window_event(|win, event| {
@@ -501,6 +546,8 @@ fn main() {
             pip::pip_toggle,
             pip::pip_set_enabled,
             pip::pip_set_corner,
+            pip::preview_place,
+            pip::preview_clear,
             gemini::gemini_status,
             gemini::gemini_set_key,
             timeshift::timeshift_settings,

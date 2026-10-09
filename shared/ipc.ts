@@ -929,6 +929,15 @@ export interface PipView {
    * what lets the UI frame it without a round-trip.
    */
   rect: MosaicRect;
+  /**
+   * Where a page has asked for the picture to be inlaid, if anywhere.
+   *
+   * The guide's preview panel. Echoed back rather than just remembered by the caller
+   * because the host clamps it to the window: a box measured mid-animation or
+   * mid-scroll can be partly outside, and a surface placed outside its parent is not
+   * drawn at all. This is where the picture actually went.
+   */
+  inlay: MosaicRect | null;
 }
 
 export interface Commands {
@@ -1212,6 +1221,32 @@ export interface Commands {
   'pip.setEnabled': (args: { enabled: boolean }) => PipView;
   /** `null` moves clockwise, which is what the button on the tile does. */
   'pip.setCorner': (args: { corner: PipCorner | null }) => PipView;
+
+  /* ── The inlaid picture ─────────────────────────────────────────────────── */
+
+  /**
+   * Put the picture inside a rectangle this page has measured — the guide's preview.
+   *
+   * **Physical** pixels of the client area, so the caller multiplies its CSS box by
+   * `devicePixelRatio`. The host places real video surfaces in those coordinates and
+   * only the page knows its own ratio.
+   *
+   * The rectangle comes back clamped, which is what the caller should draw its frame
+   * around. Refused while a mosaic is open: the tiles have the surfaces.
+   */
+  'preview.place': (args: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => PipView;
+  /**
+   * Give the whole window back.
+   *
+   * Never refused — it is how a page cleans up, and a cleanup that can fail leaves the
+   * picture stuck in a rectangle on a screen nobody is looking at.
+   */
+  'preview.clear': () => PipView;
 
   'progress.save': (args: {
     profileId: number;
