@@ -4,7 +4,7 @@ import { HashRouter } from 'react-router-dom';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
-import { failNextMock, invoke, setSilentDurationMock } from './ipc';
+import { failNextMock, hangMock, invoke, setSilentDurationMock } from './ipc';
 import './styles/app.css';
 
 // Before the first render, so a failure during mount has somewhere to go too.
@@ -20,6 +20,24 @@ installGlobalErrorHandlers();
 // be dead.
 (window as unknown as { __auroraSilentDuration?: unknown }).__auroraSilentDuration =
   setSilentDurationMock;
+// …and lets them make one go quiet rather than refuse, which is the failure the boot
+// screen exists to survive and the one nothing could express before.
+(window as unknown as { __auroraHang?: unknown }).__auroraHang = hangMock;
+
+// …and on the query string as well as on `window`, because the commands that decide the
+// first screen are already in flight by the time a test can evaluate anything. Same
+// mechanism as `?video`. `?hang=providers.list,profiles.list` silences those; `?bootStuck`
+// shortens the boot screen's own patience so asserting on it does not cost 20 seconds.
+{
+  const params = new URLSearchParams(window.location.search);
+  for (const name of params.get('hang')?.split(',') ?? []) {
+    if (name.trim()) hangMock(name.trim());
+  }
+  const stuck = Number(params.get('bootStuck'));
+  if (Number.isFinite(stuck) && stuck > 0) {
+    (window as unknown as { __auroraBootStuckMs?: number }).__auroraBootStuckMs = stuck;
+  }
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

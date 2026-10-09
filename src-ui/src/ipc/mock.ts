@@ -2514,10 +2514,28 @@ export function setSilentDurationMock(on: boolean): void {
   silentDuration = on;
 }
 
+/**
+ * Commands that should never answer at all.
+ *
+ * Distinct from `faults`, and the distinction is the whole point: a refusal is an answer
+ * and the UI has somewhere to put it, while a command that simply never comes back
+ * leaves whatever was waiting on it waiting forever. That is what 1.0.1 did — the host
+ * went quiet once the window was up — and no test could express it, so the screen that
+ * spins while it happens went unexamined.
+ */
+const hangs = new Set<string>();
+
+export function hangMock(name: string): void {
+  hangs.add(name);
+}
+
 export async function invokeMock<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
 ): Promise<CommandResult<K>> {
+  // Before the faults, and never cleared: a host that has gone quiet stays quiet, and
+  // the caller retrying does not make it answer.
+  if (hangs.has(name)) return await new Promise<never>(() => {});
   const fault = faults.get(name);
   if (fault !== undefined) {
     faults.delete(name);
