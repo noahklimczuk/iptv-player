@@ -108,3 +108,75 @@ test('it is still a navigation landmark of links', async ({ page }) => {
     'page',
   );
 });
+
+/**
+ * How visible it is, as numbers.
+ *
+ * Reported as "make the tab bar more visible", and it was a fair complaint: the pill was
+ * filled at 82% over the page, edged with a border at 10% of the text colour, and
+ * labelled in `--text-faint` at 10px. Over a page with a bright rail behind it there was
+ * very little to say where the navigation was.
+ *
+ * These are the three numbers that fixed it, pinned so the next restyle has to be
+ * deliberate about them. Thresholds rather than exact values — this is about not
+ * disappearing, not about one particular shade.
+ */
+test('the pill is solid enough to find, and its labels readable', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(pill(page)).toBeVisible();
+
+  const look = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="nav-pill"]') as HTMLElement;
+    const style = getComputedStyle(el);
+    // The resting label, not the active one: the active item has an accent fill behind
+    // it and was never the thing that was hard to see.
+    const resting = Array.from(el.querySelectorAll('a')).find(
+      (a) => a.getAttribute('aria-current') !== 'page',
+    ) as HTMLElement;
+    const parse = (c: string) => {
+      const n = c.match(/[\d.]+/g)!.map(Number);
+      return { r: n[0]!, g: n[1]!, b: n[2]!, a: n[3] ?? 1 };
+    };
+    return {
+      background: parse(style.backgroundColor),
+      border: parse(style.borderTopColor),
+      borderWidth: parseFloat(style.borderTopWidth),
+      label: parse(getComputedStyle(resting).color),
+      fontSize: parseFloat(getComputedStyle(resting).fontSize),
+      shadow: style.boxShadow,
+    };
+  });
+
+  // A surface rather than a tint. Below about 0.85 the page reads through it and the
+  // edge stops being an edge.
+  expect(look.background.a).toBeGreaterThanOrEqual(0.85);
+
+  // A real boundary. The old border was `color-mix(var(--text) 10%, transparent)`, which
+  // is an alpha of 0.1 — technically present, invisible in practice.
+  expect(look.borderWidth).toBeGreaterThanOrEqual(1);
+  expect(look.border.a).toBeGreaterThan(0.5);
+
+  // Labels you read rather than decoration under the icons.
+  expect(look.fontSize).toBeGreaterThanOrEqual(11);
+
+  // And they have to carry against the pill's own fill. WCAG AA for text this size is
+  // 4.5:1; `--text-faint` on `--bg-elevated` did not reach it.
+  const ratio = (() => {
+    const channel = (v: number) => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const lum = (c: { r: number; g: number; b: number }) =>
+      0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
+    const a = lum(look.label);
+    const b = lum(look.background);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  })();
+  expect(
+    ratio,
+    `the resting labels are ${ratio.toFixed(2)}:1 against the pill, which is under AA`,
+  ).toBeGreaterThanOrEqual(4.5);
+
+  // Lifted off the page, which is the other half of reading as a floating control.
+  expect(look.shadow).not.toBe('none');
+});

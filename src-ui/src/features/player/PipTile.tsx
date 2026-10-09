@@ -7,12 +7,19 @@
  * host for that reason: a tile the UI positioned itself would be a frame that does not
  * line up with its own video the moment the two disagree about rounding.
  *
- * It also has to punch a hole. The shell is opaque while PiP is on — the viewer is
- * reading a page, not watching full-screen — so the only way the picture shows through
- * is for nothing to be painted over that rectangle. That is the `backdrop` below: four
- * opaque bands around the tile rather than one translucent sheet over it, because a
- * transparent div does not erase what is behind it, it just fails to cover it.
+ * **It does not punch the hole.** It used to try, with four opaque bands around the tile
+ * at `z-index: 58`, and that could not work in two ways at once: the bands sat above the
+ * page, so they covered the thing PiP exists to let you read, and the shell underneath
+ * was still painting, so the rectangle they left showed shell rather than video. The
+ * small picture has never displayed anything as a result.
+ *
+ * The hole is cut by clipping the app shell (`holeClipPath` in `SurfaceHole`), which
+ * removes the rectangle from the layer instead of trying to cover around it. This tile is
+ * portalled to `document.body` so that it is *outside* that clipped subtree — its frame
+ * and controls sit inside the hole by definition, and would be clipped away with
+ * everything else.
  */
+import { createPortal } from 'react-dom';
 import type { PipView } from '@shared/ipc';
 import { Icon } from '@/components/Icon';
 
@@ -45,32 +52,7 @@ export function PipTile({
   if (!view.enabled || view.rect.width === 0) return null;
   const box = cssRect(view.rect, dpr);
 
-  const band = (style: React.CSSProperties): React.CSSProperties => ({
-    position: 'fixed',
-    background: 'var(--bg)',
-    zIndex: 58,
-    pointerEvents: 'none',
-    ...style,
-  });
-
-  return (
-    <>
-      {/*
-        * The hole. Four opaque bands around the tile, so the page behind stays readable
-        * and the only see-through rectangle in the window is the one with video in it.
-        */}
-      <div style={band({ left: 0, right: 0, top: 0, height: box.top })} />
-      <div style={band({ left: 0, right: 0, top: box.top + box.height, bottom: 0 })} />
-      <div style={band({ left: 0, width: box.left, top: box.top, height: box.height })} />
-      <div
-        style={band({
-          left: box.left + box.width,
-          right: 0,
-          top: box.top,
-          height: box.height,
-        })}
-      />
-
+  return createPortal(
       <div
         data-testid="pip-tile"
         data-corner={view.corner}
@@ -139,8 +121,8 @@ export function PipTile({
             <Icon name="close" size={13} />
           </button>
         </div>
-      </div>
-    </>
+      </div>,
+    document.body,
   );
 }
 

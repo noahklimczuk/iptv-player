@@ -104,3 +104,88 @@ test('multi-view and the small picture do not fight over the surface', async ({ 
   await expect(tile(page)).toBeHidden();
   await expect(page.getByText(/Close multi-view first/i)).toBeVisible();
 });
+
+/**
+ * The hole, which is the part that was never there.
+ *
+ * Every test above passed while the small picture showed nothing at all, because they
+ * check where the *tile* is and the tile is a frame — the picture is mpv, behind the
+ * WebView, and whether it is visible is a question about what the page paints over it.
+ *
+ * The shell is opaque while PiP is on, deliberately: the point is to read a page with the
+ * stream still running. An opaque layer cannot be given a see-through rectangle by
+ * putting a transparent child in it, which is what the old four-bands approach amounted
+ * to — and the bands were above the content as well, so they covered the page they were
+ * meant to leave readable.
+ *
+ * Clipping the shell is the version that works, and hit-testing is how a browser can be
+ * asked whether it worked: a region removed by `clip-path` does not hit-test, so the
+ * shell must be absent from the stack of elements under the middle of the tile and
+ * present everywhere else.
+ */
+test('the shell is cut away behind the tile, and nowhere else', async ({ page }) => {
+  await page.goto('/?video#/live');
+  await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
+  await page.getByRole('button', { name: 'Watch Meridian News' }).first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await page.keyboard.press('p');
+  await expect(page.getByTestId('pip-tile')).toBeVisible();
+
+  const box = (await page.getByTestId('pip-tile').boundingBox())!;
+
+  const stacks = await page.evaluate((b) => {
+    const names = (x: number, y: number) =>
+      document.elementsFromPoint(x, y).map((el) => el.getAttribute('data-testid') ?? el.tagName);
+    return {
+      inside: names(b.x + b.width / 2, b.y + b.height / 2),
+      // Well away from the tile, where the page must still be solid.
+      outside: names(40, 40),
+      shellClip: getComputedStyle(
+        document.querySelector('[data-testid="app-shell"]') as HTMLElement,
+      ).clipPath,
+      // The tile has to be outside the clipped subtree or it would be clipped with it.
+      tileInShell: !!document
+        .querySelector('[data-testid="app-shell"]')
+        ?.contains(document.querySelector('[data-testid="pip-tile"]')),
+    };
+  }, box);
+
+  // The frame is there…
+  expect(stacks.inside).toContain('pip-tile');
+  // …and the shell is not, which is the whole point: nothing of the page is painted in
+  // that rectangle, so what is behind the WebView shows through.
+  expect(
+    stacks.inside,
+    'the app shell still covers the tile, so the picture cannot show through',
+  ).not.toContain('app-shell');
+
+  // Everywhere else the page is untouched — a hole that swallowed the window would be
+  // just as broken as no hole at all.
+  expect(stacks.outside).toContain('app-shell');
+
+  expect(stacks.shellClip).toContain('evenodd');
+  expect(stacks.tileInShell, 'the tile is inside the clipped subtree').toBe(false);
+});
+
+test('the hole is gone once the picture is not in a corner', async ({ page }) => {
+  await page.goto('/?video#/live');
+  await page.getByRole('button', { name: 'Watch Meridian News' }).first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+
+  const shellClip = () =>
+    page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector('[data-testid="app-shell"]') as HTMLElement)
+          .clipPath,
+    );
+
+  await page.keyboard.press('p');
+  await expect(page.getByTestId('pip-tile')).toBeVisible();
+  expect(await shellClip()).toContain('polygon');
+
+  // Back to full screen: `videoBehind` makes the whole shell transparent for that, and a
+  // clip on top of it would be a hole in a window that is already a hole.
+  await page.getByTestId('pip-expand').click();
+  await expect(page.getByTestId('pip-tile')).toBeHidden();
+  expect(await shellClip()).toBe('none');
+});
