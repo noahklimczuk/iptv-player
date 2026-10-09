@@ -17,6 +17,8 @@ URLs, and nine real streams from a provider; `real_panel` is where that belongs.
 """
 import time
 
+from driver import HostRefused
+
 # Commands cross the bridge as `module_action`: `mosaic.check` in `shared/ipc.ts` is
 # `mosaic_check` here, because the driver calls `__TAURI_INTERNALS__.invoke` directly and
 # the translation the UI does in `src-ui/src/ipc/index.ts` is not in the way.
@@ -53,11 +55,10 @@ def run(d, ctx):
     # An unknown layout name is refused rather than guessed at.
     try:
         d.invoke("mosaic_check", {"layout": "grid4x4"})
-        raise AssertionError("an unknown layout was accepted")
-    except AssertionError:
-        raise
-    except Exception as e:
+    except HostRefused as e:
         assert "grid4x4" in str(e), f"the refusal should name the layout: {e}"
+    else:
+        raise AssertionError("an unknown layout was accepted")
 
     # Commands that need an open mosaic say so, in words, rather than panicking the
     # host — which on a release build would take the process with it.
@@ -69,11 +70,10 @@ def run(d, ctx):
     ):
         try:
             d.invoke(command, args)
-            raise AssertionError(f"{command} answered with no mosaic open")
-        except AssertionError:
-            raise
-        except Exception as e:
+        except HostRefused as e:
             assert "not open" in str(e), f"{command} said {e!r}"
+        else:
+            raise AssertionError(f"{command} answered with no mosaic open")
 
     # The saved-layout table exists and is empty, which is migration 11 having run.
     assert d.invoke("mosaic_layouts") == [], "a fresh library has saved layouts"
