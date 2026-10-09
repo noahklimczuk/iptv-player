@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import type { CatalogItem, MosaicView, SearchHit } from '@shared/ipc';
+import type { CatalogItem, MosaicView, PipView, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
@@ -16,6 +16,7 @@ import { ChannelBanner, DigitEntry } from '@/features/player/ChannelBanner';
 import { SkipButton } from '@/features/player/SkipButton';
 import { UpNextCard } from '@/features/player/UpNextCard';
 import { MosaicOverlay } from '@/features/mosaic/MosaicOverlay';
+import { PipTile } from '@/features/player/PipTile';
 import { MosaicPage, SaveLayoutDialog } from '@/features/mosaic/MosaicPage';
 import { AssistantPage } from '@/features/assistant/AssistantPage';
 import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/PlayerOverlay';
@@ -115,6 +116,25 @@ export default function App() {
   // a tile whose stream died updates here without this screen asking.
   const [mosaic, setMosaic] = useState<MosaicView | null>(null);
   const [savingLayout, setSavingLayout] = useState(false);
+
+  // Picture-in-picture (README §6.2). The same player in a corner, so unlike a mosaic
+  // tile it opens no stream and cannot be refused by the provider.
+  const [pip, setPip] = useState<PipView | null>(null);
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
+  useEffect(() => {
+    invoke('pip.state').then(setPip).catch(() => {});
+    // Read live rather than once: dragging the window to a display with another scale
+    // factor changes it without a resize event, and the tile's frame would then sit a
+    // third of the way into its own picture.
+    const onResize = () => setDpr(window.devicePixelRatio || 1);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const pipOn = pip?.enabled === true;
+  const togglePip = useCallback(() => {
+    invoke('pip.toggle').then(setPip).catch(report('Could not change the small picture'));
+  }, []);
   const [layoutsVersion, setLayoutsVersion] = useState(0);
   useEffect(() => onMosaicState(setMosaic), []);
   // And once at mount, because the heartbeat only reports a mosaic that is *open* —
@@ -428,8 +448,9 @@ export default function App() {
         .then((found) => found && ui.openDetail(found))
         .catch(report('Could not look that up'));
     },
+    onPip: togglePip,
     onNavigate: (to: string) => { closePlayer(); navigate(to); },
-  }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle, mosaicOpen, closeMosaic]);
+  }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle, mosaicOpen, closeMosaic, togglePip]);
 
   useHotkeys(handlers, !ui.paletteOpen);
 
@@ -515,7 +536,11 @@ export default function App() {
   //
   // A mosaic is the same question with more surfaces: while one is open there is video
   // behind the whole client area, so the shell has to let it through.
-  const videoBehind = (playerOpen && showingPicture(ui.player)) || mosaicOpen;
+  //
+  // Not while the picture is in a corner. PiP exists so the viewer can read a page with
+  // the stream still running, so hiding the shell would hide the thing they turned it on
+  // for — `PipTile` punches a hole for the tile instead, and the rest stays opaque.
+  const videoBehind = !pipOn && ((playerOpen && showingPicture(ui.player)) || mosaicOpen);
 
   return (
     <div
@@ -663,6 +688,30 @@ export default function App() {
         </div>
       </main>
 
+      {pip && (
+        <PipTile
+          view={pip}
+          title={ui.player?.title ?? null}
+          dpr={dpr}
+          onExpand={() => {
+            invoke('pip.setEnabled', { enabled: false })
+              .then((v) => { setPip(v); setPlayerOpen(true); })
+              .catch(report('Could not expand the picture'));
+          }}
+          onClose={() => {
+            invoke('pip.setEnabled', { enabled: false })
+              .then(setPip)
+              .catch(report('Could not close the small picture'));
+            closePlayer();
+          }}
+          onCycleCorner={() => {
+            invoke('pip.setCorner', { corner: null })
+              .then(setPip)
+              .catch(report('Could not move the picture'));
+          }}
+        />
+      )}
+
       {mosaic?.open && (
         <MosaicOverlay
           view={mosaic}
@@ -697,7 +746,7 @@ export default function App() {
         }}
       />
 
-      {playerOpen && ui.player && (
+      {playerOpen && !pipOn && ui.player && (
         <PlayerOverlay
           player={ui.player}
           fullscreen={fullscreen.fullscreen}
