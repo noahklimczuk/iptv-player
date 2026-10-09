@@ -77,6 +77,37 @@ per-channel locks already stored; media keys and global shortcuts. The phase tab
 
 ---
 
+## 0. Does the built binary answer at all? — **run this before every tag**
+
+Added after 1.0.1 and 1.0.2 shipped unusable. Both built, installed, launched and drew a
+window; then every command the first screen makes stopped returning, so the app sat on
+"Opening your library…" until it was killed. The whole suite was green: 185 browser
+journeys against the mock, 1,000-odd Rust tests, clippy clean. None of them runs the
+binary that ships.
+
+The cause was a `MutexGuard` temporary inside a struct literal, which lived long enough
+for the next line to ask for the same lock — `Pip::state`, called from the window's
+`Resized` handler, so the first resize parked the host's **main thread** and with it
+wry's custom-protocol handler. Nothing is logged when that happens, because the thread
+that would log it is the one that is stuck.
+
+```
+AURORA_TEST_EXE=<the exe you are about to ship> python tests-host/run.py ipc_alive starts_up
+```
+
+`ipc_alive` asks the one question no other scenario asks — *does an invoke come back* —
+and separates the two causes, because they need different fixes: nothing serving at all
+means the main thread is parked, while assets serving beside a hanging `invoke` means
+only the IPC route is dead. Run it against the **release** binary, not a debug build, and
+against the artifact from CI if that is what is being tagged.
+
+`cargo test` now also covers the specific shape of that bug: `Pip` has a test that calls
+every entry point on a watchdog thread and fails if one does not return. A deadlock
+otherwise *hangs* a Rust test rather than failing it, which is how this one got past —
+two tests in that module were hanging and it read as a slow runner.
+
+---
+
 ## 1. Run the Phase 0 spike — **done**
 
 **Run on Windows 11 with libmpv v0.41, and it works.** The full account is in

@@ -69,16 +69,39 @@ impl Pip {
         self.enabled.load(Ordering::SeqCst)
     }
 
-    fn rect(&self) -> Rect {
-        let (w, h) = *self.size.lock();
-        self.geometry.lock().rect(w, h)
+    /// The window size and the geometry, each copied out before the other is asked for.
+    ///
+    /// One function, because the bug this replaced was a *nested* lock and the way to not
+    /// have one again is to have a single place that takes them. `state` used to read
+    ///
+    /// ```ignore
+    /// PipView {
+    ///     corner: self.geometry.lock().corner,
+    ///     rect: self.rect(),          // locks `geometry` again
+    /// }
+    /// ```
+    ///
+    /// and a temporary inside a struct literal lives until the whole literal is built —
+    /// so the guard from `corner` was still held when `rect` asked for it. `parking_lot`
+    /// mutexes are not reentrant, so the first call deadlocked, permanently. Every public
+    /// method here goes through `state` or `apply`, which means picture-in-picture could
+    /// not work at all; and because `relayout` is called from the window's `Resized`
+    /// handler, the first resize of the window parked the *main thread*, and with it
+    /// wry's custom-protocol handler. That is what shipped in 1.0.1: a window that drew,
+    /// a UI that mounted, and then no command, event or asset request ever answering
+    /// again — "Opening your library…" forever.
+    fn snapshot(&self) -> ((u32, u32), Geometry) {
+        let size = *self.size.lock();
+        let geometry = *self.geometry.lock();
+        (size, geometry)
     }
 
     pub fn state(&self) -> PipView {
+        let ((w, h), geometry) = self.snapshot();
         PipView {
             enabled: self.is_enabled(),
-            corner: self.geometry.lock().corner,
-            rect: self.rect(),
+            corner: geometry.corner,
+            rect: geometry.rect(w, h),
         }
     }
 
@@ -87,8 +110,15 @@ impl Pip {
     /// The one function that touches the backend's geometry, so "full window" and "in a
     /// corner" cannot drift apart.
     fn apply(&self) -> Result<PipView> {
-        let (w, h) = *self.size.lock();
-        let view = self.state();
+        // One snapshot rather than a size read and then `state`, so the rect handed to
+        // the backend is from the same moment as the size it is measured against — and
+        // so there stays exactly one place in this file that takes these two locks.
+        let ((w, h), geometry) = self.snapshot();
+        let view = PipView {
+            enabled: self.is_enabled(),
+            corner: geometry.corner,
+            rect: geometry.rect(w, h),
+        };
         let mut player = self.player.lock();
         if view.enabled {
             player.place(view.rect)?;
@@ -291,6 +321,71 @@ mod tests {
 
     fn placed(seen: &Arc<Mutex<Option<Rect>>>) -> Option<Rect> {
         *seen.lock()
+    }
+
+    /// Every entry point returns, on its own thread, within a deadline.
+    ///
+    /// A deadlock does not fail a Rust test, it hangs it -- and a hung test reads as a
+    /// slow machine or a stuck runner rather than as the bug it is. Two of the tests in
+    /// this module did hang on the nested `geometry` lock described on `snapshot`, which
+    /// is a worse outcome than failing: the suite was killed by a timeout somewhere else,
+    /// nobody looked here, and picture-in-picture shipped in a state where the first
+    /// window resize parked the host's main thread.
+    ///
+    /// So this one asks the question directly, with a watchdog, and says which call it
+    /// was. It is a cheap guard against reintroducing a lock held across another one --
+    /// which is easy to do here by accident, because a `MutexGuard` temporary inside a
+    /// struct literal or a method-call chain lives longer than it looks.
+    #[test]
+    fn every_entry_point_returns_rather_than_deadlocking() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        /// Generous for work that takes microseconds, and still far short of a hang.
+        const DEADLINE: Duration = Duration::from_secs(5);
+
+        /// A named entry point, called through a `&Pip`.
+        type Call = (&'static str, fn(&Pip));
+
+        let calls: Vec<Call> = vec![
+            ("state", |p| {
+                p.state();
+            }),
+            ("relayout", |p| {
+                p.relayout(1920, 1080).unwrap();
+            }),
+            ("toggle", |p| {
+                p.toggle().unwrap();
+            }),
+            ("set_enabled", |p| {
+                p.set_enabled(true).unwrap();
+            }),
+            ("set_corner", |p| {
+                p.set_corner(Some(Corner::TopLeft)).unwrap();
+            }),
+            ("set_corner clockwise", |p| {
+                p.set_corner(None).unwrap();
+            }),
+            ("set_window then state", |p| {
+                p.set_window(1280, 720);
+                p.state();
+            }),
+        ];
+
+        for (name, call) in calls {
+            let (tx, rx) = mpsc::channel();
+            // A fresh `Pip` per call, on its own thread: a deadlocked thread cannot be
+            // killed, so it is left parked and the test ends on the deadline instead.
+            std::thread::spawn(move || {
+                let (p, _seen) = pip();
+                call(&p);
+                let _ = tx.send(());
+            });
+            assert!(
+                rx.recv_timeout(DEADLINE).is_ok(),
+                "Pip::{name} did not return within {DEADLINE:?} -- it is holding one of                  its locks across another. See `Pip::snapshot`.",
+            );
+        }
     }
 
     #[test]
