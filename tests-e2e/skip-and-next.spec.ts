@@ -259,3 +259,66 @@ test('Up Next appears on an episode nobody has taught anything', async ({ page }
   await seekTo(page, duration - 30);
   await expect(page.getByText(/Up next/i).first()).toBeVisible();
 });
+
+/**
+ * The case an ordinary library is actually in: a stream that never says how long it is.
+ *
+ * mpv reads a duration out of the container, and a provider's VOD stream frequently
+ * gives it nothing to read — sometimes until the whole file is buffered, sometimes never.
+ * Both the host and `upNextVisible` were taught to cope, by falling back to the episode's
+ * stored runtime, and it made no difference: `useEpisodeAids` would not *ask* until the
+ * player reported a duration, so `aids` stayed null for the entire episode and Skip
+ * Credits, Skip Intro and autoplay were dead together.
+ *
+ * Every other test here plays a fixture with a known runtime, which is why none of them
+ * saw it.
+ */
+test('the aids work on a stream that never reports a duration', async ({ page }) => {
+  await page.goto('/#/');
+  await page.evaluate(() => {
+    (window as unknown as { __auroraSilentDuration: (on: boolean) => void })
+      .__auroraSilentDuration(true);
+  });
+
+  await playEpisodeWithoutChapters(page);
+
+  // The premise: the player genuinely does not know.
+  const state = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<unknown>;
+    };
+    return (await w.__auroraInvoke('player.state')) as {
+      durationSecs: number;
+      itemId: number;
+    };
+  });
+  expect(state.durationSecs).toBe(0);
+
+  // The host does, from the episode's own runtime — and that is the number the card and
+  // the button have to come from.
+  const upNextAt = await page.evaluate(async (episodeId) => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<unknown>;
+    };
+    const aids = (await w.__auroraInvoke('library.playbackAids', {
+      profileId: 1,
+      episodeId,
+      durationSecs: 0,
+    })) as { upNextAtSecs: number | null };
+    return aids.upNextAtSecs;
+  }, state.itemId);
+  expect(upNextAt, 'the host should place Up Next from the stored runtime').not.toBeNull();
+
+  // Seeking through the command surface rather than the slider, whose range comes from
+  // the duration the player does not have.
+  await page.evaluate(async (secs) => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<unknown>;
+    };
+    await w.__auroraInvoke('player.seek', { positionSecs: secs });
+  }, upNextAt! + 5);
+
+  await expect(page.getByRole('button', { name: 'Skip Credits' })).toBeVisible();
+  await expect(page.getByText(/Up next/i).first()).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/aids-without-a-duration.png` });
+});

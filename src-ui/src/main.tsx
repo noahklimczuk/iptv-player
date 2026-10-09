@@ -4,7 +4,7 @@ import { HashRouter } from 'react-router-dom';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
-import { failNextMock, invoke } from './ipc';
+import { failNextMock, invoke, setSilentDurationMock } from './ipc';
 import './styles/app.css';
 
 // Before the first render, so a failure during mount has somewhere to go too.
@@ -15,6 +15,11 @@ installGlobalErrorHandlers();
 (window as unknown as { __auroraInvoke?: unknown }).__auroraInvoke = invoke;
 // …and lets them make one refuse, so "the failure reaches the viewer" is testable.
 (window as unknown as { __auroraFailNext?: unknown }).__auroraFailNext = failNextMock;
+// …and lets them play something whose duration the stream never reports, which is the
+// ordinary case on provider VOD and the one in which Skip Credits and autoplay used to
+// be dead.
+(window as unknown as { __auroraSilentDuration?: unknown }).__auroraSilentDuration =
+  setSilentDurationMock;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
