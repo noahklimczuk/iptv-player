@@ -505,7 +505,12 @@ mod tests {
     const WIN: (u32, u32) = (1920, 1080);
 
     fn rect(x: i32, y: i32, w: u32, h: u32) -> Rect {
-        Rect { x, y, width: w, height: h }
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     #[test]

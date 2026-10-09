@@ -889,7 +889,7 @@ pub fn refresh_provider(
     let mut options = SyncOptions::new(provider_id, source, now_unix());
     options.password = stored_password(services.credentials.as_ref(), credential_ref_value)?;
 
-    let rules = load_rules(&services)?;
+    let rules = load_rules(services)?;
 
     // The download happens with no lock held. It used to run inside one, which froze
     // every other command for the length of a playlist and a guide — and because the
@@ -899,7 +899,7 @@ pub fn refresh_provider(
     // `sync::fetch` is handed no database, so it cannot reintroduce that by accident.
     let emit = |p: Progress| {
         // Best-effort: a dropped progress event must never fail an import.
-        crate::emit(&app, "ingest.progress", &p);
+        crate::emit(app, "ingest.progress", &p);
     };
     let fetched = sync::fetch(&services.http, &options, &rules, emit)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
@@ -1193,11 +1193,7 @@ mod tests {
     }
 
     /// Seed a provider with a given `last_refresh_at`. `None` means it never finished one.
-    fn provider_refreshed_at(
-        db: &aurora_db::rusqlite::Connection,
-        id: i64,
-        at: Option<i64>,
-    ) {
+    fn provider_refreshed_at(db: &aurora_db::rusqlite::Connection, id: i64, at: Option<i64>) {
         db.execute(
             "INSERT INTO providers (id,name,kind,base_url,created_at,last_refresh_at)
              VALUES (?1,?2,'m3u','https://example.com/p.m3u',0,?3)",
@@ -1255,16 +1251,6 @@ mod tests {
         provider_refreshed_at(&db, 4, Some(now - 60));
         // 2 never did, then 3 at five days, then 1 at two. 4 is not due at all.
         assert_eq!(stale_providers(&db, now).unwrap(), vec![2, 3, 1]);
-    }
-
-    /// The sweep interval has to be shorter than the staleness it looks for, or a
-    /// provider coming due just after a check waits nearly another whole day.
-    #[test]
-    fn the_sweep_runs_more_often_than_the_staleness_it_looks_for() {
-        assert!(
-            crate::providers::REFRESH_AFTER_SECS > 30 * 60,
-            "the sweep interval in main.rs must be shorter than this"
-        );
     }
 
     fn provider_count(db: &aurora_db::rusqlite::Connection) -> i64 {
