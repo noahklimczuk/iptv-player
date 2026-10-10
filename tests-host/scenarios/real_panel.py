@@ -151,11 +151,12 @@ def run(d, ctx):
         if page == "Live TV":
             _logos_render(d, ctx)
 
-    # Before the recorder, and it waits for the mosaic to report itself closed before
-    # returning. This line allows one connection, so the two cannot overlap -- and an
-    # unfinished mosaic starved the recorder for fifty minutes the first time they did.
-    _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx)
     _records_a_real_stream(d, ctx)
+    # Last. It leaves its overlay up -- the screen learns a mosaic has closed from its own
+    # click or the next `mosaic.state`, and neither has happened by the time the next step
+    # would run -- so anything after it reads a page with a mosaic drawn over it. The two
+    # also cannot overlap on a line that allows one connection.
+    _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx)
 
 
 def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
@@ -451,8 +452,20 @@ def _records_a_real_stream(d, ctx):
             f"   recording: {cname} -> {on_disk / 1024 / 1024:.1f} MB in {window}s"
             f" (host reported {size} bytes), {os.path.basename(path)}"
         )
-        d.click(d.by_text("nav a", "Recordings", timeout=30))
-        time.sleep(3)
+        # Through the route rather than the nav pill. The pill is hidden whenever the
+        # shell thinks there is video behind it, and WebDriver reports no text at all for
+        # a hidden element -- so clicking it by name is a test that depends on what the
+        # player happens to be doing. The hash is what the link would set anyway, and
+        # `HashRouter` does not reload the document.
+        d.js("window.location.hash = '#/recordings'; return true;")
+        assert d.wait_body(lambda b: "recordings" in b.lower(), timeout=30), (
+            f"the recordings page never drew; screen said {d.body()[:200]!r}"
+        )
+        # The recording that was just made is on it, which is the thing a viewer came to
+        # this page for.
+        assert d.wait_body(lambda b: "harness recording" in b.lower(), timeout=30), (
+            f"the recording is not listed; screen said {d.body()[:300]!r}"
+        )
         d.shot(ctx.shot("recorded"))
         ctx.assert_no_panic()
         return

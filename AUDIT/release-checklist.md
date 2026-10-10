@@ -332,20 +332,19 @@ Several things can only be answered with an account:
   WebAdvisor, and a phone on the same network worked. Intermittent, which is what made it
   look like a flaky provider. The app now tells the two apart by asking the same host once
   without credentials, and names the products Windows reports.
-- **Recording. Partly answered.** `real_panel` now schedules a 40-second recording on a
-  real channel and looks at what reached disk. A run got as far as the states: two
-  channels reached `completed` with no reason given, and a third came back `failed —
-  Your provider didn't respond`, which is the recorder meeting a stream that accepts the
-  request and sends nothing, reported in words a viewer could act on. So the recorder
-  does work against a provider.
+- **Recording. Answered.** `real_panel` schedules a 40-second recording on a real channel
+  and weighs what reached disk: **32.3 MB in 40 seconds**, and 2.5 MB and 2.1 MB on other
+  channels — all well past the 64 KB that separates a working recorder from one that opens
+  a stream and writes nothing. The recording is then listed on the Recordings page, which
+  is what a viewer came there for.
 
-  What is **not** yet confirmed is the file: the check asserts the recording is larger
-  than 64 KB, because a recording that writes an empty file looks exactly like a working
-  one everywhere except on disk, and that assertion has not had a green run. The harness
-  wipes `target/release/data` before each run and could not, with the tree under OneDrive
-  and three real-time scanners on the machine holding handles on a directory written
-  moments earlier. Re-run `python tests-host/run.py real_panel` with the panel
-  credentials in the environment to close it.
+  It had never had a green run, and the reason was not the file check. `Recorder::start`
+  connects to the provider, and the DVR called it from the scheduler thread; a provider
+  that accepts the connection and then sends nothing holds that call for the recording's
+  whole window. While it was blocked there were no ticks at all, so every recording sat at
+  `scheduled` with no reason — on a line that allows one connection, which is this one,
+  that was all of them. Connecting now happens on its own thread (F-37).
+
 - **Logos. Answered.** Every logo on Live TV decoded against the real panel — 18 of 18,
   all of them over plain `http:` — so F-12's `img-src` widening does what it was meant
   to. `real_panel` now asks the images themselves, since a blocked image is not a broken
