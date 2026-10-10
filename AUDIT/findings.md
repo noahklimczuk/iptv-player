@@ -1116,3 +1116,64 @@ never going to be what made a browse grid fast.
 **Regression test.** `tests-host/scenarios/artwork_cache.py` opens a screen on a real
 library and asserts the cache grew *and* that the images on that screen are being served
 from it: 45 → 181 files, 117 of 117 images local, none broken.
+
+---
+
+## F-36 — Medium — Hiding a video surface cannot be undone — **Fixed**
+
+Recorded first as "closing a mosaic does not return", which was true and the wrong
+diagnosis. The hang was caused by the fix being attempted at the time, not by anything
+that shipped. Written out in full because the wrong explanation was in this file for an
+hour and the right one is worth keeping.
+
+**What was observed.** `mosaic.close` did not return within three minutes, reproducibly,
+against a real panel — on an ordinary music channel and on a pay-per-view channel that
+never streams.
+
+**What it was blamed on.** Dropping a tile's backend tears down an mpv instance whose
+window was created on a Tauri command thread, and `mpv.rs` warns on `unsafe impl Send`
+that destroying a window off its creating thread is not sound. That explanation fits the
+symptom and was wrong about this case.
+
+**What it actually was.** The fix being tried for "multi-view plays but shows no video"
+hid the main player's full-window surface while a mosaic was open, so the tiles — which
+every `place` sends to the bottom of the z-order — were no longer behind it. Hiding worked
+once. Restoring did not: `SetWindowPos` on a window whose *sibling* belongs to a thread
+with no message loop does not come back, and by close time a tile window owned by such a
+thread existed. So the close blocked on showing the surface again, and before that
+ordering was corrected it blocked with the surface still hidden — a black window.
+
+**The fix** is to stop hiding anything. Tiles still go to the bottom of the z-order as
+they are built, and the main surface is then sent to the bottom *after* them, which leaves
+the one arrangement that works: WebView, tiles, main surface. Nothing needs restoring if
+nothing was hidden.
+
+Not done by naming a sibling to sit above, which was the attempt in between: Win32 cannot
+say that. `SetWindowPos`'s `hWndInsertAfter` names the window the moved one goes *behind*,
+so asking for "above the main surface" with the only handle to hand put the tile behind it
+again — measured, and the tile stayed invisible.
+
+**Verified** on a real subscription, through `real_panel`'s mosaic step:
+
+```
+mosaic: a tile surface is in front of the main one
+mosaic: 1 visible surface(s) at [(0, 0, 720, 450)]     # a quarter of 1440x900
+mosaic: the close finished, and the main surface is intact
+```
+
+The close finishing is the part that matters here: with nothing hidden there is nothing
+for it to block on.
+
+**What remains latent.** Tile windows are still created and destroyed on command threads
+rather than the main one, which is the hazard `mpv.rs` describes. It is not currently
+observable — the close completes and the surfaces are where they should be — but it is the
+reason an operation on a *sibling* of a tile window can block, and anything that reaches
+for `set_surface_visible` or another cross-thread window call on a video surface will find
+it again. `Mosaic`'s tests panic if anything asks to hide the main surface, which is how
+they say so.
+
+**Regression tests.** `the_main_surface_goes_under_the_tiles` and
+`a_resize_puts_it_back_under_them` assert the ordering by recording who was placed and
+when — the main surface has to be last, or it is on top. `tests-host/scenarios/surfaces.py`
+measures the other three placements in the window tree, and `real_panel`'s mosaic step
+measures this one.

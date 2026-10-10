@@ -144,14 +144,37 @@ pub struct Mosaic {
 }
 
 impl Mosaic {
-    /// Hide or restore the main player's surface. Failure is logged, never fatal: a
-    /// mosaic that opened is better than one refused because a window would not hide.
-    fn hide_main(&self, hidden: bool) {
-        if let Err(e) = self.main.lock().set_surface_visible(!hidden) {
-            tracing::warn!(
-                "could not {} the main video surface: {e}",
-                if hidden { "hide" } else { "restore" }
-            );
+    /// Put the main player's surface underneath the tiles.
+    ///
+    /// Every `place` sends the surface it moves to the very bottom of the z-order --
+    /// right for the only surface there is, since it has to stay under the WebView, and
+    /// wrong once there are tiles, because they go to the bottom too and the main
+    /// player's full-window surface is already down there covering them. That is a
+    /// mosaic you can hear and cannot see.
+    ///
+    /// So the tiles are placed first and the main surface is sent to the bottom *after*
+    /// them, which leaves the one order that works: WebView, tiles, main surface.
+    ///
+    /// Done this way rather than by naming a sibling to sit above, because Win32 cannot
+    /// say that: `SetWindowPos`'s `hWndInsertAfter` names the window the moved one goes
+    /// *behind*, so asking for "above the main surface" with the only handle to hand puts
+    /// the tile behind it again. Measured, not assumed -- the first attempt did exactly
+    /// that and the tile stayed invisible.
+    ///
+    /// And not by hiding the main surface, which was the attempt before that: hiding
+    /// could not be undone, because `SetWindowPos` on a window whose sibling belongs to a
+    /// thread with no message loop does not return (AUDIT/findings.md F-36), so the
+    /// window stayed black after closing. Nothing needs restoring if nothing was hidden.
+    fn sink_main_surface(&self) {
+        let (w, h) = *self.size.lock();
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            width: w.max(1),
+            height: h.max(1),
+        };
+        if let Err(e) = self.main.lock().place(rect) {
+            tracing::warn!("could not put the main video surface under the tiles: {e}");
         }
     }
 
@@ -273,15 +296,6 @@ impl Mosaic {
         // whole module is trying to avoid.
         self.close();
 
-        // Out of the way before any tile is placed.
-        //
-        // `place` sends the surface it moves to the bottom of the z-order, so every tile
-        // ends up *behind* the main player's full-window surface. Stopping playback does
-        // not help: the window is still there, still full-window, still in front, and an
-        // mpv surface with nothing loaded is black — a mosaic you can hear and cannot
-        // see, which is exactly what was reported.
-        self.hide_main(true);
-
         let rects = layout.rects_now(*self.size.lock());
         let parent = self.parent.load(Ordering::SeqCst);
 
@@ -289,6 +303,11 @@ impl Mosaic {
         for (index, channel_id) in wanted.into_iter().enumerate() {
             tiles.push(self.build_tile(index, channel_id, rects[index], parent, now));
         }
+
+        // Every tile has gone to the bottom of the z-order, so the main surface goes
+        // under them. See `sink_main_surface` -- this is the line that makes a mosaic
+        // visible rather than merely audible.
+        self.sink_main_surface();
 
         let mut session = Session {
             layout,
@@ -418,10 +437,6 @@ impl Mosaic {
                 tile.player = None;
             }
         }
-        // And the main surface comes back, whether or not there was a session to close:
-        // `close` is also the tidy-up path on a failed open, and leaving it hidden there
-        // would be a black window with no mosaic over it.
-        self.hide_main(false);
         MosaicView::closed()
     }
 
@@ -508,6 +523,9 @@ impl Mosaic {
         }
 
         let tile = self.build_tile(index, channel_id, rects[index], parent, now);
+        // The replacement tile went to the bottom like every other, so the main surface
+        // goes under it too.
+        self.sink_main_surface();
 
         let mut guard = self.session.lock();
         let session = guard.as_mut().ok_or_else(not_open)?;
@@ -551,6 +569,12 @@ impl Mosaic {
                 let _ = player.place(rect);
             }
         }
+        // Every tile has just gone to the bottom of the z-order, so the main surface has
+        // to go under them again -- otherwise the first drag of a window edge re-buries
+        // the whole mosaic. Dropped first: `sink_main_surface` takes the player mutex,
+        // and holding the session lock across it is how a deadlock gets built.
+        drop(guard);
+        self.sink_main_surface();
     }
 
     /// Drain every tile's events, the way the main player's heartbeat does.
@@ -872,22 +896,43 @@ mod tests {
         )
     }
 
-    /// The same, with the main surface's visibility recorded.
+    /// The same, with a fake handle for the main surface and every tile placement
+    /// recorded.
     ///
-    /// `NullBackend` has no window, so it cannot answer the question this is about: was
-    /// the main player's surface got out of the way before the tiles were placed.
-    fn mosaic_watching_main(limit: Option<i64>) -> (Mosaic, Arc<Mutex<Option<bool>>>) {
-        let (m, _db) = mosaic(limit);
-        let seen = Arc::new(Mutex::new(None));
-        let main: Arc<Mutex<Box<dyn PlayerBackend>>> =
-            Arc::new(Mutex::new(Box::new(VisibilitySpy(Arc::clone(&seen)))));
-        (Mosaic { main, ..m }, seen)
+    /// `NullBackend` has no window and reports no handle, so it cannot answer the
+    /// question this is about: was each tile ordered *above* the main player's surface,
+    /// or sent to the bottom of the z-order behind it.
+    /// Every placement, in the order they were asked for, tagged with who was moved.
+    ///
+    /// The order is the whole assertion: the tiles go to the bottom of the z-order as
+    /// they are built, so the main player's surface has to be sent to the bottom *after*
+    /// them or it sits on top and the mosaic is audible and invisible.
+    type Placements = Arc<Mutex<Vec<(&'static str, Rect)>>>;
+
+    fn mosaic_watching_tiles(limit: Option<i64>) -> (Mosaic, Placements, Arc<Mutex<Connection>>) {
+        let (m, db) = mosaic(limit);
+        let placed: Placements = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&placed);
+        let main: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(Box::new(Spy {
+            who: "main",
+            placed: Arc::clone(&placed),
+        })));
+        let factory: TileFactory = Arc::new(move || {
+            Box::new(Spy {
+                who: "tile",
+                placed: Arc::clone(&log),
+            })
+        });
+        (Mosaic { main, factory, ..m }, placed, db)
     }
 
-    /// Records only the one call this is about; everything else is `NullBackend`'s.
-    struct VisibilitySpy(Arc<Mutex<Option<bool>>>);
+    /// Records what it was asked to do, and refuses to be hidden.
+    struct Spy {
+        who: &'static str,
+        placed: Placements,
+    }
 
-    impl PlayerBackend for VisibilitySpy {
+    impl PlayerBackend for Spy {
         fn load(
             &mut self,
             _: &str,
@@ -945,48 +990,89 @@ mod tests {
         ) -> std::result::Result<(), aurora_player::PlayerError> {
             Ok(())
         }
+        fn place(&mut self, rect: Rect) -> std::result::Result<(), aurora_player::PlayerError> {
+            self.placed.lock().push((self.who, rect));
+            Ok(())
+        }
+        /// Nothing is hidden any more, so nothing has to be restored.
+        ///
+        /// Hiding the main surface was the first fix for the bug below, and it could not
+        /// be undone: `SetWindowPos` on a window whose sibling belongs to a thread with
+        /// no message loop does not return (AUDIT/findings.md F-36), so the window stayed
+        /// black after closing. Panicking here is how these tests say that approach must
+        /// not come back.
         fn set_surface_visible(
             &mut self,
             visible: bool,
         ) -> std::result::Result<(), aurora_player::PlayerError> {
-            *self.0.lock() = Some(visible);
-            Ok(())
+            panic!(
+                "asked to set the {} surface visible={visible}; see F-36",
+                self.who
+            );
         }
     }
 
     /// The bug this exists for: a mosaic you could hear and could not see.
     ///
-    /// Every `place` sends its surface to the bottom of the z-order, so each tile lands
-    /// behind the main player's full-window surface. Stopping playback leaves that window
-    /// in front, and an mpv surface with nothing loaded is black.
+    /// Every `place` goes to the bottom of the z-order, so the tiles land underneath the
+    /// main player's full-window surface -- which is still there, still full-window, and
+    /// black with nothing loaded. The main surface has to be sent down *after* them.
     #[test]
-    fn opening_a_mosaic_gets_the_main_surface_out_of_the_way() {
-        let (m, seen) = mosaic_watching_main(Some(8));
+    fn the_main_surface_goes_under_the_tiles() {
+        let (m, placed, db) = mosaic_watching_tiles(Some(8));
+        // A channel with a stream: without one `build_tile` reports that and returns
+        // before it ever places a surface.
+        seed_channel(&db, 1, "One", true);
         m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
             .unwrap();
+
+        let calls = placed.lock().clone();
+        assert!(
+            calls.iter().any(|(who, _)| *who == "tile"),
+            "no tile was placed at all: {calls:?}"
+        );
         assert_eq!(
-            *seen.lock(),
-            Some(false),
-            "the main surface was left in front"
+            calls.last().map(|(who, _)| *who),
+            Some("main"),
+            "the main surface was not the last thing sent to the bottom, so it is on top \
+             of the tiles: {calls:?}"
         );
     }
 
+    /// And again on a resize, or the first drag of a window edge re-buries the mosaic.
     #[test]
-    fn closing_it_gives_the_main_surface_back() {
-        let (m, seen) = mosaic_watching_main(Some(8));
+    fn a_resize_puts_it_back_under_them() {
+        let (m, placed, db) = mosaic_watching_tiles(Some(8));
+        seed_channel(&db, 1, "One", true);
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        placed.lock().clear();
+
+        m.relayout(1920, 1080);
+        let calls = placed.lock().clone();
+        assert!(
+            calls.iter().any(|(who, _)| *who == "tile"),
+            "a resize moved no tile: {calls:?}"
+        );
+        assert_eq!(
+            calls.last().map(|(who, _)| *who),
+            Some("main"),
+            "a resize left the main surface on top of the tiles: {calls:?}"
+        );
+        // And it covers the new client area, not the old one.
+        let (_, rect) = calls.last().unwrap();
+        assert_eq!((rect.width, rect.height), (1920, 1080));
+    }
+
+    /// Opening and closing one must not touch the main surface's visibility at all --
+    /// `Spy::set_surface_visible` panics, so reaching the end of this is the assertion.
+    #[test]
+    fn a_mosaic_never_hides_the_main_surface() {
+        let (m, _placed, db) = mosaic_watching_tiles(Some(8));
+        seed_channel(&db, 1, "One", true);
         m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
             .unwrap();
         m.close();
-        assert_eq!(*seen.lock(), Some(true), "the window would stay black");
-    }
-
-    /// `close` is also the tidy-up after a refused open, and a surface left hidden there
-    /// is a black window with no mosaic over it.
-    #[test]
-    fn closing_without_a_session_still_restores_the_surface() {
-        let (m, seen) = mosaic_watching_main(Some(8));
-        m.close();
-        assert_eq!(*seen.lock(), Some(true));
     }
 
     /// Nothing in here records: the DVR is present only so the mosaic can ask how many
