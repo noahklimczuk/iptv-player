@@ -961,16 +961,22 @@ pub const REFRESH_AFTER_SECS: i64 = 24 * 60 * 60;
 
 /// Providers whose library is older than `REFRESH_AFTER_SECS`, oldest first.
 ///
-/// `last_refresh_at` is null for a provider that has never finished one -- imported
-/// through the wizard and then interrupted, say -- and that counts as stale: never is
-/// older than a day.
+/// Age is measured from `last_refresh_at` **or `created_at`**, whichever is later, and
+/// the fallback is the whole point. Only `refresh_provider` stamps `last_refresh_at` --
+/// the setup wizard imports a library without ever touching it -- so reading the column
+/// alone made every newly added provider "never refreshed", and the sweep re-imported it
+/// two minutes after the wizard had finished. Caught by a real panel: a library of 6,698
+/// channels came back as 13,396.
+///
+/// A provider created over a day ago that has still never completed a refresh is stale,
+/// which is the case the null was there for: imported through the wizard and interrupted.
 pub fn stale_providers(db: &aurora_db::rusqlite::Connection, now: i64) -> Result<Vec<i64>> {
     let cutoff = now - REFRESH_AFTER_SECS;
     let mut stmt = db
         .prepare(
             "SELECT id FROM providers
-              WHERE last_refresh_at IS NULL OR last_refresh_at <= ?1
-              ORDER BY COALESCE(last_refresh_at, 0)",
+              WHERE MAX(COALESCE(last_refresh_at, 0), COALESCE(created_at, 0)) <= ?1
+              ORDER BY MAX(COALESCE(last_refresh_at, 0), COALESCE(created_at, 0))",
         )
         .map_err(aurora_db::DbError::from)?;
     let ids = stmt
@@ -1233,6 +1239,22 @@ mod tests {
     /// Never counts as older than a day. A provider imported through the wizard and then
     /// interrupted has no `last_refresh_at` at all, and it is exactly the one that most
     /// needs picking up.
+    /// The bug this fallback exists for: the wizard imports a library and never stamps
+    /// `last_refresh_at`, so reading that column alone made a provider added seconds ago
+    /// due for a full re-import on the next sweep.
+    #[test]
+    fn a_provider_added_just_now_is_not_due() {
+        let db = aurora_db::open_memory().unwrap();
+        let now = 10 * DAY;
+        db.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at,last_refresh_at)
+             VALUES (1,'P','m3u','https://example.com/p.m3u',?1,NULL)",
+            params![now - 60],
+        )
+        .unwrap();
+        assert_eq!(stale_providers(&db, now).unwrap(), Vec::<i64>::new());
+    }
+
     #[test]
     fn a_provider_that_never_finished_one_is_due() {
         let db = aurora_db::open_memory().unwrap();

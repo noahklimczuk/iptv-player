@@ -151,6 +151,9 @@ def run(d, ctx):
         if page == "Live TV":
             _logos_render(d, ctx)
 
+    # Before the recorder, and it waits for the mosaic to report itself closed before
+    # returning. This line allows one connection, so the two cannot overlap -- and an
+    # unfinished mosaic starved the recorder for fifty minutes the first time they did.
     _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx)
     _records_a_real_stream(d, ctx)
 
@@ -179,12 +182,20 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
 
     hwnd = wp.find("Aurora")
     assert hwnd, "no window titled Aurora on the desktop"
-    main = next(
-        (c for c in wp.children_front_to_back(hwnd) if wp.class_name(c).lower() == "static"),
-        None,
+    # Visible STATIC children only, and there should be exactly one before a mosaic
+    # exists. Taking the frontmost without filtering picked a hidden sibling and reported
+    # "already hidden before any mosaic", which was the lookup being wrong rather than the
+    # app. `video_surface` is the scenario that pins the z-order itself.
+    visible = [
+        c
+        for c in wp.children_front_to_back(hwnd)
+        if wp.class_name(c).lower() == "static" and wp.is_visible(c)
+    ]
+    assert len(visible) == 1, (
+        "expected one visible video surface before any mosaic; found "
+        f"{[wp.describe(c) for c in visible]}"
     )
-    assert main, "the main video surface is not attached"
-    assert wp.is_visible(main), "the main surface is already hidden before any mosaic"
+    main = visible[0]
 
     # One channel, from the smallest group.
     #
@@ -253,17 +264,35 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
 
     # And given back, or the window is black with nothing over it.
     d.js(
-        "window.__TAURI_INTERNALS__.invoke('mosaic_close', { args: {} }).catch(() => {});"
+        "window.__TAURI_INTERNALS__.invoke('mosaic_close', { args: {} })"
+        "  .then(() => { window.__mosaicClosed = true; })"
+        "  .catch(() => { window.__mosaicClosed = true; });"
         " return true;"
     )
     back = False
-    for _ in range(40):
+    for _ in range(60):
         time.sleep(0.5)
         if wp.is_visible(main):
             back = True
             break
     assert back, "the main surface was left hidden after the mosaic closed"
-    print("   mosaic: closed, and the main surface is back")
+
+    # And settled, not merely asked to close. This line allows one connection, so a
+    # mosaic still letting go of its stream would starve whatever ran next -- which is how
+    # the first version of this step hung the whole scenario for fifty minutes.
+    #
+    # Waited for through the close call's own promise rather than by asking
+    # `mosaic.state`: `Mosaic::close` holds the session lock while it stops each tile, and
+    # `state` wants the same lock, so polling it during a slow close blocks on exactly the
+    # thing being waited for. That cost a run to find out.
+    settled = False
+    for _ in range(180):
+        time.sleep(1)
+        if d.js("return window.__mosaicClosed ?? false;"):
+            settled = True
+            break
+    assert settled, "the mosaic never finished closing"
+    print("   mosaic: closed, settled, and the main surface is back")
 
 
 def _logos_render(d, ctx):
