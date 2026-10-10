@@ -188,3 +188,52 @@ test('closing the mosaic gives the shell back', async ({ page }) => {
   await expect(page.getByTestId('mosaic-overlay')).toBeHidden();
   await expect(shell).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 });
+
+/**
+ * Picking a channel for a tile, on a list the size a real subscription actually is.
+ *
+ * Reported as "make the channel selection in multi-view easier to pick a channel". The
+ * picker was one flat list of every channel, which on a real library is several thousand
+ * names — searchable, but only if you already knew the name. These pin the two things
+ * that make it browsable instead: favourites at the top, and the provider's own
+ * categories as headings you can scroll past.
+ */
+test('the channel picker groups the list instead of running it together', async ({ page }) => {
+  await openMultiview(page);
+
+  await page.getByTestId('mosaic-pick-0').getByRole('button').click();
+  const list = page.getByRole('listbox');
+  await expect(list).toBeVisible();
+
+  const headings = list.getByTestId('select-group');
+  const names = await headings.allTextContents();
+  expect(names.length, 'the list has no group headings at all').toBeGreaterThan(0);
+  // More than one, or the grouping tells nobody anything.
+  expect(new Set(names).size).toBeGreaterThan(1);
+  // Favourites lead, because the handful somebody watches is almost always what they
+  // want in a tile. The fixture has some; a library with none simply starts at the
+  // first category.
+  if (names.some((n) => /favourite/i.test(n))) {
+    expect(names[0]).toMatch(/favourite/i);
+  }
+});
+
+test('the filter matches a category, not just a channel name', async ({ page }) => {
+  await openMultiview(page);
+  await page.getByTestId('mosaic-pick-0').getByRole('button').click();
+
+  const filter = page.getByRole('textbox', { name: /filter/i });
+  await expect(filter).toBeVisible();
+
+  // A category name, which is usually not any channel's name. Searching it has to find
+  // that category's channels — the difference between browsing and guessing.
+  const names = await page.getByTestId('select-group').allTextContents();
+  const category = names.find((n) => !/favourite/i.test(n));
+  expect(category, 'no category to search for').toBeTruthy();
+
+  await filter.fill(category!.toLowerCase());
+  const rows = page.getByRole('listbox').getByRole('option');
+  await expect(rows.first()).toBeVisible();
+  // And what came back really is that category.
+  await expect(page.getByTestId('select-group').first()).toHaveText(category!);
+});

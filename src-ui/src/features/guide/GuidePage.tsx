@@ -71,6 +71,7 @@ const xFor = (t: number, from: number) => ((t - from) / 60) * PX_PER_MIN;
 export function GuidePage({
   onTune,
   onPreview,
+  pictureReady,
   onInlay,
   onCatchup,
   onSearch,
@@ -84,6 +85,15 @@ export function GuidePage({
    * intentions and the page says which it means at each call site.
    */
   onPreview: (channel: Channel) => void;
+  /**
+   * Whether the video surface actually has a frame on it.
+   *
+   * Not the same as "we asked it to play". The preview box is a hole in an otherwise
+   * opaque page -- that is how the picture behind the WebView shows at all -- so a box
+   * made see-through before the stream has opened is a rectangle of desktop. This is the
+   * host's own answer, and the box stays black until it is true.
+   */
+  pictureReady: boolean;
   /**
    * Where the picture ended up, or `null` when the guide no longer has it.
    *
@@ -154,7 +164,7 @@ export function GuidePage({
    * hole and the surface are two halves of the same thing: a hole punched before a
    * stream is playing is a rectangle of desktop showing through the app.
    */
-  const inlay = useInlaidPicture(previewRef, playingId != null);
+  const inlay = useInlaidPicture(previewRef, pictureReady && playingId != null);
 
   // Reported through an effect rather than from the hook's callback so that leaving the
   // page also says so: the cleanup runs on unmount, and a shell left transparent after
@@ -341,7 +351,7 @@ export function GuidePage({
           <PreviewPane
             boxRef={previewRef}
             channel={previewChannel}
-            live={playingId != null && playingId === previewChannel?.id}
+            live={pictureReady && playingId != null && playingId === previewChannel?.id}
             onTune={onTune}
             onPreview={(ch) => {
               setPlayingId(ch.id);

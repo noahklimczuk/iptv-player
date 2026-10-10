@@ -19,7 +19,11 @@ const preview = (page: Page) => page.getByTestId('guide-preview');
 const channelCells = (page: Page) => page.locator('[data-testid="guide-channel"]');
 
 async function openGuide(page: Page) {
-  await page.goto('/#/guide');
+  // `?video` composes as though libmpv were rendering behind the page, which is the only
+  // way a browser can reach this state. The preview box is only made see-through once
+  // the host reports a frame on the surface -- without that it would be a hole through
+  // to the desktop while the stream opens -- and a browser has no surface at all.
+  await page.goto('/?video#/guide');
   await expect(page.getByRole('heading', { name: 'TV Guide' })).toBeVisible();
   await expect(preview(page)).toBeVisible();
   // The grid settles after its first paint; measuring mid-layout proves nothing.
