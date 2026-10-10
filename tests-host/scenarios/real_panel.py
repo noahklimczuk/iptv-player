@@ -24,7 +24,10 @@ gitignored, and the assertions below read counts from it rather than anything
 identifying.
 """
 import os
+import sys
 import time
+
+import winprobe as wp
 
 URL = os.environ.get("AURORA_PANEL_URL")
 USER = os.environ.get("AURORA_PANEL_USER")
@@ -148,7 +151,119 @@ def run(d, ctx):
         if page == "Live TV":
             _logos_render(d, ctx)
 
+    _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx)
     _records_a_real_stream(d, ctx)
+
+
+def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
+    """
+    Does a mosaic tile have anywhere to draw?
+
+    The fourth placement in `surfaces`, and the one that needs a real subscription: a
+    mosaic will not open without a channel, and the loopback fixture's URLs are stubs
+    that mpv never finishes deciding about.
+
+    What went wrong, and reached the viewer as "multi-view plays in the background but
+    doesn't play video": every `place` sends its surface to `HWND_BOTTOM`, so each tile
+    lands *behind* the main player's full-window surface. Stopping playback is not enough
+    -- the window is still there, still full-window, still in front, and an mpv surface
+    with nothing loaded is black.
+
+    One filled tile, deliberately. This line allows a single connection, so a four-stream
+    mosaic is refused by `Budget::check` and correctly so; one tile is the most that can
+    ever open here.
+    """
+    if sys.platform != "win32":
+        print("   mosaic: skipped, no mpv surface off Windows")
+        return
+
+    hwnd = wp.find("Aurora")
+    assert hwnd, "no window titled Aurora on the desktop"
+    main = next(
+        (c for c in wp.children_front_to_back(hwnd) if wp.class_name(c).lower() == "static"),
+        None,
+    )
+    assert main, "the main video surface is not attached"
+    assert wp.is_visible(main), "the main surface is already hidden before any mosaic"
+
+    # One channel, from the smallest group.
+    #
+    # Not `channels.list` with no argument: it has no limit, and this library holds
+    # thousands -- marshalling all of them through WebDriver is minutes of nothing. Not
+    # `channels.byNumber` either, which was the first attempt: this panel numbers nothing
+    # in the first ten, and a channel number is a thing a provider may simply not send.
+    # A group is bounded and its count comes back with it, so the smallest one is both
+    # cheap and certain to contain something.
+    groups = d.invoke("channels_groups", {})
+    assert groups, "the panel imported channels into no groups at all"
+    smallest = min(groups, key=lambda g: g["count"])
+    rows = d.invoke("channels_list", {"group": smallest["name"]})
+    assert rows, f"the group {smallest['name']!r} says {smallest['count']} and returned none"
+    channel = rows[0]
+    print(f"   mosaic: using {channel['name']!r} from {smallest['name']!r}")
+
+    # Fired and watched rather than waited for: `mosaic.open` does not return until mpv
+    # has decided about the stream, and everything asserted here has happened by then --
+    # the main surface is hidden before the first tile is built, and a tile's surface is
+    # created and placed before its stream is loaded.
+    d.js(
+        "const [ids] = arguments;"
+        " window.__TAURI_INTERNALS__"
+        "   .invoke('mosaic_open', { args: { layout: 'grid2x2', channelIds: ids } })"
+        "   .then((v) => { window.__mosaicOpened = v; })"
+        "   .catch((e) => { window.__mosaicFailed = String(e); });"
+        " return true;",
+        [channel["id"], None, None, None],
+    )
+
+    hidden = False
+    for _ in range(40):
+        time.sleep(0.5)
+        failed = d.js("return window.__mosaicFailed ?? null;")
+        assert not failed, f"the host would not open a mosaic: {failed}"
+        if not wp.is_visible(main):
+            hidden = True
+            break
+    assert hidden, (
+        "the main surface is still showing with a mosaic opening, so it covers every "
+        "tile -- which is what 'plays in the background but no video' was"
+    )
+    print("   mosaic: the main surface is out of the way")
+
+    # A tile surface, in one of the quarters of a 2x2.
+    cx, cy, cw, ch = wp.client_rect(hwnd)
+    tiles = [
+        c
+        for c in wp.children_front_to_back(hwnd)
+        if wp.class_name(c).lower() == "static" and wp.is_visible(c)
+    ]
+    rects = [wp.window_rect(t) for t in tiles]
+    print(f"   mosaic: {len(tiles)} visible surface(s) at {[(r[0] - cx, r[1] - cy, r[2], r[3]) for r in rects]}")
+    assert tiles, "a mosaic is opening and there is no visible surface anywhere"
+    for left, top, width, height in rects:
+        x, y = left - cx, top - cy
+        assert width <= cw // 2 + 2 and height <= ch // 2 + 2, (
+            f"a tile surface is {width}x{height}, which is not a quarter of {cw}x{ch}"
+        )
+        assert -2 <= x <= cw and -2 <= y <= ch, f"a tile surface is off the window at {x},{y}"
+
+    wp.bring_to_front(hwnd)
+    time.sleep(0.4)
+    wp.grab(cx, cy, cw, ch).save_png(ctx.shot("mosaic-surfaces"))
+
+    # And given back, or the window is black with nothing over it.
+    d.js(
+        "window.__TAURI_INTERNALS__.invoke('mosaic_close', { args: {} }).catch(() => {});"
+        " return true;"
+    )
+    back = False
+    for _ in range(40):
+        time.sleep(0.5)
+        if wp.is_visible(main):
+            back = True
+            break
+    assert back, "the main surface was left hidden after the mosaic closed"
+    print("   mosaic: closed, and the main surface is back")
 
 
 def _logos_render(d, ctx):

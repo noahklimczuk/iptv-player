@@ -24,8 +24,9 @@ use libmpv2::mpv_node::MpvNode;
 use libmpv2::{events::Event, Format, Mpv};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_NOACTIVATE, SW_HIDE,
-    SW_SHOW, WINDOW_EX_STYLE, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DestroyWindow, SetWindowPos, ShowWindow, HWND_BOTTOM, SWP_HIDEWINDOW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOW, WINDOW_EX_STYLE,
+    WS_CHILD, WS_VISIBLE,
 };
 
 use crate::backend::{Engine, LoadOptions, PlayerBackend};
@@ -807,10 +808,28 @@ impl PlayerBackend for MpvBackend {
         Ok(())
     }
 
+    /// `SetWindowPos`, not `ShowWindow`.
+    ///
+    /// The note on `unsafe impl Send` above says why: `SetWindowPos` on a window owned by
+    /// another thread is explicitly permitted by Win32, and this is called from a Tauri
+    /// command — a worker thread, not the main thread that created the window.
+    /// `ShowWindow` is not in that category. Hiding a cross-thread window with it sends
+    /// `WM_SHOWWINDOW` synchronously to the owning thread and blocks until that thread
+    /// handles it, and the first version of this hung `mosaic.open` for exactly that
+    /// reason: the command never returned and the scenario timed out waiting for it.
     fn set_surface_visible(&mut self, visible: bool) -> Result<(), PlayerError> {
         if let Some(hwnd) = self.video_hwnd {
+            let flags = SWP_NOMOVE
+                | SWP_NOSIZE
+                | SWP_NOZORDER
+                | SWP_NOACTIVATE
+                | if visible {
+                    SWP_SHOWWINDOW
+                } else {
+                    SWP_HIDEWINDOW
+                };
             unsafe {
-                let _ = ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
+                let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, flags);
             }
         }
         Ok(())

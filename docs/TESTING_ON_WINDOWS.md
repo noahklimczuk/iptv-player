@@ -106,8 +106,7 @@ $env:CARGO_TARGET_DIR = "C:\aurora-target"
 # Only if msedgedriver.exe is not on PATH:
 $env:AURORA_MSEDGEDRIVER = "$PWD\.windows\msedgedriver.exe"
 
-# The real panel, for the scenarios that need one. Typed straight into the window;
-# never written to a file, an argument or a log.
+# The real panel, for the scenarios that need one.
 $env:AURORA_PANEL_URL  = "https://…"
 $env:AURORA_PANEL_USER = "…"
 $env:AURORA_PANEL_PASS = "…"
@@ -115,6 +114,28 @@ $env:AURORA_PANEL_PASS = "…"
 python tests-host\run.py                 # all nine
 python tests-host\run.py player_controls # one of them
 ```
+
+On this machine they are kept in `C:\aurora-dev\panel.env` rather than retyped, and
+sourced before a run:
+
+```bash
+set -a; . /c/aurora-dev/panel.env; set +a
+python tests-host/run.py real_panel
+```
+
+`C:\aurora-dev\` and not the home directory: `C:\Users\<you>` is itself a git repository
+here, so anything under it is inside one, and this repository is public. A path outside
+every repository is the only arrangement in which a credential cannot be committed by
+accident.
+
+**What the line allows shapes what can be tested.** `player_api.php` reports
+`max_connections: 1` for this subscription, so:
+
+- a multi-tile mosaic cannot open at all -- `Budget::check` refuses it, correctly -- and
+  the mosaic surface check uses a single filled tile, which is the most that can ever
+  open here;
+- two scenarios must never run at once, and the app itself should be closed first, or
+  whichever asks second is refused for want of a connection.
 
 Screenshots and logs land in `screenshots\host\`, which is gitignored — the shots are
 of a real subscription.

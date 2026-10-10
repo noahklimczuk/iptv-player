@@ -117,6 +117,17 @@ def children_front_to_back(parent):
     return out
 
 
+def is_visible(hwnd):
+    """Whether Windows would draw it.
+
+    `children_front_to_back` enumerates every child, hidden ones included, which is the
+    right behaviour for a z-order question and the wrong one for "is there a picture
+    here". The main player's surface is hidden rather than destroyed while a mosaic is
+    open, so telling the two apart is the whole point.
+    """
+    return bool(user32.IsWindowVisible(hwnd))
+
+
 def describe(hwnd):
     return f"{class_name(hwnd)!r} {title(hwnd)!r} at {window_rect(hwnd)}"
 
