@@ -30,7 +30,7 @@
 //! already is.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 
 use aurora_core::mosaic::{Budget, Demand, Layout, Rect};
@@ -133,6 +133,14 @@ pub struct Mosaic {
     /// main player does.
     #[allow(dead_code)]
     data_dir: PathBuf,
+    /// Whether the screen has been told there is a mosaic.
+    ///
+    /// The heartbeat only had something to say while a session existed, so a mosaic that
+    /// went away was never announced: the overlay stayed on screen over a mosaic that was
+    /// no longer open, and the shell stayed transparent for video that was no longer
+    /// there. Clicking Close looked fine only because that path updates the screen's own
+    /// state as well -- every other way of closing one did not.
+    announced: AtomicBool,
     /// The main player, so its surface can be got out of the way.
     ///
     /// Not for playing anything — the tiles have their own backends. It is here because
@@ -193,6 +201,7 @@ impl Mosaic {
             parent: AtomicIsize::new(0),
             size: Mutex::new((1280, 720)),
             data_dir,
+            announced: AtomicBool::new(false),
             main,
         }
     }
@@ -585,7 +594,15 @@ impl Mosaic {
     /// bug F-30 was.
     pub fn tick(&self) -> Option<MosaicView> {
         let mut guard = self.session.lock();
-        let session = guard.as_mut()?;
+        let Some(session) = guard.as_mut() else {
+            // No session. If the screen was last told there was one, tell it once that
+            // there is not -- a mosaic closed by a command, by promoting a tile, or by a
+            // failed open would otherwise leave its overlay up for ever.
+            return self
+                .announced
+                .swap(false, Ordering::SeqCst)
+                .then(MosaicView::closed);
+        };
         for tile in session.tiles.iter_mut() {
             if let Some(player) = tile.player.as_mut() {
                 player.pump(0.0);
@@ -599,6 +616,7 @@ impl Mosaic {
             }
         }
         let rects = session.layout.rects_now(*self.size.lock());
+        self.announced.store(true, Ordering::SeqCst);
         Some(view_of(session, &rects))
     }
 
@@ -1062,6 +1080,46 @@ mod tests {
         // And it covers the new client area, not the old one.
         let (_, rect) = calls.last().unwrap();
         assert_eq!((rect.width, rect.height), (1920, 1080));
+    }
+
+    /// A mosaic that goes away is announced, once.
+    ///
+    /// The heartbeat is the only thing that tells the screen about a mosaic, and it had
+    /// nothing to say once the session was gone -- so the overlay stayed up over a mosaic
+    /// that had closed, and the shell stayed transparent for video that was no longer
+    /// there. Clicking Close looked right only because that path sets the screen's own
+    /// state too; closing one any other way -- a command, promoting a tile, an open that
+    /// replaced it -- did not.
+    #[test]
+    fn closing_a_mosaic_is_announced_to_the_screen() {
+        let (m, _placed, db) = mosaic_watching_tiles(Some(8));
+        seed_channel(&db, 1, "One", true);
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+
+        // While it is open the heartbeat reports it, which is what arms the announcement.
+        let open = m.tick().expect("an open mosaic has something to report");
+        assert!(open.open);
+
+        m.close();
+        let closed = m
+            .tick()
+            .expect("a mosaic that closed must be reported once");
+        assert!(!closed.open, "the screen was told the mosaic is still open");
+        assert!(closed.tiles.is_empty());
+
+        // Once, and not on every heartbeat thereafter: an event per tick for a screen
+        // with no mosaic on it is noise the UI would re-render for.
+        assert!(m.tick().is_none(), "the closed state is repeated for ever");
+    }
+
+    /// And nothing is announced for a mosaic that was never opened.
+    #[test]
+    fn a_mosaic_that_never_opened_says_nothing() {
+        let (m, _placed, _db) = mosaic_watching_tiles(Some(8));
+        assert!(m.tick().is_none());
+        m.close();
+        assert!(m.tick().is_none());
     }
 
     /// Opening and closing one must not touch the main surface's visibility at all --

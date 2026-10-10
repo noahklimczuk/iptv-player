@@ -300,11 +300,9 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
         "  .catch(() => { window.__mosaicClosed = true; });"
         " return true;"
     )
-    # Whether the close itself *finishes* is F-36, and it does not: dropping a tile's
-    # backend tears down an mpv instance whose window was created on a thread with no
-    # message loop, and the teardown has nothing to wait for. Reported rather than
-    # asserted, because it is a separate defect from the ordering this step is about and
-    # failing here would hide the things above that do pass.
+    # Whether the close itself finishes is reported rather than asserted. It does, now
+    # that nothing is hidden (F-36) -- but it depends on a provider letting go of a
+    # stream, and failing here would hide the things above that do not.
     finished = False
     for _ in range(20):
         if d.js("return window.__mosaicClosed ?? false;"):
@@ -314,10 +312,25 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
 
     # What matters either way: the main surface is still there to go back to.
     assert wp.is_visible(main), "the main surface vanished while the mosaic was closing"
+
+    # And the screen is told. The overlay is `position: fixed; inset: 0`, so one left
+    # behind is not a cosmetic leftover -- it is a sheet over every page. It used to stay
+    # for ever when a mosaic was closed by anything other than its own button, because the
+    # player's heartbeat had nothing to say once the session was gone.
+    gone = False
+    for _ in range(40):
+        time.sleep(0.5)
+        if not d.find_all('[data-testid="mosaic-overlay"]'):
+            gone = True
+            break
+    assert gone, (
+        "the mosaic overlay is still on screen after the mosaic closed, so every page "
+        "behind it is covered"
+    )
     print(
         "   mosaic: the close "
-        + ("finished" if finished else "has not returned (F-36)")
-        + ", and the main surface is intact"
+        + ("finished" if finished else "has not returned")
+        + ", the overlay is gone, and the main surface is intact"
     )
 
 
