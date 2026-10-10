@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode,
 } from 'react';
@@ -306,6 +306,16 @@ export interface SelectOption {
   label: string;
   /** Shown right-aligned and dimmed — a count, usually. */
   hint?: string;
+  /**
+   * A heading to file this option under.
+   *
+   * Options keep the order they are given in; this only draws a heading when the group
+   * changes, so the caller decides both the grouping and the order within it. Added for
+   * multi-view's channel picker, where a flat list of several thousand names could only
+   * be searched and not browsed — you had to know what you were looking for before you
+   * could look for it.
+   */
+  group?: string;
 }
 
 /**
@@ -359,7 +369,14 @@ export function Select({
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     return needle
-      ? options.filter((o) => o.label.toLowerCase().includes(needle))
+      ? options.filter(
+          (o) =>
+            o.label.toLowerCase().includes(needle) ||
+            // The group and the hint as well: on a real library the useful search is
+            // "sports" or a channel number, and neither is in the name.
+            (o.group ?? '').toLowerCase().includes(needle) ||
+            (o.hint ?? '').toLowerCase().includes(needle),
+        )
       : options;
   }, [options, filter]);
 
@@ -418,9 +435,30 @@ export function Select({
               {placeholder}
             </SelectRow>
           )}
-          {shown.map((o) => (
+          {shown.map((o, i) => (
+            <Fragment key={o.value}>
+              {o.group && o.group !== shown[i - 1]?.group && (
+                <div
+                  data-testid="select-group"
+                  // Sticky, because the whole point is knowing where you are in a list
+                  // long enough to need scrolling.
+                  style={{
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 1,
+                    background: 'var(--bg-elevated)',
+                    padding: '6px var(--sp-2) 3px',
+                    fontSize: 'var(--fs-xs)',
+                    fontWeight: 700,
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-faint)',
+                  }}
+                >
+                  {o.group}
+                </div>
+              )}
             <SelectRow
-              key={o.value}
               active={o.value === value}
               onClick={() => { onChange(o.value); setOpen(false); }}
             >
@@ -436,6 +474,7 @@ export function Select({
                 </span>
               )}
             </SelectRow>
+            </Fragment>
           ))}
           {shown.length === 0 && (
             <div

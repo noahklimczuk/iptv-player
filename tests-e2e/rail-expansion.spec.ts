@@ -131,3 +131,54 @@ test('the expanded panel is reachable, not just visible', async ({ page }) => {
   expect(box, 'the Play button has no box to click').not.toBeNull();
   expect(box!.height).toBeGreaterThan(8);
 });
+
+/**
+ * A card is the same width whatever is written under it.
+ *
+ * Reported as "the Because of what you watch section is massive", with three posters
+ * across a 1920px screen where every other rail showed ten. The cards carry their
+ * recommendation reason as a single `white-space: nowrap` line, and a flex item's
+ * `min-width` defaults to `auto` — it may not be narrower than its own content. So the
+ * card grew to fit the whole sentence, and the ellipsis that was supposed to cut the
+ * reason short could never fire, because nothing overflowed.
+ *
+ * Only the recommendation rail passes a reason, which is why only it was affected, and
+ * why no existing test saw it: the rails the suite measures have nothing under the
+ * poster but a year.
+ */
+test('a reason under a card does not make the card wider', async ({ page }) => {
+  await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await page.evaluate(async () => {
+    const w = window as unknown as { __auroraInvoke: (c: string, a: unknown) => Promise<unknown> };
+    await w.__auroraInvoke('gemini.setKey', { key: 'test-key' });
+  });
+  await page.getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: 'Home' })
+    .click();
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await page.waitForTimeout(900);
+
+  const withReason = page.getByRole('region', { name: 'Because of what you watch' });
+  await expect(withReason).toBeVisible();
+  await expect(withReason.getByTestId('card-reason').first()).toBeVisible();
+
+  const cards = withReason.getByTestId('catalog-card');
+  const count = Math.min(await cards.count(), 4);
+  expect(count).toBeGreaterThan(1);
+
+  // Against the rail's own card width rather than another rail's, so the assertion does
+  // not depend on which rails the fixture happens to produce. `CARD_W` is 168; the bug
+  // rendered these at 265 and, on a real library with longer reasons, at over 700.
+  for (let i = 0; i < count; i += 1) {
+    const box = (await cards.nth(i).boundingBox())!;
+    expect(box.width, `a card with a reason is ${box.width}px, not a card width`)
+      .toBeLessThan(200);
+  }
+
+  // And the reason is cut short rather than setting the width.
+  const cut = await withReason.getByTestId('card-reason').first().evaluate(
+    (el) => el.scrollWidth > el.clientWidth || el.textContent!.length < 30,
+  );
+  expect(cut, 'the reason is neither ellipsed nor short').toBe(true);
+});

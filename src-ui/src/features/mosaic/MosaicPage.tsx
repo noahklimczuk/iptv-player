@@ -144,17 +144,44 @@ export function MosaicPage({
   const selectionBlocked =
     check?.verdict === 'exceeds' && filled + check.recordings > check.limit;
 
-  // Thousands of channels in one list is why `Select` grows a search box past a dozen
-  // options; built once per channel list rather than per tile.
-  const channelOptions = useMemo(
-    () =>
-      (channels ?? []).map((c: Channel) => ({
-        value: String(c.id),
-        label: c.name,
-        hint: c.number ? String(c.number) : undefined,
-      })),
-    [channels],
-  );
+  /**
+   * The channels, in an order somebody can actually pick from.
+   *
+   * A real subscription is several thousand channels, and as one flat list the only way
+   * through it was the search box -- which means knowing the name before you can look
+   * for it. Two changes make it browsable:
+   *
+   * - **Favourites first**, under their own heading, because the handful of channels
+   *   somebody watches is almost always what they want in a tile.
+   * - **Grouped by the provider's own category** after that, so scrolling has landmarks.
+   *   `Select` draws a sticky heading whenever the group changes, and its filter matches
+   *   the group name too -- typing "sport" finds the sports channels whatever they are
+   *   called.
+   *
+   * Built once per channel list rather than per tile: nine tiles meant nine copies of
+   * several thousand options.
+   */
+  const channelOptions = useMemo(() => {
+    const all = channels ?? [];
+    const toOption = (c: Channel, group: string) => ({
+      value: String(c.id),
+      label: c.name,
+      hint: c.number ? String(c.number) : undefined,
+      group,
+    });
+    const favourites = all.filter((c: Channel) => c.favorite);
+    const rest = [...all]
+      .filter((c: Channel) => !c.favorite)
+      .sort((a: Channel, b: Channel) =>
+        (a.group ?? '').localeCompare(b.group ?? '') ||
+        (a.number ?? 0) - (b.number ?? 0) ||
+        a.name.localeCompare(b.name),
+      );
+    return [
+      ...favourites.map((c: Channel) => toOption(c, 'Favourites')),
+      ...rest.map((c: Channel) => toOption(c, c.group ?? 'Everything else')),
+    ];
+  }, [channels]);
 
   const setTile = (index: number, value: string | undefined) => {
     setPicked((prev) => {

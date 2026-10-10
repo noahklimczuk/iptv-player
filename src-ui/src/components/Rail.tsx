@@ -170,7 +170,18 @@ export function Rail({
           {rail.items.map((item, i) => (
             <div
               key={`${item.kind}-${item.id}`}
-              style={{ flex: `0 0 ${CARD_W}px`, scrollSnapAlign: 'start' }}
+              style={{
+                flex: `0 0 ${CARD_W}px`,
+                // `min-width: 0`, because a flex item's default is `auto` -- it may not
+                // be narrower than its own content. A recommendation card carries its
+                // reason as one `white-space: nowrap` line, so its min-content width is
+                // that whole sentence, and the card grew to fit it: "Because of what you
+                // watch" rendered three posters across the screen while every other rail
+                // showed ten. The ellipsis on the reason could never fire, because there
+                // was nothing to overflow.
+                minWidth: 0,
+                scrollSnapAlign: 'start',
+              }}
             >
               <CatalogCard
                 item={item}

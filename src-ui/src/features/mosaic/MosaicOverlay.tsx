@@ -86,13 +86,21 @@ export function MosaicOverlay({
             width: tile.rect.width / dpr,
             height: tile.rect.height / dpr,
             pointerEvents: 'auto',
-            // A tile with no picture needs a surface of its own to say so on; one with
-            // a picture must stay transparent or there is no point to any of this.
-            background: tile.error
-              ? 'color-mix(in srgb, var(--bg) 88%, transparent)'
-              : tile.channelId === null
-                ? 'color-mix(in srgb, var(--bg) 70%, transparent)'
-                : 'transparent',
+            // See-through only once there is something to see through to.
+            //
+            // The window is transparent while a mosaic is open -- that is how the tiles
+            // show at all -- so a tile that paints nothing is not "empty", it is a hole
+            // straight to the desktop. A tile that is still opening its stream used to
+            // be exactly that, and on a line that allows one connection three of the
+            // four tiles stay that way: most of the window was the desktop showing
+            // through. `status` is what tells them apart, and anything short of a
+            // picture gets an opaque black screen to wait on.
+            background:
+              tile.error || tile.channelId === null
+                ? 'color-mix(in srgb, var(--bg) 92%, transparent)'
+                : tile.status === 'playing' || tile.status === 'paused'
+                  ? 'transparent'
+                  : '#000',
             border: tile.focused
               ? '2px solid var(--accent)'
               : '1px solid color-mix(in srgb, var(--text) 22%, transparent)',

@@ -4,7 +4,7 @@
 //! start what is due — so there is a single place where the schedule and the recorder
 //! can disagree, and it is driven by a clock the tests control.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -65,7 +65,13 @@ pub struct Dvr {
     db: Arc<Mutex<Connection>>,
     recorder: Arc<dyn Recorder>,
     folder: PathBuf,
-    active: Mutex<HashMap<i64, Active>>,
+    active: Arc<Mutex<HashMap<i64, Active>>>,
+    /// Recordings whose stream is being opened right now.
+    ///
+    /// Separate from `active` because opening one happens on its own thread: it is not
+    /// recording yet, and it must still be counted against the subscription's limit and
+    /// not picked up twice by the next tick.
+    starting: Arc<Mutex<HashSet<i64>>>,
     max_concurrent: usize,
 }
 
@@ -75,8 +81,30 @@ impl Dvr {
             db,
             recorder,
             folder,
-            active: Mutex::new(HashMap::new()),
+            active: Arc::new(Mutex::new(HashMap::new())),
+            starting: Arc::new(Mutex::new(HashSet::new())),
             max_concurrent: DEFAULT_MAX_CONCURRENT,
+        }
+    }
+
+    /// Wait until nothing is still opening a stream, or give up.
+    ///
+    /// Opening one happens on its own thread (see `start_due`), so "the tick returned"
+    /// and "the recording started or failed" are two different moments. Anything that
+    /// needs the second one — a test asserting the outcome, a shutdown that should not
+    /// leave a half-opened stream behind — waits here.
+    ///
+    /// Returns false if it gave up, which is a provider still holding the connection.
+    pub fn settle(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.starting.lock().is_empty() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 
@@ -202,10 +230,11 @@ impl Dvr {
         };
 
         for rec in due {
-            if self.active.lock().contains_key(&rec.id) {
+            if self.active.lock().contains_key(&rec.id) || self.starting.lock().contains(&rec.id) {
                 continue;
             }
-            if self.active.lock().len() >= self.max_concurrent {
+            let busy = self.active.lock().len() + self.starting.lock().len();
+            if busy >= self.max_concurrent {
                 // Priority ordering in `due` means the ones that matter start first; the
                 // rest are skipped rather than queued, because their airtime is now.
                 let reason = "too many recordings at once for this subscription".to_string();
@@ -220,51 +249,104 @@ impl Dvr {
                 continue;
             }
 
-            match self.begin(&rec, now) {
-                Ok(active) => {
-                    let db = self.db.lock();
-                    repo::set_state(
-                        &db,
-                        rec.id,
-                        aurora_core::dvr::RecordingState::Recording,
-                        None,
-                    )?;
-                    drop(db);
-                    self.active.lock().insert(rec.id, active);
-                    report.started.push(rec.id);
-                }
-                Err(e) => {
-                    let reason = e.to_string();
-                    let db = self.db.lock();
-                    repo::set_state(
-                        &db,
-                        rec.id,
-                        aurora_core::dvr::RecordingState::Failed,
-                        Some(&reason),
-                    )?;
-                    report.failed.push((rec.id, reason));
-                }
+            // Claimed before the stream is opened, and opened somewhere else.
+            //
+            // `Recorder::start` connects to the provider, and a provider that accepts the
+            // connection and then sends nothing holds it for the recording's whole window
+            // -- blocking reqwest has no separate read timeout, and a short overall one
+            // would cut a long recording short. Doing that here meant the scheduler
+            // thread itself was blocked: no further ticks, nothing reaped, no stall
+            // noticed, and the recording sitting at "scheduled" with no reason for as
+            // long as it lasted. On a line already at its connection limit that is every
+            // recording, which is what "it never records" turned out to mean.
+            //
+            // So the state goes to `Recording` now -- it is the honest answer, the thing
+            // is starting -- and the connecting happens on a thread. `starting` keeps the
+            // next tick from picking it up again and keeps it counted against the limit.
+            {
+                let db = self.db.lock();
+                repo::set_state(
+                    &db,
+                    rec.id,
+                    aurora_core::dvr::RecordingState::Recording,
+                    None,
+                )?;
+            }
+            self.starting.lock().insert(rec.id);
+            report.started.push(rec.id);
+
+            let id = rec.id;
+            let db = Arc::clone(&self.db);
+            let recorder = Arc::clone(&self.recorder);
+            let folder = self.folder.clone();
+            let active = Arc::clone(&self.active);
+            let starting = Arc::clone(&self.starting);
+            let spawned = std::thread::Builder::new()
+                .name(format!("aurora-rec-{id}"))
+                .spawn(move || {
+                    let outcome = Self::open_stream(&db, recorder.as_ref(), &folder, &rec, now);
+                    starting.lock().remove(&id);
+                    match outcome {
+                        Ok(entry) => {
+                            active.lock().insert(id, entry);
+                        }
+                        Err(e) => {
+                            let reason = e.to_string();
+                            tracing::warn!("recording {id} could not start: {reason}");
+                            let db = db.lock();
+                            let _ = repo::set_state(
+                                &db,
+                                id,
+                                aurora_core::dvr::RecordingState::Failed,
+                                Some(&reason),
+                            );
+                        }
+                    }
+                });
+            if let Err(e) = spawned {
+                // A thread that will not spawn is not a recording that will not start
+                // later, so this is reported rather than left claimed.
+                self.starting.lock().remove(&id);
+                let reason = format!("could not start a thread for this recording: {e}");
+                let db = self.db.lock();
+                repo::set_state(
+                    &db,
+                    id,
+                    aurora_core::dvr::RecordingState::Failed,
+                    Some(&reason),
+                )?;
+                report.failed.push((id, reason));
             }
         }
         Ok(())
     }
 
-    fn begin(&self, rec: &Recording, now: i64) -> Result<Active> {
+    /// Open the provider's stream and start writing it to disk.
+    ///
+    /// An associated function rather than a method because it runs on a thread of its
+    /// own: see `start_due`. It takes only what it needs, so nothing about `Dvr` has to
+    /// outlive the call.
+    fn open_stream(
+        db: &Arc<Mutex<Connection>>,
+        recorder: &dyn Recorder,
+        folder: &std::path::Path,
+        rec: &Recording,
+        now: i64,
+    ) -> Result<Active> {
         let url = {
-            let db = self.db.lock();
+            let db = db.lock();
             let (url, _) = crate::window::resolve_playback(&db, "live", rec.channel_id, None)?;
             url
         };
 
-        let dest = self.folder.join(recording_filename(
+        let dest = folder.join(recording_filename(
             &rec.title,
             rec.season,
             rec.episode,
             rec.air_start,
         ));
 
-        let handle = self
-            .recorder
+        let handle = recorder
             .start(RecordRequest {
                 url,
                 dest,
@@ -293,6 +375,11 @@ impl Dvr {
 
     /// Stop everything, for shutdown. Recordings in flight complete with what they have.
     pub fn shutdown(&self, now: i64) {
+        // A stream still being opened would otherwise finish connecting after everything
+        // else had been finalised, leaving a recording running into a closed app. Bounded
+        // because the window is shutting and a provider that will not answer must not
+        // hold it open.
+        self.settle(std::time::Duration::from_secs(5));
         let ids: Vec<i64> = self.active.lock().keys().copied().collect();
         if ids.is_empty() {
             return;
@@ -795,6 +882,9 @@ mod tests {
         let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
 
         dvr.tick(1_000).unwrap();
+        // The stream is opened on its own thread, so the recording becomes active a
+        // moment after the tick returns rather than inside it.
+        assert!(dvr.settle(std::time::Duration::from_secs(5)));
         assert_eq!(dvr.active_ids(), vec![id]);
         wait_for_bytes(&dvr, id, 1);
 
@@ -852,9 +942,12 @@ mod tests {
             dir.clone(),
         );
 
+        // The tick reports what it *began*; the provider's refusal arrives on the
+        // thread doing the connecting, which is the whole point of `start_due` not
+        // blocking the scheduler.
         let report = dvr.tick(1_000).unwrap();
-        assert!(report.started.is_empty());
-        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.started, vec![id]);
+        assert!(dvr.settle(std::time::Duration::from_secs(5)));
         assert_eq!(state_of(&db, id), RecordingState::Failed);
         let reason = repo::get(&db.lock(), id).unwrap().unwrap().reason.unwrap();
         assert!(!reason.is_empty());
@@ -878,8 +971,78 @@ mod tests {
             dir.clone(),
         );
 
+        // Resolving the channel's source happens on the connecting thread too, so the
+        // failure lands after the tick rather than in it.
+        dvr.tick(1_000).unwrap();
+        assert!(dvr.settle(std::time::Duration::from_secs(5)));
+        assert_eq!(state_of(&db, id), RecordingState::Failed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A recorder that takes its time connecting, the way a real provider does.
+    struct SlowRecorder {
+        /// How long `start` blocks before admitting it cannot connect.
+        delay: std::time::Duration,
+        began: Arc<Mutex<bool>>,
+    }
+
+    impl Recorder for SlowRecorder {
+        fn start(
+            &self,
+            _request: aurora_ingest::recorder::RecordRequest,
+        ) -> std::result::Result<aurora_ingest::recorder::Handle, aurora_core::neterr::NetFailure>
+        {
+            *self.began.lock() = true;
+            std::thread::sleep(self.delay);
+            Err(aurora_core::neterr::NetFailure::classify(
+                "connection timed out",
+            ))
+        }
+    }
+
+    /// The bug this exists for: a provider that accepts the connection and then sends
+    /// nothing used to hold the *scheduler* thread for the recording's whole window.
+    ///
+    /// Blocking reqwest has no read timeout separate from the overall one, and the
+    /// overall one has to be long enough for the recording itself — so `Recorder::start`
+    /// can legitimately take minutes to give up. Doing that inside the tick meant no
+    /// further ticks, nothing reaped, no stall noticed, and the recording sitting at
+    /// "scheduled" with no reason for as long as it lasted. On a line already at its
+    /// connection limit, that is every recording.
+    #[test]
+    fn a_slow_provider_does_not_hold_up_the_scheduler() {
+        let db = seeded_db();
+        let dir = tempdir("slow");
+        let id = schedule_at(&db, "Show", 1_000);
+        let began = Arc::new(Mutex::new(false));
+        let dvr = Dvr::new(
+            Arc::clone(&db),
+            Arc::new(SlowRecorder {
+                delay: std::time::Duration::from_millis(600),
+                began: Arc::clone(&began),
+            }),
+            dir.clone(),
+        );
+
+        let started = std::time::Instant::now();
         let report = dvr.tick(1_000).unwrap();
-        assert_eq!(report.failed.len(), 1);
+        let took = started.elapsed();
+
+        // The tick itself is quick, whatever the provider is doing.
+        assert!(
+            took < std::time::Duration::from_millis(300),
+            "the tick waited {took:?} for the provider"
+        );
+        assert_eq!(report.started, vec![id]);
+        // And it is `Recording` meanwhile, which is the honest answer -- it is starting.
+        assert_eq!(state_of(&db, id), RecordingState::Recording);
+
+        // A second tick while the first is still connecting must not start it twice.
+        let again = dvr.tick(1_001).unwrap();
+        assert!(again.started.is_empty(), "started twice: {again:?}");
+
+        assert!(dvr.settle(std::time::Duration::from_secs(5)));
+        assert!(*began.lock(), "the recorder was never asked to start");
         assert_eq!(state_of(&db, id), RecordingState::Failed);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -893,7 +1056,10 @@ mod tests {
         let dvr = Dvr::new(Arc::clone(&db), recorder, dir.clone());
 
         assert_eq!(dvr.tick(1_000).unwrap().started.len(), 1);
+        // The second tick lands while the first is still opening its stream, which is
+        // the case `starting` exists for: claimed, so not picked up again.
         assert!(dvr.tick(1_010).unwrap().started.is_empty());
+        assert!(dvr.settle(std::time::Duration::from_secs(5)));
         assert_eq!(dvr.active_ids().len(), 1);
 
         dvr.shutdown(1_020);

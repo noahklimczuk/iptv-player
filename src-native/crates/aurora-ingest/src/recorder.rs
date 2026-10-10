@@ -217,6 +217,13 @@ fn build_client(request: &RecordRequest) -> Result<reqwest::blocking::Client, Ne
         .connect_timeout(Duration::from_secs(20))
         // The recording's own window, not a fetch budget. Without a ceiling at all, a
         // wedged socket would hold the thread until the process exits.
+        //
+        // Deliberately the only limit, and it covers the body as well as the headers --
+        // blocking reqwest has no separate read timeout, and a shorter one here would cut
+        // a two-hour recording off at the knees. The cost is that a provider which
+        // accepts the connection and then sends nothing holds `start` for the whole
+        // window; `Dvr::start_due` is what keeps that off the scheduler thread, because
+        // this used to freeze the entire DVR while it happened.
         .timeout(Duration::from_secs(request.window_secs + WINDOW_SLACK_SECS))
         .redirect(reqwest::redirect::Policy::limited(5))
         // Never gzip: this is a transport stream, and asking would only invite a

@@ -747,6 +747,7 @@ export default function App() {
                 // The same tune, without surfacing the player: the picture is going
                 // into a box on a page the viewer is still reading.
                 onPreview={(ch) => tune(ch, { reveal: false })}
+                pictureReady={showingPicture(ui.player)}
                 onInlay={setGuideInlay}
                 onCatchup={playCatchup}
                 onSearch={(q) => ui.setPalette(true, q)}
