@@ -68,7 +68,7 @@ licence obligation met, and advisories checked on both ecosystems in CI.
 | **A recording's file on disk** | The recorder reaches a provider and reports its states correctly; the assertion that the file exceeds 64 kB has not had a green run, because the harness wipe needs a build outside OneDrive. One run with credentials closes it. |
 | **Per-machine install and uninstall** | The *upgrade* path is verified with a real library behind it. A per-machine NSIS install needs an administrator account, which this machine does not have. The per-user MSI path is what is actually used. |
 | **ARM64** | No ARM64 machine, and no ARM64 libmpv upstream. x64 only, said plainly on the release page. |
-| **Zap time** | 1.91s against the 1.5s in README §16, measured against a public CDN rather than a provider. Reported rather than asserted, and worth re-measuring on a real panel before anything is optimised. |
+| **Zap time** | **1.92s against the 1.5s in README §16, now measured on a real subscription** and not only a public CDN — the two agree to within 10ms, so the number is the app's and not the network's. Reported rather than asserted. Where the time goes has not been measured, and that is the thing to do before anything is optimised. |
 
 **Not built, by choice:** Stalker portals; drag-to-reorder, custom logos, named favourite
 lists and the rules engine; PiP, sleep timer, tray, backup/restore; a UI for the
@@ -108,7 +108,31 @@ two tests in that module were hanging and it read as a slow runner.
 
 ---
 
-## 1. Run the Phase 0 spike — **done**
+## 1. Run the Phase 0 spike — **done, and now on a real subscription**
+
+Confirmed a second time against the viewer's own panel rather than a public stream, which
+is the part that had never been done: `video_surface` with
+`AURORA_TEST_STREAM_M3U` pointed at six live channels taken from the panel's own
+`get.php`, trimmed to a handful so the import is seconds rather than a quarter of an hour.
+
+```
+mpv: 1280x720 H.264 30fps hw=d3d11va-copy buffer=1.92s
+surface: 'Static' at (138, 161, 1440, 900), last of 2 children
+desktop: 55.0% of the middle changed in 1.2s, 4070 colours
+resize: client 1220x740, surface 1220x740
+zap: 1.92s (budget 1.5s)
+```
+
+A different path from the first run in every respect that matters — 720p30 from a
+provider against 1080p60 from a CDN — and the same four answers: behind the UI, input
+still arriving, resize keeping the two together, and frames genuinely decoded and
+composited rather than a surface that merely exists. `tests-host/scenarios/surfaces.py`
+measures *where* a surface is; this is the only thing that measures whether anything is
+drawn on it.
+
+### The original run
+
+The first run, on a public stream:
 
 **Run on Windows 11 with libmpv v0.41, and it works.** The full account is in
 `AUDIT/test-report.md` §11; the four questions this item asked, in order:
