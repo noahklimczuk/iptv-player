@@ -68,7 +68,7 @@ licence obligation met, and advisories checked on both ecosystems in CI.
 | **A recording's file on disk** | The recorder reaches a provider and reports its states correctly; the assertion that the file exceeds 64 kB has not had a green run, because the harness wipe needs a build outside OneDrive. One run with credentials closes it. |
 | **Per-machine install and uninstall** | The *upgrade* path is verified with a real library behind it. A per-machine NSIS install needs an administrator account, which this machine does not have. The per-user MSI path is what is actually used. |
 | **ARM64** | No ARM64 machine, and no ARM64 libmpv upstream. x64 only, said plainly on the release page. |
-| **Zap time** | 1.91s against the 1.5s in README §16, measured against a public CDN rather than a provider. Reported rather than asserted, and worth re-measuring on a real panel before anything is optimised. |
+| **Zap time** | **1.92s against the 1.5s in README §16, now measured on a real subscription** and not only a public CDN — the two agree to within 10ms, so the number is the app's and not the network's. Reported rather than asserted. Where the time goes has not been measured, and that is the thing to do before anything is optimised. |
 
 **Not built, by choice:** Stalker portals; drag-to-reorder, custom logos, named favourite
 lists and the rules engine; PiP, sleep timer, tray, backup/restore; a UI for the
@@ -108,7 +108,31 @@ two tests in that module were hanging and it read as a slow runner.
 
 ---
 
-## 1. Run the Phase 0 spike — **done**
+## 1. Run the Phase 0 spike — **done, and now on a real subscription**
+
+Confirmed a second time against the viewer's own panel rather than a public stream, which
+is the part that had never been done: `video_surface` with
+`AURORA_TEST_STREAM_M3U` pointed at six live channels taken from the panel's own
+`get.php`, trimmed to a handful so the import is seconds rather than a quarter of an hour.
+
+```
+mpv: 1280x720 H.264 30fps hw=d3d11va-copy buffer=1.92s
+surface: 'Static' at (138, 161, 1440, 900), last of 2 children
+desktop: 55.0% of the middle changed in 1.2s, 4070 colours
+resize: client 1220x740, surface 1220x740
+zap: 1.92s (budget 1.5s)
+```
+
+A different path from the first run in every respect that matters — 720p30 from a
+provider against 1080p60 from a CDN — and the same four answers: behind the UI, input
+still arriving, resize keeping the two together, and frames genuinely decoded and
+composited rather than a surface that merely exists. `tests-host/scenarios/surfaces.py`
+measures *where* a surface is; this is the only thing that measures whether anything is
+drawn on it.
+
+### The original run
+
+The first run, on a public stream:
 
 **Run on Windows 11 with libmpv v0.41, and it works.** The full account is in
 `AUDIT/test-report.md` §11; the four questions this item asked, in order:
@@ -499,21 +523,47 @@ Do not static-link libmpv. The relinking obligation is satisfied by its being a
 separate `.dll`, and `THIRD-PARTY-NOTICES.md` now states that as a constraint on the
 build rather than an observation about it.
 
-## 9. Store listing / release page copy
+## 9. Store listing / release page copy — **done for GitHub; the Store part stays open**
 
-If it goes to the Microsoft Store rather than GitHub Releases, the auto-updater (D17)
-must be disabled for that build — the Store owns updating, and two mechanisms fighting
-is worse than either. `can_install()` already refuses for portable copies; a Store
-build needs the same treatment.
+`docs/RELEASE_NOTES_TEMPLATE.md`: what a release page says, and the two things that change
+if it ever goes anywhere else.
 
-## 10. A privacy note
+The copy leads with what the thing is and how to install it, then says the three things
+somebody will otherwise discover for themselves — SmartScreen warns because nothing is
+signed, catch-up does not work on any subscription tested, x64 only — and links the
+privacy note rather than summarising it badly.
 
-Worth writing even though the answer is short and good: the app talks to the
-provider the viewer entered, to TMDB (with a key baked in per D19), and to GitHub for
-update checks. Nothing is sent anywhere else, there is no telemetry, and credentials
-live in Windows Credential Manager and never in the database, a log or an export
-(verified — `http::redact` now covers the markerless `/user/pass/id.ts` form too, F-15).
-Say so on the release page; people ask.
+**The Store part is unchanged and still open**, because nothing is going there yet. Two
+things would have to happen first, and the first is not optional: the auto-updater (D17)
+must be off in a Store build, since the Store owns updating and two mechanisms swapping
+the same executable is how an install ends up half of each. `can_install()` already
+refuses for portable copies and a Store build needs the same refusal. The second is that
+the Store's privacy declaration is a form rather than a paragraph, and its answers have to
+match `docs/PRIVACY.md` — including the Google one, which is the only entry on it that
+is not "nothing".
+
+## 10. A privacy note — **done, and it found something**
+
+`docs/PRIVACY.md`. Worth writing even though most of the answer is short and good, and
+the writing is what turned up the part that is not.
+
+The honest list of destinations is the provider, Google, TMDB and GitHub — and
+`gemini.rs` described the Google one as opt-in: *"the request is made only when they have
+set a key, which is the opt-in"*. That was true when it was written and is not true of a
+release. Official builds compile a key in (D19, and the thing that made the assistant work
+at all), so `key_available` is true before the viewer has entered anything, and the
+recommendation rail asks Google the first time the home screen opens with something in the
+watch history. **A viewer's watch history leaves the machine by default.**
+
+That is a defensible trade — the alternative is a feature that does nothing until
+somebody finds a Google key — and it is not defensible silently. The note says it in
+the plainest words available, says what is sent (titles, years, genres, how much was
+watched, whether it was liked — and for the assistant, what was typed and a one-line
+library summary), says what is not (provider, credentials, anything naming the viewer),
+and says how to stop it. The comment in `gemini.rs` has been corrected to match.
+
+Worth revisiting if anyone other than the publisher installs this: a first-run question
+would make it a choice rather than a disclosure.
 
 ---
 

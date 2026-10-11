@@ -128,6 +128,47 @@ here, so anything under it is inside one, and this repository is public. A path 
 every repository is the only arrangement in which a credential cannot be committed by
 accident.
 
+### Running `video_surface` against the real panel
+
+It needs a playlist of streams that actually play, and the panel's own `get.php` is
+480,000 lines — importing that through the wizard is a quarter of an hour before the
+scenario starts. Trim it to a handful instead, and serve the trimmed file from outside
+the repository, because every stream URL in it carries the credentials:
+
+```bash
+set -a; . /c/aurora-dev/panel.env; set +a
+# Six live channels, written to a scratch directory and served on loopback.
+#   a live URL is /<user>/<pass>/<id> with no extension; VOD ends .mkv or .mp4
+python -I - <<'EOF'
+import os, re, io, urllib.request, urllib.parse
+url = os.environ["AURORA_PANEL_URL"].rstrip("/")
+q = urllib.parse.urlencode({"username": os.environ["AURORA_PANEL_USER"],
+                            "password": os.environ["AURORA_PANEL_PASS"],
+                            "type": "m3u_plus", "output": "ts"})
+req = urllib.request.Request(f"{url}/get.php?{q}", headers={"User-Agent": "VLC/3.0.20"})
+lines = urllib.request.urlopen(req, timeout=120).read().decode("utf-8", "replace").splitlines()
+live, skip = re.compile(r"/\d+$"), re.compile(r"ppv|event only|24/7|adult", re.I)
+picked, i = [], 0
+while i < len(lines) - 1 and len(picked) < 6:
+    if lines[i].startswith("#EXTINF") and live.search(lines[i + 1].strip()):
+        if not skip.search(lines[i]):
+            picked.append((lines[i], lines[i + 1].strip()))
+        i += 2
+        continue
+    i += 1
+os.makedirs("/c/aurora-dev/live", exist_ok=True)
+io.open("/c/aurora-dev/live/playlist.m3u", "w", encoding="utf-8", newline="\n").write(
+    "#EXTM3U\n" + "\n".join(f"{a}\n{b}" for a, b in picked) + "\n")
+EOF
+
+cd /c/aurora-dev/live && python -m http.server 8123 --bind 127.0.0.1 &
+AURORA_TEST_STREAM_M3U=http://127.0.0.1:8123/playlist.m3u \
+  python tests-host/run.py video_surface
+```
+
+Shopping channels are a good pick and not a joke: they broadcast around the clock, so the
+motion check never lands in a scheduling gap.
+
 **What the line allows shapes what can be tested.** `player_api.php` reports
 `max_connections: 1` for this subscription, so:
 
