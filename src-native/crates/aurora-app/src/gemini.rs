@@ -6,9 +6,16 @@
 //! **What leaves this machine, exactly.** The titles the viewer has watched, with their
 //! years and genres, how much of each they watched, and whether they liked it. Nothing
 //! else: not their provider, not their credentials, not what is in their library, not
-//! anything that identifies them or the subscription. The request is made only when they
-//! have set a key, which is the opt-in — there is no key by default and no built-in one
-//! unless a build supplies it.
+//! anything that identifies them or the subscription.
+//!
+//! **It is not opt-in in an official build, and that used to be written here as though it
+//! were.** A release is compiled with a key (D19), so `key_available` is true before the
+//! viewer has entered anything and the rail asks Google the first time the home screen
+//! opens with something in the watch history. That is the trade the built-in key buys —
+//! the alternative is a feature that does nothing until somebody goes and finds a key —
+//! but it means a viewer's history leaves the machine by default. Clearing the key in
+//! Settings stops it. A build compiled without `AURORA_GEMINI_KEY` has no key and asks
+//! nothing. `docs/PRIVACY.md` says so where a viewer can read it.
 //!
 //! **Why the answer is resolved rather than displayed.** The model is asked for titles by
 //! name, which is the thing it is good at and the thing the local recommender cannot do.

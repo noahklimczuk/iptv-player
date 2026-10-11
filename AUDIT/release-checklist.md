@@ -523,21 +523,47 @@ Do not static-link libmpv. The relinking obligation is satisfied by its being a
 separate `.dll`, and `THIRD-PARTY-NOTICES.md` now states that as a constraint on the
 build rather than an observation about it.
 
-## 9. Store listing / release page copy
+## 9. Store listing / release page copy — **done for GitHub; the Store part stays open**
 
-If it goes to the Microsoft Store rather than GitHub Releases, the auto-updater (D17)
-must be disabled for that build — the Store owns updating, and two mechanisms fighting
-is worse than either. `can_install()` already refuses for portable copies; a Store
-build needs the same treatment.
+`docs/RELEASE_NOTES_TEMPLATE.md`: what a release page says, and the two things that change
+if it ever goes anywhere else.
 
-## 10. A privacy note
+The copy leads with what the thing is and how to install it, then says the three things
+somebody will otherwise discover for themselves — SmartScreen warns because nothing is
+signed, catch-up does not work on any subscription tested, x64 only — and links the
+privacy note rather than summarising it badly.
 
-Worth writing even though the answer is short and good: the app talks to the
-provider the viewer entered, to TMDB (with a key baked in per D19), and to GitHub for
-update checks. Nothing is sent anywhere else, there is no telemetry, and credentials
-live in Windows Credential Manager and never in the database, a log or an export
-(verified — `http::redact` now covers the markerless `/user/pass/id.ts` form too, F-15).
-Say so on the release page; people ask.
+**The Store part is unchanged and still open**, because nothing is going there yet. Two
+things would have to happen first, and the first is not optional: the auto-updater (D17)
+must be off in a Store build, since the Store owns updating and two mechanisms swapping
+the same executable is how an install ends up half of each. `can_install()` already
+refuses for portable copies and a Store build needs the same refusal. The second is that
+the Store's privacy declaration is a form rather than a paragraph, and its answers have to
+match `docs/PRIVACY.md` — including the Google one, which is the only entry on it that
+is not "nothing".
+
+## 10. A privacy note — **done, and it found something**
+
+`docs/PRIVACY.md`. Worth writing even though most of the answer is short and good, and
+the writing is what turned up the part that is not.
+
+The honest list of destinations is the provider, Google, TMDB and GitHub — and
+`gemini.rs` described the Google one as opt-in: *"the request is made only when they have
+set a key, which is the opt-in"*. That was true when it was written and is not true of a
+release. Official builds compile a key in (D19, and the thing that made the assistant work
+at all), so `key_available` is true before the viewer has entered anything, and the
+recommendation rail asks Google the first time the home screen opens with something in the
+watch history. **A viewer's watch history leaves the machine by default.**
+
+That is a defensible trade — the alternative is a feature that does nothing until
+somebody finds a Google key — and it is not defensible silently. The note says it in
+the plainest words available, says what is sent (titles, years, genres, how much was
+watched, whether it was liked — and for the assistant, what was typed and a one-line
+library summary), says what is not (provider, credentials, anything naming the viewer),
+and says how to stop it. The comment in `gemini.rs` has been corrected to match.
+
+Worth revisiting if anyone other than the publisher installs this: a first-run question
+would make it a choice rather than a disclosure.
 
 ---
 
