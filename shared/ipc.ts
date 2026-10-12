@@ -1010,9 +1010,25 @@ export interface Commands {
     keyIsBuiltIn: boolean;
     keyIsPersistent: boolean;
     hasHistory: boolean;
+    /**
+     * Whether the viewer has left these two features on.
+     *
+     * Separate from `hasKey`, and the distinction is the point: an official build is
+     * compiled with a key, so clearing the viewer's own one falls back to that and
+     * stops nothing. This is the switch that does.
+     */
+    enabled: boolean;
   };
-  /** Empty clears the stored key. */
+  /** Empty clears the stored key. It does not turn the feature off — see `setEnabled`. */
   'gemini.setKey': (args: { key: string }) => void;
+  /**
+   * Turn the recommendation rail and the assistant off, or back on.
+   *
+   * Off means nothing is sent to Google whatever key is available, including the one
+   * compiled into a release. Also drops the cached answer, which was built from this
+   * viewer's history.
+   */
+  'gemini.setEnabled': (args: { enabled: boolean }) => void;
 
   /* ── The assistant ──────────────────────────────────────────────────────── */
 

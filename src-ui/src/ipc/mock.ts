@@ -86,6 +86,17 @@ const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'm
 const liked = new Set<string>(['movie:4', 'series:2']);
 /** Set through `gemini.setKey`, so the preview can show both sides of the switch. */
 let mockGeminiKey = '';
+/** Set through `gemini.setEnabled`. On by default, as a release build is. */
+let mockGeminiEnabled = true;
+/**
+ * What the host's `resolve_key` returns, modelled.
+ *
+ * Switched off means there is no key *whatever is set* — which is the whole point of the
+ * switch, because a release build is compiled with one and clearing the viewer's own
+ * falls back to it. Every place the mock asked `mockGeminiKey` directly now asks this,
+ * so the preview turns the rail and the assistant off the same way the host does.
+ */
+const geminiKey = () => (mockGeminiEnabled ? mockGeminiKey : '');
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -1439,15 +1450,17 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   /* ── Gemini recommendations ───────────────────────────────────────────── */
 
   'gemini.status': () => ({
-    hasKey: mockGeminiKey.length > 0,
+    hasKey: geminiKey().length > 0,
     keyIsBuiltIn: false,
     keyIsPersistent: true,
     hasHistory: progress.size > 0,
+    enabled: mockGeminiEnabled,
   }),
   'gemini.setKey': ({ key }) => { mockGeminiKey = key.trim(); },
+  'gemini.setEnabled': ({ enabled }) => { mockGeminiEnabled = enabled; },
 
   'assistant.status': ({ profileId }) => ({
-    hasKey: mockGeminiKey.length > 0,
+    hasKey: geminiKey().length > 0,
     model: 'gemini-flash-latest',
     messages: (assistantHistory.get(profileId) ?? []).length,
   }),
@@ -1456,7 +1469,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'assistant.send': ({ profileId, text }) => {
     const asked = text.trim();
     if (!asked) throw new Error('Ask me something first.');
-    if (!mockGeminiKey) {
+    if (!geminiKey()) {
       throw new Error('The assistant needs a Gemini key, which is set in Settings.');
     }
 
@@ -1491,7 +1504,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return { message, steps };
   },
   'gemini.recommendations': ({ refresh }) => {
-    if (!mockGeminiKey) throw new Error('No Gemini key is set. Add one in Settings.');
+    if (!geminiKey()) throw new Error('No Gemini key is set. Add one in Settings.');
     // The real thing asks a model for titles and then looks each one up here, dropping
     // what this library does not carry. The preview models the *shape* of that: a dozen
     // real rows with a sentence each, and a count of the ones that did not resolve.
