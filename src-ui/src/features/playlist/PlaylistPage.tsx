@@ -17,6 +17,8 @@ import { Badge, Button, EmptyState, FIELD, Select, Skeleton } from '@/components
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
+import { notify } from '@/lib/errors';
+import { numberPatch } from './number';
 
 const ROW_H = 46;
 const PAGE = 300;
@@ -355,7 +357,18 @@ function Row({
           label={`Number for ${row.name}`}
           width={64}
           weight={400}
-          onCommit={(next) => onPatch({ number: Number(next) || 0 })}
+          onCommit={(next) => {
+            const patch = numberPatch(next);
+            if (patch === undefined) {
+              notify(
+                `“${next.trim()}” is not a channel number`,
+                'Enter a whole number above zero, or clear the field to use the '
+                + "provider's own number.",
+              );
+              return;
+            }
+            onPatch(patch);
+          }}
         />
       )}
 
