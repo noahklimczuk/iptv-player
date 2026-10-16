@@ -94,10 +94,20 @@ pub struct Dvr {
     /// Set only by a test that needs a known cap. Production reads the real one from
     /// the database on every tick — see [`Dvr::max_concurrent`].
     forced_max_concurrent: Option<usize>,
+    /// Provider passwords, for rebuilding a channel's stream address.
+    ///
+    /// A recording resolves the same live address a tune does, and the library no longer
+    /// stores Xtream URLs — they carry the credentials in their path (R-126).
+    credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
 }
 
 impl Dvr {
-    pub fn new(db: Arc<Mutex<Connection>>, recorder: Arc<dyn Recorder>, folder: PathBuf) -> Self {
+    pub fn new(
+        db: Arc<Mutex<Connection>>,
+        recorder: Arc<dyn Recorder>,
+        folder: PathBuf,
+        credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
+    ) -> Self {
         Self {
             db,
             recorder,
@@ -105,6 +115,7 @@ impl Dvr {
             active: Arc::new(Mutex::new(HashMap::new())),
             starting: Arc::new(Mutex::new(HashSet::new())),
             forced_max_concurrent: None,
+            credentials,
         }
     }
 
@@ -321,10 +332,18 @@ impl Dvr {
             let folder = self.folder.clone();
             let active = Arc::clone(&self.active);
             let starting = Arc::clone(&self.starting);
+            let credentials = Arc::clone(&self.credentials);
             let spawned = std::thread::Builder::new()
                 .name(format!("aurora-rec-{id}"))
                 .spawn(move || {
-                    let outcome = Self::open_stream(&db, recorder.as_ref(), &folder, &rec, now);
+                    let outcome = Self::open_stream(
+                        &db,
+                        recorder.as_ref(),
+                        &folder,
+                        credentials.as_ref(),
+                        &rec,
+                        now,
+                    );
                     starting.lock().remove(&id);
                     match outcome {
                         Ok(entry) => {
@@ -370,12 +389,14 @@ impl Dvr {
         db: &Arc<Mutex<Connection>>,
         recorder: &dyn Recorder,
         folder: &std::path::Path,
+        credentials: &dyn aurora_ingest::credentials::CredentialStore,
         rec: &Recording,
         now: i64,
     ) -> Result<Active> {
         let url = {
             let db = db.lock();
-            let (url, _) = crate::window::resolve_playback(&db, "live", rec.channel_id, None)?;
+            let (url, _) =
+                crate::window::resolve_playback(&db, credentials, "live", rec.channel_id, None)?;
             url
         };
 
@@ -743,6 +764,12 @@ pub fn dvr_storage(services: State<'_, Services>) -> Result<Storage> {
 
 #[cfg(test)]
 mod tests {
+    /// A credential store for the tests, which never need a real one: the fixtures
+    /// store plain URLs, so `streams::playable` hands them back untouched (R-126).
+    fn test_store() -> std::sync::Arc<dyn aurora_ingest::credentials::CredentialStore> {
+        std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default())
+    }
+
     use super::*;
     use aurora_core::dvr::RecordingState;
     use aurora_core::neterr::NetFailure;
@@ -889,6 +916,7 @@ mod tests {
                 ..Default::default()
             }),
             dir.clone(),
+            test_store(),
         );
 
         let report = dvr.tick(1_000).unwrap();
@@ -916,7 +944,12 @@ mod tests {
         let db = seeded_db();
         let dir = tempdir("window");
         let id = schedule_at(&db, "Long Show", 1_000);
-        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
+        let dvr = Dvr::new(
+            Arc::clone(&db),
+            Arc::new(EndlessRecorder),
+            dir.clone(),
+            test_store(),
+        );
 
         dvr.tick(1_000).unwrap();
         // The stream is opened on its own thread, so the recording becomes active a
@@ -942,6 +975,7 @@ mod tests {
             Arc::clone(&db),
             Arc::new(FakeRecorder::default()),
             dir.clone(),
+            test_store(),
         );
 
         dvr.tick(1_000).unwrap();
@@ -977,6 +1011,7 @@ mod tests {
                 ..Default::default()
             }),
             dir.clone(),
+            test_store(),
         );
 
         // The tick reports what it *began*; the provider's refusal arrives on the
@@ -1006,6 +1041,7 @@ mod tests {
                 ..Default::default()
             }),
             dir.clone(),
+            test_store(),
         );
 
         // Resolving the channel's source happens on the connecting thread too, so the
@@ -1059,6 +1095,7 @@ mod tests {
                 began: Arc::clone(&began),
             }),
             dir.clone(),
+            test_store(),
         );
 
         let started = std::time::Instant::now();
@@ -1090,7 +1127,7 @@ mod tests {
         let dir = tempdir("twice");
         schedule_at(&db, "Show", 1_000);
         let recorder = Arc::new(EndlessRecorder);
-        let dvr = Dvr::new(Arc::clone(&db), recorder, dir.clone());
+        let dvr = Dvr::new(Arc::clone(&db), recorder, dir.clone(), test_store());
 
         assert_eq!(dvr.tick(1_000).unwrap().started.len(), 1);
         // The second tick lands while the first is still opening its stream, which is
@@ -1116,8 +1153,13 @@ mod tests {
                 .unwrap();
         }
 
-        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone())
-            .with_max_concurrent(1);
+        let dvr = Dvr::new(
+            Arc::clone(&db),
+            Arc::new(EndlessRecorder),
+            dir.clone(),
+            test_store(),
+        )
+        .with_max_concurrent(1);
         let report = dvr.tick(1_000).unwrap();
 
         assert_eq!(report.started, vec![a], "the higher priority one records");
@@ -1148,7 +1190,12 @@ mod tests {
         // No `with_max_concurrent`. The cap has to come from the provider row, which is
         // the whole of R-108: the column was never written, so this fell back to two and
         // the second recording went out on a line that allows one.
-        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
+        let dvr = Dvr::new(
+            Arc::clone(&db),
+            Arc::new(EndlessRecorder),
+            dir.clone(),
+            test_store(),
+        );
         assert_eq!(dvr.max_concurrent(&db.lock()), 1);
 
         let report = dvr.tick(1_000).unwrap();
@@ -1167,7 +1214,12 @@ mod tests {
     fn a_limit_that_changes_mid_session_is_picked_up_by_the_next_tick() {
         let db = seeded_db();
         let dir = tempdir("changed-limit");
-        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
+        let dvr = Dvr::new(
+            Arc::clone(&db),
+            Arc::new(EndlessRecorder),
+            dir.clone(),
+            test_store(),
+        );
 
         // No provider has declared anything yet, which on a first run is every tick
         // until setup finishes.
@@ -1201,6 +1253,7 @@ mod tests {
             Arc::clone(&db),
             Arc::new(FakeRecorder::default()),
             dir.clone(),
+            test_store(),
         );
 
         // Launched the next morning: the window is long gone.
@@ -1225,6 +1278,7 @@ mod tests {
             Arc::clone(&db),
             Arc::new(FakeRecorder::default()),
             dir.clone(),
+            test_store(),
         );
         assert!(dvr.tick(1_000).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1235,7 +1289,12 @@ mod tests {
         let db = seeded_db();
         let dir = tempdir("shutdown");
         let id = schedule_at(&db, "Show", 1_000);
-        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
+        let dvr = Dvr::new(
+            Arc::clone(&db),
+            Arc::new(EndlessRecorder),
+            dir.clone(),
+            test_store(),
+        );
 
         dvr.tick(1_000).unwrap();
         wait_for_bytes(&dvr, id, 1);
@@ -1254,7 +1313,12 @@ mod tests {
         let db = seeded_db();
         let dir = tempdir("bytes");
         let id = schedule_at(&db, "Show", 1_000);
-        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
+        let dvr = Dvr::new(
+            Arc::clone(&db),
+            Arc::new(EndlessRecorder),
+            dir.clone(),
+            test_store(),
+        );
 
         dvr.tick(1_000).unwrap();
         wait_for_bytes(&dvr, id, 1);

@@ -107,6 +107,13 @@ pub struct Playback {
     /// is discarded rather than published, so a slow channel cannot overwrite the one
     /// the viewer moved on to.
     generation: AtomicU64,
+    /// Provider passwords, for rebuilding a stream address.
+    ///
+    /// The library no longer stores Xtream URLs — they carry the credentials in their
+    /// path — so the address is rebuilt from `stream_id` at tune time, which needs the
+    /// password. Held here rather than reached through `Services` because `Playback` is
+    /// constructed before it and the heartbeat's `recover` needs it too (R-126).
+    credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
 }
 
 impl Playback {
@@ -114,6 +121,7 @@ impl Playback {
         db: Arc<Mutex<Connection>>,
         player: Arc<Mutex<Box<dyn PlayerBackend>>>,
         data_dir: PathBuf,
+        credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
     ) -> Self {
         Self {
             db,
@@ -124,6 +132,7 @@ impl Playback {
             data_dir,
             tune: Mutex::new(()),
             generation: AtomicU64::new(0),
+            credentials,
         }
     }
 
@@ -169,7 +178,35 @@ impl Playback {
         // from the heartbeat and load it over the channel just tuned.
         *self.vod.lock() = None;
 
-        let candidates: Vec<(i64, String)> = sources.into_iter().map(|s| (s.id, s.url)).collect();
+        // Each candidate's address, rebuilt where the library holds a stream id instead
+        // of a URL. A source whose provider has no saved password is dropped rather than
+        // failing the whole tune — the others may still play, and the refusal below says
+        // what happened when none of them can (R-126).
+        let candidates: Vec<(i64, String)> = {
+            let db = self.db.lock();
+            let mut cache = std::collections::HashMap::new();
+            let mut out = Vec::new();
+            let mut refusal = None;
+            for s in sources {
+                match crate::streams::playable(
+                    &db,
+                    self.credentials.as_ref(),
+                    &mut cache,
+                    aurora_core::model::MediaKind::Live,
+                    &crate::streams::StreamRef::from(&s),
+                ) {
+                    Ok(url) => out.push((s.id, url)),
+                    Err(e) => refusal = Some(e),
+                }
+            }
+            if out.is_empty() {
+                *self.session.lock() = None;
+                return Err(refusal.unwrap_or_else(|| {
+                    AppError::Other(format!("channel {channel_id} has no stream URL"))
+                }));
+            }
+            out
+        };
         let mut session = LiveSession {
             channel_id,
             candidates,
@@ -216,7 +253,13 @@ impl Playback {
         let (_tune, _generation) = self.begin_tune();
         let (url, options) = {
             let db = self.db.lock();
-            crate::window::resolve_playback(&db, kind, id, position_secs)?
+            crate::window::resolve_playback(
+                &db,
+                self.credentials.as_ref(),
+                kind,
+                id,
+                position_secs,
+            )?
         };
         *self.session.lock() = None;
         let mut player = self.player.lock();
@@ -243,7 +286,14 @@ impl Playback {
         let (_tune, _generation) = self.begin_tune();
         let (url, options) = {
             let db = self.db.lock();
-            crate::window::resolve_catchup(&db, channel_id, start, stop, now)?
+            crate::window::resolve_catchup(
+                &db,
+                self.credentials.as_ref(),
+                channel_id,
+                start,
+                stop,
+                now,
+            )?
         };
         *self.session.lock() = None;
         let mut player = self.player.lock();
@@ -666,7 +716,12 @@ mod tests {
         let fake = Fake::new();
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(fake.backend()));
         (
-            Playback::new(Arc::clone(&db), player, tempdir("failover")),
+            Playback::new(
+                Arc::clone(&db),
+                player,
+                tempdir("failover"),
+                std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
+            ),
             fake,
             db,
         )
@@ -766,7 +821,12 @@ mod tests {
         let shared = Shared::new();
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(shared.backend()));
         (
-            Playback::new(Arc::clone(&db), player, dir.clone()),
+            Playback::new(
+                Arc::clone(&db),
+                player,
+                dir.clone(),
+                std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
+            ),
             shared,
             dir,
         )
@@ -820,7 +880,15 @@ mod tests {
         let db = Arc::new(Mutex::new(conn));
         let fake = Fake::new();
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(fake.backend()));
-        (Arc::new(Playback::new(db, player, tempdir("race"))), fake)
+        (
+            Arc::new(Playback::new(
+                db,
+                player,
+                tempdir("race"),
+                std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
+            )),
+            fake,
+        )
     }
 
     fn source_url(channel: i64, n: usize) -> String {

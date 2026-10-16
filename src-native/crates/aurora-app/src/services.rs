@@ -90,10 +90,13 @@ impl Services {
         // No cap is set here on purpose. It was read once, at this point, and on a
         // first run that is before the provider exists — see `Dvr::max_concurrent`,
         // which asks the database per tick instead.
+        let credentials: Arc<dyn CredentialStore> = Arc::from(default_store());
+
         let dvr = Arc::new(crate::dvr::Dvr::new(
             Arc::clone(&db),
             Arc::new(StreamRecorder),
             folder,
+            Arc::clone(&credentials),
         ));
 
         // One instance per tile, made on demand. `create_backend` rather than a clone of
@@ -106,6 +109,7 @@ impl Services {
             Arc::new(create_backend),
             data_dir.clone(),
             Arc::clone(&player),
+            Arc::clone(&credentials),
         ));
 
         let pip = Arc::new(crate::pip::Pip::new(Arc::clone(&player)));
@@ -116,6 +120,7 @@ impl Services {
                 Arc::clone(&db),
                 Arc::clone(&player),
                 data_dir.clone(),
+                Arc::clone(&credentials),
             )),
             mosaic,
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
@@ -125,7 +130,7 @@ impl Services {
             db,
             player,
             http: Arc::new(http),
-            credentials: Arc::from(default_store()),
+            credentials,
             data_dir,
             opened,
         })

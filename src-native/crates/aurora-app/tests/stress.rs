@@ -138,7 +138,17 @@ fn harness() -> (Arc<Playback>, Counter) {
     let counter = Counter::new();
     let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(counter.backend()));
     let dir = std::env::temp_dir().join(format!("aurora-stress-{}", std::process::id()));
-    (Arc::new(Playback::new(db, player, dir)), counter)
+    (
+        Arc::new(Playback::new(
+            db,
+            player,
+            dir,
+            // The fixtures store plain URLs, so nothing here needs a password: the
+            // resolver hands a stored address straight back (R-126).
+            Arc::new(aurora_ingest::credentials::MemoryStore::default()),
+        )),
+        counter,
+    )
 }
 
 /// 2,000 zaps as fast as the machine will do them, with the heartbeat running

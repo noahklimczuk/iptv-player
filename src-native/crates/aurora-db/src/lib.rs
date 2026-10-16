@@ -23,6 +23,13 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     let conn = Connection::open(path)?;
     configure(&conn)?;
     migrate::run(&conn)?;
+    // Takes the credentials out of the three URL columns, once. In `open` rather than in
+    // a migration because it has to parse a URL, which SQL does badly; it is guarded on
+    // its own result, so the second launch does nothing. See `backfill_stream_ids`.
+    let rewritten = backfill_stream_ids(&conn)?;
+    if rewritten > 0 {
+        tracing::info!(rows = rewritten, "rewrote stored stream URLs as stream ids");
+    }
     // A library that predates `analyze` being called at all — every library that
     // already exists — gets its statistics here, once. See `analyze`.
     if !has_statistics(&conn)? {
@@ -84,6 +91,78 @@ fn configure(conn: &Connection) -> Result<()> {
 pub fn analyze(conn: &Connection) -> Result<()> {
     conn.execute_batch("ANALYZE")?;
     Ok(())
+}
+
+/// Replace every stored Xtream stream URL with the id it can be rebuilt from.
+///
+/// An Xtream URL carries the credentials in its path, so storing it stored the viewer's
+/// password -- 6,699 channel sources, 27,494 films and one row per episode of 8,086
+/// series on the subscription this is measured against, several hundred thousand
+/// plaintext copies in one file. `docs/PRIVACY.md` promised the opposite about the very
+/// artefact somebody attaches to a bug report (R-126).
+///
+/// Run from `open` rather than as a migration because deciding whether a URL *is* an
+/// Xtream stream address means parsing it, and SQL is the wrong tool for that. It is
+/// idempotent by its own query: only rows that still hold a URL and have no `stream_id`
+/// are considered, so the pass after the first finds nothing and costs one indexless
+/// scan of three tables at startup.
+///
+/// Rows whose URL does not parse are left exactly as they are. That is an M3U provider,
+/// whose addresses are whatever the playlist said and cannot be rebuilt from an id --
+/// the honest half of this, and what the privacy note now says out loud.
+///
+/// Returns how many rows were rewritten, for the log line.
+pub fn backfill_stream_ids(conn: &Connection) -> Result<usize> {
+    // Only an Xtream provider's rows. An M3U provider's URLs are whatever the playlist
+    // said -- including, very often, Xtream stream URLs, since that is what a panel's
+    // `get.php` serves -- but there is no saved password to rebuild them from: an M3U
+    // provider has no `credential_ref`, because its URL carries its own credentials. So
+    // those rows keep theirs and `docs/PRIVACY.md` says so, which is the honest half of
+    // this (R-126).
+    let queries = [
+        (
+            "channel_sources",
+            "SELECT s.id, s.url FROM channel_sources s
+             JOIN channels c ON c.id = s.channel_id
+             JOIN providers p ON p.id = c.provider_id
+             WHERE s.stream_id IS NULL AND s.url <> '' AND p.kind = 'xtream'",
+        ),
+        (
+            "movies",
+            "SELECT m.id, m.url FROM movies m
+             JOIN providers p ON p.id = m.provider_id
+             WHERE m.stream_id IS NULL AND m.url <> '' AND p.kind = 'xtream'",
+        ),
+        (
+            "episodes",
+            "SELECT e.id, e.url FROM episodes e
+             JOIN series r ON r.id = e.series_id
+             JOIN providers p ON p.id = r.provider_id
+             WHERE e.stream_id IS NULL AND e.url <> '' AND p.kind = 'xtream'",
+        ),
+    ];
+
+    let mut rewritten = 0usize;
+    for (table, select) in queries {
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare(select)?;
+            let found = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            found.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let sql =
+            format!("UPDATE {table} SET stream_id = ?2, container = ?3, url = '' WHERE id = ?1");
+        let mut update = conn.prepare(&sql)?;
+        for (id, url) in rows {
+            let Some((stream_id, container)) = aurora_core::catchup::split_xtream_stream_ref(&url)
+            else {
+                continue;
+            };
+            update.execute(rusqlite::params![id, stream_id, container])?;
+            rewritten += 1;
+        }
+    }
+    Ok(rewritten)
 }
 
 /// Whether `ANALYZE` has ever run on this database.
@@ -232,6 +311,106 @@ mod tests {
             .query_row("SELECT count(*) FROM providers", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "an intact library must not be replaced");
+    }
+
+    /// The password is not in the library after an import, and the row still plays.
+    ///
+    /// An Xtream stream URL carries the credentials in its path, and those strings were
+    /// stored verbatim in three tables: 6,699 channel sources, 27,494 films and one row
+    /// per episode of 8,086 series on the subscription this is measured against, which
+    /// is several hundred thousand plaintext copies of a username and password in one
+    /// SQLite file. `docs/PRIVACY.md` promised the opposite about the one artefact
+    /// somebody attaches to a bug report (R-126).
+    #[test]
+    fn an_xtream_import_leaves_no_credentials_in_the_library() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                 VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (1,1,'c1','CNN','cnn',0);
+             INSERT INTO channel_sources (channel_id,url)
+                 VALUES (1,'http://panel.example:8080/live/bob/hunter2/1234.ts');
+             INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+                 VALUES (1,1,'m1','Heat','heat',
+                         'http://panel.example:8080/movie/bob/hunter2/555.mkv',0);
+             INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+                 VALUES (1,1,'s1','The Wire','the wire',0);
+             INSERT INTO episodes (id,series_id,season,episode,url)
+                 VALUES (1,1,1,1,'http://panel.example:8080/series/bob/hunter2/999.mp4');",
+        )
+        .unwrap();
+
+        let rewritten = backfill_stream_ids(&conn).unwrap();
+        assert_eq!(rewritten, 3, "every stored URL should have been rewritten");
+
+        // Nothing anywhere in the three tables mentions the password or the username.
+        for (table, column) in [
+            ("channel_sources", "url"),
+            ("movies", "url"),
+            ("episodes", "url"),
+        ] {
+            let leaked: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM {table}
+                          WHERE {column} LIKE '%hunter2%' OR {column} LIKE '%bob%'"
+                    ),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(leaked, 0, "{table}.{column} still carries the credentials");
+        }
+
+        // And what is kept is enough to rebuild the address: the id and the container.
+        let (id, container): (String, Option<String>) = conn
+            .query_row(
+                "SELECT stream_id, container FROM movies WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(id, "555");
+        assert_eq!(container.as_deref(), Some("mkv"));
+
+        let (live_id, live_container): (String, Option<String>) = conn
+            .query_row(
+                "SELECT stream_id, container FROM channel_sources WHERE channel_id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(live_id, "1234");
+        assert_eq!(live_container.as_deref(), Some("ts"));
+
+        // Twice changes nothing: the pass runs at every launch.
+        assert_eq!(backfill_stream_ids(&conn).unwrap(), 0);
+    }
+
+    /// An M3U provider keeps its URLs, because nothing could rebuild them.
+    ///
+    /// Its addresses are whatever the playlist said — including, very often, Xtream
+    /// stream URLs, since that is what a panel's `get.php` serves — and there is no
+    /// saved password to rebuild them from: an M3U provider has no `credential_ref`,
+    /// because its URL carries its own credentials. `docs/PRIVACY.md` says so rather
+    /// than implying the library is clean for everybody (R-126).
+    #[test]
+    fn an_m3u_providers_urls_are_left_alone() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+                 VALUES (1,'List','m3u','http://host/get.php?username=bob',0);
+             INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+                 VALUES (1,1,'m1','Heat','heat','http://host/movie/bob/hunter2/555.mkv',0);",
+        )
+        .unwrap();
+
+        assert_eq!(backfill_stream_ids(&conn).unwrap(), 0);
+        let url: String = conn
+            .query_row("SELECT url FROM movies WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(url, "http://host/movie/bob/hunter2/555.mkv");
     }
 
     /// The bug: a corrupt file propagated out of `Services::new`, Tauri turned that
