@@ -53,6 +53,12 @@ async function walkWithoutBreaking(page: Page, query: string) {
 test('the app draws a library nothing has enriched', async ({ page }) => {
   const errors = await walkWithoutBreaking(page, '?unenriched');
   expect(errors, 'the unenriched library broke something').toEqual([]);
+
+  // And there was something to break: the detail view is open on a real title, with the
+  // fields an import does write. "No errors" over a blank screen is not a pass (R-159).
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Title', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Year', { exact: true })).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/60-unenriched-detail.png` });
 });
 
