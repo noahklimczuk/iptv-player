@@ -49,4 +49,24 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
-panic = "abort"
+# No `panic = "abort"`, deliberately.
+#
+# `supervise.rs` is built on `catch_unwind` and exists so that one panicking tick does
+# not end a background thread for the rest of the session -- its header is explicit that
+# the alternative is "an OSD frozen on whatever it last showed, failover that stopped
+# working, or ... a DVR that silently never records anything again". Under `abort`,
+# `catch_unwind` cannot catch anything: the process is gone before it returns. So the
+# safety net existed in every debug build and in none of the shipped ones, across all six
+# `supervised` call sites -- maintenance, player, mosaic, DVR, update, playlist refresh
+# (R-72).
+#
+# It also reframed every other panic in the codebase: a bad rule on a Turkish title
+# (R-17) and a pasted URL with a multi-byte character after a `%` (R-63) were caught and
+# logged in a debug build and fatal in a release one, which is the opposite way round
+# from what a reader of `supervise.rs` would assume. And `cargo test` builds with the test
+# profile, which unwinds, so the test named `a_panicking_tick_does_not_end_the_loop` could
+# only ever pass and could never exercise the configuration that ships.
+#
+# The trade is unwinding tables -- some binary size and a little speed -- against six
+# background threads whose panics are currently fatal. `tests/contract.rs` asserts this
+# stays gone.
