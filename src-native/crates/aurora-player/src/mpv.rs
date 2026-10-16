@@ -691,7 +691,16 @@ impl PlayerBackend for MpvBackend {
 
     fn seek(&mut self, position_secs: f64, relative: bool) -> Result<(), PlayerError> {
         let mode = if relative { "relative" } else { "absolute" };
-        self.cmd(&["seek", &position_secs.to_string(), mode])
+        self.cmd(&["seek", &position_secs.to_string(), mode])?;
+        // The stall clock starts again from here: a seek can land somewhere that is not
+        // buffered, and the wait for that data is not the stream having stopped (R-70).
+        let landed = if relative {
+            (self.state.position_secs + position_secs).max(0.0)
+        } else {
+            position_secs.max(0.0)
+        };
+        self.watchdog.seeked(landed);
+        Ok(())
     }
 
     fn set_volume(&mut self, volume: u32) -> Result<(), PlayerError> {
