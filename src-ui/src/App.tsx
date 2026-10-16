@@ -848,6 +848,7 @@ export default function App() {
           onFullscreen={fullscreen.toggle}
           onClose={closePlayer}
           onGuide={() => { closePlayer(); navigate('/guide'); }}
+          onSettings={() => { closePlayer(); navigate('/settings'); }}
           nextEpisode={episode.aids?.nextEpisode ?? null}
           onPlayNext={episode.aids?.nextEpisode ? episode.playNext : undefined}
         />

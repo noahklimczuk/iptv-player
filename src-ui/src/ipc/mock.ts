@@ -2533,6 +2533,18 @@ export function failNextMock(name: string, message: string): void {
 }
 
 /**
+ * Put the player into the state the error panel is for.
+ *
+ * `player.error` is filled in by the host from `NetFailure`, so a browser cannot reach
+ * it by making a command refuse -- a refusal is a rejected promise, which goes to a
+ * notice, not to the panel. Which is why the panel's four dead buttons went unpressed by
+ * any journey for as long as they existed (R-110).
+ */
+export function setPlayerErrorMock(error: PlayerState['error']): PlayerState {
+  return setPlayer({ error, status: error ? 'error' : player.status });
+}
+
+/**
  * Whether the player pretends not to know how long anything is.
  *
  * Not a hypothetical: a provider's VOD stream very often reports no duration, because
