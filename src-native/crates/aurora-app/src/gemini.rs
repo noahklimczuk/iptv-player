@@ -424,10 +424,22 @@ mod tests {
     #[test]
     fn switching_off_beats_a_key_compiled_into_the_build() {
         // On: the viewer's own key wins, then the built-in one.
-        assert_eq!(key_from(true, Some("mine"), Some("baked")).as_deref(), Some("mine"));
-        assert_eq!(key_from(true, None, Some("baked")).as_deref(), Some("baked"));
-        assert_eq!(key_from(true, Some("  "), Some("baked")).as_deref(), Some("baked"));
-        assert_eq!(key_from(true, Some(" mine "), None).as_deref(), Some("mine"));
+        assert_eq!(
+            key_from(true, Some("mine"), Some("baked")).as_deref(),
+            Some("mine")
+        );
+        assert_eq!(
+            key_from(true, None, Some("baked")).as_deref(),
+            Some("baked")
+        );
+        assert_eq!(
+            key_from(true, Some("  "), Some("baked")).as_deref(),
+            Some("baked")
+        );
+        assert_eq!(
+            key_from(true, Some(" mine "), None).as_deref(),
+            Some("mine")
+        );
         assert_eq!(key_from(true, None, None), None);
 
         // Off: nothing, whatever is available. This is the row that did not exist.
@@ -443,7 +455,10 @@ mod tests {
     fn clearing_the_key_falls_back_to_the_built_in_one() {
         // So "Remove key" is not an off switch in a release build, and the panel now
         // says so rather than leaving the viewer to find out.
-        assert_eq!(key_from(true, None, Some("baked")).as_deref(), Some("baked"));
+        assert_eq!(
+            key_from(true, None, Some("baked")).as_deref(),
+            Some("baked")
+        );
         // ...and the switch is.
         assert_eq!(key_from(false, None, Some("baked")), None);
     }
