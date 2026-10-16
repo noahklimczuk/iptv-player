@@ -255,7 +255,9 @@ test('command palette searches across every content kind', async ({ page }) => {
   // assertion passed the whole time the library was being pushed below the fold.
   const movies = dialog.getByTestId('palette-group-movies');
   await expect(movies).toBeVisible();
-  await expect(movies.getByRole('button')).not.toHaveCount(0);
+  // `option`, not `button`: the result rows are the options of a labelled listbox, so
+  // that arrowing through them can be announced and scrolled into view (R-147).
+  await expect(movies.getByRole('option')).not.toHaveCount(0);
 
   // Before anything is unfolded, so the shot shows what a search actually looks like.
   await page.screenshot({ path: `${SHOTS}/10-search.png` });
@@ -263,12 +265,13 @@ test('command palette searches across every content kind', async ({ page }) => {
   // Capped per group, so the guide's matches cannot bury the library. The rest are a
   // click away rather than thrown away.
   const onNow = dialog.getByTestId('palette-group-onNow');
+  // The "Show N more" row is still a button: it is a control, not a result.
   const more = onNow.getByRole('button', { name: /^Show \d+ more on now$/ });
   if (await more.count()) {
-    const before = await onNow.getByRole('button').count();
+    const before = await onNow.getByRole('option').count();
     await more.click();
     await expect(more).toHaveCount(0);
-    expect(await onNow.getByRole('button').count()).toBeGreaterThan(before);
+    expect(await onNow.getByRole('option').count()).toBeGreaterThan(before);
   }
 });
 
@@ -290,7 +293,7 @@ test('picking a film in the palette opens that film', async ({ page }) => {
   // first button in the dialog belongs to whichever group comes first, usually a channel.
   const movies = dialog.locator('[data-testid="palette-group-movies"]');
   await expect(movies).toBeVisible();
-  const hit = movies.getByRole('button').first();
+  const hit = movies.getByRole('option').first();
   const picked = (await hit.innerText()).split('\n')[0]!.trim();
   await hit.click();
 
