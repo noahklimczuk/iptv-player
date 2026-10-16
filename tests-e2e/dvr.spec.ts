@@ -51,6 +51,56 @@ test('recordings library groups what is watchable, what is coming, and what fail
   await page.screenshot({ path: `${SHOTS}/20-recordings.png` });
 });
 
+/**
+ * Pressing Play on a recording plays it.
+ *
+ * The button existed, read "Play", looked enabled and did nothing: `onPlay` was an
+ * optional prop the only mount did not supply, and there was no command it could have
+ * been given -- `MediaKind` could not name a recording, so the DVR wrote files that
+ * could only be opened in Explorer (R-118). `onPlay?.()` is valid TypeScript, so
+ * neither the type checker nor a sweep for handler-less buttons could see it, and no
+ * journey pressed it.
+ */
+test('pressing Play on a recording opens the player on it', async ({ page }) => {
+  await page.goto('/#/recordings');
+  await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
+
+  const play = page.getByRole('button', { name: /^Play$/ }).first();
+  await expect(play).toBeVisible();
+
+  // What the Recorded tab can offer, asked of the transport rather than read off the
+  // screen, so the assertion does not depend on row order or on how a title is drawn.
+  const playable = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<
+        { id: number; title: string; state: string; filePath: string | null }[]>;
+    };
+    const rows = await w.__auroraInvoke('dvr.list', {});
+    return rows.filter((r) => r.state === 'completed' && r.filePath)
+      .map((r) => ({ id: r.id, title: r.title }));
+  });
+  expect(playable.length).toBeGreaterThan(0);
+
+  await play.click();
+
+  // The player is open, on one of those recordings, and knows what kind of thing it is.
+  const state = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<{ itemKind: string | null;
+        itemId: number | null; title: string | null; status: string }>;
+    };
+    return w.__auroraInvoke('player.state');
+  });
+  expect(state.itemKind).toBe('recording');
+  expect(state.status).toBe('playing');
+  expect(playable.map((r) => r.id)).toContain(state.itemId);
+  expect(state.title).toBe(playable.find((r) => r.id === state.itemId)?.title);
+  await expect(page.getByRole('slider', { name: 'Seek' })).toBeVisible();
+
+  await settle(page);
+  await page.screenshot({ path: `${SHOTS}/21-recording-playing.png` });
+});
+
 test('deleting a recording asks first, and backing out keeps the file', async ({ page }) => {
   await page.goto('/#/recordings');
   await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();

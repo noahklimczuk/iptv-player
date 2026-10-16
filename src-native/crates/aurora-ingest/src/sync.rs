@@ -501,6 +501,32 @@ pub fn apply(
         total: 0,
     });
     if !epg_channels.is_empty() {
+        // Only channels the guide actually schedules something against.
+        //
+        // A declared channel with no programmes matches like any other, so 426 of this
+        // subscription's channels were handed a guide id that holds not one programme
+        // for them -- 359 by an exact `tvg-id` match. `Coverage::matched` counted them,
+        // the Settings "fix these" list left them out, and the guide drew an empty row
+        // rather than saying there was nothing there. The viewer's report is "the guide
+        // is blank for this channel" and the app's own diagnostics said it was fine.
+        //
+        // Pruned here rather than in `EpgIndex::build`, which cannot know: whether a
+        // channel has programmes is only settled once the whole document has been read,
+        // and by this point they are all in the table (R-21).
+        let scheduled = epg_repo::channels_with_programmes(db).map_err(db_failure)?;
+        let declared = epg_channels.len();
+        epg_channels.retain(|c| scheduled.contains(&c.id));
+        let dropped = declared - epg_channels.len();
+        if dropped > 0 {
+            tracing::info!(
+                declared,
+                scheduled = epg_channels.len(),
+                dropped,
+                "guide channels with nothing scheduled are not offered for matching"
+            );
+        }
+    }
+    if !epg_channels.is_empty() {
         let index = EpgIndex::build(&epg_channels);
         let rows = channels::list(
             db,
@@ -1481,6 +1507,59 @@ mod tests {
         let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
         let cnn = rows.iter().find(|r| r.name == "CNN HD").unwrap();
         assert_eq!(cnn.epg_channel_id.as_deref(), Some("cnn.us"));
+    }
+
+    /// A guide channel with nothing scheduled against it is not a match.
+    ///
+    /// Of the 4,827 ids this subscription's guide declares, 1,882 carry no programme at
+    /// all, and they matched like any other channel -- so 426 channels were told they
+    /// had a guide that holds nothing for them, 359 of them by an exact `tvg-id`.
+    /// `epg_matched` counted them, the "fix these" list left them out, and the guide
+    /// drew an empty row instead of saying there was nothing there (R-21).
+    #[test]
+    fn a_guide_channel_with_no_programmes_is_not_matched() {
+        // `cnn.us` is declared and scheduled; `bbcone.uk` is declared and never
+        // scheduled, which is the case this is about.
+        const EPG_WITH_AN_EMPTY_CHANNEL: &str = r#"<tv>
+            <channel id="cnn.us"><display-name>CNN</display-name></channel>
+            <channel id="bbcone.uk"><display-name>BBC One</display-name></channel>
+            <programme start="20240115120000 +0000" stop="20240115130000 +0000" channel="cnn.us">
+              <title>World News</title></programme>
+          </tv>"#;
+        let server = TestServer::start(|_, req| {
+            if req.path.starts_with("/epg") {
+                Reply::ok(EPG_WITH_AN_EMPTY_CHANNEL)
+            } else {
+                Reply::ok(PLAYLIST)
+            }
+        });
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        // CNN still matches. BBC One, which used to match its empty namesake by
+        // normalized name, now does not.
+        assert_eq!(
+            report.epg_matched, 1,
+            "unmatched: {:?}",
+            report.epg_unmatched
+        );
+        assert!(
+            report.epg_unmatched.iter().any(|n| n == "BBC One"),
+            "BBC One should be reported as having no guide: {:?}",
+            report.epg_unmatched
+        );
+
+        let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
+        let cnn = rows.iter().find(|r| r.name == "CNN HD").unwrap();
+        assert_eq!(cnn.epg_channel_id.as_deref(), Some("cnn.us"));
+        let bbc = rows.iter().find(|r| r.name == "BBC One").unwrap();
+        assert_eq!(
+            bbc.epg_channel_id, None,
+            "a channel with no programmes is worse than no match: the guide draws an              empty row and the diagnostics say it is fine"
+        );
     }
 
     #[test]

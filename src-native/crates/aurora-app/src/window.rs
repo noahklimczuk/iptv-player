@@ -246,6 +246,75 @@ pub fn resolve_playback(
                 },
             ))
         }
+        // A finished recording is a file, not a stream: mpv opens it off disk and needs
+        // no provider, no credentials and no failover. Everything the DVR does -- the
+        // schedule, the reaper, the stall detector, the quota, Keep, conflict
+        // resolution, series rules -- ended at a file nobody could watch from inside
+        // the app, because `MediaKind` could not name one (R-118).
+        "recording" => {
+            let (path, title, state): (Option<String>, String, String) = db
+                .query_row(
+                    "SELECT file_path, title, state FROM recordings WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()
+                .map_err(aurora_db::DbError::from)?
+                .ok_or_else(|| {
+                    AppError::Other(
+                        "This recording is no longer in your library. It may have been                          deleted to stay under the storage quota."
+                            .into(),
+                    )
+                })?;
+
+            // Said in terms of what the row is, because each of these is a different
+            // thing to do about it.
+            let path = match (path.as_deref().map(str::trim), state.as_str()) {
+                (Some(p), _) if !p.is_empty() => p,
+                (_, "scheduled") => {
+                    return Err(AppError::Other(
+                        "This recording has not started yet, so there is nothing to                          play."
+                            .into(),
+                    ))
+                }
+                (_, "recording") => {
+                    return Err(AppError::Other(
+                        "This recording is still being written. It can be played once                          it finishes."
+                            .into(),
+                    ))
+                }
+                _ => {
+                    return Err(AppError::Other(
+                        "This recording has no file on disk. Its reason is on the                          Recordings screen."
+                            .into(),
+                    ))
+                }
+            };
+
+            // Checked before mpv is asked, so a file deleted outside Aurora -- which a
+            // recordings folder invites -- says so instead of opening a black player.
+            if !std::path::Path::new(path).exists() {
+                return Err(AppError::Other(format!(
+                    "The file for this recording is gone: {path}"
+                )));
+            }
+
+            Ok((
+                path.to_string(),
+                LoadOptions {
+                    is_live: false,
+                    cache_secs: cache_secs_for(false),
+                    start_at_secs: position_secs,
+                    title: Some(title),
+                    playing: Some(Playing {
+                        kind: MediaKind::Recording,
+                        id,
+                        channel_id: None,
+                    }),
+                    ..Default::default()
+                },
+            ))
+        }
         other => Err(AppError::Other(format!("unknown media kind {other:?}"))),
     }
 }
@@ -371,6 +440,107 @@ mod tests {
                 "the database's words reached the viewer: {err}"
             );
         }
+    }
+
+    /// A recording with a file is playable, and the file is what mpv is handed.
+    ///
+    /// Everything the DVR does ended at a file nobody could open from inside the app:
+    /// `MediaKind` could not name a recording, so the Play button on every completed
+    /// row called an optional prop nobody passed (R-118).
+    #[test]
+    fn a_finished_recording_resolves_to_its_file() {
+        let db = seeded_recording_db();
+        let file = std::env::temp_dir().join("aurora-test-recording.ts");
+        std::fs::write(&file, b"not really a transport stream").unwrap();
+        db.execute(
+            "UPDATE recordings SET state = 'completed', file_path = ?1 WHERE id = 1",
+            [file.to_string_lossy().as_ref()],
+        )
+        .unwrap();
+
+        let (url, options) = resolve_playback(&db, "recording", 1, Some(90.0)).unwrap();
+        assert_eq!(url, file.to_string_lossy());
+        assert!(!options.is_live);
+        assert_eq!(options.start_at_secs, Some(90.0));
+        assert_eq!(options.title.as_deref(), Some("The Nine O Clock News"));
+        let playing = options.playing.expect("a recording is a playing item");
+        assert_eq!(playing.kind, MediaKind::Recording);
+        assert_eq!(playing.id, 1);
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// Five ways a recording is not playable, each needing a different thing done about
+    /// it -- so each says which one it is rather than opening a black player.
+    #[test]
+    fn a_recording_that_cannot_be_played_says_which_way() {
+        let db = seeded_recording_db();
+
+        let gone = resolve_playback(&db, "recording", 404, None)
+            .unwrap_err()
+            .to_string();
+        assert!(gone.contains("no longer in your library"), "{gone}");
+
+        // Scheduled: nothing has been written yet.
+        let not_yet = resolve_playback(&db, "recording", 1, None)
+            .unwrap_err()
+            .to_string();
+        assert!(not_yet.contains("has not started yet"), "{not_yet}");
+
+        // In flight.
+        db.execute("UPDATE recordings SET state = 'recording' WHERE id = 1", [])
+            .unwrap();
+        let busy = resolve_playback(&db, "recording", 1, None)
+            .unwrap_err()
+            .to_string();
+        assert!(busy.contains("still being written"), "{busy}");
+
+        // Failed, with no file at all.
+        db.execute("UPDATE recordings SET state = 'failed' WHERE id = 1", [])
+            .unwrap();
+        let failed = resolve_playback(&db, "recording", 1, None)
+            .unwrap_err()
+            .to_string();
+        assert!(failed.contains("no file on disk"), "{failed}");
+
+        // Completed, but the file was deleted outside Aurora -- which a folder full of
+        // .ts files invites somebody to do.
+        db.execute(
+            "UPDATE recordings
+                SET state = 'completed', file_path = 'Z:\\nope\\missing.ts'
+              WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        let missing = resolve_playback(&db, "recording", 1, None)
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("is gone"), "{missing}");
+        assert!(missing.contains("missing.ts"), "{missing}");
+    }
+
+    /// One scheduled recording on one channel, for the two tests above to move around.
+    fn seeded_recording_db() -> aurora_db::rusqlite::Connection {
+        let db = aurora_db::open_memory().unwrap();
+        db.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+             VALUES (1,1,'k','BBC One','bbc one',0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO recordings (id, channel_id, title, air_start, air_stop,
+                                     start, stop, state, created_at)
+             VALUES (1, 1, 'The Nine O Clock News', 100, 200, 100, 200, 'scheduled', 0)",
+            [],
+        )
+        .unwrap();
+        db
     }
 
     /// An M3U entry can carry a title and no address. mpv's answer to that is "empty

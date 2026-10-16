@@ -144,24 +144,46 @@ impl EpgIndex {
             });
         }
 
-        // Fuzzy pass: only for keys of a similar length, and only for a distance of 1.
-        // Anything looser produces confident nonsense on channel names like "Sky 1" / "Sky 2".
+        // Fuzzy pass: only for keys of a similar length, only for a distance of 1, only
+        // when the one edit is not a digit, and only when exactly one channel is that
+        // close.
+        //
+        // The first two conditions were here and were not enough. `key.len() >= 5`
+        // excludes only *short* names -- `sky1` is four characters and was excluded while
+        // `spectrumxcast3` is fourteen and was not -- and between two long channel names
+        // a single-character edit is, in practice, the channel number. Replayed over the
+        // real guide and playlist: 655 channels got a fuzzy match, 639 of them (97%)
+        // differed from it by a single digit, and 624 had several candidates tied at the
+        // same distance. `espn156` was handed one of ten equally close channels because
+        // it came first in the provider's `<channel>` order (R-22).
+        //
+        // Each of those channels then showed another channel's schedule at confidence
+        // 60, which is worse than a blank row: a blank row is understood, and a
+        // plausible wrong programme is believed.
         if key.len() >= 5 {
-            let mut best: Option<(usize, &str)> = None;
+            let mut matches: Vec<&str> = Vec::new();
             for (k, id) in &self.keys {
                 if k.len().abs_diff(key.len()) > 1 {
                     continue;
                 }
-                let d = edit_distance_at_most(&key, k, 1);
-                if let Some(d) = d {
-                    if best.as_ref().map(|(bd, _)| d < *bd).unwrap_or(true) {
-                        best = Some((d, id));
-                    }
+                if edit_distance_at_most(&key, k, 1).is_none() {
+                    continue;
+                }
+                // "BBC 1" and "BBC 2" are one edit apart and are different channels.
+                if single_edit_touches_a_digit(&key, k) {
+                    continue;
+                }
+                if !matches.contains(&id.as_str()) {
+                    matches.push(id.as_str());
+                }
+                // Two channels equally close is not a match, it is a coin toss.
+                if matches.len() > 1 {
+                    return None;
                 }
             }
-            if let Some((_, id)) = best {
+            if let Some(id) = matches.first() {
                 return Some(Match {
-                    epg_channel_id: id.to_string(),
+                    epg_channel_id: (*id).to_string(),
                     method: MatchMethod::Fuzzy,
                     confidence: 60,
                 });
@@ -169,6 +191,33 @@ impl EpgIndex {
         }
         None
     }
+}
+
+/// For two keys one edit apart, is that edit a digit?
+///
+/// Which is the difference between "BBC One" vs "BBC Two" -- a real pair to consider --
+/// and "ESPN+ 156" vs "ESPN+ 15", which are two different channels whose names differ by
+/// the number that identifies them. Assumes the two are within one edit of each other;
+/// callers check that first.
+fn single_edit_touches_a_digit(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len() == b.len() {
+        return a
+            .iter()
+            .zip(&b)
+            .find(|(x, y)| x != y)
+            .is_some_and(|(x, y)| x.is_ascii_digit() || y.is_ascii_digit());
+    }
+    // One is the other with a character inserted; find it.
+    let (short, long) = if a.len() < b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    let at = (0..short.len())
+        .find(|&i| short[i] != long[i])
+        .unwrap_or(short.len());
+    long.get(at).is_some_and(|c| c.is_ascii_digit())
 }
 
 /// Levenshtein distance, bailing out as soon as it exceeds `max`.
@@ -279,6 +328,62 @@ mod tests {
         let m = index().resolve(None, "Discovry Channel", None).unwrap();
         assert_eq!(m.method, MatchMethod::Fuzzy);
         assert_eq!(m.epg_channel_id, "discovery.uk");
+    }
+
+    /// Long names whose one difference is the channel number, which is what the fuzzy
+    /// pass actually spent its time doing.
+    ///
+    /// `key.len() >= 5` was meant to stop this and only ever excluded short names:
+    /// `sky1` is four characters and was excluded while `spectrumxcast3` is fourteen and
+    /// was not. Replayed over the real library: 703 fuzzy matches, 663 of them differing
+    /// by a single digit -- "CBS 2 LOS ANGELES" was being shown the schedule of
+    /// `cbs9losangeles`, "ABC 4 CHARLESTON" that of `abc8charleston` (R-22).
+    #[test]
+    fn a_long_name_is_not_matched_to_one_with_a_different_number() {
+        let idx = EpgIndex::build(&[
+            ch("spectrumxcast.us", &["Spectrum XCast"]),
+            ch("cbs9losangeles.us", &["CBS 9 Los Angeles"]),
+            ch("nbc14columbus.us", &["NBC 14 Columbus"]),
+        ]);
+        for name in [
+            "US SPECTRUM XCAST 3",
+            "US CBS 2 LOS ANGELES HD",
+            "US NBC 4 COLUMBUS HD",
+        ] {
+            let m = idx.resolve(None, name, None);
+            assert!(m.is_none(), "{name} matched {m:?}");
+        }
+    }
+
+    /// Several channels equally close is not a match, it is a coin toss.
+    ///
+    /// 624 of the 655 fuzzy matches measured were ties, and the old code kept whichever
+    /// candidate it walked past first -- so the answer depended on the order the
+    /// provider wrote its `<channel>` elements in, and `espn156` was handed one of ten
+    /// equally close channels for no reason at all.
+    #[test]
+    fn a_tie_is_not_resolved_by_whichever_came_first() {
+        // Two guide channels one edit from the name, neither involving a digit.
+        let idx = EpgIndex::build(&[
+            ch("first.us", &["Channel Alpha"]),
+            ch("second.us", &["Channel Alpho"]),
+        ]);
+        let m = idx.resolve(None, "Channel Alphx", None);
+        assert!(m.is_none(), "picked one of a tie: {m:?}");
+
+        // One clear winner is still matched.
+        let only = EpgIndex::build(&[ch("first.us", &["Channel Alpha"])]);
+        let hit = only.resolve(None, "Channel Alphx", None).unwrap();
+        assert_eq!(hit.epg_channel_id, "first.us");
+        assert_eq!(hit.method, MatchMethod::Fuzzy);
+    }
+
+    /// Two guide entries that are aliases of the same channel are not a tie.
+    #[test]
+    fn two_names_for_one_channel_are_still_a_match() {
+        let idx = EpgIndex::build(&[ch("one.us", &["Channel Alpha", "Channel Alpho"])]);
+        let hit = idx.resolve(None, "Channel Alphx", None).unwrap();
+        assert_eq!(hit.epg_channel_id, "one.us");
     }
 
     #[test]
