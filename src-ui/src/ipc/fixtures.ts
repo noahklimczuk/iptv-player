@@ -132,6 +132,10 @@ export const channels: Channel[] = (() => {
         logo: art(name, 96, 96),
         group: g.name,
         epgChannelId: `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
+        // The raw `tvg-id` the playlist carried. The same value here, because the mock
+        // does not model guide matching -- on a real panel the two differ constantly,
+        // which is the reason the field is sent at all.
+        tvgId: `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
         quality: q,
         hidden: false,
         isRadio: false,
@@ -166,6 +170,7 @@ export const channels: Channel[] = (() => {
       logo: art(f.name, 96, 96),
       group: f.group,
       epgChannelId: `${f.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
+      tvgId: `${f.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
       quality: 'HD',
       hidden: false,
       isRadio: false,

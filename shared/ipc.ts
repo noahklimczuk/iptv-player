@@ -23,6 +23,15 @@ export interface Channel {
   logo: string | null;
   group: string | null;
   epgChannelId: string | null;
+  /**
+   * The raw `tvg-id` the playlist carried, before any guide matching.
+   *
+   * Declared because the host sends it and did not say so. `epgChannelId` above is the
+   * guide id this channel was *matched* to, which is the one to use; this is what the
+   * provider wrote, kept because the two differ constantly and the difference is the
+   * only evidence of how a channel came to be matched (R-154).
+   */
+  tvgId: string | null;
   quality: Quality | null;
   hidden: boolean;
   isRadio: boolean;

@@ -346,7 +346,7 @@ pub fn count_movies(conn: &Connection, q: &BrowseQuery) -> Result<u32> {
     Ok(conn.query_row(&sql, params.as_slice(), |r| r.get(0))?)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesRow {
     pub id: i64,
@@ -444,7 +444,7 @@ pub fn count_series(conn: &Connection, q: &BrowseQuery) -> Result<u32> {
 }
 
 /// One shelf the provider files titles under, and how many are on it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Category {
     pub name: String,
@@ -541,7 +541,7 @@ pub fn series(conn: &Connection, id: i64) -> Result<Option<SeriesRow>> {
 }
 
 /// What the library holds, for the Settings screen.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryStats {
     pub channels: i64,
@@ -557,7 +557,7 @@ pub struct LibraryStats {
 /// The number that matters is not how many programmes were imported but how many
 /// channels ended up with any — an EPG that parsed perfectly and matched nothing looks
 /// identical to a missing one from the sofa.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpgCoverage {
     pub total: i64,
@@ -863,16 +863,30 @@ pub fn upsert_episodes(
 /// never declared the field, so no UI code referenced it and no type check mentioned it.
 ///
 /// Anything that needs the stream addresses an episode by `id` and asks the database.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeRow {
     pub id: i64,
+    /// Which show this is an episode of.
+    ///
+    /// `shared/ipc.ts` has declared `Episode.seriesId` all along and nothing sent it,
+    /// so every episode the UI held claimed to belong to no show. Free to send: the
+    /// query already takes the series id as its argument (R-154).
+    pub series_id: i64,
     pub season: u16,
     pub episode: u16,
     pub title: Option<String>,
     pub overview: Option<String>,
     pub still: Option<String>,
     pub runtime_mins: Option<u32>,
+    /// When it first went out, or null.
+    ///
+    /// Also declared in the contract and never sent. The column exists in `schema.rs`
+    /// and **nothing in the workspace writes it** — neither the Xtream import nor the
+    /// TMDB sweep — so this is null for every episode of every show today. Sent anyway,
+    /// because the contract declares it nullable and a truthful null is an answer; the
+    /// fixtures give every episode an air date, which is the part that is wrong.
+    pub air_date: Option<i64>,
 }
 
 /// Which show an episode belongs to.
@@ -898,18 +912,21 @@ pub fn episodes_for(
     let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<EpisodeRow> {
         Ok(EpisodeRow {
             id: r.get(0)?,
+            series_id: r.get(7)?,
             season: r.get::<_, i64>(1)? as u16,
             episode: r.get::<_, i64>(2)? as u16,
             title: r.get(3)?,
             overview: r.get(4)?,
             still: r.get(5)?,
             runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+            air_date: r.get(8)?,
         })
     };
     let rows = match season {
         Some(s) => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins
+                "SELECT id, season, episode, title, overview, still, runtime_mins,
+                        series_id, air_date
                  FROM episodes WHERE series_id = ?1 AND season = ?2 ORDER BY episode",
             )?;
             let out = stmt
@@ -919,7 +936,8 @@ pub fn episodes_for(
         }
         None => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins
+                "SELECT id, season, episode, title, overview, still, runtime_mins,
+                        series_id, air_date
                  FROM episodes WHERE series_id = ?1 ORDER BY season, episode",
             )?;
             let out = stmt
@@ -956,7 +974,8 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
     Ok(conn
         .query_row(
-            "SELECT id, season, episode, title, overview, still, runtime_mins
+            "SELECT id, season, episode, title, overview, still, runtime_mins,
+                    series_id, air_date
              FROM episodes
              WHERE series_id = ?1
                AND (season > ?2 OR (season = ?2 AND episode > ?3))
@@ -966,12 +985,14 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
             |r| {
                 Ok(EpisodeRow {
                     id: r.get(0)?,
+                    series_id: r.get(7)?,
                     season: r.get::<_, i64>(1)? as u16,
                     episode: r.get::<_, i64>(2)? as u16,
                     title: r.get(3)?,
                     overview: r.get(4)?,
                     still: r.get(5)?,
                     runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    air_date: r.get(8)?,
                 })
             },
         )
