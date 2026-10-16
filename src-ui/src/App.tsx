@@ -896,7 +896,26 @@ export default function App() {
             />
           </div>
           <div style={{ pointerEvents: 'auto' }}>
+            {/*
+              * Keyed on the episode, which is what makes auto-skip work more than once.
+              *
+              * `SkipButton` remembers the regions it has already skipped so that seeking
+              * back into an intro does not immediately yank the viewer forward again --
+              * right, and it identified a region by kind and start second with nothing
+              * about *which* episode. This component is never remounted between episodes
+              * (autoplay-next keeps `playerOpen` true), so that memory accumulated for a
+              * whole session.
+              *
+              * The keys collide by construction rather than by chance: `autoSkip` is
+              * restricted to markers that are not conventional guesses, which leaves
+              * chapters, the viewer's own skips and `learned` -- and a marker learned
+              * from a show's episodes is the same number for all of them. A show whose
+              * intro is learned at 42s has `intro:42` on every episode, so "Always skip
+              * intros" worked on the first episode of a session and appeared to turn
+              * itself off after that, with the manual button still there (R-149).
+              */}
             <SkipButton
+              key={episode.episodeId ?? 'none'}
               marker={episode.activeMarker}
               autoSkip={episode.autoSkip}
               onSkip={episode.skip}
