@@ -12,6 +12,7 @@ import { Icon } from '@/components/Icon';
 import { hasVideoSurface, invoke } from '@/ipc';
 import { notify, report } from '@/lib/errors';
 import { clockTime, duration } from '@/lib/format';
+import { isTyping } from '@/hooks/useHotkeys';
 
 const HIDE_AFTER_MS = 3200;
 
@@ -127,6 +128,33 @@ export function PlayerOverlay({
   useEffect(() => {
     bump();
     return () => window.clearTimeout(hideTimer.current);
+  }, [bump]);
+
+  /**
+   * Any key wakes it, which is how a remote reaches this at all.
+   *
+   * `bump` was wired to `onMouseMove` and `onClick` and nothing else — grepped, it
+   * appeared five times in this file and nowhere else in `src-ui` — while keyboard and
+   * remote input arrives at a global listener in `useHotkeys`. So 3.2 seconds after the
+   * last mouse movement: volume-up changed the volume with no indicator, seeking moved
+   * the playhead with no scrub bar, pause paused with no sign of it, and channel-up
+   * zapped with no banner. The action happened; the feedback did not.
+   *
+   * With a mouse that is a small annoyance — one twitch brings it all back. On a
+   * television driven by a remote, which README §1 names as the target, there is no
+   * pointer to twitch and the OSD is simply unreachable (R-74).
+   *
+   * `keydown` on the window rather than on this div: the div never has focus, and the
+   * keys in question are handled globally. The same `isTyping` guard the hotkeys use,
+   * so a search field over the player does not keep waking it.
+   */
+  useEffect(() => {
+    const wake = (e: KeyboardEvent) => {
+      if (isTyping(e.target)) return;
+      bump();
+    };
+    window.addEventListener('keydown', wake);
+    return () => window.removeEventListener('keydown', wake);
   }, [bump]);
 
   const playing = player.status === 'playing';
