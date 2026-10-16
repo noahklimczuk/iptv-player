@@ -383,6 +383,11 @@ pub fn progress_get(
     let kind = match args.kind.as_str() {
         "episode" => progress::ItemKind::Episode,
         "channel" => progress::ItemKind::Channel,
+        // Named, rather than falling through. `ItemKind::Recording` has existed since
+        // the schema did, and the catch-all below filed a recording's position as a
+        // *movie's* -- against the same rowid, so it collided with whatever film held
+        // it. Nothing sent this kind until recordings became playable (R-118).
+        "recording" => progress::ItemKind::Recording,
         _ => progress::ItemKind::Movie,
     };
     let db = services.db.lock();

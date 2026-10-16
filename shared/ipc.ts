@@ -6,7 +6,14 @@
  * hand-kept mirror of the Rust side; `pnpm typecheck` fails if the UI drifts from it.
  */
 
-export type MediaKind = 'live' | 'movie' | 'episode';
+/**
+ * What the player can be asked to open.
+ *
+ * `'recording'` is a finished DVR capture, resolved host-side to the file on disk.
+ * `ItemKind` in the progress API has always carried it; this union did not, which is
+ * why nothing could play a recording (R-118).
+ */
+export type MediaKind = 'live' | 'movie' | 'episode' | 'recording';
 export type Quality = '4K' | 'FHD' | 'HD' | 'SD';
 
 export interface Channel {
@@ -1251,14 +1258,14 @@ export interface Commands {
 
   'progress.save': (args: {
     profileId: number;
-    kind: 'movie' | 'episode' | 'channel';
+    kind: 'movie' | 'episode' | 'channel' | 'recording';
     id: number;
     positionSecs: number;
     durationSecs: number;
   }) => void;
   'progress.get': (args: {
     profileId: number;
-    kind: 'movie' | 'episode';
+    kind: 'movie' | 'episode' | 'recording';
     id: number;
   }) => Progress | null;
   /**

@@ -1779,6 +1779,26 @@ const handlers: { [K in CommandName]: Handler<K> } = {
         positionSecs: 0, durationSecs: 0, error: null, timeshift: windowFor(0),
       });
     }
+    // A finished recording plays from its file, which here means from its row. The
+    // host resolves `recordings.file_path` and hands mpv a local path (R-118).
+    if (kind === 'recording') {
+      const rec = recordings.find((r) => r.id === id);
+      if (!rec) throw new Error('This recording is no longer in your library.');
+      if (rec.state !== 'completed' || !rec.filePath) {
+        throw new Error(
+          rec.state === 'recording'
+            ? 'This recording is still being written. It can be played once it finishes.'
+            : 'This recording has no file on disk.',
+        );
+      }
+      return setPlayer({
+        status: 'playing', isLive: false, channelId: null, itemKind: 'recording',
+        itemId: id, title: rec.title, subtitle: rec.subTitle ?? null, timeshift: null,
+        positionSecs: positionSecs ?? 0,
+        durationSecs: silentDuration ? 0 : (rec.durationSecs || 5400),
+        error: null,
+      });
+    }
     const item = kind === 'movie'
       ? fx.movies.find((m) => m.id === id)
       : fx.episodes.find((e) => e.id === id);

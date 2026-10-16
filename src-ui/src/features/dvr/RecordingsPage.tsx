@@ -23,7 +23,15 @@ const TABS: { id: Tab; label: string }[] = [
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export function RecordingsPage({ onPlay }: { onPlay?: (r: Recording) => void }) {
+/**
+ * `onPlay` is required, not optional.
+ *
+ * It used to be optional and the only mount supplied nothing, so `onPlay?.(rec)` on
+ * every completed recording was a no-op -- valid TypeScript, invisible to the type
+ * checker and to a sweep for handler-less buttons, and the feature behind it did not
+ * exist at all (R-118).
+ */
+export function RecordingsPage({ onPlay }: { onPlay: (r: Recording) => void }) {
   const [tab, setTab] = useState<Tab>('recorded');
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
@@ -285,7 +293,7 @@ function RecordedRow({
   rec: Recording;
   channel: Channel | null;
   onChanged: () => void;
-  onPlay?: (r: Recording) => void;
+  onPlay: (r: Recording) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const act = async (fn: () => Promise<unknown>) => {
@@ -340,7 +348,7 @@ function RecordedRow({
           {duration(rec.durationSecs)} · {bytes(rec.bytes)}
         </span>
 
-        <Button size="sm" variant="primary" icon="play" onClick={() => onPlay?.(rec)}>
+        <Button size="sm" variant="primary" icon="play" onClick={() => onPlay(rec)}>
           Play
         </Button>
         <IconButton
