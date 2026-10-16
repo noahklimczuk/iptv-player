@@ -733,6 +733,15 @@ fn normalise(genre: &str) -> String {
     genre.trim().to_lowercase()
 }
 
+/// The same fold, for whoever has to match a stored key against a database row.
+///
+/// `repo::recommend` needs it because SQLite's `LOWER()` is ASCII-only: folding both
+/// sides in SQL loses every accented shelf name, so the database's side is folded here
+/// instead and compared exactly (R-57).
+pub fn fold_key(value: &str) -> String {
+    normalise(value)
+}
+
 /// Back to something worth printing. Only ever used for a label.
 fn display_genre(normalised: &str) -> String {
     let mut out = String::with_capacity(normalised.len());
