@@ -2514,6 +2514,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       channelsMissing: 0,
       epgMatched: Math.max(0, channels - 2),
       epgUnmatched: want.live ? fx.channels.slice(-2).map((c) => c.name) : [],
+      epgUnmatchedTotal: want.live ? Math.min(2, fx.channels.length) : 0,
       warnings: [],
       // A clean import loses nothing it was asked to keep, which is what the host
       // reports too — `kindExcluded` is the one number that is allowed to be non-zero

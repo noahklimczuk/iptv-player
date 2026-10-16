@@ -553,7 +553,16 @@ export interface SyncReport {
   epgProgrammes: number;
   channelsMissing: number;
   epgMatched: number;
+  /** Names of channels with no guide, capped at 200 by the host. */
   epgUnmatched: string[];
+  /**
+   * How many channels have no guide altogether, which is *not* `epgUnmatched.length`.
+   *
+   * The setup screen used the capped list's length as the unmatched total, so past 200
+   * the percentage it computed drifted towards 100% -- 93% where the truth was 37%
+   * (R-121). Divide by `epgMatched + epgUnmatchedTotal`.
+   */
+  epgUnmatchedTotal: number;
   warnings: string[];
   /**
    * Everything the import saw and did not keep, and why.

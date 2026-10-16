@@ -58,7 +58,16 @@ pub struct SyncReport {
     /// Channels the provider stopped listing. Kept in the library, flagged, not deleted.
     pub channels_missing: usize,
     pub epg_matched: usize,
+    /// Names of channels with no guide, **capped at 200** -- nobody wants four thousand
+    /// of them over the IPC bridge.
     pub epg_unmatched: Vec<String>,
+    /// How many channels have no guide in total, which is not `epg_unmatched.len()`.
+    ///
+    /// The setup screen divided by the capped list's length, so past 200 unmatched the
+    /// denominator stopped growing while the numerator kept going and the percentage
+    /// converged on 100% -- it reported 93% coverage where the truth was 37%, and then
+    /// described four thousand channels as "the rest" of 7% (R-121).
+    pub epg_unmatched_total: usize,
     /// Non-fatal problems worth surfacing after the refresh.
     pub warnings: Vec<String>,
     /// What the import saw and did not keep. Zero everywhere is the claim that
@@ -511,6 +520,7 @@ pub fn apply(
                     report.epg_matched += 1;
                 }
                 None => {
+                    report.epg_unmatched_total += 1;
                     if report.epg_unmatched.len() < 200 {
                         report.epg_unmatched.push(row.name.clone());
                     }
@@ -526,6 +536,11 @@ pub fn apply(
             total = coverage.total,
             "EPG coverage {:.1}%",
             coverage.percent()
+        );
+        debug_assert_eq!(
+            report.epg_matched + report.epg_unmatched_total,
+            rows.len(),
+            "every channel is either matched or counted as unmatched"
         );
     }
 
@@ -1441,6 +1456,81 @@ mod tests {
         // Ordered by channel number.
         assert_eq!(rows[0].name, "BBC One");
         assert_eq!(rows[0].number, Some(101));
+    }
+
+    /// Past 200 unmatched channels, the report still says how many there are.
+    ///
+    /// `epg_unmatched` is capped at 200 and the setup screen divided by that list's
+    /// length, so the denominator stopped growing while the numerator kept going: on
+    /// this subscription it reported 93% coverage where the truth was 37%, then
+    /// described four thousand channels as "the rest" of 7% (R-121).
+    #[test]
+    fn the_unmatched_total_is_not_the_length_of_the_capped_list() {
+        // Enough of each that the two percentages round differently: 200 of 450 is 44%,
+        // while 200 of (200 + the capped 200) is 50%.
+        const WITH_GUIDE: usize = 200;
+        const WITHOUT: usize = 250;
+
+        let mut playlist = String::from("#EXTM3U\n");
+        let mut epg = String::from("<tv>\n");
+        for i in 0..WITH_GUIDE {
+            playlist.push_str(&format!(
+                "#EXTINF:-1 tvg-id=\"ch{i}.test\" group-title=\"News\",Channel {i}\n\
+                 http://example.com/live/u/p/{}.ts\n",
+                i + 1
+            ));
+            epg.push_str(&format!(
+                "<channel id=\"ch{i}.test\"><display-name>Channel {i}</display-name></channel>\n\
+                 <programme start=\"20240115120000 +0000\" stop=\"20240115130000 +0000\" \
+                 channel=\"ch{i}.test\"><title>Something</title></programme>\n"
+            ));
+        }
+        for i in 0..WITHOUT {
+            playlist.push_str(&format!(
+                "#EXTINF:-1 group-title=\"News\",Nameless Channel {i}\n\
+                 http://example.com/live/u/p/{}.ts\n",
+                WITH_GUIDE + i + 1
+            ));
+        }
+        epg.push_str("</tv>\n");
+
+        let server = TestServer::start(move |_, req| {
+            if req.path.starts_with("/epg") {
+                Reply::ok(epg.as_str())
+            } else {
+                Reply::ok(playlist.as_str())
+            }
+        });
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        assert_eq!(report.channels, WITH_GUIDE + WITHOUT);
+        assert_eq!(report.epg_matched, WITH_GUIDE);
+        assert_eq!(
+            report.epg_unmatched.len(),
+            200,
+            "the list of names is still capped"
+        );
+        assert_eq!(
+            report.epg_unmatched_total, WITHOUT,
+            "but the count is every channel without a guide"
+        );
+
+        // Which is the whole point: the percentage the setup screen computes.
+        let known = report.epg_matched + report.epg_unmatched_total;
+        let honest = (report.epg_matched as f64 / known as f64 * 100.0).round() as i64;
+        let from_the_capped_list = (report.epg_matched as f64
+            / (report.epg_matched + report.epg_unmatched.len()) as f64
+            * 100.0)
+            .round() as i64;
+        assert_eq!(honest, 44, "200 of 450");
+        assert_eq!(
+            from_the_capped_list, 50,
+            "200 of 400, which is what it used to say"
+        );
     }
 
     #[test]
