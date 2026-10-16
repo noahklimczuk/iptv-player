@@ -15,6 +15,24 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
+/**
+ * Move the clock in steps, letting React schedule as it goes.
+ *
+ * One big `fastForward` is not enough. The billboard reschedules its own timer when the
+ * trailer starts — twelve seconds becomes thirty-two — and that happens in a React
+ * effect, which runs *after* `fastForward` has already advanced the clock to the end of
+ * its window. The replacement timer is then due beyond it and never fires, so the test
+ * saw a billboard that "never rotated" depending on whether the rail's first item had a
+ * trailer key. Small steps give the effect a chance to run between them.
+ */
+async function advance(page: Page, ms: number, step = 4_000) {
+  for (let moved = 0; moved < ms; moved += step) {
+    await page.clock.fastForward(Math.min(step, ms - moved));
+    // Real time, so React's scheduler gets a turn.
+    await page.waitForTimeout(30);
+  }
+}
+
 /** Which title the billboard is showing, by its Play button's label. */
 async function featured(page: Page): Promise<string> {
   const hero = page.getByRole('region', { name: 'Featured' });
@@ -33,8 +51,13 @@ test('the billboard stops rotating while a keyboard user is on it @motion', asyn
   await expect(hero).toBeVisible();
 
   // It does rotate when nobody is using it, which is the behaviour being preserved.
+  //
+  // Past `ROTATE_WITH_TRAILER_MS` rather than `ROTATE_MS`: a title with a trailer key
+  // starts one after two seconds and then dwells for 32s instead of 12s, and whether the
+  // rail's first item has a key depends on which item it is. Waiting 13s made this test
+  // a coin flip on that — it passed alone and failed in a full run.
   const first = await featured(page);
-  await page.clock.fastForward(13_000);
+  await advance(page, 40_000);
   await expect.poll(() => featured(page), { message: 'the billboard never rotated' })
     .not.toBe(first);
 
@@ -44,8 +67,8 @@ test('the billboard stops rotating while a keyboard user is on it @motion', asyn
   await expect(play).toBeFocused();
   const held = await featured(page);
 
-  // Well past two rotations' worth.
-  await page.clock.fastForward(40_000);
+  // Well past two rotations' worth, trailer dwell included.
+  await advance(page, 80_000);
   expect(await featured(page), 'the billboard rotated under a focused button')
     .toBe(held);
   // And focus is still where the viewer put it.
@@ -54,7 +77,7 @@ test('the billboard stops rotating while a keyboard user is on it @motion', asyn
   // Moving focus away lets it carry on. Past `ROTATE_WITH_TRAILER_MS`, not `ROTATE_MS`:
   // a trailer has started by now, and the dwell is 32s while one is playing.
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link').first().focus();
-  await page.clock.fastForward(35_000);
+  await advance(page, 40_000);
   await expect.poll(() => featured(page), { message: 'it never resumed' }).not.toBe(held);
 });
 
@@ -72,6 +95,6 @@ test('reduce motion stops the billboard rotating at all', async ({ page }) => {
   const first = await featured(page);
 
   // Three rotations' worth of nothing happening.
-  await page.clock.fastForward(40_000);
+  await advance(page, 60_000);
   expect(await featured(page), 'the billboard rotated with animations off').toBe(first);
 });
