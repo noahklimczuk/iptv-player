@@ -122,6 +122,12 @@ impl SyncOptions {
 }
 
 /// Run a full refresh. `on_progress` is called often enough to drive a progress bar.
+/// How much of the past the guide keeps, counted back from the moment of a refresh.
+///
+/// Eight days: a provider advertising catch-up on this subscription offers a week, and a
+/// guide row that has been pruned is a catch-up entry that cannot be found.
+const EPG_RETENTION_SECS: i64 = 8 * 24 * 60 * 60;
+
 /// Everything the network gave us, before a single row is written.
 ///
 /// The point of this type is the boundary it draws. A refresh downloads a playlist and
@@ -467,12 +473,56 @@ pub fn apply(
     let mut epg_channels: Vec<EpgChannel> = Vec::new();
     for source in fetched.epg {
         epg_repo::upsert_channels(db, &source.channels).map_err(db_failure)?;
+
+        // Everything this source is about to write, removed first.
+        //
+        // `insert_batch` is an unqualified INSERT and `epg_programmes` has no unique
+        // constraint, so a refresh used to add a second complete copy of the guide
+        // rather than replace the first. A refresh runs by itself once a day: on this
+        // subscription one copy is 547,166 programmes and roughly 128 MB of row
+        // payload, so the library grew by that much daily, `grid_slice` returned a row
+        // per copy -- seven identical entries in every slot after a week -- and "now
+        // and next" picked whichever copy SQLite reached first.
+        //
+        // `clear_channels` was written for exactly this ("Remove everything for a set
+        // of channels before reimporting them, so a refresh does not duplicate
+        // programmes") and had no caller anywhere outside its own test. Neither did
+        // `prune_before` below, whose comment cites README §4.4 on the database not
+        // growing unbounded (R-49).
+        //
+        // Taken from the programmes as well as the declared channels, because a guide
+        // can schedule against an id it never declared -- and those rows would
+        // otherwise be the ones that duplicate.
+        let mut touched: Vec<String> = source.channels.iter().map(|c| c.id.clone()).collect();
+        touched.extend(
+            source
+                .programmes
+                .iter()
+                .flatten()
+                .map(|p| p.channel_id.clone()),
+        );
+        touched.sort_unstable();
+        touched.dedup();
+        epg_repo::clear_channels(db, &touched).map_err(db_failure)?;
+
         for batch in &source.programmes {
             epg_repo::insert_batch(db, batch).map_err(db_failure)?;
         }
         report.epg_channels += source.counted_channels;
         report.epg_programmes += source.counted_programmes;
         epg_channels.extend(source.channels);
+    }
+
+    // And whatever is left over from a channel this guide no longer carries, once it
+    // has finished airing. README §4.4. The window is generous because a provider that
+    // advertises catch-up expects yesterday to still be addressable.
+    if !epg_channels.is_empty() {
+        match epg_repo::prune_before(db, options.now_unix - EPG_RETENTION_SECS) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(pruned = n, "programmes that had already finished"),
+            // A refresh that imported a guide must not fail because tidying up did not.
+            Err(e) => tracing::warn!("could not prune finished programmes: {e}"),
+        }
     }
 
     // ── Matching ────────────────────────────────────────────────────────────────
@@ -1462,6 +1512,98 @@ mod tests {
         let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
         let cnn = rows.iter().find(|r| r.name == "CNN HD").unwrap();
         assert_eq!(cnn.epg_channel_id.as_deref(), Some("cnn.us"));
+    }
+
+    /// A second refresh replaces the guide rather than adding another copy of it.
+    ///
+    /// `insert_batch` is an unqualified INSERT and `epg_programmes` has no unique
+    /// constraint, so three refreshes used to leave three identical rows in every slot.
+    /// A refresh runs by itself once a day, and one copy of this subscription's guide is
+    /// 547,166 programmes and roughly 128 MB of row payload (R-49).
+    #[test]
+    fn refreshing_twice_replaces_the_guide_rather_than_duplicating_it() {
+        let server = combined_server();
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let first = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        let after_one = epg_repo::count(&conn).unwrap();
+        assert_eq!(after_one, first.epg_programmes as i64);
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(
+            epg_repo::count(&conn).unwrap(),
+            after_one,
+            "a second refresh added another copy of the guide"
+        );
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(epg_repo::count(&conn).unwrap(), after_one);
+
+        // And the grid shows one row per airing, which is what the viewer sees.
+        let rows = epg_repo::grid_slice(&conn, &["cnn.us".to_string()], 0, i64::MAX / 4).unwrap();
+        let airings: std::collections::HashSet<(i64, &str)> =
+            rows.iter().map(|p| (p.start, p.title.as_str())).collect();
+        assert_eq!(
+            rows.len(),
+            airings.len(),
+            "the guide grid is showing the same airing more than once: {rows:?}"
+        );
+    }
+
+    /// A programme that finished long ago goes, which is the other half of README §4.4 --
+    /// `prune_before` existed and had no caller outside its own test.
+    #[test]
+    fn a_refresh_prunes_programmes_that_have_long_since_finished() {
+        let server = combined_server();
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        // On a channel this guide does not carry, so the import's own clearing does not
+        // account for it.
+        epg_repo::upsert_channels(
+            &mut conn,
+            &[EpgChannel {
+                id: "gone.uk".into(),
+                display_names: vec!["Gone".into()],
+                icon: None,
+            }],
+        )
+        .unwrap();
+        epg_repo::insert_batch(
+            &mut conn,
+            &[Programme {
+                channel_id: "gone.uk".into(),
+                start: 1_000,
+                stop: 2_000,
+                title: "Last Year".into(),
+                sub_title: None,
+                description: None,
+                categories: Vec::new(),
+                season: None,
+                episode: None,
+                icon: None,
+                rating: None,
+                star_rating: None,
+                is_new: false,
+                is_live: false,
+                is_premiere: false,
+                credits: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let before = epg_repo::count(&conn).unwrap();
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        let rows = epg_repo::grid_slice(&conn, &["gone.uk".to_string()], 0, 10_000).unwrap();
+        assert!(
+            rows.is_empty(),
+            "a programme that stopped in 1970 is still in the guide: {rows:?}"
+        );
+        assert!(epg_repo::count(&conn).unwrap() < before + 10);
     }
 
     #[test]
