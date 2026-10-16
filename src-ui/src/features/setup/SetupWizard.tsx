@@ -8,25 +8,16 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  DraftProvider, IngestPhase, IngestProgress, SyncReport, ValidationResult,
+  DraftProvider, IngestProgress, SyncReport, ValidationResult,
 } from '@shared/ipc';
 import { Badge, Button, EmptyState, FIELD } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { invoke, onIngestProgress } from '@/ipc';
+// Shared with Settings → Refresh, which had its own copy with two invented phases
+// and four missing ones (R-145).
+import { PHASE_SENTENCE } from '@/lib/phases';
 
 type Step = 'source' | 'content' | 'importing' | 'done';
-
-const PHASE_LABEL: Record<IngestPhase, string> = {
-  authenticating: 'Checking your subscription',
-  fetchingPlaylist: 'Fetching your channel list',
-  importingChannels: 'Importing channels',
-  importingMovies: 'Importing movies',
-  importingSeries: 'Importing series',
-  fetchingEpg: 'Downloading the TV guide',
-  matchingEpg: 'Matching the guide to your channels',
-  indexing: 'Building the search index',
-  done: 'Finished',
-};
 
 export function SetupWizard({
   onFinished,
@@ -598,7 +589,7 @@ function ImportingStep({ progress }: { progress: IngestProgress | null }) {
       <style>{'@keyframes aurora-spin { to { transform: rotate(360deg); } }'}</style>
 
       <div role="status" style={{ fontSize: 'var(--fs-lg)', fontWeight: 650 }}>
-        {PHASE_LABEL[phase]}
+        {PHASE_SENTENCE[phase]}
       </div>
       {pct != null && (
         <div style={{ marginTop: 'var(--sp-3)' }}>
