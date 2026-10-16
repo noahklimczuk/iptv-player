@@ -94,12 +94,19 @@ export const CatalogCard = memo(function CatalogCard({
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   function enter() {
-    if (!animations) return;
     setExpanded(true);
     onExpand?.(index);
-    // Nothing to dwell towards without a trailer. `preview` used to be set for every
-    // card and drove a label reading "Preview playing" over a still poster.
-    if (!hoverPreviews || !item.trailerKey) return;
+    // `animations` used to return here, before `setExpanded`. Every action this card
+    // offers lives inside `{expanded && ...}` -- Play, My List, I like this, More info
+    // and Remove from Continue Watching -- so a viewer who has turned animation effects
+    // off in Windows got one button per card instead of five, on the home screen and
+    // both browse grids, from first launch and with nothing on screen to explain it. An
+    // accessibility preference that removes functionality is the inverse of what the
+    // preference is for, so the expansion now happens either way and `animations`
+    // decides only how long it takes (the `transition` below, and the panel's).
+    //
+    // A trailer that starts playing by itself is motion, though, and that stays off.
+    if (!animations || !hoverPreviews || !item.trailerKey) return;
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setPreview(true), PREVIEW_DELAY_MS);
   }
@@ -305,11 +312,8 @@ export const CatalogCard = memo(function CatalogCard({
                     fontSize: 9, color: 'var(--text-muted)',
                   }}
                 >
-                  {item.match !== undefined && (
-                    <span style={{ color: 'var(--success)', fontWeight: 800 }}>
-                      {item.match}% match
-                    </span>
-                  )}
+                  {/* "% match" was here, on the expanded card. Mock-only: `match` came
+                      from `fixtures.ts` and from nothing on the host (R-99). */}
                   {item.certification && (
                     <span
                       style={{

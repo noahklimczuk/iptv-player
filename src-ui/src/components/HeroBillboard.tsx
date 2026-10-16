@@ -223,9 +223,9 @@ export function HeroBillboard({
             marginBottom: 'var(--sp-3)', fontSize: 'var(--fs-sm)',
           }}
         >
-          {item.match !== undefined && (
-            <span style={{ color: 'var(--success)', fontWeight: 800 }}>{item.match}% match</span>
-          )}
+          {/* "% match" was here too, and was mock-only in the same way -- `match` was
+              assigned in `fixtures.ts` and by nothing on the host, so this branch never
+              ran outside a browser (R-99). */}
           {item.year && <span>{item.year}</span>}
           {item.certification && <Badge tone="outline">{item.certification}</Badge>}
           {/* See `CatalogCard`: unknown until the listing is fetched, and "0

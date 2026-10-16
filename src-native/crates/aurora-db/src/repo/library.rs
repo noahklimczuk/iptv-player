@@ -711,6 +711,16 @@ pub struct NewEpisode {
     pub title: Option<String>,
     pub url: String,
     pub still: Option<String>,
+    /// The provider's plot for this episode, which `get_series_info` sends for 96% of
+    /// them on the panel this is measured against and which was parsed and dropped.
+    pub overview: Option<String>,
+    /// How long the episode runs, from the provider's own `duration_secs`.
+    ///
+    /// This is what `library_playback_aids` falls back to when the player reports no
+    /// duration, which a provider's VOD stream very often does -- so with the column
+    /// empty, Up Next, autoplay-next and Skip Credits were all dead on an ordinary
+    /// library until TMDB enrichment happened to reach the episode (R-139).
+    pub runtime_mins: Option<u32>,
 }
 
 /// A show as the provider describes it, before enrichment.
@@ -813,16 +823,27 @@ pub fn upsert_episodes(
     let mut n = 0;
     {
         let mut stmt = tx.prepare(
-            r#"INSERT INTO episodes (series_id, season, episode, title, url, still, added_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7)
+            r#"INSERT INTO episodes (series_id, season, episode, title, url, still,
+                                     overview, runtime_mins, added_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
                ON CONFLICT (series_id, season, episode) DO UPDATE SET
-                 title = COALESCE(excluded.title, episodes.title),
-                 url   = excluded.url,
-                 still = COALESCE(excluded.still, episodes.still)"#,
+                 title        = COALESCE(excluded.title, episodes.title),
+                 url          = excluded.url,
+                 still        = COALESCE(excluded.still, episodes.still),
+                 overview     = COALESCE(excluded.overview, episodes.overview),
+                 runtime_mins = COALESCE(excluded.runtime_mins, episodes.runtime_mins)"#,
         )?;
         for e in episodes {
             stmt.execute(params![
-                series_id, e.season, e.episode, e.title, e.url, e.still, now
+                series_id,
+                e.season,
+                e.episode,
+                e.title,
+                e.url,
+                e.still,
+                e.overview,
+                e.runtime_mins,
+                now
             ])?;
             n += 1;
         }
@@ -1376,6 +1397,7 @@ mod tests {
                 title: Some("Fourth".into()),
                 url: "u".into(),
                 still: None,
+                ..Default::default()
             }],
             0,
         )
@@ -1956,6 +1978,7 @@ mod tests {
                     title: Some("Two".into()),
                     url: "u2".into(),
                     still: None,
+                    ..Default::default()
                 },
                 NewEpisode {
                     season: 1,
@@ -1963,6 +1986,7 @@ mod tests {
                     title: Some("One".into()),
                     url: "u1".into(),
                     still: None,
+                    ..Default::default()
                 },
                 NewEpisode {
                     season: 2,
@@ -1970,6 +1994,7 @@ mod tests {
                     title: None,
                     url: "u3".into(),
                     still: None,
+                    ..Default::default()
                 },
             ],
             0,
@@ -1983,6 +2008,72 @@ mod tests {
 
         let s1 = episodes_for(&conn, sid, Some(1)).unwrap();
         assert_eq!(s1.len(), 2);
+    }
+
+    /// The two fields the provider sends for nearly every episode and the import used
+    /// to drop (R-139).
+    ///
+    /// `runtime_mins` is the one that costs a feature: `library_playback_aids` falls back
+    /// to it when the player reports no duration, which a provider's VOD stream very
+    /// often does -- so with the column empty, Up Next, autoplay-next and Skip Credits
+    /// had nothing to work from on an un-enriched library, which is most of one.
+    #[test]
+    fn an_episodes_plot_and_runtime_are_stored_and_survive_a_playlist_refresh() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let sid = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Show",
+                match_key: "show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[NewEpisode {
+                season: 1,
+                episode: 1,
+                title: Some("One".into()),
+                url: "u1".into(),
+                overview: Some("What happens in it.".into()),
+                runtime_mins: Some(59),
+                ..Default::default()
+            }],
+            0,
+        )
+        .unwrap();
+
+        let stored = &episodes_for(&conn, sid, None).unwrap()[0];
+        assert_eq!(stored.overview.as_deref(), Some("What happens in it."));
+        assert_eq!(stored.runtime_mins, Some(59));
+
+        // An M3U refresh carries neither -- a flat playlist line has no plot and no
+        // duration -- and must not blank what `get_series_info` supplied.
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[NewEpisode {
+                season: 1,
+                episode: 1,
+                title: Some("One".into()),
+                url: "u1-again".into(),
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+
+        let after = &episodes_for(&conn, sid, None).unwrap()[0];
+        assert_eq!(after.url, "u1-again", "the stream is always the newest one");
+        assert_eq!(after.overview.as_deref(), Some("What happens in it."));
+        assert_eq!(after.runtime_mins, Some(59));
     }
 
     #[test]
@@ -2006,7 +2097,7 @@ mod tests {
             episode: 1,
             title: Some("T".into()),
             url: "old".into(),
-            still: None,
+            ..Default::default()
         };
         upsert_episodes(&mut conn, sid, std::slice::from_ref(&ep), 0).unwrap();
         upsert_episodes(

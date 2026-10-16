@@ -2520,15 +2520,20 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
 };
 
-export function isInMyList(kind: 'movie' | 'series', id: number) {
-  return myList.has(`${kind}:${id}`);
-}
-export function isFavorite(channelId: number) {
-  return favorites.has(channelId);
-}
-export function getProgress(kind: 'movie' | 'episode', id: number) {
-  return progress.get(`${kind}:${id}`) ?? null;
-}
+/*
+ * `getProgress`, `isInMyList` and `isFavorite` used to live here.
+ *
+ * They read this module's own state and reached production code through
+ * `export * from './mock'` in `ipc/index.ts`, which looks exactly like importing a
+ * transport and is not one. `DetailModal` imported `getProgress` and therefore asked
+ * the mock for a film's resume position in release builds too, where nothing writes
+ * these maps -- but the seeding loop above runs at module evaluation in every build, so
+ * the answer was four fabricated rows for whichever real films held rowids 4, 12, 28
+ * and 53, and null for every other film (R-98). What production code should ask is
+ * `progress.get`, `lists.marks` (which `state/marks.ts` already goes through) and
+ * `channels.list` with `favoritesOnly`, as `LivePage` does. Through `invoke` like
+ * everything else, so these cannot come back.
+ */
 
 /**
  * Commands the next call to which should refuse, and with what.
