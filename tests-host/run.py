@@ -227,9 +227,22 @@ def _is_transport_error(e):
     )
 
 
-# What `keyring` files a secret under on Windows: the target name is `{user}.{service}`,
-# and the service is fixed by `aurora-ingest::credentials`.
-CREDENTIAL_SERVICE = "AuroraTV"
+# What `keyring` files a secret under on Windows: the target name is
+# `{user}.{service}`.
+#
+# Moved off the real one by default. Credential Manager is per *user*, so the service
+# name is the one piece of state a redirected data directory does not isolate -- and
+# while `reclaim_credentials` below is careful to delete only keys it read out of the
+# library it just destroyed, "careful" is what the `aurora-provider-{row id}` collision
+# was too, and that one took the machine owner's saved password with it. The host honours
+# this variable (`aurora_ingest::credentials::windows_store::SERVICE_ENV`), so setting it
+# here puts the whole run in its own vault: nothing a scenario writes can land on, or
+# delete, an entry belonging to the installed copy.
+#
+# `setdefault`, so a run that deliberately wants the real vault can say so.
+CREDENTIAL_SERVICE = os.environ.setdefault(
+    "AURORA_CREDENTIAL_SERVICE", "AuroraTV-tests-host"
+)
 
 
 def reclaim_credentials(path):
