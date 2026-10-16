@@ -19,7 +19,7 @@ use crate::epg::{self, BatchingSink, BATCH_SIZE};
 use crate::http::HttpClient;
 use crate::playlist;
 use crate::source::SourceKind;
-use crate::xtream::XtreamClient;
+use crate::xtream::{AccountStatus, XtreamClient};
 
 /// Progress, so a 40,000-entry import is not a frozen spinner (README §C8).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +135,13 @@ impl SyncOptions {
 /// the network for the same reason.
 #[derive(Debug, Default)]
 pub struct Fetched {
+    /// What the panel said about the subscription when this refresh signed in.
+    ///
+    /// `None` for an M3U source, which has nothing to sign in to. It is carried out of
+    /// here because `max_connections` arrives on the authentication response and
+    /// nowhere else, and the one place that can store it against a provider is the
+    /// command that asked for the refresh.
+    account: Option<AccountStatus>,
     live: Vec<PlaylistEntry>,
     movies: Vec<PlaylistEntry>,
     episodes: Vec<PlaylistEntry>,
@@ -145,6 +152,13 @@ pub struct Fetched {
     epg: Vec<FetchedEpg>,
     warnings: Vec<String>,
     dropped: Dropped,
+}
+
+impl Fetched {
+    /// What the subscription said about itself, for the caller to store.
+    pub fn account(&self) -> Option<&AccountStatus> {
+        self.account.as_ref()
+    }
 }
 
 /// One show as the provider listed it, owned so it can outlive the HTTP client.
@@ -213,7 +227,7 @@ pub fn fetch(
             let password = options.password.as_deref().unwrap_or_default();
             missing_sign_in(username, password)?;
             let client = XtreamClient::new(http, base_url, username, password);
-            client.authenticate(options.now_unix)?;
+            out.account = Some(client.authenticate(options.now_unix)?);
             epg_urls.push(client.xmltv_url());
 
             on_progress(Progress {
@@ -1989,6 +2003,66 @@ mod tests {
         assert_eq!(rows[0].number, Some(202));
         assert!(rows[0].has_catchup);
         assert_eq!(rows[0].epg_channel_id.as_deref(), Some("cnn.us"));
+    }
+
+    /// What the panel says about the subscription has to survive the fetch.
+    ///
+    /// `max_connections` arrives on the authentication response and nowhere else, and
+    /// `fetch` signs in on every Xtream refresh — but it discarded the answer, so the
+    /// column stayed NULL on every real install and every connection budget in the app
+    /// had nothing to enforce (R-108).
+    #[test]
+    fn the_subscriptions_connection_limit_survives_the_fetch() {
+        let server = TestServer::start(|_, req| {
+            let p = &req.path;
+            if p.contains("action=") {
+                Reply::ok("[]")
+            } else if p.contains("xmltv.php") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(
+                    r#"{"user_info":{"username":"u","status":"Active",
+                              "max_connections":"1","active_cons":0}}"#,
+                )
+            }
+        });
+
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "u".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = Some("p".into());
+
+        let fetched = fetch(&http(), &opts, &no_rules(), |_| {}).unwrap();
+        let account = fetched.account().expect("an Xtream fetch signed in");
+        assert_eq!(account.max_connections, Some(1));
+        assert_eq!(account.active_connections, Some(0));
+    }
+
+    /// An M3U playlist has nothing to sign in to, which the caller must be able to tell
+    /// apart from a line that declared no limit — it stores one and not the other.
+    #[test]
+    fn an_m3u_fetch_has_no_account_to_report() {
+        let server = TestServer::always(Reply::ok(
+            "#EXTM3U
+#EXTINF:-1 tvg-id=\"a\",A
+http://example.com/a.ts
+",
+        ));
+        let opts = SyncOptions::new(
+            1,
+            SourceKind::M3u {
+                url: server.url(""),
+            },
+            1_705_320_000,
+        );
+
+        let fetched = fetch(&http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert!(fetched.account().is_none());
     }
 
     /// The gap a real import found: 28,693 series downloaded and thrown away.

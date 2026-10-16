@@ -219,20 +219,11 @@ impl Mosaic {
 
     /// The tightest `max_connections` across enabled providers, or `None`.
     ///
-    /// The same query `Services` uses to cap simultaneous recordings, asked again here
-    /// rather than cached: a provider's limit is rewritten by every refresh that reads
-    /// `player_api.php`, and a mosaic opened after one should use the new number.
+    /// Asked again here rather than cached: a provider's limit is rewritten by every
+    /// refresh that signs in to `player_api.php`, and a mosaic opened after one should
+    /// use the new number.
     fn limit(&self) -> Option<usize> {
-        let db = self.db.lock();
-        db.query_row(
-            "SELECT MIN(max_connections) FROM providers
-             WHERE enabled = 1 AND max_connections > 0",
-            [],
-            |r| r.get::<_, Option<i64>>(0),
-        )
-        .ok()
-        .flatten()
-        .map(|n| n.max(1) as usize)
+        crate::dvr::line_limit(&self.db.lock())
     }
 
     /// What the picker should say about a layout, without opening it.
