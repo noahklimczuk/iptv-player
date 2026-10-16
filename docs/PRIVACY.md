@@ -13,14 +13,31 @@ Everything you would expect: the playlist, the guide, the artwork your provider 
 the streams themselves. Your username and password go to your provider, because that is
 what they are for.
 
-They are **not** stored in the library database. They live in Windows Credential Manager,
-and the database keeps only a reference to the entry. That means a copy of `library.db` —
-a backup, an export, a file handed to somebody for a bug report — contains no credentials.
+**Your password is not kept as a password anywhere in the library.** It lives in Windows
+Credential Manager, and the `providers` table holds only a reference to the entry — so
+nothing in Aurora stores the thing you typed.
 
-Nor do they appear in a log. Every URL written to the log goes through `http::redact`
-first, which strips `username`, `password`, `token` and the rest from query strings, and
-also handles the form that has no markers at all: `http://host/<user>/<pass>/12345.ts`,
-which is how most panels address a stream. That second case was a real leak once (F-15).
+**But `library.db` is not safe to hand to somebody today, and this note used to say it
+was.** Xtream addresses a stream as
+`http://host/<username>/<password>/<id>` — the credentials are in the path, because that
+is how the protocol works — and the library stores those URLs as they come, in
+`channel_sources.url`, `movies.url` and `episodes.url`. On a subscription with a few
+thousand channels and a large catalogue that is hundreds of thousands of copies of your
+sign-in, in plain text, in one file.
+
+So: **do not attach `library.db` to a bug report.** The work to store a stream id and
+rebuild the URL when it is needed is in progress; when it is done this paragraph will say
+so, and until then it says what is actually true.
+
+Credentials no longer appear in a **log**. Every URL written to one goes through
+`http::redact` first, which strips `username`, `password`, `token` and the rest from query
+strings, and also handles the form that carries no markers at all —
+`http://host/<user>/<pass>/<id>`, which is how most panels address a stream. That second
+case has been a real leak twice: once when it was not handled at all (F-15), and once
+because the fix required a file extension on the end, which the panel this app is measured
+against does not put there — so none of its live channels was redacted while its films
+were. Settings → Diagnostics offers to copy the log "for a bug report", and that is now a
+safe thing to accept.
 
 ## Google, for the assistant and the recommendation rail
 
@@ -49,9 +66,14 @@ is a feature that does nothing until you go and find a Google key — but it mea
 viewing history leaves the machine by default*, and you should know that rather than
 discover it.
 
-To stop it: clear the key in **Settings → Assistant**. With no key, both features say they
-need one and nothing is sent. A build you compile yourself has no key unless you supply
-one.
+To stop it: turn **Suggestions and the assistant** off, in
+**Settings → Recommendations**. Nothing is then sent to Google, including by the key
+compiled into the build, and both features say they need a key.
+
+Clearing the key is *not* how to stop it, and this note used to say it was. In an official
+build, removing the key you entered falls back to the one compiled in — so the rail carried
+on and your history kept going out. A build you compile yourself has no key at all unless
+you supply one, which is why the instruction looked right to whoever wrote it.
 
 Google's terms govern what they do with it. Aurora does not send it anywhere else and
 keeps no copy beyond the conversation stored in your own library.

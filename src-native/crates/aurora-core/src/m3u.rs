@@ -130,8 +130,8 @@ pub fn parse<R: BufRead>(reader: R) -> Parsed {
                     for part in v.split('&') {
                         let (hk, hv) = split_once_trim(part, '=');
                         match hk.to_ascii_lowercase().as_str() {
-                            "user-agent" => pending.http.user_agent = Some(urldecode(hv)),
-                            "referer" | "referrer" => pending.http.referrer = Some(urldecode(hv)),
+                            "user-agent" => pending.http.user_agent = Some(crate::percent::decode(hv)),
+                            "referer" | "referrer" => pending.http.referrer = Some(crate::percent::decode(hv)),
                             _ => {}
                         }
                     }
@@ -374,45 +374,6 @@ fn split_once_trim(s: &str, sep: char) -> (&str, &str) {
     match s.split_once(sep) {
         Some((a, b)) => (a.trim(), b.trim()),
         None => (s.trim(), ""),
-    }
-}
-
-/// Percent-decode, over bytes.
-///
-/// Two things it has to get right, both of which the obvious `&str` version gets
-/// wrong. Slicing `s[i + 1..i + 3]` to read the two hex digits panics whenever those
-/// offsets land inside a multi-byte character — `"%a\u{e9}"` is enough — and this
-/// parser's whole contract is that a broken playlist costs a warning, not the
-/// process. And `byte as char` is a Latin-1 cast, so `%C3%A9` decoded to `Ã©`
-/// instead of `é`, in a string that goes back out as an HTTP header.
-///
-/// Decoding into a `Vec<u8>` and interpreting the result as UTF-8 once at the end
-/// removes both: there is no `&str` index to get wrong, and the bytes a provider
-/// escaped are reassembled before anything decides what characters they are.
-fn urldecode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let (Some(hi), Some(lo)) = (hex_digit(b[i + 1]), hex_digit(b[i + 2])) {
-                out.push(hi * 16 + lo);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(if b[i] == b'+' { b' ' } else { b[i] });
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex_digit(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
     }
 }
 

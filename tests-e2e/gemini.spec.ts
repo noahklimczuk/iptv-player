@@ -68,6 +68,42 @@ test('with a key, the rail appears and every card says why', async ({ page }) =>
   await page.screenshot({ path: `${SHOTS}/54-gemini-rail.png` });
 });
 
+/**
+ * The switch, which is the only thing that stops anything being sent in a release build.
+ *
+ * `removing the key takes the rail away again`, below, passes in a browser because the
+ * mock has no built-in key — and in an official build removing the key falls back to the
+ * one compiled in, so the rail stays and the history keeps going to Google.
+ * `docs/PRIVACY.md` told viewers to clear the key for exactly this purpose.
+ *
+ * So this journey turns the feature *off* with a key still saved, which is the state the
+ * old instruction could never reach.
+ */
+test('turning suggestions off takes the rail away with the key still saved', async ({ page }) => {
+  const panel = await settings(page);
+  await panel.getByLabel('Gemini API key').fill('test-key');
+  await panel.getByRole('button', { name: 'Use this key' }).click();
+  await expect(panel.getByRole('button', { name: 'Get recommendations now' })).toBeVisible();
+
+  const toggle = panel.getByTestId('gemini-enabled');
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(panel.getByText(/Nothing is sent to Google/)).toBeVisible();
+
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await page.waitForTimeout(900);
+  await expect(page.getByRole('region', { name: RAIL })).toHaveCount(0);
+
+  // And back on, with the key that was never removed.
+  const again = await settings(page);
+  await again.getByTestId('gemini-enabled').click();
+  await expect(again.getByTestId('gemini-enabled')).toHaveAttribute('aria-checked', 'true');
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: RAIL })).toBeVisible({ timeout: 20_000 });
+});
+
 test('removing the key takes the rail away again', async ({ page }) => {
   const panel = await settings(page);
   await panel.getByLabel('Gemini API key').fill('test-key');

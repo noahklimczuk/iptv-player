@@ -51,8 +51,8 @@ pub fn parse_pasted_xtream(input: &str) -> Option<PastedXtream> {
             continue;
         };
         match key.to_ascii_lowercase().as_str() {
-            "username" | "user" => username = Some(urldecode(value)),
-            "password" | "pass" => password = Some(urldecode(value)),
+            "username" | "user" => username = Some(aurora_core::percent::decode(value)),
+            "password" | "pass" => password = Some(aurora_core::percent::decode(value)),
             _ => {}
         }
     }
@@ -107,24 +107,6 @@ pub fn looks_like_panel_root(input: &str) -> bool {
     !after_scheme.contains('/')
 }
 
-fn urldecode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v as char);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(if b[i] == b'+' { ' ' } else { b[i] as char });
-        i += 1;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +120,52 @@ mod tests {
         assert_eq!(got.base_url, "http://example.com:8080");
         assert_eq!(got.username, "alice");
         assert_eq!(got.password, "hunter2");
+    }
+
+    /// A paste that used to end the process.
+    ///
+    /// `urldecode` sliced a `&str` to read the two hex digits, which panics when those
+    /// offsets land inside a multi-byte character. `[profile.release]` sets
+    /// `panic = "abort"`, and `providers_detect` runs on **every keystroke** of the
+    /// setup wizard's first field, so a URL pasted out of a chat client that had
+    /// smart-quoted it closed the window with nothing written anywhere.
+    #[test]
+    fn a_percent_before_a_multibyte_character_does_not_end_the_process() {
+        for tail in [
+            "p%\u{2013}w",  // en dash — the one a chat client produces
+            "p%\u{2019}w",  // curly apostrophe
+            "p%\u{20ac}w",  // euro
+            "p%\u{1f600}w", // emoji
+            "p%\u{e9}w",    // two-byte, which happened to survive
+            "pw%",          // truncated at the end
+            "pw%2",
+            "pw%zz",
+        ] {
+            let url = format!("http://example.com/get.php?username=alice&password={tail}");
+            // Any answer will do; the point is that there is one.
+            let _ = parse_pasted_xtream(&url);
+        }
+    }
+
+    /// A non-ASCII password arrived mangled and was then saved and rejected.
+    ///
+    /// `byte as char` is a Latin-1 cast, so `caf%C3%A9` became `cafÃ©` — five
+    /// characters where four belonged. It went into Credential Manager in that form and
+    /// the panel refused the login, behind a masked field showing the wrong number of
+    /// dots.
+    #[test]
+    fn a_non_ascii_password_decodes_to_what_the_viewer_typed() {
+        let got =
+            parse_pasted_xtream("http://example.com/get.php?username=alice&password=caf%C3%A9")
+                .unwrap();
+        assert_eq!(got.password, "caf\u{e9}");
+        assert_eq!(got.password.chars().count(), 4, "{:?}", got.password);
+
+        let spaced =
+            parse_pasted_xtream("http://example.com/get.php?username=a%20b&password=c%20d")
+                .unwrap();
+        assert_eq!(spaced.username, "a b");
+        assert_eq!(spaced.password, "c d");
     }
 
     #[test]
