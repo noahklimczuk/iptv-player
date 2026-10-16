@@ -904,14 +904,30 @@ pub fn refresh_provider(
     let fetched = sync::fetch(&services.http, &options, &rules, emit)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
 
+    // How many streams at once this line allows, which arrives on the authentication
+    // response and nowhere else. Stored here because this is the only moment the app
+    // has both the number and the provider it belongs to: it used to be read during
+    // setup, shown once in the wizard and dropped, so the column stayed NULL forever
+    // and every budget built on it — the DVR's cap on simultaneous recordings, the
+    // warning strip, multi-view's refusal — silently had no limit to enforce (R-108).
+    let max_connections = fetched
+        .account()
+        .and_then(|a| a.max_connections)
+        .map(|n| n as i64);
+
     // Only the writes hold it, and they are local and bounded.
     let mut db = services.db.lock();
     let report = sync::apply(&mut db, fetched, &options, emit)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
 
+    // `COALESCE`, so an M3U refresh — which has no account to ask — leaves a number a
+    // previous Xtream refresh established rather than wiping it back to NULL.
     db.execute(
-        "UPDATE providers SET last_refresh_at = ?2 WHERE id = ?1",
-        params![provider_id, now_unix()],
+        "UPDATE providers
+            SET last_refresh_at = ?2,
+                max_connections = COALESCE(?3, max_connections)
+          WHERE id = ?1",
+        params![provider_id, now_unix(), max_connections],
     )
     .map_err(aurora_db::DbError::from)?;
 

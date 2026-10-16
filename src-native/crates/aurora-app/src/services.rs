@@ -85,15 +85,16 @@ impl Services {
             aurora_db::repo::settings::get::<String>(&db.lock(), crate::dvr::FOLDER_KEY)?
                 .map(PathBuf::from)
                 .unwrap_or_else(|| data_dir.join("Recordings"));
-        let max_concurrent =
-            max_connections(&db.lock()).unwrap_or(crate::dvr::DEFAULT_MAX_CONCURRENT);
-
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(create_backend()));
 
-        let dvr = Arc::new(
-            crate::dvr::Dvr::new(Arc::clone(&db), Arc::new(StreamRecorder), folder)
-                .with_max_concurrent(max_concurrent),
-        );
+        // No cap is set here on purpose. It was read once, at this point, and on a
+        // first run that is before the provider exists — see `Dvr::max_concurrent`,
+        // which asks the database per tick instead.
+        let dvr = Arc::new(crate::dvr::Dvr::new(
+            Arc::clone(&db),
+            Arc::new(StreamRecorder),
+            folder,
+        ));
 
         // One instance per tile, made on demand. `create_backend` rather than a clone of
         // the main player, because each tile needs its own mpv and its own child surface
@@ -129,17 +130,4 @@ impl Services {
             opened,
         })
     }
-}
-
-/// The tightest connection limit across enabled providers, which is what actually caps
-/// simultaneous recordings — exceeding it gets the line cut, not queued.
-fn max_connections(db: &Connection) -> Option<usize> {
-    db.query_row(
-        "SELECT MIN(max_connections) FROM providers WHERE enabled = 1 AND max_connections > 0",
-        [],
-        |r| r.get::<_, Option<i64>>(0),
-    )
-    .ok()
-    .flatten()
-    .map(|n| n.max(1) as usize)
 }
