@@ -161,3 +161,96 @@ fn no_channel_is_handed_a_schedule_that_differs_only_by_a_number() {
         by_a_digit.len()
     );
 }
+
+/// No channel is matched to a guide channel that has nothing scheduled against it.
+///
+/// Builds the index the way `sync::apply` does -- from the ids the guide actually
+/// schedules programmes against, not from every id it declares. On this library 4,827
+/// ids are declared and 2,937 carry a programme, and before the two fixes in this
+/// change 909 channels were pointed at one of the other 1,890: 360 by an exact
+/// `tvg-id`, 67 by normalized name (R-21) and 482 by the fuzzy pass (R-22). Each one
+/// got an empty guide row while the diagnostics counted it as covered.
+#[test]
+#[ignore = "real library: run with --ignored"]
+fn no_channel_is_matched_to_a_guide_channel_with_no_programmes() {
+    let db = library();
+
+    let scheduled: std::collections::HashSet<String> = db
+        .prepare("SELECT DISTINCT channel_id FROM epg_programmes")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        !scheduled.is_empty(),
+        "no programmes at all -- is this a real library?"
+    );
+
+    let declared: Vec<EpgChannel> = db
+        .prepare("SELECT id, display_name FROM epg_channels")
+        .unwrap()
+        .query_map([], |r| {
+            let id: String = r.get(0)?;
+            let name: Option<String> = r.get(1)?;
+            Ok(EpgChannel {
+                id,
+                display_names: name.into_iter().collect(),
+                icon: None,
+            })
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    // The pruning `sync::apply` performs before building the index.
+    let offered: Vec<EpgChannel> = declared
+        .iter()
+        .filter(|c| scheduled.contains(&c.id))
+        .cloned()
+        .collect();
+    println!(
+        "   {} guide channels declared, {} with programmes, {} offered for matching",
+        declared.len(),
+        scheduled.len(),
+        offered.len()
+    );
+
+    let index = EpgIndex::build(&offered);
+    let channels: Vec<(String, Option<String>)> = db
+        .prepare("SELECT name, tvg_id FROM channels")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    let mut matched = 0;
+    let mut empty = Vec::new();
+    for (name, tvg_id) in &channels {
+        let Some(hit) = index.resolve(tvg_id.as_deref(), name, None) else {
+            continue;
+        };
+        matched += 1;
+        if !scheduled.contains(&hit.epg_channel_id) {
+            empty.push(format!(
+                "{name:?} -> {:?} ({:?})",
+                hit.epg_channel_id, hit.method
+            ));
+        }
+    }
+
+    println!(
+        "   {} channels, {matched} matched, {} of them to a guide channel with nothing in it",
+        channels.len(),
+        empty.len()
+    );
+    for line in empty.iter().take(10) {
+        println!("      {line}");
+    }
+    assert!(
+        empty.is_empty(),
+        "{} channels are reported as having a guide that holds no programme for them",
+        empty.len()
+    );
+}

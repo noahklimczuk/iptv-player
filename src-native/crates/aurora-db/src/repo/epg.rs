@@ -1,5 +1,7 @@
 //! EPG persistence and the guide-grid read path.
 
+use std::collections::HashSet;
+
 use aurora_core::model::Programme;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -202,6 +204,21 @@ pub fn clear_channels(conn: &mut Connection, epg_channel_ids: &[String]) -> Resu
 
 pub fn count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT count(*) FROM epg_programmes", [], |r| r.get(0))?)
+}
+
+/// Which guide channels actually have something scheduled.
+///
+/// A guide declares channels and schedules programmes against them, and the two sets are
+/// not the same: of the 4,827 distinct ids this subscription's guide declares, 1,882
+/// carry no `<programme>` element at all. Whether a channel has any is not knowable
+/// until the whole document has been read, which is why this is asked of the table
+/// afterwards rather than decided while parsing (R-21).
+pub fn channels_with_programmes(conn: &Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT channel_id FROM epg_programmes")?;
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<HashSet<_>, _>>()?;
+    Ok(ids)
 }
 
 #[cfg(test)]
