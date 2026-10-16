@@ -241,6 +241,18 @@ const mockProfiles: Profile[] = [
 ];
 const mockPins = new Map<number, string | null>();
 let mockMasterPin: string | null = null;
+/**
+ * The host's own two numbers, from `aurora-db/src/repo/profiles.rs`.
+ *
+ * Mirrored rather than shortened: a lockout the mock lets go of in three seconds is a
+ * lockout no journey has really tested, and the UI reads the deadline off the timestamp
+ * either way.
+ */
+const MAX_PIN_FAILURES = 5;
+const PIN_LOCKOUT_SECS = 60;
+/** Wrong attempts, and the deadline they earn, keyed by profile (0 is the master PIN). */
+const pinFailures = new Map<number, number>();
+const pinLockouts = new Map<number, number>();
 let mockParental: ParentalSettings = {
   hasMasterPin: false, hideAdult: true, lockSettings: false,
 };
@@ -2108,10 +2120,38 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     const p = mockProfiles.find((x) => x.id === profileId);
     if (p) { p.hasPin = pin !== null; mockPins.set(profileId, pin); }
   },
+  /**
+   * Wrong PINs are counted here, and five of them lock the pad -- as the host does.
+   *
+   * This used to answer `{ wrong: { remaining: 4 } }` to every wrong PIN, for ever: a
+   * constant, so no journey could reach the locked-out state at all, and the UI's
+   * handling of it went unexamined. `repo::profiles` counts failures per scope, clears
+   * them on success, and returns a real `lockedOut.until` timestamp after
+   * `MAX_PIN_FAILURES`; those two numbers are mirrored exactly rather than shortened,
+   * because a mock that is kinder than the host is how [R-159]'s five tests came to
+   * certify behaviour a shipped build does not have.
+   */
   'profiles.verifyPin': ({ profileId, pin }): PinOutcome => {
     const stored = profileId == null ? mockMasterPin : mockPins.get(profileId) ?? null;
     if (stored == null) return 'notRequired';
-    return stored === pin ? 'ok' : { wrong: { remaining: 4 } };
+    const scope = profileId ?? 0;
+    const now = Math.floor(Date.now() / 1000);
+    const locked = pinLockouts.get(scope) ?? 0;
+    if (locked > now) return { lockedOut: { until: locked } };
+    if (stored === pin) {
+      pinFailures.delete(scope);
+      pinLockouts.delete(scope);
+      return 'ok';
+    }
+    const failures = (pinFailures.get(scope) ?? 0) + 1;
+    pinFailures.set(scope, failures);
+    if (failures >= MAX_PIN_FAILURES) {
+      const until = now + PIN_LOCKOUT_SECS;
+      pinLockouts.set(scope, until);
+      pinFailures.delete(scope);
+      return { lockedOut: { until } };
+    }
+    return { wrong: { remaining: MAX_PIN_FAILURES - failures } };
   },
   'profiles.parental': (): ParentalSettings => mockParental,
   'profiles.setParental': ({ hideAdult, lockSettings, masterPin }) => {
