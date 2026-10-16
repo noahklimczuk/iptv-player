@@ -394,7 +394,12 @@ export const episodes: Episode[] = (() => {
               'breaks the rule', 'tells the truth'])}; ` +
             `${person()} ${pick(['pays for it', 'disagrees', 'disappears',
               'covers the trail'])}.`,
-          still: art(`${s.id}-${season}-${e}`, 480, 270),
+          // Not every episode has one. Stills come from TMDB enrichment, which misses
+          // individual episodes constantly -- recent ones especially -- so a library
+          // where every episode has artwork is a library that does not exist, and it
+          // is what hid R-106 from all 154 journeys. Deterministic, and deliberately
+          // not drawn from the PRNG: a draw here would shift every later fixture.
+          still: (s.id + e) % 3 === 0 ? null : art(`${s.id}-${season}-${e}`, 480, 270),
           runtimeMins: int(38, 62),
           airDate: Math.floor(Date.now() / 1000) - int(30, 2000) * 86400,
         });

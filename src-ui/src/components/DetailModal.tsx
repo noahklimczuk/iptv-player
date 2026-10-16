@@ -699,6 +699,11 @@ function Episodes({
           style={{ display: 'flex', alignItems: 'center', borderRadius: 'var(--r-md)' }}
           onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface)')}
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          // The same highlight for the keyboard. `onFocus`/`onBlur` bubble from the
+          // buttons inside, so tabbing through the list now shows where you are
+          // instead of moving an invisible cursor.
+          onFocus={(e) => (e.currentTarget.style.background = 'var(--surface)')}
+          onBlur={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           <button
             onClick={() => onPlay(ep.id)}
@@ -722,7 +727,25 @@ function Episodes({
             >
               {watched ? <Icon name="check" size={18} /> : ep.episode}
             </div>
-            <div style={{ position: 'relative', borderRadius: 'var(--r-sm)', overflow: 'hidden' }}>
+            {/*
+              `aspectRatio` and a background, because the `<img>` is the only in-flow
+              child here and it is conditional. With `ep.still` null this box was 148px
+              wide and 0px tall with `overflow: hidden`, so both of the absolutely
+              positioned children were clipped to nothing: the play affordance, and --
+              the part that matters -- the resume bar. `partway` was computed correctly
+              from real host data, rendered, and then clipped away, which left the tick
+              as the only sign of which episode you were partway through. Episode stills
+              come from TMDB enrichment and nothing else, so this was the state of every
+              episode of every show until a key is configured, and the permanent state
+              of whatever enrichment never matches (R-106).
+            */}
+            <div
+              data-testid="episode-thumb"
+              style={{
+                position: 'relative', borderRadius: 'var(--r-sm)', overflow: 'hidden',
+                aspectRatio: '16/9', background: 'var(--surface-2, rgb(255 255 255 / 0.06))',
+              }}
+            >
               {ep.still && (
                 <img
                   src={ep.still} alt=""
