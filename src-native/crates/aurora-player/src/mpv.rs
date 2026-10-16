@@ -306,18 +306,11 @@ impl MpvBackend {
         // the latter: `mpv_error_string` gives "loading failed" and ffmpeg gives
         // "Server returned 403 Forbidden", and only one of those tells the viewer their
         // line has hit its connection limit.
-        let described = if self.recent_log.is_empty() {
-            message.to_string()
-        } else {
-            format!(
-                "{message} [mpv: {}]",
-                self.recent_log
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            )
-        };
+        // Built by `describe_failure`, which redacts both halves. This used to be
+        // assembled here and logged as-is, and `redact` was not referenced once in this
+        // crate (R-62).
+        let described =
+            crate::error::describe_failure(message, self.recent_log.iter().map(String::as_str));
         tracing::warn!("playback failed: {described}");
         self.state.error = Some(PlaybackError::classify(&described));
         self.state.status = PlayerStatus::Error;
@@ -414,7 +407,8 @@ impl MpvBackend {
                         self.fail(&message);
                     } else {
                         tracing::debug!(
-                            "mpv reported {message} while {:?}; not a playback failure",
+                            "mpv reported {} while {:?}; not a playback failure",
+                            aurora_core::redact::redact_in_text(&message),
                             self.state.status
                         );
                     }
@@ -438,6 +432,12 @@ impl MpvBackend {
                     _ => {}
                 },
                 Drained::Log(line) => {
+                    // Redacted here, at the one point mpv's own output enters the
+                    // process, so neither this log line nor `recent_log` nor anything
+                    // built from it can carry a password. ffmpeg names the URL it failed
+                    // to open, at error level, which is above the `warn` filter
+                    // `LOG_LEVEL` sets (R-62).
+                    let line = aurora_core::redact::redact_in_text(&line);
                     // Kept for `fail`, and logged at debug so a failure can be read about
                     // afterwards in `aurora.log` rather than only summarised in the OSD.
                     tracing::debug!("mpv: {line}");
