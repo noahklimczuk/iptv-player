@@ -2188,9 +2188,21 @@ mod tests {
         .unwrap();
 
         let after = &episodes_for(&conn, sid, None).unwrap()[0];
-        assert_eq!(after.url, "u1-again", "the stream is always the newest one");
         assert_eq!(after.overview.as_deref(), Some("What happens in it."));
         assert_eq!(after.runtime_mins, Some(59));
+
+        // Asked of the column rather than of `EpisodeRow`, which deliberately no longer
+        // carries the URL: it goes to the WebView, and an Xtream stream URL has the
+        // password in its path. These two changes were written on separate branches --
+        // one removing the field, one asserting on it -- and each was green alone.
+        let url: String = conn
+            .query_row(
+                "SELECT url FROM episodes WHERE series_id = ?1 AND season = 1 AND episode = 1",
+                params![sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(url, "u1-again", "the stream is always the newest one");
     }
 
     #[test]
@@ -2493,9 +2505,18 @@ mod runtime_tests {
         let rows = episodes_for(&conn, series_id, None).unwrap();
         assert_eq!(rows.len(), 1);
         let json = serde_json::to_string(&rows[0]).unwrap();
-        assert!(!json.contains("alice"), "the username crossed the bridge: {json}");
-        assert!(!json.contains("s3cret"), "the password crossed the bridge: {json}");
-        assert!(!json.contains("panel.example"), "the provider's host leaked: {json}");
+        assert!(
+            !json.contains("alice"),
+            "the username crossed the bridge: {json}"
+        );
+        assert!(
+            !json.contains("s3cret"),
+            "the password crossed the bridge: {json}"
+        );
+        assert!(
+            !json.contains("panel.example"),
+            "the provider's host leaked: {json}"
+        );
         assert!(!json.contains("url"), "there is a url field again: {json}");
         // And the episode is still useful for what the UI draws it with.
         assert!(json.contains("Pilot"), "{json}");
@@ -2508,9 +2529,14 @@ mod runtime_tests {
         )
         .unwrap();
         let first = episodes_for(&conn, series_id, None).unwrap()[0].id;
-        let next = following_episode(&conn, first).unwrap().expect("a following episode");
+        let next = following_episode(&conn, first)
+            .unwrap()
+            .expect("a following episode");
         let json = serde_json::to_string(&next).unwrap();
-        assert!(!json.contains("s3cret"), "nextEpisode leaked the password: {json}");
+        assert!(
+            !json.contains("s3cret"),
+            "nextEpisode leaked the password: {json}"
+        );
         assert_eq!(next.title.as_deref(), Some("Second"));
     }
 
