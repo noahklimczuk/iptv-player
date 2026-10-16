@@ -99,7 +99,18 @@ function useSeriesResume(item: CatalogItem, version: number): string | null {
   const [label, setLabel] = useState<string | null>(null);
 
   useEffect(() => {
-    if (item.kind !== 'series') { setLabel(null); return; }
+    // Cleared on the way *in*, not only on the way out.
+    //
+    // `DetailModal` is one mounted component whose `item` changes, so `Hero` is not
+    // remounted between titles. Closing a show you are partway through and opening a
+    // different one showed the **first** show's label — "Resume S02E05 from 41:12" — on
+    // the second show's Play button for as long as the two commands took, with the
+    // button live the whole time. And the `!ep` path below returns without clearing, so
+    // a resume point naming an episode the listing does not contain left the stale
+    // label up for good: `watch_progress` carries no foreign key to `episodes`, on
+    // purpose, so that is a state the host can really produce (R-101).
+    setLabel(null);
+    if (item.kind !== 'series') return;
     let live = true;
     void (async () => {
       try {
@@ -107,7 +118,9 @@ function useSeriesResume(item: CatalogItem, version: number): string | null {
         if (!live || !point) { if (live) setLabel(null); return; }
         const eps = await invoke('library.episodes', { seriesId: item.id });
         const ep = eps.find((e) => e.id === point.episodeId);
-        if (!live || !ep) return;
+        // An episode the listing does not have is a reason to say "Play", like every
+        // other way of not knowing in this effect.
+        if (!live || !ep) { if (live) setLabel(null); return; }
         const which = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`;
         setLabel(
           point.positionSecs > 0
