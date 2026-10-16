@@ -16,7 +16,7 @@ pub use rusqlite;
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Open (or create) the library database with the pragmas the workload needs.
 pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
@@ -29,6 +29,25 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     let rewritten = backfill_stream_ids(&conn)?;
     if rewritten > 0 {
         tracing::info!(rows = rewritten, "rewrote stored stream URLs as stream ids");
+        // **And then rewrite the file.** Blanking a column does not remove the bytes
+        // from the database: SQLite leaves the old row in a freed page, and a freed page
+        // keeps its contents until something reuses it. Measured on the real library
+        // after the rewrite: 34,702 raw occurrences of the password still in the file
+        // while every one of the three columns was clean (R-126).
+        //
+        // The whole point of this work is that `library.db` can be handed to somebody,
+        // so a file that still has the password in its unallocated pages is not fixed.
+        // `VACUUM` rebuilds it. Once, on the first launch after an upgrade, which is the
+        // only time anything is rewritten; it needs temporary space about the size of
+        // the library, and a failure is logged rather than fatal — the columns are
+        // already clean, and refusing to start would be a worse answer than a file that
+        // needs one more launch.
+        match conn.execute_batch("VACUUM") {
+            Ok(()) => tracing::info!("library compacted, so the old rows are gone from the file"),
+            Err(e) => tracing::error!(
+                "the library could not be compacted, so the previous stream URLs may                  still be recoverable from unused pages of the file: {e}"
+            ),
+        }
     }
     // A library that predates `analyze` being called at all — every library that
     // already exists — gets its statistics here, once. See `analyze`.
@@ -91,6 +110,42 @@ fn configure(conn: &Connection) -> Result<()> {
 pub fn analyze(conn: &Connection) -> Result<()> {
     conn.execute_batch("ANALYZE")?;
     Ok(())
+}
+
+/// How a stream address should be stored for this provider: `(url, stream_id, container)`.
+///
+/// For a provider whose addresses can be rebuilt -- an Xtream panel, whose base address
+/// is on the provider row and whose password is in Credential Manager -- the URL is
+/// *not* stored: the credentials are in its path. For anything else, and for a URL this
+/// does not recognise as a stream address, the URL is kept as it is.
+///
+/// Used at every write rather than only by `backfill_stream_ids`, because a pass that
+/// cleans up afterwards leaves a window: the episode sweep runs in the background after
+/// a refresh has finished, and on a real subscription it writes 42,493 rows -- every one
+/// of which held the password until the next launch when the only conversion was
+/// post-hoc (R-126).
+pub fn stored_stream(rebuild: bool, url: &str) -> (String, Option<String>, Option<String>) {
+    if !rebuild {
+        return (url.to_string(), None, None);
+    }
+    match aurora_core::catchup::split_xtream_stream_ref(url) {
+        Some((stream_id, container)) => (String::new(), Some(stream_id), container),
+        // Not a stream address at all. An Xtream provider can still carry one of these —
+        // a `get.php` playlist row, say — and it is kept rather than lost.
+        None => (url.to_string(), None, None),
+    }
+}
+
+/// Whether this provider's stream addresses are rebuilt rather than stored.
+pub fn provider_rebuilds_urls(conn: &Connection, provider_id: i64) -> Result<bool> {
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM providers WHERE id = ?1",
+            rusqlite::params![provider_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(kind.as_deref() == Some("xtream"))
 }
 
 /// Replace every stored Xtream stream URL with the id it can be rebuilt from.
@@ -386,6 +441,99 @@ mod tests {
 
         // Twice changes nothing: the pass runs at every launch.
         assert_eq!(backfill_stream_ids(&conn).unwrap(), 0);
+    }
+
+    /// Upgrading a library does not leave the password in the file.
+    ///
+    /// The half a column check cannot see. Blanking `url` does not remove the old row
+    /// from a SQLite database: it stays in a freed page, and a freed page keeps its
+    /// contents until something reuses it. Measured on the real 257 MB library after the
+    /// first version of this fix: all three columns clean, and **34,702 raw occurrences
+    /// of the password still in the file**. Since the whole point is that `library.db`
+    /// can be handed to somebody, that was a false pass (R-126).
+    ///
+    /// On a real file rather than in memory, because this is a question about bytes on
+    /// disk.
+    #[test]
+    fn upgrading_a_library_removes_the_password_from_the_file() {
+        let dir = scratch("vacuum");
+        let path = dir.join("library.db");
+
+        // A library as an older build left it: migration 11, URLs with the password in
+        // them, and no `stream_id` column at all.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            crate::configure(&conn).unwrap();
+            for m in crate::schema::MIGRATIONS.iter().filter(|m| m.version <= 11) {
+                conn.execute_batch(m.sql).unwrap();
+            }
+            conn.execute_batch("PRAGMA user_version = 11").unwrap();
+            conn.execute_batch(
+                "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                     VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+                 INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+                     VALUES (1,1,'s1','Show','show',0);",
+            )
+            .unwrap();
+            // Enough rows that the old ones cannot all sit in the same page as the new.
+            let tx = conn.unchecked_transaction().unwrap();
+            for i in 0..400 {
+                tx.execute(
+                    "INSERT INTO movies (provider_id,provider_key,title,match_key,url,last_seen_at)
+                     VALUES (1,?1,?2,'m',?3,0)",
+                    rusqlite::params![
+                        format!("k{i}"),
+                        format!("Film {i}"),
+                        format!("http://panel.example:8080/movie/bob/hunter2/{i}.mkv")
+                    ],
+                )
+                .unwrap();
+                tx.execute(
+                    "INSERT INTO episodes (series_id,season,episode,url)
+                     VALUES (1,1,?1,?2)",
+                    rusqlite::params![
+                        i + 1,
+                        format!("http://panel.example:8080/series/bob/hunter2/{i}.mp4")
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        let before = std::fs::read(&path).unwrap();
+        assert!(
+            count_bytes(&before, b"hunter2") > 100,
+            "the fixture did not write the password often enough to be a real check"
+        );
+
+        // What a viewer's first launch on the new build does.
+        let conn = open(&path).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM movies WHERE instr(url, 'hunter2') > 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "the columns should be clean");
+        drop(conn);
+
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(
+            count_bytes(&after, b"hunter2"),
+            0,
+            "the password survives in the file's unused pages — VACUUM is what removes it"
+        );
+        // The username stays: it is on the `providers` row, which the app has to show.
+        assert!(count_bytes(&after, b"bob") > 0);
+    }
+
+    fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
     }
 
     /// An M3U provider keeps its URLs, because nothing could rebuild them.

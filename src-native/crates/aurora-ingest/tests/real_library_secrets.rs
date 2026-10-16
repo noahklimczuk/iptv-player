@@ -159,3 +159,51 @@ fn show_what_is_stored() {
         println!("{kind:7} {title:40.40} url={url:?} stream_id={id:?} container={container:?}");
     }
 }
+
+/// The password is not in the *file*, which is a different question from the columns.
+///
+/// Blanking a column does not remove the bytes from a SQLite database: the old row stays
+/// in a freed page, and a freed page keeps its contents until something reuses it.
+/// Measured on the real library after the first version of this fix: every one of the
+/// three columns was clean and **34,702 raw occurrences of the password were still in the
+/// file**. Since the entire point of the work is that `library.db` can be handed to
+/// somebody, the column check alone would have been a false pass (R-126).
+#[test]
+#[ignore = "needs a real library and the real credentials"]
+fn the_file_itself_holds_no_password() {
+    use std::io::Read;
+
+    let path = std::env::var("AURORA_REAL_LIBRARY").unwrap_or_else(|_| DEFAULT_LIBRARY.into());
+    let password = secret("AURORA_PANEL_PASS").into_bytes();
+    assert!(
+        password.len() > 3,
+        "the password is too short to search a 250 MB file for"
+    );
+
+    let mut file = std::fs::File::open(&path).expect("the library should open");
+    let mut buffer = vec![0u8; 8 << 20];
+    // The overlap, so a match that straddles two reads is still found.
+    let mut carry: Vec<u8> = Vec::new();
+    let mut found = 0usize;
+    loop {
+        let read = file.read(&mut buffer).expect("the library should read");
+        if read == 0 {
+            break;
+        }
+        let mut window = std::mem::take(&mut carry);
+        window.extend_from_slice(&buffer[..read]);
+        found += window
+            .windows(password.len())
+            .filter(|w| *w == password.as_slice())
+            .count();
+        let keep = window.len().saturating_sub(password.len() - 1);
+        carry = window[keep..].to_vec();
+    }
+
+    assert_eq!(
+        found, 0,
+        "the password appears {found} times in the bytes of {path}. The columns may be \
+         clean while the old rows survive in freed pages — `VACUUM` after the rewrite is \
+         what removes them."
+    );
+}
