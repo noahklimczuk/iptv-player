@@ -819,18 +819,41 @@ function Similar() {
   );
 }
 
+/**
+ * What the library actually knows about this title.
+ *
+ * Five of these rows used to be string literals: every one of 27,494 films and 8,086
+ * shows reported `matroska (mkv)`, `HEVC Main 10 · 3840x2160 · 23.976 fps`,
+ * `E-AC-3 5.1 @ 640 kbps · AAC 2.0`, `SRT (eng), ASS (eng SDH)` and a source of
+ * `example.com` — under a heading that says **Details**, which is exactly where
+ * somebody looks to find out whether a stream is really 4K before committing to it. The
+ * five real rows sat immediately above them in the same list with identical styling, so
+ * a `Quality` of `SD` could appear directly over a `Video` row claiming 3840x2160
+ * (R-104).
+ *
+ * The stream's container, codec, resolution, frame rate, audio layout and subtitle
+ * tracks are known only once mpv has the file open — it exposes `video-params`,
+ * `audio-params` and `track-list`, and `get_vod_info` carries much of it per title —
+ * so for a title nobody has played the honest answer is to leave the row out. `Source`
+ * is answerable now, from the same `library.alternates` the Sources section above uses.
+ */
 function Details({ item }: { item: CatalogItem }) {
+  const { data: alternates } = useCommand(
+    'library.alternates',
+    { kind: item.kind === 'series' ? 'series' : 'movies', id: item.id },
+    [item.kind, item.id],
+  );
+  // The provider this row came from, which is the one the viewer is about to play.
+  const source = (alternates ?? []).find((a) => a.id === item.id)?.provider ?? null;
+
   const rows: [string, string][] = [
     ['Title', item.title],
     ['Year', String(item.year ?? '—')],
     ['Genres', item.genres.join(', ') || '—'],
     ['Certification', item.certification ?? '—'],
     ['Quality', item.quality ?? '—'],
-    ['Container', 'matroska (mkv)'],
-    ['Video', 'HEVC Main 10 · 3840x2160 · 23.976 fps'],
-    ['Audio', 'E-AC-3 5.1 @ 640 kbps · AAC 2.0'],
-    ['Subtitles', 'SRT (eng), ASS (eng SDH)'],
-    ['Source', 'example.com'],
+    ...(item.lang ? ([['Language', item.lang]] as [string, string][]) : []),
+    ...(source ? ([['Source', source]] as [string, string][]) : []),
   ];
   return (
     <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '160px 1fr', gap: 'var(--sp-2) var(--sp-4)', fontSize: 'var(--fs-sm)' }}>
