@@ -14,7 +14,9 @@
  * answers a different question: "find me this" rather than "narrow what I am looking
  * at". A group of 482 channels needed one.
  */
-import { useCallback, useDeferredValue, useMemo, useRef, useState } from 'react';
+import {
+  useCallback, useDeferredValue, useEffect, useMemo, useRef, useState,
+} from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Channel } from '@shared/ipc';
 import { Badge, Button, EmptyState, Skeleton, TextField } from '@/components/Primitives';
@@ -62,6 +64,27 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
     [group, favoritesOnly, profileId, favNonce],
   );
 
+  /**
+   * Changing the order clears the letter, because leaving A–Z takes away the only
+   * control that could.
+   *
+   * The bar is greyed out unless the list is alphabetical, and the filter it set was
+   * applied regardless. So: press A–Z, pick T, press Number — the list is still only the
+   * T channels, the count beside the heading still reflects them, and the bar that would
+   * clear it is now `pointerEvents: 'none'`. The only other way out is the "Clear
+   * search" button, which lives inside the no-matches empty state and so needs
+   * `visible.length === 0` — unavailable in exactly the case where something *is*
+   * showing and most of the group is missing.
+   *
+   * `BrowsePage` solves the same problem the other way, with a removable chip beside its
+   * other filters. Clearing is the one-line version and it is what the greying is
+   * already trying to say (R-112).
+   */
+  const chooseOrder = useCallback((next: 'number' | 'name') => {
+    setOrder(next);
+    if (next !== 'name') setLetter(undefined);
+  }, []);
+
   const toggleFavorite = useCallback(
     (channel: Channel) => {
       invoke('favorites.toggle', { profileId, channelId: channel.id })
@@ -97,12 +120,42 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   }, [channels, lazyTyped, letter, order]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
-  // Measured rather than assumed: the grid template is `auto-fill` over a 150px
-  // minimum, and the virtualiser has to agree with it about how many fit.
+  /**
+   * Measured rather than assumed, and measured *again* when it changes.
+   *
+   * The grid template is `auto-fill` over a 150px minimum and the virtualiser has to
+   * agree with it about how many fit. A ref callback fires when the element attaches and
+   * when it detaches -- never when it resizes -- so `width` used to be whatever the
+   * scroller measured on mount, for the life of the mount. When the two disagree, CSS
+   * lays out one number of tiles per row while `rowCount` and `virt` assume another: the
+   * virtualiser's total height is wrong and rows land at the wrong offsets, so tiles
+   * overlap or the list ends early.
+   *
+   * The column's width changes in ordinary use -- resizing or maximising the window, and
+   * the group sidebar taking 250px off this very column. Two accidents hid it: the
+   * scroller only mounts once `visible.length > 0`, so the first measurement is taken
+   * with content present and is right, and switching between List and Grid does not
+   * remount it, so the stale width survives that too (R-113).
+   */
+  const observer = useRef<ResizeObserver | null>(null);
   const measure = useCallback((el: HTMLDivElement | null) => {
     scrollRef.current = el;
-    if (el) setWidth(el.clientWidth);
+    observer.current?.disconnect();
+    if (!el) {
+      observer.current = null;
+      return;
+    }
+    setWidth(el.clientWidth);
+    // Guarded because jsdom and older WebViews have no `ResizeObserver`; the mount
+    // measurement above still applies there, which is what this used to be.
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    observer.current = ro;
   }, []);
+  // The callback ref runs on unmount with null, which disconnects; this covers the
+  // component being torn down without that happening first.
+  useEffect(() => () => observer.current?.disconnect(), []);
   const perRow = view === 'grid' ? Math.max(1, Math.floor((width || 1200) / TILE_MIN_W)) : 1;
   const rowCount = view === 'grid' ? Math.ceil(visible.length / perRow) : visible.length;
 
@@ -200,14 +253,14 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
           <Button
             size="sm"
             variant={order === 'number' ? 'primary' : 'ghost'}
-            onClick={() => setOrder('number')}
+            onClick={() => chooseOrder('number')}
           >
             Number
           </Button>
           <Button
             size="sm"
             variant={order === 'name' ? 'primary' : 'ghost'}
-            onClick={() => setOrder('name')}
+            onClick={() => chooseOrder('name')}
           >
             A–Z
           </Button>
@@ -484,6 +537,7 @@ function ChannelTile({
   const data = guide;
   return (
     <button
+      data-testid="channel-tile"
       onClick={() => onTune(channel)}
       style={{
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
