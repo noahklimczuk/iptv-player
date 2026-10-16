@@ -210,6 +210,7 @@ test('a scheduled airing from the guide appears in the recordings page', async (
 
 test('Remind me toggles, and Record series becomes the undo action', async ({ page }) => {
   await selectUpcoming(page);
+  const title = await page.locator('h2').first().innerText();
 
   const remind = page.getByRole('button', { name: 'Remind me' });
   await remind.click();
@@ -223,5 +224,14 @@ test('Remind me toggles, and Record series becomes the undo action', async ({ pa
   // The new rule is on the rules screen.
   await page.goto('/#/recordings');
   await page.getByRole('tab', { name: /Series rules/ }).click();
-  await expect(page.getByText('New episodes only').first()).toBeVisible();
+  const row = page.getByTestId('rule-row').filter({ hasText: title });
+  await expect(row).toHaveCount(1);
+
+  // And it is *not* restricted to new episodes. This used to assert the opposite, by
+  // name: `newOnly` was hardcoded `true`, which `SeriesRule::matches` turns into a
+  // rule that can never match a programme on a guide with no `<new/>` or `<premiere>`
+  // markers -- 0 of 789,764 on the subscription this is measured against. The label
+  // was the one visible trace of the flag, and the test checked for it as the expected
+  // outcome (R-133).
+  await expect(row).not.toContainText('New episodes only');
 });

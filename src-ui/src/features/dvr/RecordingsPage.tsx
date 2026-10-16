@@ -223,13 +223,16 @@ function ConflictNotice({
 /* ── Rows ─────────────────────────────────────────────────────────────────── */
 
 function RowShell({
-  children, accent,
+  children, accent, testId,
 }: {
   children: React.ReactNode;
   accent?: string;
+  /** So a journey can assert about one row rather than about the whole screen. */
+  testId?: string;
 }) {
   return (
     <div
+      data-testid={testId}
       style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         padding: 'var(--sp-3)', background: 'var(--surface)',
@@ -485,7 +488,7 @@ function RuleRow({
 }) {
   const [confirming, setConfirming] = useState(false);
   return (
-        <RowShell accent={confirming ? 'var(--danger)' : undefined}>
+        <RowShell accent={confirming ? 'var(--danger)' : undefined} testId="rule-row">
           <div style={{ minWidth: 0, flex: 1, opacity: rule.enabled ? 1 : 0.55 }}>
             <div style={{ fontWeight: 700 }}>{rule.title}</div>
             <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
