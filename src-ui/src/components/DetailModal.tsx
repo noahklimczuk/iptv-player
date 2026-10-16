@@ -6,9 +6,10 @@
  * drawn here came from the browser fixtures alone (R-99).
  */
 import { AnimatePresence, motion } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogItem, Episode, EpisodeProgress, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { invoke } from '@/ipc';
 import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useProfile } from '@/state/profile';
@@ -39,6 +40,17 @@ export function DetailModal({
    */
   const watch = useSeriesProgress(item?.kind === 'series' ? item.id : 0);
 
+  /**
+   * Keep focus in here while it is open, and give it back on the way out.
+   *
+   * `aria-modal="true"` above was a promise nothing kept: measured in Chromium, twelve
+   * of twelve Tab presses from the open modal landed on controls behind the scrim —
+   * including Play buttons on other titles, which start playback with a modal over them
+   * (R-102).
+   */
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, item != null);
+
   useEffect(() => {
     if (!item) return;
     setTab(item.kind === 'series' ? 'episodes' : 'similar');
@@ -66,6 +78,10 @@ export function DetailModal({
           }}
         >
           <motion.div
+            ref={dialogRef}
+            // Focusable, so the dialog itself can take focus on open — which is what a
+            // screen reader reads the label from. See `useFocusTrap` (R-102).
+            tabIndex={-1}
             role="dialog" aria-modal="true" aria-label={item.title}
             initial={{ y: 24, scale: 0.97 }} animate={{ y: 0, scale: 1 }}
             exit={{ y: 16, scale: 0.98 }}
