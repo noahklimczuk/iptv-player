@@ -36,7 +36,9 @@ getrandom = "0.3"
 # Content-addressing for the artwork cache. Already in the tree via rustls, so this
 # costs nothing to build.
 sha2 = "0.10"
-rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+# `functions` registers `shown_title`, so the letter bar, the A-Z sort and what the
+# viewer reads are one expression rather than three that disagree (R-52).
+rusqlite = { version = "0.32", features = ["bundled", "backup", "functions"] }
 aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }
 aurora-player = { path = "crates/aurora-player" }
