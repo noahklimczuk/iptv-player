@@ -24,7 +24,9 @@ async function featured(page: Page): Promise<string> {
   return hero.getByRole('heading').first().innerText();
 }
 
-test('the billboard stops rotating while a keyboard user is on it', async ({ page }) => {
+// `@motion`, so the reduced-motion project skips it: there the billboard does not rotate
+// at all, which is the subject of the test below rather than a failure of this one.
+test('the billboard stops rotating while a keyboard user is on it @motion', async ({ page }) => {
   await page.clock.install();
   await page.goto('/#/');
   const hero = page.getByRole('region', { name: 'Featured' });
