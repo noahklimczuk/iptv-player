@@ -245,7 +245,11 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
           title={favoritesOnly ? 'No favourite channels yet' : 'No channels'}
           body={
             favoritesOnly
-              ? 'Press F while watching, or use the heart on any channel, to add it here.'
+              // Was "Press F while watching, or use the heart on any channel". `F` goes
+              // fullscreen -- README §14.1 assigns it to favouriting and nothing
+              // implements that -- so the one sentence a viewer reads in exactly this
+              // situation was telling them to press the wrong key (R-143).
+              ? 'Use the heart beside any channel in the list to add it here.'
               : emptyReason(providers ?? null)
           }
         />
