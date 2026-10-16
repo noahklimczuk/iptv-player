@@ -58,11 +58,90 @@ function applyDom(theme: Theme, density: Density, animations: boolean) {
   root.dataset.motion = animations ? 'on' : 'off';
 }
 
+/**
+ * Where the four Appearance choices are kept, so they survive the window closing.
+ *
+ * They were not kept anywhere. `useUi` was a plain `create` with no persistence and a
+ * hardcoded initial state, and every handler in the Appearance panel wrote only to the
+ * in-memory store -- so picking the OLED theme, or TV density, lasted until the app was
+ * closed. **Density is the one that mattered**: its own hint says "TV mode enlarges
+ * everything for a 10-foot UI", which is what the app is for, so anybody running Aurora
+ * on a television had to set it again on every launch. Everything else in Settings
+ * persists through the host, which made this the one panel that did not (R-87).
+ *
+ * `localStorage` rather than a host command: these are per-machine display preferences,
+ * not library data, and the machine is the right scope for them -- the same library
+ * opened on a television and on a laptop wants two different densities. It also means
+ * the choice is applied on the first paint, before any IPC could have answered.
+ *
+ * Every access is wrapped: the accessor throws outright in a WebView with site data
+ * blocked, and a thumbnail capture or a private window can hand back an empty store. A
+ * forgotten setting is a small cost; a boot that dies reading one is not.
+ */
+const SAVED_KEY = 'aurora.appearance';
+
+interface SavedAppearance {
+  theme: Theme;
+  density: Density;
+  animations: boolean;
+  hoverPreviews: boolean;
+}
+
+const THEMES: Theme[] = ['dark', 'oled', 'light', 'contrast'];
+const DENSITIES: Density[] = ['desktop', 'tv'];
+
+function loadAppearance(): Partial<SavedAppearance> {
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(SAVED_KEY);
+  } catch {
+    return {};
+  }
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    const v = parsed as Record<string, unknown>;
+    const out: Partial<SavedAppearance> = {};
+    // Checked against the allowed values rather than trusted. Whatever is in this key
+    // is a string somebody could have edited, and an unknown theme would go straight
+    // into `data-theme`, where it matches no stylesheet and leaves the app unstyled.
+    if (THEMES.includes(v.theme as Theme)) out.theme = v.theme as Theme;
+    if (DENSITIES.includes(v.density as Density)) out.density = v.density as Density;
+    if (typeof v.animations === 'boolean') out.animations = v.animations;
+    if (typeof v.hoverPreviews === 'boolean') out.hoverPreviews = v.hoverPreviews;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveAppearance(a: SavedAppearance) {
+  try {
+    window.localStorage.setItem(SAVED_KEY, JSON.stringify(a));
+  } catch {
+    // Nothing to do and nothing worth telling the viewer: the setting still applies to
+    // this session, it just will not be there next time.
+  }
+}
+
+const saved = loadAppearance();
+
+/** The initial appearance: what was chosen last time, or what the machine implies. */
+const initialAppearance: SavedAppearance = {
+  theme: saved.theme ?? 'dark',
+  density: saved.density ?? 'desktop',
+  animations:
+    saved.animations ?? !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+  hoverPreviews: saved.hoverPreviews ?? true,
+};
+
 export const useUi = create<UiState>((set, get) => ({
-  theme: 'dark',
-  density: 'desktop',
-  animations: !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
-  hoverPreviews: true,
+  theme: initialAppearance.theme,
+  density: initialAppearance.density,
+  animations: initialAppearance.animations,
+  hoverPreviews: initialAppearance.hoverPreviews,
+  // No control offers the other one yet, so there is nothing to remember.
   use24h: true,
 
   detail: null,
@@ -73,14 +152,26 @@ export const useUi = create<UiState>((set, get) => ({
   digits: '',
   catalogVersion: 0,
 
-  setTheme: (theme) => { applyDom(theme, get().density, get().animations); set({ theme }); },
-  setDensity: (density) => { applyDom(get().theme, density, get().animations); set({ density }); },
+  setTheme: (theme) => {
+    applyDom(theme, get().density, get().animations);
+    set({ theme });
+    remember(get());
+  },
+  setDensity: (density) => {
+    applyDom(get().theme, density, get().animations);
+    set({ density });
+    remember(get());
+  },
   toggleAnimations: () => {
     const animations = !get().animations;
     applyDom(get().theme, get().density, animations);
     set({ animations });
+    remember(get());
   },
-  toggleHoverPreviews: () => set((s) => ({ hoverPreviews: !s.hoverPreviews })),
+  toggleHoverPreviews: () => {
+    set((s) => ({ hoverPreviews: !s.hoverPreviews }));
+    remember(get());
+  },
   openDetail: (detail) => set({ detail }),
   setPalette: (paletteOpen, paletteQuery = '') => set({ paletteOpen, paletteQuery }),
   setPlayer: (player) => set({ player }),
@@ -91,6 +182,31 @@ export const useUi = create<UiState>((set, get) => ({
   bumpCatalog: () => set((s) => ({ catalogVersion: s.catalogVersion + 1 })),
   clearDigits: () => set({ digits: '' }),
 }));
+
+/** Keep the four Appearance choices, whatever the setter just changed. */
+function remember(s: UiState) {
+  saveAppearance({
+    theme: s.theme,
+    density: s.density,
+    animations: s.animations,
+    hoverPreviews: s.hoverPreviews,
+  });
+}
+
+/**
+ * Apply them to `<html>` now, rather than when a setting is next touched.
+ *
+ * `applyDom` only ran from a setter, so a fresh window carried no `data-density` and no
+ * `data-motion` at all -- harmless while the defaults were hardcoded, since
+ * `data-density='tv'` is the only density override and the reduced-motion rules are
+ * duplicated inside an `@media` block. The moment a *stored* choice exists, the absence
+ * is the bug: the store would say `tv` and the document would not.
+ */
+applyDom(
+  initialAppearance.theme,
+  initialAppearance.density,
+  initialAppearance.animations,
+);
 
 /** Mirror host player state into the store (README §3: UI mirrors, never owns). */
 export function bindPlayerState() {
