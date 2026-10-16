@@ -2,7 +2,7 @@
  * Set-top-box behaviours that must work from any screen (README §7.2):
  * channel up/down, direct number entry with a timeout, and the last-channel toggle.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel } from '@shared/ipc';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
@@ -94,5 +94,18 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
     return () => window.clearTimeout(digitTimer.current);
   }, [digits, commitDigits]);
 
-  return { current, tune, step, lastChannel, pushDigit, commitDigits, digits };
+  /**
+   * One object per meaningful change, not one per render.
+   *
+   * Everything in here is already stable — four `useCallback`s and a store action — but
+   * the literal was not, so every consumer that lists the zapper as a dependency rebuilt
+   * on every render of `App`. `App` re-renders on each player heartbeat, which is four
+   * times a second while anything is playing, and `handlers` → `useHotkeys` turned that
+   * into the global `keydown` listener being removed and re-added at the same rate
+   * (R-134).
+   */
+  return useMemo(
+    () => ({ current, tune, step, lastChannel, pushDigit, commitDigits, digits }),
+    [current, tune, step, lastChannel, pushDigit, commitDigits, digits],
+  );
 }
