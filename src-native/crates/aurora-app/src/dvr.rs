@@ -455,19 +455,42 @@ pub struct RecordingView {
     pub recording: Recording,
     /// Bytes on disk right now, for a recording still in flight.
     pub live_bytes: Option<u64>,
+    /// What the channel is called.
+    ///
+    /// Sent with the row rather than looked up by the screen. The Recordings page used
+    /// to ask for `channels.list` with no filter and build a `Map` of every channel --
+    /// 6,699 rows and 1.72 MB of JSON across the bridge, measured against the live
+    /// panel -- to put a name beside as few as three rows (R-117).
+    pub channel_name: Option<String>,
+    /// Its logo, for the same reason and from the same row.
+    pub channel_logo: Option<String>,
 }
 
 #[tauri::command(async)]
 pub fn dvr_list(services: State<'_, Services>, args: ListArgs) -> Result<Vec<RecordingView>> {
     let state = args.state.as_deref().and_then(parse_state);
-    let rows = {
+    let (rows, names) = {
         let db = services.db.lock();
-        repo::list(&db, state)?
+        let rows = repo::list(&db, state)?;
+        // One lookup for the channels these rows actually name, rather than the whole
+        // catalogue. Usually a handful of ids, and never more than the recordings.
+        let ids: std::collections::BTreeSet<i64> = rows.iter().map(|r| r.channel_id).collect();
+        let mut names = std::collections::HashMap::new();
+        for id in ids {
+            if let Some(channel) = aurora_db::repo::channels::get(&db, id)? {
+                names.insert(id, (channel.name, channel.logo));
+            }
+        }
+        (rows, names)
     };
     Ok(rows
         .into_iter()
         .map(|recording| RecordingView {
             live_bytes: services.dvr.bytes_so_far(recording.id),
+            channel_name: names.get(&recording.channel_id).map(|(n, _)| n.clone()),
+            channel_logo: names
+                .get(&recording.channel_id)
+                .and_then(|(_, l)| l.clone()),
             recording,
         })
         .collect())

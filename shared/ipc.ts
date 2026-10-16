@@ -612,6 +612,21 @@ export interface Recording {
   watched: boolean;
   /** Bytes on disk right now, for a recording still in flight. */
   liveBytes?: number | null;
+  /**
+   * What the channel is called, sent with the row.
+   *
+   * The Recordings page used to ask for `channels.list` with no filter and build a `Map`
+   * of every channel to put a name beside each row — 6,699 rows and 1.72 MB of JSON
+   * across the bridge, measured against the live panel, to label as few as three
+   * recordings. The host has both tables and this row is already denormalised (`title`,
+   * `subTitle`, `season` and `episode` are all copied from the guide), so the name
+   * belongs here too (R-117).
+   *
+   * Null for a channel the library no longer has, which a refresh can produce.
+   */
+  channelName: string | null;
+  /** Its logo, for the same reason and from the same row. */
+  channelLogo: string | null;
 }
 
 /** A window where the schedule wants more streams than the subscription allows. */
@@ -635,6 +650,8 @@ export interface RecordingRule {
   keepEpisodes: number | null;
   priority: number;
   enabled: boolean;
+  /** What the channel is called, for a rule restricted to one. See `Recording`. */
+  channelName: string | null;
   scheduled: number;
 }
 

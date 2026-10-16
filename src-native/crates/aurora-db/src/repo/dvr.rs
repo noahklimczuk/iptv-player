@@ -425,14 +425,24 @@ pub struct RuleView {
     pub enabled: bool,
     /// How many recordings this rule has scheduled or made.
     pub scheduled: i64,
+    /// What the channel is called, for a rule restricted to one.
+    ///
+    /// Joined here rather than looked up by the screen. The Recordings page used to ask
+    /// for `channels.list` with no filter to build a `Map` of every channel — 6,699 rows
+    /// and 1.72 MB of JSON across the bridge, measured against the live panel — purely
+    /// to put a name beside a handful of rows (R-117).
+    pub channel_name: Option<String>,
 }
 
 pub fn list_rules(conn: &Connection) -> Result<Vec<RuleView>> {
     let mut stmt = conn.prepare(
         "SELECT r.id, r.title, r.channel_id, r.new_only, r.weekdays, r.around_local_minute,
                 r.pre_padding_secs, r.post_padding_secs, r.keep_episodes, r.priority, r.enabled,
-                (SELECT COUNT(*) FROM recordings WHERE rule_id = r.id)
-         FROM recording_rules r ORDER BY r.title",
+                (SELECT COUNT(*) FROM recordings WHERE rule_id = r.id),
+                COALESCE(c.custom_name, c.name)
+         FROM recording_rules r
+         LEFT JOIN channels c ON c.id = r.channel_id
+         ORDER BY r.title",
     )?;
     let rows = stmt.query_map([], |r| {
         let weekdays: Option<String> = r.get(4)?;
@@ -449,6 +459,7 @@ pub fn list_rules(conn: &Connection) -> Result<Vec<RuleView>> {
             priority: r.get(9)?,
             enabled: r.get::<_, i64>(10)? != 0,
             scheduled: r.get(11)?,
+            channel_name: r.get(12)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
