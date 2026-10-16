@@ -1,6 +1,9 @@
 /**
- * Expanded detail view (README §8.4): backdrop with scrim, resume CTA, match %,
- * metadata pills, cast, and tabs for episodes / more like this / details.
+ * Expanded detail view (README §8.4): backdrop with scrim, resume CTA, metadata pills,
+ * cast, and tabs for episodes / more like this / details.
+ *
+ * No match % -- README §8.4 specifies one and nothing computes it, so what used to be
+ * drawn here came from the browser fixtures alone (R-99).
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -358,11 +361,13 @@ function Body({
               flexWrap: 'wrap', marginBottom: 'var(--sp-3)', fontSize: 'var(--fs-sm)',
             }}
           >
-            {item.match !== undefined && (
-              <span style={{ color: 'var(--success)', fontWeight: 700 }}>
-                {item.match}% match
-              </span>
-            )}
+            {/* No "% match" here any more. It was a documented feature that existed
+                only in the mock: `match` was assigned in `fixtures.ts` and nowhere
+                else, `MovieRow`/`SeriesRow` have no such field, so serde could not
+                produce one and the branch was dead in every real build (R-99). The
+                recommender does build a profile from viewing history, so the number is
+                derivable -- but a green screenshot of a figure the host cannot compute
+                is worse than no figure, so the claim goes until something computes it. */}
             {item.year && <span style={{ color: 'var(--text-muted)' }}>{item.year}</span>}
             {item.certification && <Badge tone="outline">{item.certification}</Badge>}
             {!isSeries && item.runtimeMins && (
@@ -382,7 +387,12 @@ function Body({
               </span>
             )}
             {item.quality && <Badge tone={item.quality === '4K' ? 'accent' : 'neutral'}>{item.quality}</Badge>}
-            <Badge tone="neutral">CC</Badge>
+            {/* The "CC" badge was here, unconditional. Nothing in the schema, the
+                playlist parse or enrichment records whether a title has subtitles, so
+                it asserted captions on all 27,494 films and every show without ever
+                being able to know (R-100). `get_vod_info` does return a subtitle list
+                per title, so this is answerable -- when it is asked, the badge can come
+                back keyed on the answer. */}
           </div>
           <p style={{ margin: 0, color: 'var(--text)', lineHeight: 1.6 }}>{item.overview}</p>
           <Sources item={item} onPlay={onPlay} />

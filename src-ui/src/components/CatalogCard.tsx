@@ -312,11 +312,8 @@ export const CatalogCard = memo(function CatalogCard({
                     fontSize: 9, color: 'var(--text-muted)',
                   }}
                 >
-                  {item.match !== undefined && (
-                    <span style={{ color: 'var(--success)', fontWeight: 800 }}>
-                      {item.match}% match
-                    </span>
-                  )}
+                  {/* "% match" was here, on the expanded card. Mock-only: `match` came
+                      from `fixtures.ts` and from nothing on the host (R-99). */}
                   {item.certification && (
                     <span
                       style={{

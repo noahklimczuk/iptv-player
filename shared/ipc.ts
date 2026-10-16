@@ -59,8 +59,6 @@ export interface Movie {
   certification: string | null;
   genres: string[];
   cast: string[];
-  /** Percentage match computed locally from viewing history (README §8.4). */
-  match?: number;
   addedAt: number | null;
   lang?: string | null;
   /**
@@ -87,7 +85,6 @@ export interface Series {
   genres: string[];
   cast: string[];
   seasons: number[];
-  match?: number;
   addedAt: number | null;
   lang?: string | null;
   /** See `Movie.trailerKey`. */
