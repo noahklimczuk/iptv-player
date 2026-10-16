@@ -1446,7 +1446,18 @@ export interface Commands {
   'providers.detect': (args: { text: string }) => DetectedSource;
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
   'providers.save': (args: { draft: DraftProvider }) => { id: number };
-  'providers.refresh': (args: { providerId: number }) => SyncReport;
+  /**
+   * Import, or re-import, everything this provider offers.
+   *
+   * `content` says what kinds to keep, and is stored when given: the nightly sweep
+   * refreshes without arguments and has to honour the same answer. Omit it to use
+   * whatever was last chosen, which for a library that predates the question is
+   * everything.
+   */
+  'providers.refresh': (args: {
+    providerId: number;
+    content?: { live: boolean; vod: boolean; series: boolean };
+  }) => SyncReport;
   /** A provider's settings, password included, for editing. */
   'providers.credentials': (args: { providerId: number }) => ProviderCredentials;
   /**

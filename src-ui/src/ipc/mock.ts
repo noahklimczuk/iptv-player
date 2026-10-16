@@ -2472,14 +2472,28 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return true;
   },
 
-  'providers.refresh': async (): Promise<SyncReport> => {
+  'providers.refresh': async ({ content }): Promise<SyncReport> => {
+    // What the viewer asked for, honoured the way `sync::fetch` honours it: an excluded
+    // kind is not imported and is *counted* as excluded rather than silently absent.
+    // The mock used to ignore this argument and report the whole fixture either way,
+    // so a journey could not tell the wizard's three switches did nothing (R-120).
+    const want = content ?? { live: true, vod: true, series: true };
+    const channels = want.live ? fx.channels.length : 0;
+    const movies = want.vod ? fx.movies.length : 0;
+    const series = want.series ? fx.series.length : 0;
+    const episodes = want.series ? fx.episodes.length : 0;
+    const excluded =
+      (want.live ? 0 : fx.channels.length)
+      + (want.vod ? 0 : fx.movies.length)
+      + (want.series ? 0 : fx.episodes.length);
+
     // Walk the same phases the host emits, and only resolve once they are done —
     // so the wizard's progress UI is genuinely exercised rather than skipped past.
     const phases: IngestProgress[] = [
       { phase: 'fetchingPlaylist', done: 0, total: 0 },
-      { phase: 'importingChannels', done: fx.channels.length, total: fx.channels.length },
-      { phase: 'importingMovies', done: fx.movies.length, total: fx.movies.length },
-      { phase: 'importingSeries', done: fx.series.length, total: fx.series.length },
+      { phase: 'importingChannels', done: channels, total: channels },
+      { phase: 'importingMovies', done: movies, total: movies },
+      { phase: 'importingSeries', done: series, total: series },
       { phase: 'fetchingEpg', done: 0, total: 0 },
       { phase: 'matchingEpg', done: 0, total: 0 },
       { phase: 'indexing', done: 0, total: 0 },
@@ -2491,18 +2505,22 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     }
 
     return {
-      channels: fx.channels.length,
-      movies: fx.movies.length,
-      series: fx.series.length,
-      episodes: fx.episodes.length,
-      epgChannels: fx.channels.length,
-      epgProgrammes: fx.channels.length * 48,
+      channels,
+      movies,
+      series,
+      episodes,
+      epgChannels: channels,
+      epgProgrammes: channels * 48,
       channelsMissing: 0,
-      epgMatched: fx.channels.length - 2,
-      epgUnmatched: fx.channels.slice(-2).map((c) => c.name),
+      epgMatched: Math.max(0, channels - 2),
+      epgUnmatched: want.live ? fx.channels.slice(-2).map((c) => c.name) : [],
       warnings: [],
-      // A clean import loses nothing, which is what the host reports too.
-      dropped: { hiddenByRule: 0, kindExcluded: 0, noStreamId: 0, noEpisodeMarker: 0 },
+      // A clean import loses nothing it was asked to keep, which is what the host
+      // reports too — `kindExcluded` is the one number that is allowed to be non-zero
+      // here, because the viewer asked for it.
+      dropped: {
+        hiddenByRule: 0, kindExcluded: excluded, noStreamId: 0, noEpisodeMarker: 0,
+      },
     };
   },
 };

@@ -119,14 +119,18 @@ export function SetupWizard({
     } finally {
       setChecking(false);
     }
-  }, [draft]);
+  }, [draft, content]);
 
   const runImport = useCallback(async () => {
     setStep('importing');
     setError(null);
     try {
       const { id } = await invoke('providers.save', { draft });
-      setReport(await invoke('providers.refresh', { providerId: id }));
+      // `content` is what the previous step asked about. It used to be read by nothing
+      // but the switches' own rendering -- `runImport` did not even list it as a
+      // dependency -- so unchecking Movies and Series still imported every film and
+      // show the panel carries (R-120).
+      setReport(await invoke('providers.refresh', { providerId: id, content }));
       setStep('done');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
