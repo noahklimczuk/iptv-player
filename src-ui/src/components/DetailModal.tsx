@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CatalogItem, Episode, EpisodeProgress, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
-import { getProgress, invoke } from '@/ipc';
+import { invoke } from '@/ipc';
 import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { report } from '@/lib/errors';
@@ -127,7 +127,31 @@ function Hero({
 }: {
   item: CatalogItem; onClose: () => void; onPlay: (i: CatalogItem) => void; watch: Watch;
 }) {
-  const prog = item.kind === 'movie' ? getProgress('movie', item.id) : null;
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  /*
+   * A film's resume position, from the host.
+   *
+   * This used to call `getProgress` -- which is not a command and not a transport. It
+   * is declared only in `ipc/mock.ts` and reached `@/ipc` through a star export, so on
+   * Windows it read a `Map` nothing writes. The map is not empty, though: the mock
+   * seeds it from `fixtures.seedProgress` at module-evaluation time, and `ipc/index.ts`
+   * imports the mock statically in every build. So whichever four real films happened
+   * to hold rowids 4, 12, 28 and 53 showed a progress bar, a "55:25 of 2:43:00" read
+   * off a fixture film's runtime and a "Resume from ..." button for a title nobody had
+   * opened -- and every other film showed no resume at all, however much of it had
+   * actually been watched. Pressing the button was always right, because that goes
+   * through the real `progress.get`, so the label and the action disagreed in both
+   * directions (R-98).
+   *
+   * `watch.version` is in the deps so the bar reflects a position saved since the modal
+   * opened, which is what the series label beside it already does.
+   */
+  const { data: prog } = useCommand(
+    'progress.get',
+    { profileId, kind: 'movie' as const, id: item.id },
+    [profileId, item.id, watch.version],
+    item.kind === 'movie',
+  );
   const pct = prog ? progressPct(prog.positionSecs, prog.durationSecs) : 0;
   /*
    * What Play means for a show, said on the button before it is pressed.
