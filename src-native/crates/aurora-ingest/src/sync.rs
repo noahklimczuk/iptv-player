@@ -455,6 +455,11 @@ pub fn apply(
                     title: e.title.clone(),
                     url: e.url.clone(),
                     still: e.logo.clone(),
+                    // A flat playlist line carries neither. Episodes imported through
+                    // `get_series_info` do, and `upsert_episodes` COALESCEs, so a
+                    // playlist refresh does not blank what the API supplied.
+                    overview: None,
+                    runtime_mins: None,
                 })
             })
             .collect();

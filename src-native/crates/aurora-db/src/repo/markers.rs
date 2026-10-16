@@ -295,6 +295,7 @@ mod tests {
                 title: Some(format!("E{e}")),
                 url: format!("https://example.com/{e}.mkv"),
                 still: None,
+                ..Default::default()
             })
             .collect();
         crate::repo::library::upsert_episodes(&mut conn, sid, &eps, 0).unwrap();
