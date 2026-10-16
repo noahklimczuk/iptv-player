@@ -19,8 +19,8 @@ const RAIL = 'Because of what you watch';
  * status all have near-twins in the panel above it, and a page-wide locator picks
  * whichever shipped first.
  */
-async function settings(page: Page) {
-  await page.goto('/#/settings');
+async function settings(page: Page, query = '') {
+  await page.goto(`/${query}#/settings`);
   const panel = page.getByRole('region', { name: 'Recommendations' });
   await expect(panel).toBeVisible();
   return panel;
@@ -114,6 +114,58 @@ test('removing the key takes the rail away again', async ({ page }) => {
   await expect(panel.getByText(/No key yet/)).toBeVisible();
 
   await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await page.waitForTimeout(900);
+  await expect(page.getByRole('region', { name: RAIL })).toHaveCount(0);
+});
+
+/**
+ * What "Remove key" does in the build people actually run.
+ *
+ * `BUILT_IN_KEY` is `option_env!("AURORA_GEMINI_KEY")` — resolved by `rustc`, so a
+ * release is compiled with a key and `resolve_key` falls back to it the moment the
+ * viewer's own is cleared. The mock had a mutable string and `keyIsBuiltIn: false`
+ * hardcoded, so the one state that matters for privacy could not be reached from a
+ * browser at all, and the journey above it ("removing the key takes the rail away
+ * again") passed only because the mock is kinder than the host.
+ *
+ * `docs/PRIVACY.md` told viewers to clear the key for exactly this purpose, and in an
+ * official build that did nothing. `?builtInKey` is how a compile-time fact gets
+ * modelled — it cannot be set at runtime, so it is a query flag, read once (R-159).
+ */
+test('with a key compiled in, removing your own does not stop the rail', async ({ page }) => {
+  const panel = await settings(page, '?builtInKey');
+
+  // No key of their own, and the panel says where the one in play came from.
+  await expect(panel.getByText(/Using the key built into this build/)).toBeVisible();
+
+  // The rail is there on the strength of the compiled-in key alone.
+  await page.goto('/?builtInKey#/');
+  await expect(page.getByRole('region', { name: RAIL })).toBeVisible({ timeout: 20_000 });
+
+  // Entering a key of their own replaces it...
+  const mine = await settings(page, '?builtInKey');
+  await mine.getByLabel('Gemini API key').fill('my-own-key');
+  await mine.getByRole('button', { name: 'Use this key' }).click();
+  await expect(mine.getByText(/Using the key built into this build/)).toHaveCount(0);
+
+  // ...and removing it falls back to the compiled one rather than turning anything off.
+  // This is the step `docs/PRIVACY.md` used to describe as the way to stop sending.
+  await mine.getByRole('button', { name: 'Remove key' }).click();
+  await expect(mine.getByText(/Using the key built into this build/)).toBeVisible();
+
+  await page.goto('/?builtInKey#/');
+  await expect(
+    page.getByRole('region', { name: RAIL }),
+    'removing the key stopped the rail, which a release build cannot do',
+  ).toBeVisible({ timeout: 20_000 });
+
+  // The switch is the only thing that does stop it, which is what R-141 added and what
+  // the privacy note says now.
+  const off = await settings(page, '?builtInKey');
+  await off.getByTestId('gemini-enabled').click();
+  await expect(off.getByTestId('gemini-enabled')).toHaveAttribute('aria-checked', 'false');
+  await page.goto('/?builtInKey#/');
   await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
   await page.waitForTimeout(900);
   await expect(page.getByRole('region', { name: RAIL })).toHaveCount(0);
