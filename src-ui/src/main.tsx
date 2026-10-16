@@ -4,7 +4,9 @@ import { HashRouter } from 'react-router-dom';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
-import { failNextMock, hangMock, invoke, setSilentDurationMock } from './ipc';
+import {
+  clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setSilentDurationMock,
+} from './ipc';
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
 
@@ -16,6 +18,10 @@ installGlobalErrorHandlers();
 (window as unknown as { __auroraInvoke?: unknown }).__auroraInvoke = invoke;
 // …and lets them make one refuse, so "the failure reaches the viewer" is testable.
 (window as unknown as { __auroraFailNext?: unknown }).__auroraFailNext = failNextMock;
+// What was asked for and how big the answer was, for the journeys that assert on the
+// cost of a screen rather than on its contents.
+(window as unknown as { __auroraCalls?: unknown }).__auroraCalls = mockCalls;
+(window as unknown as { __auroraClearCalls?: unknown }).__auroraClearCalls = clearMockCalls;
 // …and lets them play something whose duration the stream never reports, which is the
 // ordinary case on provider VOD and the one in which Skip Credits and autoplay used to
 // be dead.

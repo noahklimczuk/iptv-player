@@ -38,6 +38,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, MosaicRect, Programme } from '@shared/ipc';
 import { useDvrMarks } from '@/features/dvr/useDvrMarks';
+import { useGuideSlice } from './useGuideSlice';
 import { Badge, Button, EmptyState, Select, Skeleton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
@@ -135,16 +136,22 @@ export function GuidePage({
   }, []);
 
   const { data: groups } = useCommand('channels.groups', undefined, []);
-  const { data: slice, loading } = useCommand(
-    'epg.gridSlice',
-    { from, to, channelIds: [] },
-    [from, to],
+  /**
+   * The rows, from `channels.list`, with the category narrowing the *query*.
+   *
+   * Both halves of this used to come out of one `epg.gridSlice` with
+   * `channelIds: []` — which the host reads as every channel — and the category was
+   * then applied here, client-side, to what had already crossed the bridge. So
+   * choosing one of 67 groups narrowed what was drawn and not what was fetched
+   * (R-130).
+   */
+  const { data: channelRows, loading } = useCommand(
+    'channels.list',
+    { group },
+    [group],
   );
 
-  const channels = useMemo(() => {
-    const all = slice?.channels ?? [];
-    return group ? all.filter((c) => c.group === group) : all;
-  }, [slice, group]);
+  const channels = useMemo(() => channelRows ?? [], [channelRows]);
 
   useEffect(() => {
     if (!previewChannel && channels.length) setPreviewChannel(channels[0]!);
@@ -156,6 +163,15 @@ export function GuidePage({
     estimateSize: () => ROW_H,
     overscan: 6,
   });
+
+  // The programmes for the rows the virtualiser has actually mounted, plus its
+  // overscan. About 14 rows of 6,699 on a 950px window, which is the difference
+  // between a 14.8 MB reply and roughly 30 KB of it.
+  const visibleIds = rowVirt
+    .getVirtualItems()
+    .map((vr) => channels[vr.index]?.id)
+    .filter((id): id is number => id != null);
+  const guide = useGuideSlice(from, to, visibleIds);
 
   /**
    * Ask the host for the picture, but only once there is one.
@@ -245,7 +261,16 @@ export function GuidePage({
         * *above* in-flow content that has no z-index of its own — which is the trap
         * `PipTile` fell into — so everything that must stay visible says so.
         */}
-      <div style={{ position: 'relative', zIndex: 1 }}>
+      {/*
+        * `zIndex: 2`, one above the row below it, because the toolbar's dropdowns open
+        * downwards *into* that row. Both were 1, and with equal z-index the later
+        * sibling wins, so the Category list opened underneath the preview panel it sits
+        * directly above: `elementFromPoint` on a row of that list returns
+        * `guide-preview`, and the click never reached it. The guide's only category
+        * filter could not be chosen at all. Found by the journey added for R-130, which
+        * needed to choose one to prove the filter reaches the host.
+        */}
+      <div style={{ position: 'relative', zIndex: 2 }}>
       <GuideToolbar
         from={from}
         groups={groups ?? []}
@@ -260,7 +285,7 @@ export function GuidePage({
       <div style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative', zIndex: 1 }}>
         {/* The grid, on the side the channel column is indexed from. */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          {loading && !slice ? (
+          {loading && channels.length === 0 ? (
             <div style={{ padding: 'var(--sp-5)', display: 'grid', gap: 8 }}>
               {Array.from({ length: 10 }, (_, i) => <Skeleton key={i} h={ROW_H - 6} />)}
             </div>
@@ -300,10 +325,11 @@ export function GuidePage({
                 >
                   {rowVirt.getVirtualItems().map((vr) => {
                     const ch = channels[vr.index]!;
-                    const progs = slice?.programmes[ch.epgChannelId ?? String(ch.id)] ?? [];
+                    const progs = guide.byEpgId[ch.epgChannelId ?? String(ch.id)] ?? [];
                     return (
                       <div
                         key={ch.id}
+                        data-testid="guide-row"
                         style={{
                           position: 'absolute', top: vr.start, left: 0,
                           height: ROW_H, width: '100%', display: 'flex',
