@@ -111,3 +111,53 @@ test('switching profile from the top bar returns to the picker', async ({ page }
   await page.getByRole('button', { name: /Switch profile \(currently Sam\)/ }).click();
   await expect(page.getByRole('heading', { name: "Who's watching?" })).toBeVisible();
 });
+
+/**
+ * The lockout after five wrong PINs, which left a dead pad and a frozen number.
+ *
+ * `isLocked` and `secondsLeft` were computed from `Date.now()` during render and nothing
+ * scheduled another render. Every key is disabled while locked — 0–9 and backspace — so
+ * there was nothing left to press that could cause one, and the only enabled control was
+ * Back. The countdown therefore read "(60s)" for as long as the pad was open, and the
+ * recovery path was to press Back and re-enter the profile, which resets the local state,
+ * re-enables the keys, and has the host refuse again until the real minute is up.
+ *
+ * Unreachable from here until now for a second reason worth naming: the mock answered
+ * `{ wrong: { remaining: 4 } }` to every wrong PIN, for ever, so no journey could get to
+ * the locked-out state at all. It now counts failures and locks out on the fifth, with
+ * the host's own `MAX_PIN_FAILURES` and `PIN_LOCKOUT_SECS` (R-152).
+ */
+test('the lockout counts down instead of freezing', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await addProfile(page, 'Locked', { pin: '1234' });
+  await page.getByRole('button', { name: /Switch profile/ }).click();
+  await page.getByRole('button', { name: /^Locked, PIN required/ }).click();
+  await expect(page.getByRole('heading', { name: /Enter Locked's PIN/ })).toBeVisible();
+
+  // Five wrong attempts, which is what the host counts.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (const d of ['9', '9', '9', '9']) {
+      await page.getByRole('button', { name: d, exact: true }).click();
+    }
+    await expect(page.getByRole('alert')).toBeVisible();
+  }
+
+  await expect(page.getByRole('alert')).toContainText(/Too many attempts/);
+  const countdown = page.getByTestId('pin-countdown');
+  await expect(countdown).toBeVisible();
+
+  // The keypad is unavailable, which is correct...
+  await expect(page.getByRole('button', { name: '7', exact: true })).toBeDisabled();
+
+  // ...and the number moves, which is the finding. Against the old code this stays at
+  // whatever it was when the refusal arrived, because nothing re-renders.
+  const first = Number((await countdown.innerText()).replace(/[^0-9]/g, ''));
+  expect(first).toBeGreaterThan(50);
+  await expect
+    .poll(async () => Number((await countdown.innerText()).replace(/[^0-9]/g, '')), {
+      timeout: 4000,
+      message: 'the countdown never changed',
+    })
+    .toBeLessThan(first);
+});

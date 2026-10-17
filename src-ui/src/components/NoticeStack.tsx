@@ -5,7 +5,7 @@
  * dialog over live TV to say a poster would not load is worse than the problem. A
  * toast that names what was being attempted, says what the host said, and goes away.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon } from '@/components/Icon';
 import { type AppNotice, dismissNotice, subscribeToNotices } from '@/lib/errors';
 
@@ -17,13 +17,49 @@ export function NoticeStack() {
 
   useEffect(() => subscribeToNotices(setNotices), []);
 
+  /**
+   * One timer per notice, started once and left alone.
+   *
+   * This effect depended on the whole `notices` array, so every change tore down *all*
+   * the timers and started them again from zero: a toast that had been up for seven of
+   * its eight seconds went back to eight the moment another arrived. `errors.ts` caps
+   * the stack at three and dedupes by title, so this could not grow without bound --
+   * but it did not bound the *time*, and a sequence of distinct failures arriving more
+   * often than every eight seconds (which is what a provider refusing artwork during a
+   * browse produces) kept the oldest toast on screen for as long as the sequence lasted.
+   *
+   * `n.id` is already stable, so the timers are keyed on it: a notice that already has
+   * one keeps it, and the eight seconds mean eight seconds (R-97).
+   */
+  const timers = useRef(new Map<number, number>());
   useEffect(() => {
-    if (notices.length === 0) return;
-    const timers = notices.map((n) =>
-      window.setTimeout(() => dismissNotice(n.id), DISMISS_AFTER_MS),
-    );
-    return () => timers.forEach((t) => window.clearTimeout(t));
+    const live = new Set(notices.map((n) => n.id));
+    for (const [id, timer] of timers.current) {
+      if (!live.has(id)) {
+        window.clearTimeout(timer);
+        timers.current.delete(id);
+      }
+    }
+    for (const n of notices) {
+      if (timers.current.has(n.id)) continue;
+      timers.current.set(
+        n.id,
+        window.setTimeout(() => {
+          timers.current.delete(n.id);
+          dismissNotice(n.id);
+        }, DISMISS_AFTER_MS),
+      );
+    }
   }, [notices]);
+
+  // On unmount only. Clearing on every change is what the bug was.
+  useEffect(
+    () => () => {
+      for (const timer of timers.current.values()) window.clearTimeout(timer);
+      timers.current.clear();
+    },
+    [],
+  );
 
   if (notices.length === 0) return null;
 

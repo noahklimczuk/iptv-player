@@ -808,10 +808,38 @@ pub fn providers_delete(services: State<'_, Services>, args: ProviderIdArgs) -> 
     Ok(true)
 }
 
+/// What kinds of content an import should keep.
+///
+/// Settings keys rather than provider columns: the choice is about the library, the
+/// nightly sweep has to honour the same answer as the button, and a key/value row needs
+/// no migration.
+pub const IMPORT_LIVE_KEY: &str = "import.live";
+pub const IMPORT_VOD_KEY: &str = "import.vod";
+pub const IMPORT_SERIES_KEY: &str = "import.series";
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentChoice {
+    pub live: bool,
+    pub vod: bool,
+    pub series: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshArgs {
     pub provider_id: i64,
+    /// What to import, when the caller is asking for a change.
+    ///
+    /// The setup wizard asks "What should Aurora import?" and draws three switches, and
+    /// the answer reached nothing at all: `runImport` never read it, `DraftProvider` has
+    /// no content fields and neither save nor refresh accepted any. So unchecking Movies
+    /// and Series still imported 27,494 films and 8,086 shows -- nearly the whole cost
+    /// of the import, and skipping it is the entire reason the step exists (R-120).
+    ///
+    /// Stored when supplied, so the nightly sweep -- which calls `refresh_provider`
+    /// with no arguments -- keeps honouring it.
+    pub content: Option<ContentChoice>,
 }
 
 /// The password behind a provider's `credential_ref`, if it has one.
@@ -843,6 +871,16 @@ pub fn providers_refresh(
     services: State<'_, Services>,
     args: RefreshArgs,
 ) -> Result<SyncReport> {
+    if let Some(c) = args.content {
+        let db = services.db.lock();
+        for (key, on) in [
+            (IMPORT_LIVE_KEY, c.live),
+            (IMPORT_VOD_KEY, c.vod),
+            (IMPORT_SERIES_KEY, c.series),
+        ] {
+            aurora_db::repo::settings::set(&db, key, &on)?;
+        }
+    }
     refresh_provider(&app, &services, args.provider_id)
 }
 
@@ -889,6 +927,25 @@ pub fn refresh_provider(
     let mut options = SyncOptions::new(provider_id, source, now_unix());
     options.password = stored_password(services.credentials.as_ref(), credential_ref_value)?;
 
+    // What the viewer said to import, which `sync::fetch` has always honoured and
+    // nothing ever told it. Read here rather than passed in, so the nightly sweep runs
+    // the same answer as the button (R-120). Absent keys mean everything, which is what
+    // a library that predates the question should keep doing.
+    {
+        let db = services.db.lock();
+        options.import_live = aurora_db::repo::settings::get_or(&db, IMPORT_LIVE_KEY, true)?;
+        options.import_vod = aurora_db::repo::settings::get_or(&db, IMPORT_VOD_KEY, true)?;
+        options.import_series = aurora_db::repo::settings::get_or(&db, IMPORT_SERIES_KEY, true)?;
+    }
+    if !(options.import_live && options.import_vod && options.import_series) {
+        tracing::info!(
+            live = options.import_live,
+            vod = options.import_vod,
+            series = options.import_series,
+            "importing only what the viewer asked for"
+        );
+    }
+
     let rules = load_rules(services)?;
 
     // The download happens with no lock held. It used to run inside one, which froze
@@ -930,6 +987,23 @@ pub fn refresh_provider(
         params![provider_id, now_unix(), max_connections],
     )
     .map_err(aurora_db::DbError::from)?;
+
+    // Take the credentials straight back out of the rows the import just wrote.
+    //
+    // `sync::apply` stores whatever URL the provider gave, which for an Xtream panel
+    // carries the username and password in its path. Rewriting them as stream ids here
+    // -- rather than in the importer -- keeps one implementation of "is this an Xtream
+    // stream address", shared with the pass that runs at `open()` for libraries imported
+    // by an older build. The window in which the file holds them is the rest of this
+    // function; a crash inside it is covered by the next launch (R-126).
+    match aurora_db::backfill_stream_ids(&db) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(rows = n, "stored stream ids in place of stream URLs"),
+        // The library is still usable with the URLs it has, so this must not fail an
+        // import the viewer waited for -- but it is worth saying loudly, because it is
+        // the difference between a library with credentials in it and one without.
+        Err(e) => tracing::error!("could not rewrite stored stream URLs: {e}"),
+    }
 
     // Fresh guide data is the moment a series rule can find new episodes. Doing it here
     // rather than on a timer means the schedule is right as soon as the import is.

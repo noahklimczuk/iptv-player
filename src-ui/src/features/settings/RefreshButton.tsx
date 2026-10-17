@@ -15,16 +15,7 @@ import type { IngestProgress, SyncReport } from '@shared/ipc';
 import { Button } from '@/components/Primitives';
 import { invoke, onIngestProgress } from '@/ipc';
 import { report as reportError } from '@/lib/errors';
-
-const PHASE_LABEL: Record<string, string> = {
-  downloading: 'Downloading',
-  importingChannels: 'Channels',
-  importingMovies: 'Movies',
-  importingSeries: 'Series',
-  importingEpg: 'Guide',
-  indexing: 'Indexing',
-  done: 'Done',
-};
+import { PHASE_SHORT } from '@/lib/phases';
 
 export function RefreshButton({
   providerId, onDone,
@@ -71,7 +62,7 @@ export function RefreshButton({
           data-testid="refresh-progress"
           style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}
         >
-          {PHASE_LABEL[progress.phase] ?? progress.phase}
+          {PHASE_SHORT[progress.phase]}
           {progress.total > 0 && ` ${progress.done}/${progress.total}`}
         </span>
       )}

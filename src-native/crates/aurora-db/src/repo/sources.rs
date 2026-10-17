@@ -15,7 +15,22 @@ use crate::error::Result;
 #[serde(rename_all = "camelCase")]
 pub struct Source {
     pub id: i64,
+    /// The address as stored, which is empty for a provider whose URLs are rebuilt.
+    ///
+    /// An Xtream URL carries the credentials in its path, so storing it stored the
+    /// viewer's password. Those rows now keep `stream_id` and `container` instead and
+    /// this is `""`; `aurora_app::streams::playable` is the one place that turns the
+    /// pair back into an address, because only the host can reach the password. An M3U
+    /// provider's URLs cannot be rebuilt from an id, so those rows still carry theirs
+    /// (R-126).
     pub url: String,
+    /// The provider's stream id, for the rows whose URL is rebuilt.
+    pub stream_id: Option<String>,
+    /// The extension that URL ended in, if any: `ts` for live, `mkv`/`mp4` for VOD.
+    pub container: Option<String>,
+    /// Whose credentials rebuild it. The channel's provider — `channel_sources` has no
+    /// provider of its own, and a source cannot be resolved without one.
+    pub provider_id: i64,
     pub priority: i64,
     pub quality: Option<String>,
     pub fail_count: u32,
@@ -40,8 +55,11 @@ impl Source {
 /// something to try (`aurora_core::sources`).
 pub fn for_channel(conn: &Connection, channel_id: i64, now: i64) -> Result<Vec<Source>> {
     let mut stmt = conn.prepare(
-        "SELECT id, url, priority, quality, fail_count, last_ok_at, last_fail_at
-         FROM channel_sources WHERE channel_id = ?1",
+        "SELECT s.id, s.url, s.priority, s.quality, s.fail_count, s.last_ok_at,
+                s.last_fail_at, s.stream_id, s.container, c.provider_id
+         FROM channel_sources s
+         JOIN channels c ON c.id = s.channel_id
+         WHERE s.channel_id = ?1",
     )?;
     let mut rows = stmt
         .query_map(params![channel_id], |r| {
@@ -53,6 +71,9 @@ pub fn for_channel(conn: &Connection, channel_id: i64, now: i64) -> Result<Vec<S
                 fail_count: r.get::<_, i64>(4)?.max(0) as u32,
                 last_ok_at: r.get(5)?,
                 last_fail_at: r.get(6)?,
+                stream_id: r.get(7)?,
+                container: r.get(8)?,
+                provider_id: r.get(9)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

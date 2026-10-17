@@ -27,24 +27,63 @@ pub struct CatchupChannel {
     pub days: u16,
 }
 
-pub fn catchup_channel(db: &Connection, channel_id: i64) -> Result<CatchupChannel> {
-    db.query_row(
-        "SELECT c.name, c.catchup_mode, c.catchup_source, c.catchup_days,
-                (SELECT url FROM channel_sources s WHERE s.channel_id = c.id
-                 ORDER BY s.priority, s.fail_count LIMIT 1)
-         FROM channels c WHERE c.id = ?1",
-        [channel_id],
-        |r| {
-            Ok(CatchupChannel {
-                name: r.get(0)?,
-                mode: r.get(1)?,
-                source: r.get(2)?,
-                days: r.get::<_, i64>(3)?.clamp(0, i64::from(u16::MAX)) as u16,
-                stream_url: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-            })
-        },
-    )
-    .map_err(|_| AppError::Other(format!("unknown channel {channel_id}")))
+pub fn catchup_channel(
+    db: &Connection,
+    credentials: &dyn aurora_ingest::credentials::CredentialStore,
+    channel_id: i64,
+) -> Result<CatchupChannel> {
+    // `stream_url` is what `catchup::url_for` parses the credentials back out of, so it
+    // has to be the rebuilt address rather than what the row holds — which, for an
+    // Xtream provider, is now a stream id and no URL at all (R-126).
+    let (name, mode, source, days, stream) = db
+        .query_row(
+            "SELECT c.name, c.catchup_mode, c.catchup_source, c.catchup_days,
+                    s.url, s.stream_id, s.container, c.provider_id
+             FROM channels c
+             LEFT JOIN channel_sources s ON s.channel_id = c.id
+             WHERE c.id = ?1
+             ORDER BY s.priority, s.fail_count
+             LIMIT 1",
+            [channel_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, i64>(3)?,
+                    crate::streams::StreamRef {
+                        url: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                        stream_id: r.get(5)?,
+                        container: r.get(6)?,
+                        provider_id: r.get(7)?,
+                    },
+                ))
+            },
+        )
+        .map_err(|_| AppError::Other(format!("unknown channel {channel_id}")))?;
+
+    let mut access = std::collections::HashMap::new();
+    let stream_url = if stream.url.is_empty() && stream.stream_id.is_none() {
+        // No source at all. `resolve_catchup` reports that as the channel not offering
+        // catch-up, which is what an empty `stream_url` has always meant here.
+        String::new()
+    } else {
+        crate::streams::playable(
+            db,
+            credentials,
+            &mut access,
+            aurora_core::model::MediaKind::Live,
+            &stream,
+        )?
+    };
+
+    Ok(CatchupChannel {
+        name,
+        mode,
+        source,
+        days: days.clamp(0, i64::from(u16::MAX)) as u16,
+        stream_url,
+    })
 }
 
 /// Resolve "watch this programme from the start".
@@ -54,12 +93,13 @@ pub fn catchup_channel(db: &Connection, channel_id: i64) -> Result<CatchupChanne
 /// configuration does not say how to ask are three different problems.
 pub fn resolve_catchup(
     db: &Connection,
+    credentials: &dyn aurora_ingest::credentials::CredentialStore,
     channel_id: i64,
     start: i64,
     stop: i64,
     now: i64,
 ) -> Result<(String, LoadOptions)> {
-    let ch = catchup_channel(db, channel_id)?;
+    let ch = catchup_channel(db, credentials, channel_id)?;
 
     let Some(mode) = ch.mode.as_deref().and_then(catchup::Mode::parse) else {
         return Err(AppError::Other(format!(
@@ -167,10 +207,14 @@ fn playable(url: String, noun: &str) -> Result<String> {
 /// the provider layer injects them here rather than storing resolved URLs.
 pub fn resolve_playback(
     db: &Connection,
+    credentials: &dyn aurora_ingest::credentials::CredentialStore,
     kind: &str,
     id: i64,
     position_secs: Option<f64>,
 ) -> Result<(String, LoadOptions)> {
+    // One cache per resolution: a film needs one provider and a channel's sources all
+    // share one, so this reads the credential store once rather than once per row.
+    let mut access = std::collections::HashMap::new();
     match kind {
         "live" => {
             let (sources, options) = live_sources(db, id, crate::now_unix())?;
@@ -178,13 +222,33 @@ pub fn resolve_playback(
                 .into_iter()
                 .next()
                 .ok_or_else(|| AppError::Other(format!("channel {id} has no stream URL")))?;
-            Ok((first.url, options))
+            let url = crate::streams::playable(
+                db,
+                credentials,
+                &mut access,
+                aurora_core::model::MediaKind::Live,
+                &crate::streams::StreamRef::from(&first),
+            )?;
+            Ok((url, options))
         }
         "movie" => {
-            let (url, title): (String, String) = db
-                .query_row("SELECT url, title FROM movies WHERE id = ?1", [id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })
+            let (stream, title) = db
+                .query_row(
+                    "SELECT url, title, stream_id, container, provider_id
+                     FROM movies WHERE id = ?1",
+                    [id],
+                    |r| {
+                        Ok((
+                            crate::streams::StreamRef {
+                                url: r.get(0)?,
+                                stream_id: r.get(2)?,
+                                container: r.get(3)?,
+                                provider_id: r.get(4)?,
+                            },
+                            r.get::<_, String>(1)?,
+                        ))
+                    },
+                )
                 .optional()
                 .map_err(aurora_db::DbError::from)?
                 .ok_or_else(|| {
@@ -198,7 +262,16 @@ pub fn resolve_playback(
                             .into(),
                     )
                 })?;
-            let url = playable(url, "film")?;
+            let url = playable(
+                crate::streams::playable(
+                    db,
+                    credentials,
+                    &mut access,
+                    aurora_core::model::MediaKind::Movie,
+                    &stream,
+                )?,
+                "film",
+            )?;
             Ok((
                 url,
                 LoadOptions {
@@ -216,10 +289,25 @@ pub fn resolve_playback(
             ))
         }
         "episode" => {
-            let (url, title): (String, Option<String>) = db
-                .query_row("SELECT url, title FROM episodes WHERE id = ?1", [id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-                })
+            let (stream, title) = db
+                .query_row(
+                    "SELECT e.url, e.title, e.stream_id, e.container, s.provider_id
+                     FROM episodes e
+                     JOIN series s ON s.id = e.series_id
+                     WHERE e.id = ?1",
+                    [id],
+                    |r| {
+                        Ok((
+                            crate::streams::StreamRef {
+                                url: r.get(0)?,
+                                stream_id: r.get(2)?,
+                                container: r.get(3)?,
+                                provider_id: r.get(4)?,
+                            },
+                            r.get::<_, Option<String>>(1)?,
+                        ))
+                    },
+                )
                 .optional()
                 .map_err(aurora_db::DbError::from)?
                 .ok_or_else(|| {
@@ -229,7 +317,16 @@ pub fn resolve_playback(
                             .into(),
                     )
                 })?;
-            let url = playable(url, "episode")?;
+            let url = playable(
+                crate::streams::playable(
+                    db,
+                    credentials,
+                    &mut access,
+                    aurora_core::model::MediaKind::Episode,
+                    &stream,
+                )?,
+                "episode",
+            )?;
             Ok((
                 url,
                 LoadOptions {
@@ -408,6 +505,12 @@ pub fn record_mosaic_window(window: &tauri::WebviewWindow, mosaic: &crate::mosai
 
 #[cfg(test)]
 mod tests {
+    /// A credential store for the tests. The fixtures store plain URLs, so
+    /// `streams::playable` hands them straight back and no password is needed (R-126).
+    fn store() -> aurora_ingest::credentials::MemoryStore {
+        aurora_ingest::credentials::MemoryStore::default()
+    }
+
     use super::*;
 
     #[test]
@@ -418,7 +521,7 @@ mod tests {
     #[test]
     fn unknown_kinds_are_rejected_with_a_clear_message() {
         let db = aurora_db::open_memory().unwrap();
-        let err = resolve_playback(&db, "podcast", 1, None).unwrap_err();
+        let err = resolve_playback(&db, &store(), "podcast", 1, None).unwrap_err();
         assert!(err.to_string().contains("podcast"));
     }
 
@@ -430,7 +533,7 @@ mod tests {
     fn a_title_that_is_gone_says_so_in_words() {
         let db = aurora_db::open_memory().unwrap();
         for (kind, noun) in [("movie", "film"), ("episode", "episode")] {
-            let err = resolve_playback(&db, kind, 404, None)
+            let err = resolve_playback(&db, &store(), kind, 404, None)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains(noun), "{kind}: {err}");
@@ -458,7 +561,7 @@ mod tests {
         )
         .unwrap();
 
-        let (url, options) = resolve_playback(&db, "recording", 1, Some(90.0)).unwrap();
+        let (url, options) = resolve_playback(&db, &store(), "recording", 1, Some(90.0)).unwrap();
         assert_eq!(url, file.to_string_lossy());
         assert!(!options.is_live);
         assert_eq!(options.start_at_secs, Some(90.0));
@@ -475,13 +578,13 @@ mod tests {
     fn a_recording_that_cannot_be_played_says_which_way() {
         let db = seeded_recording_db();
 
-        let gone = resolve_playback(&db, "recording", 404, None)
+        let gone = resolve_playback(&db, &store(), "recording", 404, None)
             .unwrap_err()
             .to_string();
         assert!(gone.contains("no longer in your library"), "{gone}");
 
         // Scheduled: nothing has been written yet.
-        let not_yet = resolve_playback(&db, "recording", 1, None)
+        let not_yet = resolve_playback(&db, &store(), "recording", 1, None)
             .unwrap_err()
             .to_string();
         assert!(not_yet.contains("has not started yet"), "{not_yet}");
@@ -489,7 +592,7 @@ mod tests {
         // In flight.
         db.execute("UPDATE recordings SET state = 'recording' WHERE id = 1", [])
             .unwrap();
-        let busy = resolve_playback(&db, "recording", 1, None)
+        let busy = resolve_playback(&db, &store(), "recording", 1, None)
             .unwrap_err()
             .to_string();
         assert!(busy.contains("still being written"), "{busy}");
@@ -497,7 +600,7 @@ mod tests {
         // Failed, with no file at all.
         db.execute("UPDATE recordings SET state = 'failed' WHERE id = 1", [])
             .unwrap();
-        let failed = resolve_playback(&db, "recording", 1, None)
+        let failed = resolve_playback(&db, &store(), "recording", 1, None)
             .unwrap_err()
             .to_string();
         assert!(failed.contains("no file on disk"), "{failed}");
@@ -511,7 +614,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let missing = resolve_playback(&db, "recording", 1, None)
+        let missing = resolve_playback(&db, &store(), "recording", 1, None)
             .unwrap_err()
             .to_string();
         assert!(missing.contains("is gone"), "{missing}");
@@ -562,7 +665,7 @@ mod tests {
         )
         .unwrap();
 
-        let err = resolve_playback(&db, "movie", 1, None)
+        let err = resolve_playback(&db, &store(), "movie", 1, None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("without a playable address"), "{err}");
@@ -595,7 +698,7 @@ mod tests {
         let id: i64 = db
             .query_row("SELECT id FROM movies LIMIT 1", [], |r| r.get(0))
             .unwrap();
-        let (url, opts) = resolve_playback(&db, "movie", id, Some(90.0)).unwrap();
+        let (url, opts) = resolve_playback(&db, &store(), "movie", id, Some(90.0)).unwrap();
         assert_eq!(url, "https://example.com/m/1.mkv");
         assert!(!opts.is_live);
         assert_eq!(opts.start_at_secs, Some(90.0));
@@ -631,7 +734,7 @@ mod tests {
         assert_eq!(sources.len(), 1);
         assert_eq!(opts.title.as_deref(), Some("Jazz FM"));
 
-        let (url, _) = resolve_playback(&db, "live", 1, None).unwrap();
+        let (url, _) = resolve_playback(&db, &store(), "live", 1, None).unwrap();
         assert_eq!(url, "http://example.com/j.mp3");
     }
 
@@ -650,7 +753,7 @@ mod tests {
     #[test]
     fn a_missing_item_is_an_error_not_a_panic() {
         let db = aurora_db::open_memory().unwrap();
-        assert!(resolve_playback(&db, "movie", 9999, None).is_err());
+        assert!(resolve_playback(&db, &store(), "movie", 9999, None).is_err());
     }
 
     /// A channel with catch-up configured the way a provider would report it.
@@ -684,7 +787,7 @@ mod tests {
         let db = aurora_db::open_memory().unwrap();
         let id = seed_channel(&db, Some("shift"), 7, "http://example.com/live/a/b/9.ts");
 
-        let (url, opts) = resolve_catchup(&db, id, NOW - 7200, NOW - 3600, NOW).unwrap();
+        let (url, opts) = resolve_catchup(&db, &store(), id, NOW - 7200, NOW - 3600, NOW).unwrap();
 
         // A replay, not a live edge: seekable, buffered like VOD.
         assert!(url.contains("utc=") && url.contains("lutc="), "{url}");
@@ -698,7 +801,7 @@ mod tests {
         let db = aurora_db::open_memory().unwrap();
         let id = seed_channel(&db, None, 0, "http://example.com/live/a/b/9.ts");
 
-        let err = resolve_catchup(&db, id, NOW - 7200, NOW - 3600, NOW)
+        let err = resolve_catchup(&db, &store(), id, NOW - 7200, NOW - 3600, NOW)
             .unwrap_err()
             .to_string();
         assert!(err.contains("Channel Four"), "{err}");
@@ -711,14 +814,14 @@ mod tests {
         let id = seed_channel(&db, Some("shift"), 7, "http://example.com/live/a/b/9.ts");
 
         // Tomorrow: nothing to replay yet.
-        let future = resolve_catchup(&db, id, NOW + 86400, NOW + 90000, NOW)
+        let future = resolve_catchup(&db, &store(), id, NOW + 86400, NOW + 90000, NOW)
             .unwrap_err()
             .to_string();
         assert!(future.contains("has not aired yet"), "{future}");
 
         // A month ago: the provider stopped keeping it, and the window is named so the
         // viewer knows how far back they can go.
-        let old = resolve_catchup(&db, id, NOW - 30 * 86400, NOW - 29 * 86400, NOW)
+        let old = resolve_catchup(&db, &store(), id, NOW - 30 * 86400, NOW - 29 * 86400, NOW)
             .unwrap_err()
             .to_string();
         assert!(old.contains("7-day catch-up window"), "{old}");
@@ -731,7 +834,7 @@ mod tests {
         // and inventing them would produce a URL that fails silently at the player.
         let id = seed_channel(&db, Some("xtream"), 7, "http://example.com/stream.ts");
 
-        let err = resolve_catchup(&db, id, NOW - 7200, NOW - 3600, NOW)
+        let err = resolve_catchup(&db, &store(), id, NOW - 7200, NOW - 3600, NOW)
             .unwrap_err()
             .to_string();
         assert!(err.contains("not how to request it"), "{err}");
@@ -740,6 +843,6 @@ mod tests {
     #[test]
     fn an_unknown_channel_is_an_error_not_a_panic() {
         let db = aurora_db::open_memory().unwrap();
-        assert!(resolve_catchup(&db, 4242, NOW - 7200, NOW - 3600, NOW).is_err());
+        assert!(resolve_catchup(&db, &store(), 4242, NOW - 7200, NOW - 3600, NOW).is_err());
     }
 }

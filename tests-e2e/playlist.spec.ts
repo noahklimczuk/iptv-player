@@ -371,3 +371,75 @@ test('live TV renders a large channel list without mounting every row', async ({
   await page.waitForTimeout(400);
   await expect(rows.first()).not.toHaveAttribute('aria-label', firstName!);
 });
+
+/**
+ * A typo in the Number cell used to clear the renumbering it was editing.
+ *
+ * `onCommit={(next) => onPatch({ number: Number(next) || 0 })}` — and `0` is not a
+ * neutral value here, it is the sentinel that *clears* the override, which both sides
+ * agree on deliberately. So `||` mapped every unparseable input onto "discard my
+ * renumbering": `Number('12abc')` is `NaN`, and `NaN || 0` is `0`. A viewer who had
+ * renumbered a channel and then mistyped while editing it was back to the provider's
+ * number with nothing said (R-124).
+ */
+test('a typo in a channel number changes nothing', async ({ page }) => {
+  await openEditor(page);
+
+  const cell = page.getByRole('button', { name: /^Number for / }).first();
+  const label = (await cell.getAttribute('aria-label'))!;
+  const channel = label.replace(/^Number for /, '');
+
+  // Renumber it for real first, so there is an override to lose.
+  await cell.click();
+  await page.getByRole('textbox', { name: label }).fill('5');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: label })).toHaveText('5');
+
+  // Now mistype, the way somebody editing "5" into "15" with a slipped finger does.
+  await page.getByRole('button', { name: label }).click();
+  await page.getByRole('textbox', { name: label }).fill('1 5');
+  await page.keyboard.press('Enter');
+
+  // The renumbering survives, and the refusal is said out loud rather than swallowed.
+  await expect(page.getByRole('button', { name: label }), `${channel} lost its number`)
+    .toHaveText('5');
+  // Reported in the notice stack, which is `role="status"` on purpose — these arrive
+  // after the fact and should not interrupt a screen reader mid-sentence.
+  await expect(page.getByTestId('notices')).toContainText('not a channel number');
+
+  // And the host agrees, which is the half the screen cannot be trusted about: the
+  // stored override is still 5. (A reload cannot check this here — the mock transport's
+  // state lives in the page, so reloading resets the whole library.)
+  const stored = await page.evaluate(async (name) => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a: unknown) => Promise<{
+        rows: { name: string; number: number | null }[];
+      }>;
+    };
+    const page_ = await w.__auroraInvoke('playlist.list', {
+      kind: 'live', query: name, limit: 50, offset: 0,
+    });
+    return page_.rows.find((r) => r.name === name)?.number ?? null;
+  }, channel);
+  expect(stored, `the host has ${channel} back on the provider's number`).toBe(5);
+});
+
+test('clearing the Number cell hands the channel back to the provider', async ({ page }) => {
+  await openEditor(page);
+
+  const cell = page.getByRole('button', { name: /^Number for / }).first();
+  const label = (await cell.getAttribute('aria-label'))!;
+  const provider = (await cell.innerText()).trim();
+
+  await cell.click();
+  await page.getByRole('textbox', { name: label }).fill('7');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: label })).toHaveText('7');
+
+  // Emptying the field is the one unambiguous way to say "use the provider's number",
+  // and it must still work — it is the same code path the typo used to take.
+  await page.getByRole('button', { name: label }).click();
+  await page.getByRole('textbox', { name: label }).fill('');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: label })).toHaveText(provider);
+});

@@ -199,17 +199,32 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
       </Section>
 
       <Section title="Keyboard">
+        {/*
+          * Every binding `useHotkeys` interprets, which is what this list is for.
+          *
+          * It showed ten rows against eighteen bindings. The six missing ones were
+          * `Escape`, `J`, `L`, `F`, `P` and `I` — and two of those had no documentation
+          * anywhere else at all: `I` reaches the channel banner and the detail panel,
+          * and `P` reaches 832 lines of picture-in-picture whose only discoverable
+          * trace was the source. README §14.1 promises a sheet that `?` opens and a
+          * `docs/SHORTCUTS.md`; neither exists, so this panel is the sheet (R-143).
+          */}
         <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '220px 1fr', gap: 8 }}>
           {[
             ['Ctrl+K  /', 'Search and command palette'],
+            ['Escape', 'Back · close a dialog'],
             ['0–9', 'Direct channel entry'],
             ['Backspace', 'Last channel'],
             ['PgUp / PgDn', 'Channel up / down'],
             ['G', 'TV guide'],
             ['Space / K', 'Play-pause'],
             ['← / →', 'Seek ±10s (Shift: ±30s)'],
+            ['J / L', 'Seek ±10s'],
             ['T', 'Pause live TV · press again for the live edge'],
             ['↑ / ↓', 'Volume · M mute'],
+            ['F / F11', 'Fullscreen'],
+            ['P', 'Picture-in-picture'],
+            ['I', 'Info · the channel banner, or a title’s details'],
             ['Alt+1…5', 'Home, Live, Guide, Movies, Series'],
           ].map(([k, v]) => (
             <div key={k} style={{ display: 'contents' }}>

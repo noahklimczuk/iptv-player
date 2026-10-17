@@ -144,6 +144,63 @@ test('the full journey ends in a populated library', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
 });
 
+/**
+ * Unchecking Movies and Series means Movies and Series are not imported.
+ *
+ * The step is headed "What should Aurora import?" and the answer reached nothing:
+ * `runImport` never read `content`, did not even list it as a dependency, and neither
+ * `providers.save` nor `providers.refresh` accepted any content fields. So on this
+ * subscription unchecking them still imported 27,494 films and 8,086 shows -- nearly the
+ * whole cost of the import, and skipping it is the entire reason the step exists. The
+ * host had honoured `SyncOptions::import_vod` and `import_series` the whole time (R-120).
+ */
+test('unchecking a content type keeps it out of the library', async ({ page }) => {
+  await openWizard(page);
+  await page
+    .getByLabel('Provider address')
+    .fill('http://panel.example.com/get.php?username=alice&password=hunter2');
+  await page.getByRole('button', { name: 'Check connection' }).click();
+  await page.getByRole('button', { name: 'Continue' }).click();
+
+  await expect(page.getByRole('heading', { name: /What should Aurora import/ })).toBeVisible();
+  await page.getByRole('switch', { name: 'Movies', exact: true }).click();
+  await page.getByRole('switch', { name: 'Series', exact: true }).click();
+  await expect(page.getByRole('switch', { name: 'Movies', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'false',
+  );
+
+  await page.getByRole('button', { name: 'Import library' }).click();
+  await expect(page.getByRole('heading', { name: 'Your library is ready' })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // The summary is the report the host sent back, so this is the import's own account of
+  // what it kept -- channels yes, films and shows none, and the ones left out counted
+  // rather than silently missing.
+  const summary = await page.evaluate(() => document.body.innerText);
+  expect(summary).toMatch(/channel/i);
+  expect(summary).not.toMatch(/\b27,?494\b/);
+
+  const report = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<{
+        channels: number; movies: number; series: number; episodes: number;
+        dropped: { kindExcluded: number };
+      }>;
+    };
+    return w.__auroraInvoke('providers.refresh', {
+      providerId: 1,
+      content: { live: true, vod: false, series: false },
+    });
+  });
+  expect(report.movies).toBe(0);
+  expect(report.series).toBe(0);
+  expect(report.episodes).toBe(0);
+  expect(report.channels).toBeGreaterThan(0);
+  expect(report.dropped.kindExcluded).toBeGreaterThan(0);
+});
+
 test('deselecting every content type blocks the import', async ({ page }) => {
   await openWizard(page);
   await page

@@ -570,6 +570,42 @@ CREATE TABLE mosaic_layouts (
 CREATE UNIQUE INDEX idx_mosaic_layouts_name ON mosaic_layouts(name);
 "#,
     },
+    Migration {
+        version: 12,
+        name: "stream_ids_instead_of_urls",
+        sql: r#"
+-- Stop keeping the provider's password in the library.
+--
+-- An Xtream stream URL carries the credentials in its path, by design of the protocol:
+-- `{base}/live/{user}/{pass}/{id}.ts`, and `/movie/` and `/series/` the same. Those
+-- strings were stored verbatim in three tables, which on the subscription this project
+-- is measured against is 6,699 channel sources, 27,494 films and one row per episode of
+-- 8,086 series -- several hundred thousand plaintext copies of the username and password
+-- in a single SQLite file.
+--
+-- `docs/PRIVACY.md` said the opposite, and said it as a feature: that a copy of
+-- `library.db` "contains no credentials", which is the specific reassurance somebody
+-- reads before attaching it to a bug report. It was true of the `providers` table, which
+-- keeps only a `credential_ref`, and false of the library (R-126).
+--
+-- The URL is derivable: the provider row has `base_url`, the password is in Credential
+-- Manager, and `aurora_core::xtream::stream_url` already builds the address from a
+-- stream id. So the id and the container are what is stored, and the URL is rebuilt at
+-- play time.
+--
+-- `url` stays, and stays NOT NULL, for two reasons. An M3U provider's URLs are whatever
+-- the playlist said and cannot be reconstructed from an id, so those rows keep theirs --
+-- which `docs/PRIVACY.md` now says out loud rather than implying otherwise. And the
+-- backfill that empties the Xtream ones is Rust (`backfill_stream_ids`), because it has
+-- to parse a URL, which SQL does badly; an empty string is how a row says "rebuild me".
+ALTER TABLE channel_sources ADD COLUMN stream_id TEXT;
+ALTER TABLE channel_sources ADD COLUMN container TEXT;
+ALTER TABLE movies          ADD COLUMN stream_id TEXT;
+ALTER TABLE movies          ADD COLUMN container TEXT;
+ALTER TABLE episodes        ADD COLUMN stream_id TEXT;
+ALTER TABLE episodes        ADD COLUMN container TEXT;
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 11;
+pub const LATEST_VERSION: u32 = 12;
