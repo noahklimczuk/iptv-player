@@ -487,14 +487,38 @@ function SeekBar({
   const [dragged, setDragged] = useState<number | null>(null);
   const committedAt = useRef(0);
 
+  /*
+   * Let go of the handle once the host has caught up -- or once it is clear it will not.
+   *
+   * The timeout used to be checked only when this effect re-ran, and it re-ran only when
+   * `value` or `dragged` changed. `committedAt` is a ref, so `commit()` causes no render
+   * of its own. So the four-second escape hatch depended on the host continuing to
+   * report a *changing* position, and `playback.rs` deliberately suppresses an emit when
+   * the state is identical to the last one:
+   *
+   *     let mut last = self.last.lock();
+   *     if last.as_ref() == Some(&state) { return None; }
+   *
+   * A seek that was refused on a paused or stalled stream therefore stopped the position
+   * moving, nothing re-ran this, and the handle stayed where it had been dropped --
+   * showing a position the player was never at, with no way back but dragging it again
+   * (R-111).
+   *
+   * A timer owns the deadline now, so it fires whether or not anything else changes.
+   */
   useEffect(() => {
     if (dragged === null || committedAt.current === 0) return;
-    const arrived = Math.abs(value - dragged) <= SEEK_SETTLED_SECS;
-    const gaveUp = Date.now() - committedAt.current > SEEK_SETTLE_TIMEOUT_MS;
-    if (arrived || gaveUp) {
+    if (Math.abs(value - dragged) <= SEEK_SETTLED_SECS) {
       setDragged(null);
       committedAt.current = 0;
+      return;
     }
+    const left = SEEK_SETTLE_TIMEOUT_MS - (Date.now() - committedAt.current);
+    const giveUp = window.setTimeout(() => {
+      setDragged(null);
+      committedAt.current = 0;
+    }, Math.max(0, left));
+    return () => window.clearTimeout(giveUp);
   }, [value, dragged]);
 
   const commit = () => {

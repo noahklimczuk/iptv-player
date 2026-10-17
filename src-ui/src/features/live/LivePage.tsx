@@ -19,7 +19,7 @@ import {
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Channel } from '@shared/ipc';
-import { Badge, Button, EmptyState, Skeleton, TextField } from '@/components/Primitives';
+import { Badge, Button, EmptyState, IconButton, Skeleton, TextField } from '@/components/Primitives';
 import { GroupSidebar } from '@/components/GroupSidebar';
 import { Icon } from '@/components/Icon';
 import { LetterBar } from '@/components/LetterBar';
@@ -378,7 +378,13 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
                       onToggleFavorite={toggleFavorite}
                     />
                   ) : (
-                    <ChannelTile key={c.id} channel={c} guide={guide.get(c.id) ?? null} onTune={onTune} />
+                    <ChannelTile
+                      key={c.id}
+                      channel={c}
+                      guide={guide.get(c.id) ?? null}
+                      onTune={onTune}
+                      onToggleFavorite={toggleFavorite}
+                    />
                   )))}
                 </div>
               );
@@ -548,17 +554,33 @@ function ChannelRow({
   );
 }
 
+/**
+ * The grid's tile, which has to offer what the list's row offers.
+ *
+ * `ChannelRow` renders the catch-up badge and the favourite heart and takes
+ * `onToggleFavorite`; this took only `channel`, `guide` and `onTune` and rendered
+ * neither. So switching Live TV to Grid silently removed the only way to favourite a
+ * channel from that screen, and hid which channels have catch-up -- while the empty
+ * state for favourites tells the viewer exactly where the control is: "use the heart on
+ * any channel, to add it here". In Grid there was no heart on any channel (R-114).
+ *
+ * The Dropped badge comes with it, for the same reason (R-53).
+ */
 function ChannelTile({
-  channel, guide, onTune,
+  channel, guide, onTune, onToggleFavorite,
 }: {
   channel: Channel;
   guide: NowNext | null;
   onTune: (c: Channel) => void;
+  onToggleFavorite: (c: Channel) => void;
 }) {
   const data = guide;
   return (
-    <button
+    <div
       data-testid="channel-tile"
+      style={{ position: 'relative', display: 'grid' }}
+    >
+    <button
       onClick={() => onTune(channel)}
       style={{
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
@@ -573,7 +595,28 @@ function ChannelTile({
             style={{ width: 42, height: 42, borderRadius: 'var(--r-sm)', objectFit: 'cover' }}
           />
         )}
-        <span style={{ color: 'var(--text-faint)', fontWeight: 800 }}>{channel.number}</span>
+        {/*
+          * Beside the number rather than on their own lines: the grid's rows are
+          * absolutely positioned at multiples of `TILE_H`, so a tile that grows taller
+          * than the estimate overlaps the row below it -- which is what the
+          * re-measurement journey caught when these first went in (R-114).
+          */}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {channel.stale && (
+            <span
+              title="Your provider no longer lists this channel"
+              style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--warning)' }}
+            >
+              Dropped
+            </span>
+          )}
+          {channel.hasCatchup && (
+            <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+              Catch-up
+            </span>
+          )}
+          <span style={{ color: 'var(--text-faint)', fontWeight: 800 }}>{channel.number}</span>
+        </span>
       </div>
       <strong style={{ fontSize: 'var(--fs-sm)' }}>{channel.name}</strong>
       <span
@@ -582,9 +625,37 @@ function ChannelTile({
           overflow: 'hidden', textOverflow: 'ellipsis',
         }}
       >
-        {data?.now?.title ?? '—'}
+        {/*
+          * The same sentence the list uses. The tile said `'—'` where the row says "No
+          * guide data", so the same channel read as unknown in one view and as a dash in
+          * the other -- and with 4,874 of 6,699 channels carrying no `epg_channel_id` on
+          * this subscription, the dash was most of the grid (R-114).
+          */}
+        {data?.now?.title ?? 'No guide data'}
       </span>
     </button>
+      {/* Outside the tune button, because a button cannot contain a button. */}
+      <IconButton
+        size={28}
+        icon="heart"
+        filled={channel.favorite}
+        active={channel.favorite}
+        label={
+          channel.favorite
+            ? `Remove ${channel.name} from favourites`
+            : `Add ${channel.name} to favourites`
+        }
+        aria-pressed={channel.favorite}
+        data-testid={`favorite-${channel.id}`}
+        onClick={() => onToggleFavorite(channel)}
+        style={{
+          position: 'absolute',
+          top: 'var(--sp-2)',
+          right: 'var(--sp-2)',
+          color: channel.favorite ? 'var(--accent)' : 'var(--text-faint)',
+        }}
+      />
+    </div>
   );
 }
 

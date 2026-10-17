@@ -562,10 +562,21 @@ function PlaybackPrefs({ seriesId }: { seriesId: number }) {
   if (!prefs) return null;
 
   const update = (patch: Partial<SeriesPrefs>) => {
+    const before = prefs;
     const next = { ...prefs, ...patch };
     setLocal(next);
-    invoke('library.setSeriesPrefs', { profileId, seriesId, prefs: next })
-      .catch(report('Could not save that preference'));
+    invoke('library.setSeriesPrefs', { profileId, seriesId, prefs: next }).catch((e) => {
+      // Put it back. The optimistic update is right; leaving it there when the save
+      // failed is not: the viewer got a toast *and* a switch showing the state that was
+      // not saved, and `local` shadows `data` until `seriesId` changes, so re-opening
+      // the same show in the same modal session kept showing the wrong value.
+      //
+      // These three toggles are what the player's skip logic reads, so "Always skip
+      // intros" could look enabled for a whole viewing session while the host had never
+      // been told (R-103).
+      setLocal(before);
+      report('Could not save that preference')(e);
+    });
   };
 
   const toggles: [keyof SeriesPrefs, string][] = [
