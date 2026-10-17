@@ -183,36 +183,172 @@ fn declared_fields(contract: &str, interface: &str) -> Vec<String> {
         .collect()
 }
 
-/// The UI reads `PlayerState` on every frame, and the host has to send all of it.
+/// Both directions, for one interface and the Rust type the host serialises into it.
 ///
-/// `itemKind` was declared here, answered by the mock, and never sent by the host. The
-/// UI gates Skip Intro, Skip Credits and Up Next on `player.itemKind === 'episode'`
-/// (`useEpisodeAids`), so all three worked in every browser journey and none of them
-/// could ever appear on Windows. Exactly the failure the command test above exists for,
-/// one layer down: the mock is generous and the host is the one that ships.
+/// `missing` is a field the UI reads and the host never sends; `extra` is a field the
+/// host sends that the contract does not declare. Returned rather than asserted so the
+/// caller can report every interface at once, rather than hiding the second mismatch
+/// behind the first and finding them one `cargo test` at a time.
+fn field_mismatch(contract: &str, interface: &str, sent: serde_json::Value) -> Vec<String> {
+    let declared = declared_fields(contract, interface);
+    assert!(
+        !declared.is_empty(),
+        "parsed no fields at all out of {interface} — the scan is broken"
+    );
+    let sent = sent
+        .as_object()
+        .unwrap_or_else(|| panic!("{interface}'s Rust type does not serialise to an object"));
+
+    let mut out = Vec::new();
+    for f in declared.iter().filter(|f| !sent.contains_key(*f)) {
+        out.push(format!(
+            "{interface}.{f}: the UI reads it, the host never sends it"
+        ));
+    }
+    for k in sent.keys().filter(|k| !declared.contains(k)) {
+        out.push(format!(
+            "{interface}.{k}: the host sends it, the contract does not declare it"
+        ));
+    }
+    out
+}
+
+/// What the host sends must be what the contract declares — for every interface here.
+///
+/// This test existed and ran against `PlayerState` alone, which is one of the 64
+/// interfaces `shared/ipc.ts` declares. It was written because of `itemKind`: declared
+/// in the contract, answered by the mock, never sent by the host. The UI gates Skip
+/// Intro, Skip Credits and Up Next on `player.itemKind === 'episode'`, so all three
+/// worked in every browser journey and none of them could ever appear on Windows.
+///
+/// The idea was right and nothing generalised it. Across the table below the same two
+/// assertions would have caught three more of this review's findings, each of which
+/// took a hand sweep of all 64 interfaces to find instead:
+///
+/// | Finding | Which half |
+/// |---|---|
+/// | `Movie.match` / `Series.match` — a documented feature that exists only in the mock | `missing` |
+/// | `EpisodeRow.url` — the provider's password crossing into the WebView | **`extra`** |
+/// | `Episode.airDate`, `Episode.seriesId` — declared, never sent | `missing` |
+///
+/// The payoff is specific: a `#[serde(skip)]` forgotten on a credential-bearing field
+/// becomes a red test rather than a leak, and a field the mock answers and the host
+/// does not becomes a red test rather than a feature that works in all 154 Playwright
+/// journeys and in none of the shipped builds (R-154).
+///
+/// ## What is not here, and why
+///
+/// Pairs are listed by hand because the pairing is a judgement: the two sides are
+/// written in different languages and some interfaces have no single struct behind them
+/// at all. Left out deliberately:
+///
+/// * **Argument structs** (`MoviesArgs`, `ScheduleArgs`, …). They are the other
+///   direction — the UI builds them and the host deserialises — so a missing field is a
+///   deserialisation error the `commands` test above already reaches, not a silent null.
+/// * **Interfaces assembled in a command body** rather than serialised from one struct,
+///   such as `Progress` and `SearchResults`, where there is no type to pair against.
+/// * **`serde(flatten)` and view wrappers**, where the JSON keys do not come from one
+///   struct's field list and this scan would report confident nonsense.
+///
+/// Those three are the known blind spots. Everything with a struct behind it belongs in
+/// the table, and adding a row to it is the cheapest test in the repository.
+///
+/// It earned that on the first run, with three mismatches nobody had reported:
+/// `Channel.tvgId` sent and never declared, and `Episode.seriesId` and
+/// `Episode.airDate` declared and never sent.
 #[test]
-fn the_player_state_the_host_sends_is_the_one_the_contract_declares() {
+fn the_fields_the_host_sends_are_the_ones_the_contract_declares() {
+    use serde_json::to_value as v;
+
     let contract = std::fs::read_to_string(repo_root().join("shared/ipc.ts")).expect("ipc.ts");
-    let declared = declared_fields(&contract, "PlayerState");
-    assert!(
-        declared.len() > 15,
-        "only parsed {} fields — the scan is broken",
-        declared.len()
-    );
 
-    let sent = serde_json::to_value(aurora_player::PlayerState::default()).expect("serializes");
-    let sent = sent.as_object().expect("a JSON object");
+    // `Default` on every row struct here, which is all this test needed to exist.
+    let pairs: Vec<(&str, serde_json::Value)> = vec![
+        (
+            "PlayerState",
+            v(aurora_player::PlayerState::default()).unwrap(),
+        ),
+        (
+            "Track",
+            v(aurora_player::Track {
+                id: 1,
+                kind: aurora_player::TrackKind::Audio,
+                title: None,
+                language: None,
+                codec: None,
+                channels: None,
+                default: true,
+            })
+            .unwrap(),
+        ),
+        (
+            "Channel",
+            v(aurora_db::repo::channels::ChannelRow::default()).unwrap(),
+        ),
+        (
+            "Programme",
+            v(aurora_db::repo::epg::ProgrammeRow::default()).unwrap(),
+        ),
+        (
+            "Movie",
+            v(aurora_db::repo::library::MovieRow::default()).unwrap(),
+        ),
+        (
+            "Series",
+            v(aurora_db::repo::library::SeriesRow::default()).unwrap(),
+        ),
+        (
+            "Episode",
+            v(aurora_db::repo::library::EpisodeRow::default()).unwrap(),
+        ),
+        (
+            "Category",
+            v(aurora_db::repo::library::Category::default()).unwrap(),
+        ),
+        (
+            "LibraryStats",
+            v(aurora_db::repo::library::LibraryStats::default()).unwrap(),
+        ),
+        (
+            "EpgCoverage",
+            v(aurora_db::repo::library::EpgCoverage::default()).unwrap(),
+        ),
+        (
+            "PlaylistEntry",
+            v(aurora_db::repo::playlist::PlaylistRow::default()).unwrap(),
+        ),
+        (
+            "Profile",
+            v(aurora_db::repo::profiles::Profile::default()).unwrap(),
+        ),
+        (
+            "CreditEntry",
+            v(aurora_db::repo::enrichment::CreditRow::default()).unwrap(),
+        ),
+        // Built rather than defaulted: its two enums have no sensible default and
+        // giving a domain type one to satisfy a test is the wrong way round.
+        (
+            "SkipMarker",
+            v(aurora_core::markers::SkipMarker::new(
+                aurora_core::markers::MarkerKind::Intro,
+                0.0,
+                30.0,
+                aurora_core::markers::MarkerSource::Chapters,
+            ))
+            .unwrap(),
+        ),
+    ];
 
-    let missing: Vec<&String> = declared.iter().filter(|f| !sent.contains_key(*f)).collect();
-    assert!(
-        missing.is_empty(),
-        "the UI reads these and the host never sends them: {missing:?}"
-    );
+    let mut problems: Vec<String> = Vec::new();
+    for (interface, sent) in pairs {
+        problems.extend(field_mismatch(&contract, interface, sent));
+    }
 
-    let extra: Vec<&String> = sent.keys().filter(|k| !declared.contains(k)).collect();
     assert!(
-        extra.is_empty(),
-        "the host sends these and the contract does not declare them: {extra:?}"
+        problems.is_empty(),
+        "the contract and the host disagree about {} field(s):\n  {}",
+        problems.len(),
+        problems.join("\n  ")
     );
 }
 
@@ -462,6 +598,44 @@ fn the_updaters_bundle_identifier_matches_the_manifest() {
         conf["identifier"].as_str(),
         Some(aurora_app::updates::BUNDLE_IDENTIFIER),
         "tauri.conf.json's identifier and updates::BUNDLE_IDENTIFIER must agree"
+    );
+}
+
+/// The release profile must not set `panic = "abort"`.
+///
+/// `supervise.rs` is built on `catch_unwind` and exists so one panicking tick does not
+/// end a background thread for the rest of the session. Under `abort` it cannot catch
+/// anything -- the process is gone before `catch_unwind` returns -- so the safety net
+/// was present in every debug build and absent from every shipped one, at all six
+/// `supervised` call sites (R-72).
+///
+/// This is asserted here, from the manifest, because no ordinary test can: `cargo test`
+/// builds with the test profile, which unwinds, so `a_panicking_tick_does_not_end_the_loop`
+/// passes either way and never exercises the configuration that ships.
+#[test]
+fn the_release_profile_still_unwinds_so_the_supervisor_can_work() {
+    let manifest = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("Cargo.toml"),
+    )
+    .expect("the workspace Cargo.toml");
+
+    // Only lines that are actually a setting, so the explanation above it does not
+    // count as the thing it is explaining.
+    let aborts = manifest
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .any(|l| l.starts_with("panic") && l.contains("abort"));
+
+    assert!(
+        !aborts,
+        "the release profile sets panic = \"abort\", which turns every `catch_unwind` in \
+         `supervise.rs` into a no-op: a panicking tick takes the whole application \
+         instead of being logged and skipped, and the test that covers that cannot see \
+         it because tests unwind (R-72)"
     );
 }
 

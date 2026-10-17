@@ -98,11 +98,13 @@ export function behindLive(player: PlayerState): number {
 }
 
 export function PlayerOverlay({
-  player, onClose, onGuide, nextEpisode, onPlayNext, fullscreen, onFullscreen,
+  player, onClose, onGuide, onSettings, nextEpisode, onPlayNext, fullscreen, onFullscreen,
 }: {
   player: PlayerState;
   onClose: () => void;
   onGuide: () => void;
+  /** For the error panel's "Open settings", which is where a bad provider is fixed. */
+  onSettings: () => void;
   /** The episode after this one, when a series is playing (README §9). */
   nextEpisode?: Episode | null;
   onPlayNext?: () => void;
@@ -189,7 +191,7 @@ export function PlayerOverlay({
         </div>
       )}
 
-      {player.error && <ErrorPanel error={player.error} />}
+      {player.error && <ErrorPanel error={player.error} player={player} onSettings={onSettings} />}
 
       <AnimatePresence>
         {visible && (
@@ -780,14 +782,64 @@ function StatsOverlay({ stats }: { stats: NonNullable<PlayerState['stats']> }) {
   );
 }
 
-/** README §17: a human sentence, a likely cause, and at least one action. */
-function ErrorPanel({ error }: { error: NonNullable<PlayerState['error']> }) {
+/**
+ * README §17: a human sentence, a likely cause, and at least one action.
+ *
+ * The actions used to be drawn with no `onClick` at all -- not a no-op handler, not a
+ * disabled attribute, no handler -- so all four did nothing when pressed. This is the
+ * panel that only appears once a stream has already died, so the one screen a viewer
+ * reaches while something is wrong offered them four ways out and honoured none (R-110).
+ *
+ * The host does not pick these actions carelessly: `neterr.rs` chooses them per failure
+ * class, with a comment explaining why a 400 gets "Try another source" but not "Report
+ * stream as broken" because "the source is not what is wrong". That reasoning was then
+ * rendered as four identical dead buttons.
+ *
+ * The structural reason it was missed is in the signature: `ErrorPanel({ error })` took
+ * nothing else, so it had no callback to call and nothing to act on -- the one component
+ * in this file that could not act even if it wanted to.
+ */
+function ErrorPanel({
+  error, player, onSettings,
+}: {
+  error: NonNullable<PlayerState['error']>;
+  player: PlayerState;
+  onSettings: () => void;
+}) {
   const LABELS: Record<string, string> = {
     retry: 'Retry',
     tryAnotherSource: 'Try another source',
-    reportBroken: 'Report stream as broken',
     openSettings: 'Open settings',
   };
+
+  /**
+   * Ask for the same thing again.
+   *
+   * Which is what both `retry` and `tryAnotherSource` amount to, and is not a placebo
+   * for either. For live, `playback.rs`'s `recover()` has already walked the ranked
+   * sources and spent `MAX_ROLLOVERS` by the time this panel appears -- and its own
+   * comment says what a deliberate tune then does: "The next deliberate tune re-reads
+   * the order, by which time the failures just recorded will have moved the good one to
+   * the front." So this really can land on a different source than the one that failed.
+   * For a film or an episode there is one address, so the two buttons converge; the host
+   * offers both and this does not pretend otherwise.
+   */
+  const again = useCallback(() => {
+    if (player.itemKind == null || player.itemId == null) return;
+    void invoke('player.play', {
+      kind: player.itemKind,
+      id: player.itemId,
+      // Where it died, for anything that has a position. Live has none worth keeping:
+      // the point of retuning is to get back to the live edge.
+      positionSecs: player.isLive ? undefined : Math.max(0, Math.floor(player.positionSecs)),
+    }).catch(report('Could not start it again'));
+  }, [player.itemKind, player.itemId, player.isLive, player.positionSecs]);
+
+  const run = (action: string) => {
+    if (action === 'openSettings') return onSettings();
+    return again();
+  };
+
   return (
     <div
       role="alert"
@@ -806,9 +858,14 @@ function ErrorPanel({ error }: { error: NonNullable<PlayerState['error']> }) {
         {error.cause}
       </p>
       <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'center', flexWrap: 'wrap' }}>
-        {error.actions.map((a) => (
+        {/* `reportBroken` is deliberately absent: there is no host command behind it, so
+            drawing it would be the same dead button in a new form. The host still offers
+            the action for `NotFound`, `UnsupportedCodec` and `Dropped`, and the moment
+            something implements it this filter is what to delete. */}
+        {error.actions.filter((a) => a in LABELS).map((a) => (
           <button
             key={a}
+            onClick={() => run(a)}
             style={{
               padding: '8px 16px', borderRadius: 'var(--r-md)', cursor: 'pointer',
               border: '1px solid var(--border-strong)', background: 'var(--surface)',

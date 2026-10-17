@@ -83,6 +83,25 @@ fn http_status(lower: &str) -> Option<u16> {
             from = after;
         }
     }
+    // `reqwest`'s own `Display`: "http status server error (555 unknown status) for url
+    // (...)". The number is inside the parenthesis rather than after the lead-in, so the
+    // walk above steps past it and a 555 came out as `Unknown` -- "Something went wrong
+    // with that request" (R-32).
+    if let Some(at) = lower.find("http status") {
+        if let Some(open) = lower[at..].find('(') {
+            let after = at + open + 1;
+            let digits: String = lower[after..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if digits.len() == 3 {
+                if let Ok(code) = digits.parse() {
+                    return Some(code);
+                }
+            }
+        }
+    }
+
     // `403 Forbidden` and friends: the number is identified by the word beside it.
     for (code, word) in [
         (401u16, "401 unauthorized"),
@@ -134,7 +153,7 @@ impl NetFailure {
             (
                 ErrorCode::BadRequest,
                 "That request was rejected",
-                "The server would not accept it as sent. Nothing about retrying will                  change that; the log has what it said.",
+                "The server would not accept it as sent. Nothing about retrying will change that; the log has what it said.",
             )
         } else if is(403) || l.contains("forbidden") {
             (
@@ -160,11 +179,15 @@ impl NetFailure {
                 "Your provider is rate-limiting this connection",
                 "Too many requests in a short time. Waiting a moment usually clears it.",
             )
-        } else if l.contains("connection limit") || l.contains("max connections") {
+        } else if status == Some(555)
+            || l.contains("connection limit")
+            || l.contains("max connections")
+        {
             (
                 ErrorCode::ConnectionLimit,
                 "You're already watching on another device",
-                "This subscription allows a limited number of simultaneous streams.",
+                "This subscription allows a limited number of simultaneous streams. \
+                 Stop the other stream, or see Settings for how many this line allows.",
             )
         } else if l.contains("refused") {
             (
@@ -198,6 +221,17 @@ impl NetFailure {
                 "The secure connection failed",
                 "The provider's certificate could not be verified.",
             )
+        // 555 is checked above, not here. It is not a standard status, so no branch
+        // named it and it fell in with the 5xx family -- and on this subscription it is
+        // the commonest failure there is: the line allows one connection and reports the
+        // limit as HTTP 555 with an empty body. So opening multi-view, starting a
+        // recording while watching, or zapping faster than the panel frees the slot all
+        // produced "Your provider's server had an error. This is on their end. It
+        // usually resolves by itself." -- blaming the provider for the viewer's own
+        // second stream, promising it would fix itself, and offering a Retry that cannot
+        // work while the first stream is open. Aurora already had the right words
+        // (`ConnectionLimit`) and reached them only by finding the literal text
+        // "connection limit", which this panel never sends (R-32).
         } else if matches!(status, Some(500..=599))
             || l.contains("bad gateway")
             || l.contains("service unavailable")
@@ -274,7 +308,7 @@ impl NetFailure {
                 // for a film, an episode, and a provider being checked before anything is
                 // playing at all.
                 "Something went wrong with that request",
-                "Aurora could not tell what from the error it got back; the log has the                  details.",
+                "Aurora could not tell what from the error it got back; the log has the details.",
             )
         };
 
@@ -321,6 +355,81 @@ impl NetFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// HTTP 555 with an empty body, which is how this subscription says "that is your
+    /// second stream".
+    ///
+    /// Established directly against the panel: hold one stream open, ask for another on
+    /// the same line, and the answer is `555`, `text/html`, zero bytes. 555 is not a
+    /// standard status, so no branch named it and it fell in with the 5xx family -- the
+    /// viewer was told "Your provider's server had an error. This is on their end. It
+    /// usually resolves by itself", about their own second stream, with a Retry that
+    /// could not work until they closed the first one (R-32).
+    #[test]
+    fn a_555_is_the_line_being_busy_not_the_provider_being_broken() {
+        // Every form the three call sites actually produce.
+        for text in [
+            "HTTP 555",
+            "server returned 555",
+            "http error 555",
+            "HTTP status server error (555 unknown status) for url (http://host/live)",
+        ] {
+            let f = NetFailure::classify(text);
+            assert_eq!(
+                f.code,
+                ErrorCode::ConnectionLimit,
+                "{text:?} was read as {:?}: {}",
+                f.code,
+                f.message
+            );
+            assert!(
+                f.actions.contains(&ErrorAction::OpenSettings),
+                "{text:?} offers no way to see the limit: {:?}",
+                f.actions
+            );
+            assert!(
+                !f.message.to_lowercase().contains("their end")
+                    && !f.cause.to_lowercase().contains("their end"),
+                "{text:?} still blames the provider: {} / {}",
+                f.message,
+                f.cause
+            );
+        }
+
+        // An ordinary 5xx is still an ordinary 5xx.
+        let real = NetFailure::classify("server returned 502 bad gateway");
+        assert_eq!(real.code, ErrorCode::ServerError);
+    }
+
+    /// No viewer-facing sentence carries a run of whitespace left over from wrapping.
+    ///
+    /// Two `cause` strings did -- eighteen spaces each, from a hand-wrapped line that
+    /// was later joined -- and the error panel renders a cause as a paragraph, so the
+    /// gap was on screen. Nothing was broken; it looked broken, which for an error
+    /// message is the same thing (R-12).
+    #[test]
+    fn nothing_the_viewer_reads_has_a_gap_in_it() {
+        for text in [
+            "HTTP 400",
+            "HTTP 401",
+            "HTTP 404",
+            "HTTP 429",
+            "HTTP 500",
+            "HTTP 555",
+            "connection refused",
+            "timed out",
+            "widevine",
+            "unrecognisable nonsense",
+        ] {
+            let f = NetFailure::classify(text);
+            for (what, sentence) in [("message", &f.message), ("cause", &f.cause)] {
+                assert!(
+                    !sentence.contains("  "),
+                    "the {what} for {text:?} has a double space in it: {sentence:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn distinguishes_auth_from_connection_limit() {

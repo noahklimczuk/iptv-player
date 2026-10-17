@@ -2545,14 +2545,28 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return true;
   },
 
-  'providers.refresh': async (): Promise<SyncReport> => {
+  'providers.refresh': async ({ content }): Promise<SyncReport> => {
+    // What the viewer asked for, honoured the way `sync::fetch` honours it: an excluded
+    // kind is not imported and is *counted* as excluded rather than silently absent.
+    // The mock used to ignore this argument and report the whole fixture either way,
+    // so a journey could not tell the wizard's three switches did nothing (R-120).
+    const want = content ?? { live: true, vod: true, series: true };
+    const channels = want.live ? fx.channels.length : 0;
+    const movies = want.vod ? fx.movies.length : 0;
+    const series = want.series ? fx.series.length : 0;
+    const episodes = want.series ? fx.episodes.length : 0;
+    const excluded =
+      (want.live ? 0 : fx.channels.length)
+      + (want.vod ? 0 : fx.movies.length)
+      + (want.series ? 0 : fx.episodes.length);
+
     // Walk the same phases the host emits, and only resolve once they are done —
     // so the wizard's progress UI is genuinely exercised rather than skipped past.
     const phases: IngestProgress[] = [
       { phase: 'fetchingPlaylist', done: 0, total: 0 },
-      { phase: 'importingChannels', done: fx.channels.length, total: fx.channels.length },
-      { phase: 'importingMovies', done: fx.movies.length, total: fx.movies.length },
-      { phase: 'importingSeries', done: fx.series.length, total: fx.series.length },
+      { phase: 'importingChannels', done: channels, total: channels },
+      { phase: 'importingMovies', done: movies, total: movies },
+      { phase: 'importingSeries', done: series, total: series },
       { phase: 'fetchingEpg', done: 0, total: 0 },
       { phase: 'matchingEpg', done: 0, total: 0 },
       { phase: 'indexing', done: 0, total: 0 },
@@ -2564,18 +2578,23 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     }
 
     return {
-      channels: fx.channels.length,
-      movies: fx.movies.length,
-      series: fx.series.length,
-      episodes: fx.episodes.length,
-      epgChannels: fx.channels.length,
-      epgProgrammes: fx.channels.length * 48,
+      channels,
+      movies,
+      series,
+      episodes,
+      epgChannels: channels,
+      epgProgrammes: channels * 48,
       channelsMissing: 0,
-      epgMatched: fx.channels.length - 2,
-      epgUnmatched: fx.channels.slice(-2).map((c) => c.name),
+      epgMatched: Math.max(0, channels - 2),
+      epgUnmatched: want.live ? fx.channels.slice(-2).map((c) => c.name) : [],
+      epgUnmatchedTotal: want.live ? Math.min(2, fx.channels.length) : 0,
       warnings: [],
-      // A clean import loses nothing, which is what the host reports too.
-      dropped: { hiddenByRule: 0, kindExcluded: 0, noStreamId: 0, noEpisodeMarker: 0 },
+      // A clean import loses nothing it was asked to keep, which is what the host
+      // reports too — `kindExcluded` is the one number that is allowed to be non-zero
+      // here, because the viewer asked for it.
+      dropped: {
+        hiddenByRule: 0, kindExcluded: excluded, noStreamId: 0, noEpisodeMarker: 0,
+      },
     };
   },
 };
@@ -2611,6 +2630,18 @@ export function failNextMock(name: string, message: string): void {
 }
 
 /**
+ * Put the player into the state the error panel is for.
+ *
+ * `player.error` is filled in by the host from `NetFailure`, so a browser cannot reach
+ * it by making a command refuse -- a refusal is a rejected promise, which goes to a
+ * notice, not to the panel. Which is why the panel's four dead buttons went unpressed by
+ * any journey for as long as they existed (R-110).
+ */
+export function setPlayerErrorMock(error: PlayerState['error']): PlayerState {
+  return setPlayer({ error, status: error ? 'error' : player.status });
+}
+
+/**
  * Whether the player pretends not to know how long anything is.
  *
  * Not a hypothetical: a provider's VOD stream very often reports no duration, because
@@ -2643,6 +2674,47 @@ export function hangMock(name: string): void {
   hangs.add(name);
 }
 
+/**
+ * What the UI has asked for, and how big the answer was.
+ *
+ * A test seam like `__auroraFailNext`, and the one the mock was missing: every journey
+ * could see what the screen did with an answer and none of them could see what the
+ * question cost. That is how `epg.gridSlice` came to be called with
+ * `channelIds: []` — every channel, every programme in 24 hours, 14.8 MB measured
+ * against the live panel — on each of eight navigation controls, with no test able to
+ * notice (R-130).
+ *
+ * Bounded, because this is on for every journey: the last 200 calls is plenty to assert
+ * on and will not grow without limit in a long one.
+ */
+export interface MockCall {
+  name: string;
+  args: unknown;
+  /** The reply's size as JSON, which is what crosses the bridge on Windows. */
+  bytes: number;
+}
+
+const calls: MockCall[] = [];
+
+export function mockCalls(): MockCall[] {
+  return calls;
+}
+
+export function clearMockCalls(): void {
+  calls.length = 0;
+}
+
+function record(name: string, args: unknown, result: unknown): void {
+  if (calls.length >= 200) calls.shift();
+  let bytes = 0;
+  try {
+    bytes = JSON.stringify(result ?? null).length;
+  } catch {
+    // A reply that will not stringify is not one Tauri could have sent either.
+  }
+  calls.push({ name, args, bytes });
+}
+
 export async function invokeMock<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
@@ -2659,5 +2731,7 @@ export async function invokeMock<K extends CommandName>(
   }
   const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
-  return await fn(args);
+  const result = await fn(args);
+  record(name, args, result);
+  return result;
 }

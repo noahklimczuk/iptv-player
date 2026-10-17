@@ -120,6 +120,41 @@ test('detail modal opens with metadata and tabs', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/03-detail-modal.png` });
 });
 
+/**
+ * The Details tab says only what the library knows.
+ *
+ * Five of its ten rows were string literals, so every one of 27,494 films reported the
+ * same container, codec, resolution, frame rate, audio layout and subtitle tracks, with
+ * `example.com` as its source -- sitting in the same list as the five real rows, with
+ * identical styling, under a heading that says Details (R-104).
+ */
+test('the Details tab invents nothing', async ({ page }) => {
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  await page.locator('[role="button"]').first().click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('tab', { name: /Details/i }).click();
+
+  const details = await dialog.innerText();
+  for (const invented of [
+    'matroska',
+    'HEVC Main 10',
+    '3840x2160',
+    '23.976',
+    'E-AC-3',
+    'SRT (eng)',
+    'example.com',
+  ]) {
+    expect(details, `Details still claims ${invented}`).not.toContain(invented);
+  }
+
+  // And still says the things it does know.
+  await expect(dialog.getByText('Title', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Genres', { exact: true })).toBeVisible();
+});
+
 test('EPG guide renders a cable-style grid with a now line and preview', async ({ page }) => {
   await page.goto('/#/guide');
   await expect(page.getByRole('heading', { name: 'TV Guide' })).toBeVisible();

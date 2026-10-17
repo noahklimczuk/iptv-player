@@ -12,7 +12,7 @@ const FLAG_NEW: i64 = 1;
 const FLAG_LIVE: i64 = 2;
 const FLAG_PREMIERE: i64 = 4;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgrammeRow {
     pub id: i64,

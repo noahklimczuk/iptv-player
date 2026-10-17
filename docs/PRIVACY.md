@@ -36,7 +36,21 @@ strings, and also handles the form that carries no markers at all —
 case has been a real leak twice: once when it was not handled at all (F-15), and once
 because the fix required a file extension on the end, which the panel this app is measured
 against does not put there — so none of its live channels was redacted while its films
-were. Settings → Diagnostics offers to copy the log "for a bug report", and that is now a
+were. And a third time, in the component that handles a stream URL on every single play:
+the player logged mpv's own output through no redaction at all — `redact` was not
+referenced once anywhere in `aurora-player`, because it lived in the crate that also
+carries the HTTP client and the player cannot depend on that. It is in `aurora-core` now,
+and the two call sites in `mpv.rs` go through it.
+
+Routing them through it was not sufficient on its own, which is worth writing down here
+because it is the kind of thing this note has been wrong about before. `redact` took a
+URL and nothing else; mpv's log is never a bare URL but ffmpeg's sentence about one ---
+`Failed to open http://host/<user>/<pass>/<id>: Server returned 403 Forbidden` — and
+that went through the old function completely unchanged, because everything after the
+last `/` was read as one path segment and so did not look like a stream id.
+`redact_in_text` picks the URLs out of a line and redacts each on its own.
+
+Settings → Diagnostics offers to copy the log "for a bug report", and that is now a
 safe thing to accept.
 
 ## Google, for the assistant and the recommendation rail
