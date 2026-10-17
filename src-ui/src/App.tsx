@@ -501,9 +501,19 @@ export default function App() {
     onSeek: (secs: number) =>
       invoke('player.seek', { positionSecs: secs, relative: true })
         .catch(report('Could not seek')),
+    /**
+     * Volume, with a floor.
+     *
+     * `VolumeArgs::volume` is a `u32`, so at zero this sent `-5` and serde refused it:
+     * "invalid value: integer `-5`, expected u32". The `.catch` below turned that into a
+     * notification, so holding ArrowDown to mute something ended with an error toast for
+     * an action that had already finished. The top end was handled -- `set_volume` does
+     * `volume.min(200)` -- and only the bottom was missing (R-85).
+     */
     onVolume: (delta: number) =>
-      invoke('player.setVolume', { volume: (useUi.getState().player?.volume ?? 70) + delta })
-        .catch(report('Could not change the volume')),
+      invoke('player.setVolume', {
+        volume: Math.max(0, (useUi.getState().player?.volume ?? 70) + delta),
+      }).catch(report('Could not change the volume')),
     onMute: () =>
       invoke('player.setMuted', { muted: !(useUi.getState().player?.muted ?? false) })
         .catch(report('Could not change the volume')),

@@ -325,7 +325,22 @@ export function GuidePage({
                 >
                   {rowVirt.getVirtualItems().map((vr) => {
                     const ch = channels[vr.index]!;
-                    const progs = guide.byEpgId[ch.epgChannelId ?? String(ch.id)] ?? [];
+                    // No fallback to the row id.
+                    //
+                    // `byEpgId` is keyed by `epg_programmes.channel_id`, the XMLTV id the
+                    // provider chose; `String(ch.id)` is the channel's SQLite rowid. The
+                    // two are different namespaces, so the fallback asked for a key that
+                    // does not describe the thing being looked up -- and usually got
+                    // `[]`, which is the right answer for a channel with no mapping, by
+                    // accident.
+                    //
+                    // Where it is not: an XMLTV id that happens to be a bare number
+                    // equal to some channel's rowid. That channel, which has *no* guide
+                    // mapping, would be drawn with another channel's programmes. None of
+                    // this guide's 4,827 distinct ids is purely numeric, but the
+                    // fallback ran for 4,874 of 6,699 channels, so the exposure was most
+                    // of the grid (R-89).
+                    const progs = ch.epgChannelId ? guide.byEpgId[ch.epgChannelId] ?? [] : [];
                     return (
                       <div
                         key={ch.id}
