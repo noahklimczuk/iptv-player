@@ -68,9 +68,31 @@ export interface Programme {
   season: number | null;
   episode: number | null;
   rating: string | null;
+  /**
+   * The three fields the parser has always written and nothing could read.
+   *
+   * `epg_programmes` stores a programme's own artwork, its star rating and its cast, and
+   * `ProgrammeRow` had fields for none of the first two while `star_rating` was fetched
+   * as column 11 and then skipped. So the work was done on every import and discarded at
+   * the boundary (R-51). Declared here because the host sends them now, which the
+   * contract test is what noticed.
+   *
+   * This subscription sends none of them -- `credits` is `[]` and `star_rating` null for
+   * all 777,513 rows (R-132) -- so anything drawing them must handle absence, which is
+   * the ordinary case rather than the exception.
+   */
+  icon: string | null;
+  starRating: number | null;
+  credits: Credit[];
   isNew: boolean;
   isLive: boolean;
   isPremiere: boolean;
+}
+
+/** One name from a programme's `<credits>`, as XMLTV groups them by role. */
+export interface Credit {
+  role: string;
+  name: string;
 }
 
 export interface Movie {

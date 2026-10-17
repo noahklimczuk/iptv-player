@@ -293,6 +293,11 @@ export function programmesFor(ch: Channel, from: number, to: number): Programme[
       isNew: r() > 0.75,
       isLive: ch.group === 'Sports' && r() > 0.5,
       isPremiere: r() > 0.94,
+      starRating: Math.round((5.0 + rand() * 5.0) * 10) / 10,
+      credits: [
+        { role: 'presenter', name: person() },
+        { role: 'actor', name: person() },
+      ],
     };
 
     out.push({
@@ -318,6 +323,12 @@ export function programmesFor(ch: Channel, from: number, to: number): Programme[
       isNew: bare ? false : drawn.isNew,
       isLive: bare ? false : drawn.isLive,
       isPremiere: bare ? false : drawn.isPremiere,
+      // The three the parser writes and nothing could read until R-51. This panel sends
+      // none of them for any of its 777,513 programmes, so the bare case is the real
+      // one and the populated case exists to prove the path works at all.
+      icon: bare ? null : art(name, 240, 135),
+      starRating: bare ? null : drawn.starRating,
+      credits: bare ? [] : drawn.credits,
     });
     t += dur;
   }

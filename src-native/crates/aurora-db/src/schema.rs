@@ -640,6 +640,77 @@ CREATE INDEX idx_series_listing_attempts_at
     ON series_listing_attempts(attempted_at);
 "#,
     },
+    Migration {
+        version: 14,
+        name: "recordings_keyed_on_airtime",
+        sql: r#"
+-- Key a scheduled recording on the airing, not on the padded start.
+--
+-- `idx_recordings_unique` was `(channel_id, start, title)`, and the comment above it is
+-- right that this is what makes rule expansion idempotent across EPG refreshes -- as
+-- long as `start` does not move. It does: `start` is the *padded* start and
+-- `pre_padding_secs` is a per-rule setting. Raise a rule's pre-padding from 60 to 120
+-- seconds and every airing it has already scheduled gets a new `start`, so the next
+-- refresh inserts a second row for each rather than leaving it alone. Two recordings of
+-- the same programme, two connections wanted, and on a one-connection line (R-32) one of
+-- them failing (R-47).
+--
+-- `air_start` is the unpadded airtime, which is the stable identity of "this airing on
+-- this channel" and does not move when padding changes. The row already carries it.
+--
+-- Duplicates that the old index allowed are collapsed first, keeping the lowest id --
+-- the one scheduled first, which is also the one any `rule_id` reference and any
+-- recording already on disk belongs to.
+DELETE FROM recordings WHERE id NOT IN (
+    SELECT MIN(id) FROM recordings GROUP BY channel_id, air_start, title
+);
+DROP INDEX IF EXISTS idx_recordings_unique;
+CREATE UNIQUE INDEX idx_recordings_unique ON recordings(channel_id, air_start, title);
+
+-- `MarkerSource` has four variants and this CHECK had three.
+--
+-- `Convention` -- the credits-from-the-clock marker, tier 4 -- was missing, while
+-- `markers::record` inserts `marker.source.as_str()` without restriction and
+-- `MarkerSource::parse` accepts "convention" specifically so the value can round-trip
+-- through this column. Nothing writes one today, so the constraint and the enum
+-- disagreed where the compiler could not see it and the first caller to record one would
+-- have failed at runtime (R-44).
+--
+-- SQLite cannot alter a CHECK, so the table is rebuilt. It is small -- one row per
+-- marker per episode -- and `PRAGMA foreign_keys` is off during a migration, so the
+-- episode references survive the swap.
+CREATE TABLE skip_markers_new (
+    id          INTEGER PRIMARY KEY,
+    episode_id  INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL CHECK (kind IN ('intro','recap','credits')),
+    source      TEXT    NOT NULL CHECK (source IN ('chapters','user','learned','convention')),
+    start_secs  REAL    NOT NULL,
+    end_secs    REAL    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (episode_id, kind, source)
+);
+INSERT INTO skip_markers_new
+    (id, episode_id, kind, source, start_secs, end_secs, created_at)
+    SELECT id, episode_id, kind, source, start_secs, end_secs, created_at
+      FROM skip_markers;
+DROP TABLE skip_markers;
+ALTER TABLE skip_markers_new RENAME TO skip_markers;
+CREATE INDEX idx_markers_episode ON skip_markers(episode_id, kind);
+
+-- Every display name a guide channel has, not only the first.
+--
+-- XMLTV allows several `<display-name>` elements and the alternative spellings are
+-- exactly what fuzzy name matching needs, but the column was singular so all but the
+-- first were dropped at the boundary. It does not affect matching today -- `sync.rs`
+-- builds the `EpgIndex` from the in-memory parse, which has all of them -- but anything
+-- *later* could only ever see one spelling: a re-match without a re-fetch, or a "which
+-- EPG channel is this?" picker in Settings (R-50).
+--
+-- A JSON array rather than a child table: this is read as a whole, per channel, and
+-- never queried across channels.
+ALTER TABLE epg_channels ADD COLUMN display_names TEXT;
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 13;
+pub const LATEST_VERSION: u32 = 14;
