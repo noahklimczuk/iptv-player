@@ -81,12 +81,12 @@ mod tests {
     #[test]
     fn a_percent_before_a_multibyte_character_does_not_panic() {
         for s in [
-            "%\u{e9}",       // 2-byte: the offsets happened to align
-            "%\u{2013}",     // 3-byte en dash — this one panicked
-            "%\u{2019}",     // 3-byte curly apostrophe, what a chat client produces
-            "%\u{20ac}x",    // 3-byte euro, with something after it
-            "%\u{1f600}",    // 4-byte emoji
-            "a%\u{2013}b",   // and not only at the start
+            "%\u{e9}",     // 2-byte: the offsets happened to align
+            "%\u{2013}",   // 3-byte en dash — this one panicked
+            "%\u{2019}",   // 3-byte curly apostrophe, what a chat client produces
+            "%\u{20ac}x",  // 3-byte euro, with something after it
+            "%\u{1f600}",  // 4-byte emoji
+            "a%\u{2013}b", // and not only at the start
         ] {
             let _ = decode(s);
         }

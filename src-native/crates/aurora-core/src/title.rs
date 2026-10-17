@@ -284,6 +284,29 @@ pub fn split_country_prefix(name: &str) -> (String, Option<String>) {
 /// everything that is not alphanumeric — so `"US| CNN HD"`, `"CNN"`, and `"cnn.us"` all collapse
 /// to `"cnn"`.
 pub fn match_key(name: &str) -> String {
+    let base = normalised_for_matching(name);
+
+    let mut out = String::new();
+    for word in base.split_whitespace() {
+        let key: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+        if key.is_empty() || CHANNEL_TAGS.contains(&key.as_str()) {
+            continue;
+        }
+        out.push_str(&key);
+    }
+    if out.is_empty() {
+        // Never return an empty key — fall back to the raw alphanumerics.
+        return base.chars().filter(|c| c.is_alphanumeric()).collect();
+    }
+    out
+}
+
+/// The normalisation [`match_key`] and [`key_words`] share, before either decides what a
+/// word is.
+///
+/// Split out so there is one definition of it. What the two do afterwards genuinely
+/// differs, and the comment on `key_words` says why.
+fn normalised_for_matching(name: &str) -> String {
     let (base, _) = split_country_prefix(name);
     // And a bare code with no separator, which `split_country_prefix` leaves alone and
     // is right to.
@@ -305,21 +328,32 @@ pub fn match_key(name: &str) -> String {
         .unwrap_or(base);
     let base = fold_diacritics(&base).to_lowercase();
     let base = re_bracketed().replace_all(&base, " ");
-    let base = re_separators().replace_all(&base, " ");
+    re_separators().replace_all(&base, " ").into_owned()
+}
 
-    let mut out = String::new();
-    for word in base.split_whitespace() {
-        let key: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
-        if key.is_empty() || CHANNEL_TAGS.contains(&key.as_str()) {
-            continue;
-        }
-        out.push_str(&key);
-    }
-    if out.is_empty() {
-        // Never return an empty key — fall back to the raw alphanumerics.
-        return base.chars().filter(|c| c.is_alphanumeric()).collect();
-    }
-    out
+/// The same normalisation as [`match_key`], as a list of words.
+///
+/// Not `match_key(s).split_whitespace()`, which is what `tmdb::tokens` used to be.
+/// `match_key` concatenates — "The Matrix Reloaded" comes back as "thematrixreloaded" —
+/// so that split could only ever yield one element, and the token-set F1 built on it
+/// collapsed to an equality test. Punctuation and spacing differences still matched,
+/// which is why it appeared to work, but any difference of a *word* scored 0 instead of
+/// the ~0.8 the F1 was designed to give: "Blade Runner" against "Blade Runner 2049",
+/// "The Lord of the Rings" against "Lord of the Rings". Those titles then got no
+/// metadata at all, and the three mechanisms built on a continuous score had an
+/// eight-value step function underneath them (R-25).
+///
+/// The split is on anything that is not alphanumeric, rather than on whitespace, so
+/// "spider-man" is two words and matches "Spider Man". `match_key` keeps its own
+/// whitespace split on purpose: it concatenates, so where the boundaries fall cannot
+/// change its answer, and changing which *characters* survive would change every
+/// duplicate-collapsing key in the library.
+pub fn key_words(name: &str) -> Vec<String> {
+    let base = normalised_for_matching(name);
+    base.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty() && !CHANNEL_TAGS.contains(word))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Detect the quality tier advertised in a channel or stream name.
