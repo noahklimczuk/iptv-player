@@ -16,13 +16,39 @@ pub use rusqlite;
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Open (or create) the library database with the pragmas the workload needs.
 pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     let conn = Connection::open(path)?;
     configure(&conn)?;
     migrate::run(&conn)?;
+    // Takes the credentials out of the three URL columns, once. In `open` rather than in
+    // a migration because it has to parse a URL, which SQL does badly; it is guarded on
+    // its own result, so the second launch does nothing. See `backfill_stream_ids`.
+    let rewritten = backfill_stream_ids(&conn)?;
+    if rewritten > 0 {
+        tracing::info!(rows = rewritten, "rewrote stored stream URLs as stream ids");
+        // **And then rewrite the file.** Blanking a column does not remove the bytes
+        // from the database: SQLite leaves the old row in a freed page, and a freed page
+        // keeps its contents until something reuses it. Measured on the real library
+        // after the rewrite: 34,702 raw occurrences of the password still in the file
+        // while every one of the three columns was clean (R-126).
+        //
+        // The whole point of this work is that `library.db` can be handed to somebody,
+        // so a file that still has the password in its unallocated pages is not fixed.
+        // `VACUUM` rebuilds it. Once, on the first launch after an upgrade, which is the
+        // only time anything is rewritten; it needs temporary space about the size of
+        // the library, and a failure is logged rather than fatal — the columns are
+        // already clean, and refusing to start would be a worse answer than a file that
+        // needs one more launch.
+        match conn.execute_batch("VACUUM") {
+            Ok(()) => tracing::info!("library compacted, so the old rows are gone from the file"),
+            Err(e) => tracing::error!(
+                "the library could not be compacted, so the previous stream URLs may                  still be recoverable from unused pages of the file: {e}"
+            ),
+        }
+    }
     // A library that predates `analyze` being called at all — every library that
     // already exists — gets its statistics here, once. See `analyze`.
     if !has_statistics(&conn)? {
@@ -111,6 +137,114 @@ fn register_functions(conn: &Connection) -> Result<()> {
 pub fn analyze(conn: &Connection) -> Result<()> {
     conn.execute_batch("ANALYZE")?;
     Ok(())
+}
+
+/// How a stream address should be stored for this provider: `(url, stream_id, container)`.
+///
+/// For a provider whose addresses can be rebuilt -- an Xtream panel, whose base address
+/// is on the provider row and whose password is in Credential Manager -- the URL is
+/// *not* stored: the credentials are in its path. For anything else, and for a URL this
+/// does not recognise as a stream address, the URL is kept as it is.
+///
+/// Used at every write rather than only by `backfill_stream_ids`, because a pass that
+/// cleans up afterwards leaves a window: the episode sweep runs in the background after
+/// a refresh has finished, and on a real subscription it writes 42,493 rows -- every one
+/// of which held the password until the next launch when the only conversion was
+/// post-hoc (R-126).
+pub fn stored_stream(rebuild: bool, url: &str) -> (String, Option<String>, Option<String>) {
+    if !rebuild {
+        return (url.to_string(), None, None);
+    }
+    match aurora_core::catchup::split_xtream_stream_ref(url) {
+        Some((stream_id, container)) => (String::new(), Some(stream_id), container),
+        // Not a stream address at all. An Xtream provider can still carry one of these —
+        // a `get.php` playlist row, say — and it is kept rather than lost.
+        None => (url.to_string(), None, None),
+    }
+}
+
+/// Whether this provider's stream addresses are rebuilt rather than stored.
+pub fn provider_rebuilds_urls(conn: &Connection, provider_id: i64) -> Result<bool> {
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM providers WHERE id = ?1",
+            rusqlite::params![provider_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(kind.as_deref() == Some("xtream"))
+}
+
+/// Replace every stored Xtream stream URL with the id it can be rebuilt from.
+///
+/// An Xtream URL carries the credentials in its path, so storing it stored the viewer's
+/// password -- 6,699 channel sources, 27,494 films and one row per episode of 8,086
+/// series on the subscription this is measured against, several hundred thousand
+/// plaintext copies in one file. `docs/PRIVACY.md` promised the opposite about the very
+/// artefact somebody attaches to a bug report (R-126).
+///
+/// Run from `open` rather than as a migration because deciding whether a URL *is* an
+/// Xtream stream address means parsing it, and SQL is the wrong tool for that. It is
+/// idempotent by its own query: only rows that still hold a URL and have no `stream_id`
+/// are considered, so the pass after the first finds nothing and costs one indexless
+/// scan of three tables at startup.
+///
+/// Rows whose URL does not parse are left exactly as they are. That is an M3U provider,
+/// whose addresses are whatever the playlist said and cannot be rebuilt from an id --
+/// the honest half of this, and what the privacy note now says out loud.
+///
+/// Returns how many rows were rewritten, for the log line.
+pub fn backfill_stream_ids(conn: &Connection) -> Result<usize> {
+    // Only an Xtream provider's rows. An M3U provider's URLs are whatever the playlist
+    // said -- including, very often, Xtream stream URLs, since that is what a panel's
+    // `get.php` serves -- but there is no saved password to rebuild them from: an M3U
+    // provider has no `credential_ref`, because its URL carries its own credentials. So
+    // those rows keep theirs and `docs/PRIVACY.md` says so, which is the honest half of
+    // this (R-126).
+    let queries = [
+        (
+            "channel_sources",
+            "SELECT s.id, s.url FROM channel_sources s
+             JOIN channels c ON c.id = s.channel_id
+             JOIN providers p ON p.id = c.provider_id
+             WHERE s.stream_id IS NULL AND s.url <> '' AND p.kind = 'xtream'",
+        ),
+        (
+            "movies",
+            "SELECT m.id, m.url FROM movies m
+             JOIN providers p ON p.id = m.provider_id
+             WHERE m.stream_id IS NULL AND m.url <> '' AND p.kind = 'xtream'",
+        ),
+        (
+            "episodes",
+            "SELECT e.id, e.url FROM episodes e
+             JOIN series r ON r.id = e.series_id
+             JOIN providers p ON p.id = r.provider_id
+             WHERE e.stream_id IS NULL AND e.url <> '' AND p.kind = 'xtream'",
+        ),
+    ];
+
+    let mut rewritten = 0usize;
+    for (table, select) in queries {
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare(select)?;
+            let found = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            found.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let sql =
+            format!("UPDATE {table} SET stream_id = ?2, container = ?3, url = '' WHERE id = ?1");
+        let mut update = conn.prepare(&sql)?;
+        for (id, url) in rows {
+            let Some((stream_id, container)) = aurora_core::catchup::split_xtream_stream_ref(&url)
+            else {
+                continue;
+            };
+            update.execute(rusqlite::params![id, stream_id, container])?;
+            rewritten += 1;
+        }
+    }
+    Ok(rewritten)
 }
 
 /// Whether `ANALYZE` has ever run on this database.
@@ -297,6 +431,199 @@ mod tests {
             .query_row("SELECT count(*) FROM providers", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "an intact library must not be replaced");
+    }
+
+    /// The password is not in the library after an import, and the row still plays.
+    ///
+    /// An Xtream stream URL carries the credentials in its path, and those strings were
+    /// stored verbatim in three tables: 6,699 channel sources, 27,494 films and one row
+    /// per episode of 8,086 series on the subscription this is measured against, which
+    /// is several hundred thousand plaintext copies of a username and password in one
+    /// SQLite file. `docs/PRIVACY.md` promised the opposite about the one artefact
+    /// somebody attaches to a bug report (R-126).
+    #[test]
+    fn an_xtream_import_leaves_no_credentials_in_the_library() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                 VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (1,1,'c1','CNN','cnn',0);
+             INSERT INTO channel_sources (channel_id,url)
+                 VALUES (1,'http://panel.example:8080/live/bob/hunter2/1234.ts');
+             INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+                 VALUES (1,1,'m1','Heat','heat',
+                         'http://panel.example:8080/movie/bob/hunter2/555.mkv',0);
+             INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+                 VALUES (1,1,'s1','The Wire','the wire',0);
+             INSERT INTO episodes (id,series_id,season,episode,url)
+                 VALUES (1,1,1,1,'http://panel.example:8080/series/bob/hunter2/999.mp4');",
+        )
+        .unwrap();
+
+        let rewritten = backfill_stream_ids(&conn).unwrap();
+        assert_eq!(rewritten, 3, "every stored URL should have been rewritten");
+
+        // Nothing anywhere in the three tables mentions the password or the username.
+        for (table, column) in [
+            ("channel_sources", "url"),
+            ("movies", "url"),
+            ("episodes", "url"),
+        ] {
+            let leaked: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM {table}
+                          WHERE {column} LIKE '%hunter2%' OR {column} LIKE '%bob%'"
+                    ),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(leaked, 0, "{table}.{column} still carries the credentials");
+        }
+
+        // And what is kept is enough to rebuild the address: the id and the container.
+        let (id, container): (String, Option<String>) = conn
+            .query_row(
+                "SELECT stream_id, container FROM movies WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(id, "555");
+        assert_eq!(container.as_deref(), Some("mkv"));
+
+        let (live_id, live_container): (String, Option<String>) = conn
+            .query_row(
+                "SELECT stream_id, container FROM channel_sources WHERE channel_id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(live_id, "1234");
+        assert_eq!(live_container.as_deref(), Some("ts"));
+
+        // Twice changes nothing: the pass runs at every launch.
+        assert_eq!(backfill_stream_ids(&conn).unwrap(), 0);
+    }
+
+    /// Upgrading a library does not leave the password in the file.
+    ///
+    /// The half a column check cannot see. Blanking `url` does not remove the old row
+    /// from a SQLite database: it stays in a freed page, and a freed page keeps its
+    /// contents until something reuses it. Measured on the real 257 MB library after the
+    /// first version of this fix: all three columns clean, and **34,702 raw occurrences
+    /// of the password still in the file**. Since the whole point is that `library.db`
+    /// can be handed to somebody, that was a false pass (R-126).
+    ///
+    /// On a real file rather than in memory, because this is a question about bytes on
+    /// disk.
+    #[test]
+    fn upgrading_a_library_removes_the_password_from_the_file() {
+        let dir = scratch("vacuum");
+        let path = dir.join("library.db");
+
+        // A library as an older build left it: migration 11, URLs with the password in
+        // them, and no `stream_id` column at all.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            crate::configure(&conn).unwrap();
+            for m in crate::schema::MIGRATIONS.iter().filter(|m| m.version <= 11) {
+                conn.execute_batch(m.sql).unwrap();
+            }
+            conn.execute_batch("PRAGMA user_version = 11").unwrap();
+            conn.execute_batch(
+                "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                     VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+                 INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+                     VALUES (1,1,'s1','Show','show',0);",
+            )
+            .unwrap();
+            // Enough rows that the old ones cannot all sit in the same page as the new.
+            let tx = conn.unchecked_transaction().unwrap();
+            for i in 0..400 {
+                tx.execute(
+                    "INSERT INTO movies (provider_id,provider_key,title,match_key,url,last_seen_at)
+                     VALUES (1,?1,?2,'m',?3,0)",
+                    rusqlite::params![
+                        format!("k{i}"),
+                        format!("Film {i}"),
+                        format!("http://panel.example:8080/movie/bob/hunter2/{i}.mkv")
+                    ],
+                )
+                .unwrap();
+                tx.execute(
+                    "INSERT INTO episodes (series_id,season,episode,url)
+                     VALUES (1,1,?1,?2)",
+                    rusqlite::params![
+                        i + 1,
+                        format!("http://panel.example:8080/series/bob/hunter2/{i}.mp4")
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        let before = std::fs::read(&path).unwrap();
+        assert!(
+            count_bytes(&before, b"hunter2") > 100,
+            "the fixture did not write the password often enough to be a real check"
+        );
+
+        // What a viewer's first launch on the new build does.
+        let conn = open(&path).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM movies WHERE instr(url, 'hunter2') > 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "the columns should be clean");
+        drop(conn);
+
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(
+            count_bytes(&after, b"hunter2"),
+            0,
+            "the password survives in the file's unused pages — VACUUM is what removes it"
+        );
+        // The username stays: it is on the `providers` row, which the app has to show.
+        assert!(count_bytes(&after, b"bob") > 0);
+    }
+
+    fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    }
+
+    /// An M3U provider keeps its URLs, because nothing could rebuild them.
+    ///
+    /// Its addresses are whatever the playlist said — including, very often, Xtream
+    /// stream URLs, since that is what a panel's `get.php` serves — and there is no
+    /// saved password to rebuild them from: an M3U provider has no `credential_ref`,
+    /// because its URL carries its own credentials. `docs/PRIVACY.md` says so rather
+    /// than implying the library is clean for everybody (R-126).
+    #[test]
+    fn an_m3u_providers_urls_are_left_alone() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+                 VALUES (1,'List','m3u','http://host/get.php?username=bob',0);
+             INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+                 VALUES (1,1,'m1','Heat','heat','http://host/movie/bob/hunter2/555.mkv',0);",
+        )
+        .unwrap();
+
+        assert_eq!(backfill_stream_ids(&conn).unwrap(), 0);
+        let url: String = conn
+            .query_row("SELECT url FROM movies WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(url, "http://host/movie/bob/hunter2/555.mkv");
     }
 
     /// What decides between a message and renaming somebody's library.

@@ -849,13 +849,23 @@ fn write_channel_sources(
     {
         let mut lookup =
             tx.prepare("SELECT id FROM channels WHERE provider_id = ?1 AND provider_key = ?2")?;
+        // The row is identified by what it stores, which for a provider whose addresses
+        // are rebuilt is the stream id rather than the URL. The `NOT EXISTS` guard is
+        // what makes a refresh add nothing it already has, so it has to compare the same
+        // thing that is written -- against `url` alone it would insert a second row for
+        // every channel on every refresh, for ever (R-126).
         let mut insert = tx.prepare(
-            "INSERT INTO channel_sources (channel_id, url, priority, quality)
-             SELECT ?1, ?2, 0, ?3
+            "INSERT INTO channel_sources (channel_id, url, priority, quality, stream_id,
+                                          container)
+             SELECT ?1, ?2, 0, ?3, ?4, ?5
              WHERE NOT EXISTS (
-                 SELECT 1 FROM channel_sources WHERE channel_id = ?1 AND url = ?2
+                 SELECT 1 FROM channel_sources
+                  WHERE channel_id = ?1
+                    AND url = ?2
+                    AND COALESCE(stream_id, '') = COALESCE(?4, '')
              )",
         )?;
+        let rebuild = aurora_db::provider_rebuilds_urls(&tx, provider_id)?;
         for (key, entry) in entries {
             let id: i64 = match lookup
                 .query_row(aurora_db::rusqlite::params![provider_id, key], |r| r.get(0))
@@ -863,10 +873,13 @@ fn write_channel_sources(
                 Ok(id) => id,
                 Err(_) => continue,
             };
+            let (url, stream_id, container) = aurora_db::stored_stream(rebuild, &entry.url);
             insert.execute(aurora_db::rusqlite::params![
                 id,
-                entry.url,
-                title::detect_quality(&entry.name)
+                url,
+                title::detect_quality(&entry.name),
+                stream_id,
+                container
             ])?;
         }
     }

@@ -20,6 +20,7 @@ pub mod providers;
 pub mod recommend;
 pub mod series;
 pub mod services;
+pub mod streams;
 pub mod supervise;
 pub mod timeshift;
 pub mod updates;

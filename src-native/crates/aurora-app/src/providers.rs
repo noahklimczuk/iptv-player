@@ -988,6 +988,23 @@ pub fn refresh_provider(
     )
     .map_err(aurora_db::DbError::from)?;
 
+    // Take the credentials straight back out of the rows the import just wrote.
+    //
+    // `sync::apply` stores whatever URL the provider gave, which for an Xtream panel
+    // carries the username and password in its path. Rewriting them as stream ids here
+    // -- rather than in the importer -- keeps one implementation of "is this an Xtream
+    // stream address", shared with the pass that runs at `open()` for libraries imported
+    // by an older build. The window in which the file holds them is the rest of this
+    // function; a crash inside it is covered by the next launch (R-126).
+    match aurora_db::backfill_stream_ids(&db) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(rows = n, "stored stream ids in place of stream URLs"),
+        // The library is still usable with the URLs it has, so this must not fail an
+        // import the viewer waited for -- but it is worth saying loudly, because it is
+        // the difference between a library with credentials in it and one without.
+        Err(e) => tracing::error!("could not rewrite stored stream URLs: {e}"),
+    }
+
     // Fresh guide data is the moment a series rule can find new episodes. Doing it here
     // rather than on a timer means the schedule is right as soon as the import is.
     match crate::dvr::expand_rules_now(&db, now_unix()) {

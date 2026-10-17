@@ -17,17 +17,35 @@ what they are for.
 Credential Manager, and the `providers` table holds only a reference to the entry — so
 nothing in Aurora stores the thing you typed.
 
-**But `library.db` is not safe to hand to somebody today, and this note used to say it
-was.** Xtream addresses a stream as
-`http://host/<username>/<password>/<id>` — the credentials are in the path, because that
-is how the protocol works — and the library stores those URLs as they come, in
-`channel_sources.url`, `movies.url` and `episodes.url`. On a subscription with a few
-thousand channels and a large catalogue that is hundreds of thousands of copies of your
-sign-in, in plain text, in one file.
+**And `library.db` no longer holds them either, which this note was wrong about for a
+long time.** Xtream addresses a stream as `http://host/<username>/<password>/<id>` — the
+credentials are in the path, because that is how the protocol works — and the library
+used to store those URLs exactly as they came, in `channel_sources.url`, `movies.url` and
+`episodes.url`. On a subscription with a few thousand channels and a large catalogue that
+was hundreds of thousands of copies of your sign-in, in plain text, in one file, while
+this paragraph said the opposite.
 
-So: **do not attach `library.db` to a bug report.** The work to store a stream id and
-rebuild the URL when it is needed is in progress; when it is done this paragraph will say
-so, and until then it says what is actually true.
+What is stored now is the provider's stream id and the file extension, and the address is
+rebuilt when something is played — from `base_url` on the provider row and the password
+out of Credential Manager. A library imported by an older build is rewritten the first
+time this one opens it, so upgrading cleans the file rather than leaving it as it was.
+
+**One exception, and it is a real one.** An **M3U** provider's addresses are whatever the
+playlist said. They often *are* Xtream stream URLs, because that is what a panel's
+`get.php` serves — but there is no saved password to rebuild them from, since an M3U
+provider's credentials live in the URL itself and nowhere else. Those rows keep their URLs,
+so if your provider is set up as a playlist rather than as a panel, `library.db` still
+contains your sign-in and should not be handed to anybody.
+
+Two other things worth knowing, both consequences of the above:
+
+* **Your provider's password is now required to play anything** on an Xtream provider. If
+  you clear it in Settings, or copy a library to a machine whose Credential Manager does
+  not have it, playback stops with a message asking for it rather than quietly working
+  from a stored URL.
+* The database still holds your provider's **host name** and **username** — the username
+  is on the `providers` row, because the app has to show you which account it is signed in
+  as. It is the password that is gone.
 
 Credentials no longer appear in a **log**. Every URL written to one goes through
 `http::redact` first, which strips `username`, `password`, `token` and the rest from query

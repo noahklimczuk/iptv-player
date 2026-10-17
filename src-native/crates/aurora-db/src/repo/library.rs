@@ -50,6 +50,9 @@ pub fn upsert_movies(
     movies: &[NewMovie],
     now: i64,
 ) -> Result<usize> {
+    // Whether this provider's addresses are rebuilt at play time rather than stored.
+    // Decided once per batch: it is a property of the provider, not of the row (R-126).
+    let rebuild = crate::provider_rebuilds_urls(conn, provider_id)?;
     let tx = conn.transaction()?;
     let mut n = 0;
     {
@@ -58,8 +61,8 @@ pub fn upsert_movies(
         let mut stmt = tx.prepare(
             r#"INSERT INTO movies
                (provider_id, provider_key, title, match_key, year, quality, group_title,
-                url, poster, added_at, rating, last_seen_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+                url, poster, added_at, rating, last_seen_at, stream_id, container)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                ON CONFLICT (provider_id, provider_key) DO UPDATE SET
                  title        = excluded.title,
                  match_key    = excluded.match_key,
@@ -67,6 +70,8 @@ pub fn upsert_movies(
                  quality      = excluded.quality,
                  group_title  = excluded.group_title,
                  url          = excluded.url,
+                 stream_id    = excluded.stream_id,
+                 container    = excluded.container,
                  poster       = COALESCE(excluded.poster, movies.poster),
                  -- The existing one wins: by the second refresh it may be TMDB's, and
                  -- a playlist must not undo enrichment. The panel only fills a gap.
@@ -74,6 +79,7 @@ pub fn upsert_movies(
                  last_seen_at = excluded.last_seen_at"#,
         )?;
         for m in movies {
+            let (url, stream_id, container) = crate::stored_stream(rebuild, &m.url);
             stmt.execute(params![
                 provider_id,
                 m.provider_key,
@@ -82,11 +88,13 @@ pub fn upsert_movies(
                 m.year,
                 m.quality,
                 m.group,
-                m.url,
+                url,
                 m.poster,
                 m.added_at.unwrap_or(now),
                 m.rating,
-                now
+                now,
+                stream_id,
+                container
             ])?;
             n += 1;
         }
@@ -842,31 +850,54 @@ pub fn upsert_episodes(
     episodes: &[NewEpisode],
     now: i64,
 ) -> Result<usize> {
+    // Decided here as well as in `upsert_movies`, and not left to the pass that runs at
+    // the end of a refresh: the episode sweep writes in the background *after* that, and
+    // on a real subscription it is 42,493 rows — measured still holding the password the
+    // first time this fix was tried against the real panel (R-126).
+    let provider_id: Option<i64> = conn
+        .query_row(
+            "SELECT provider_id FROM series WHERE id = ?1",
+            params![series_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let rebuild = match provider_id {
+        Some(id) => crate::provider_rebuilds_urls(conn, id)?,
+        // No series row means the insert below will fail on its foreign key anyway;
+        // storing the URL is the safe reading of "we do not know the provider".
+        None => false,
+    };
     let tx = conn.transaction()?;
     let mut n = 0;
     {
         let mut stmt = tx.prepare(
             r#"INSERT INTO episodes (series_id, season, episode, title, url, still,
-                                     overview, runtime_mins, added_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+                                     overview, runtime_mins, added_at, stream_id,
+                                     container)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
                ON CONFLICT (series_id, season, episode) DO UPDATE SET
                  title        = COALESCE(excluded.title, episodes.title),
                  url          = excluded.url,
+                 stream_id    = excluded.stream_id,
+                 container    = excluded.container,
                  still        = COALESCE(excluded.still, episodes.still),
                  overview     = COALESCE(excluded.overview, episodes.overview),
                  runtime_mins = COALESCE(excluded.runtime_mins, episodes.runtime_mins)"#,
         )?;
         for e in episodes {
+            let (url, stream_id, container) = crate::stored_stream(rebuild, &e.url);
             stmt.execute(params![
                 series_id,
                 e.season,
                 e.episode,
                 e.title,
-                e.url,
+                url,
                 e.still,
                 e.overview,
                 e.runtime_mins,
-                now
+                now,
+                stream_id,
+                container
             ])?;
             n += 1;
         }
