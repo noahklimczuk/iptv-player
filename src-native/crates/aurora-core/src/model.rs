@@ -111,8 +111,23 @@ pub struct ParseWarning {
 pub struct PlaylistParseResult {
     pub entries: Vec<PlaylistEntry>,
     pub warnings: Vec<ParseWarning>,
-    /// Entries seen but skipped (duplicates, unusable URLs).
+    /// Entries seen but skipped, of either kind below.
+    ///
+    /// Kept as the total because it is what every existing caller reads, and because
+    /// "how many rows did not make it" is a real question on its own.
     pub skipped: usize,
+    /// Of those, the ones that were already in the playlist under the same URL.
+    ///
+    /// Split out because the single number mixed two different problems. A duplicate
+    /// increments `skipped` silently while an unusable line increments it *and* logs a
+    /// warning, so "3,099 skipped" could mean "you have three thousand duplicates" or
+    /// "I could not read three thousand lines" — and on the real playlist it was the
+    /// first, with 0 warnings, which the number alone gave the reader no way to learn
+    /// (R-04).
+    pub duplicates: usize,
+    /// And the ones that could not be used: a line that is not a URL, or an `#EXTINF`
+    /// with no URL after it. Every one of these also produces a warning.
+    pub unusable: usize,
 }
 
 /// An EPG programme, timezone-normalized to UTC at parse time.

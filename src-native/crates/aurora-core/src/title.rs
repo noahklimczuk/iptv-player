@@ -196,9 +196,23 @@ const CHANNEL_TAGS: &[&str] = &[
     "480p", "raw", "backup", "alt", "vip", "plus", "\u{ac}",
 ];
 
+/// The year in a VOD name, with what may sit on either side of it.
+///
+/// The trailing set used to be `[\s\)\]\.\-_]|$`, which does not include an *opening*
+/// bracket -- so `EN ★ The Academy - 2025[4K]`, with no space before the `[`, matched
+/// nothing and the year stayed in the title. `re_bracketed` then took `[4K]` away and
+/// left `EN The Academy 2025`, which is what was stored, searched and built into the
+/// match key: `theacademy2025` scores 0.000 against TMDB's "The Academy", and the film
+/// was marked `nomatch` after one attempt. Thirty films on this subscription share that
+/// shape (R-59).
 fn re_year() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?:^|[\s\(\[\.\-_])((?:19|20)\d{2})(?:[\s\)\]\.\-_]|$)").unwrap())
+    R.get_or_init(|| {
+        // `*` among the trailing characters because this panel writes it: measured in
+        // the real library, `EN Spider-Man Across the Spider-Verse 2023*` was the last
+        // film whose year the cleaner could not see.
+        Regex::new(r"(?:^|[\s\(\[\.\-_])((?:19|20)\d{2})(?:[\s\(\)\[\]\.\-_\*]|$)").unwrap()
+    })
 }
 
 fn re_country_prefix() -> &'static Regex {
@@ -568,6 +582,37 @@ mod tests {
         );
         // And a title that only looks like a tag reports no quality at all.
         assert_eq!(clean_movie_title("The Cut").quality, None);
+    }
+
+    /// A year pressed against a bracket, which is the shape that defeated this.
+    ///
+    /// `- 2025[4K]` with no space before the bracket matched no year, so the year stayed
+    /// in the stored title and in the match key, and the film could not be matched
+    /// against TMDB at all. Thirty films on the subscription this is measured against
+    /// (R-59).
+    #[test]
+    fn a_year_against_a_bracket_is_still_a_year() {
+        for (raw, title, year) in [
+            // The star comes off too, which `splits_the_star_prefix_...` covers.
+            ("EN \u{2605} The Academy - 2025[4K]", "EN The Academy", 2025),
+            ("The Academy - 2025[4K]", "The Academy", 2025),
+            ("Inception 2010[1080p]", "Inception", 2010),
+            ("Arrival 2016(FHD)", "Arrival", 2016),
+            // The trailing star this panel writes on a new release.
+            ("Spider-Man Across the Spider-Verse 2023*", "Spider-Man Across the Spider-Verse", 2023),
+            // And the forms that already worked, which must not move.
+            ("The Matrix (1999) [4K] REMUX", "The Matrix", 1999),
+            ("Inception.2010.1080p", "Inception", 2010),
+            ("Dune - 2021", "Dune", 2021),
+        ] {
+            let c = clean_movie_title(raw);
+            assert_eq!(c.year, Some(year), "year from {raw:?}");
+            assert_eq!(c.title, title, "title from {raw:?}");
+        }
+
+        // A numeric title is still a title: the year has to be preceded by something.
+        assert_eq!(clean_movie_title("2012[4K]").title, "2012");
+        assert_eq!(clean_movie_title("2012[4K]").year, None);
     }
 
     #[test]

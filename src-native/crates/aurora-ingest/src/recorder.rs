@@ -68,10 +68,38 @@ impl Progress {
         self.last_write.load(Ordering::Relaxed)
     }
 
-    /// Whether nothing has arrived for `limit_secs`. The supervisor surfaces this; it
-    /// cannot itself interrupt a blocked read.
-    pub fn is_stalled(&self, now: i64, limit_secs: i64) -> bool {
-        let last = self.last_write();
+    /// Whether nothing has arrived for `limit_secs`, counting from the start when
+    /// nothing has arrived at all.
+    ///
+    /// `since` is when the recording began. It is needed because `last_write` is set
+    /// only on a successful write, so a recording that has received *nothing* has
+    /// `last_write == 0` -- and the `last > 0` guard this used to carry made that case
+    /// permanently not-stalled, at every limit:
+    ///
+    /// ```text
+    /// a recording that has received nothing at all:
+    ///    bytes 0  last_write 0
+    ///    is_stalled(now, 60)     = false
+    ///    is_stalled(now, 600)    = false
+    ///    is_stalled(now, 86400)  = false
+    /// ```
+    ///
+    /// Which is the one case `build_client`'s own comment names two hundred lines
+    /// further down: "a provider which accepts the connection and then sends nothing
+    /// holds `start` for the whole window". That recording sat at `Recording` with no
+    /// progress for its entire window and `report.stalled` never mentioned it; only
+    /// `reap` resolved it at the end, with "the provider sent nothing". The outcome was
+    /// always right. What was missing is the signal while it is happening, which is the
+    /// only thing `note_stalls` exists to provide (R-67).
+    ///
+    /// The supervisor surfaces this; it cannot itself interrupt a blocked read.
+    pub fn is_stalled(&self, now: i64, limit_secs: i64, since: i64) -> bool {
+        // Nothing written yet: the clock runs from when the recording started, so a
+        // stream that never began counts as stalled once the limit has passed.
+        let last = match self.last_write() {
+            0 => since,
+            last => last,
+        };
         last > 0 && now - last > limit_secs
     }
 }
@@ -454,12 +482,31 @@ mod tests {
     #[test]
     fn a_stall_is_detectable_but_a_live_write_is_not_a_stall() {
         let progress = Progress::default();
-        // Nothing written yet: not a stall, just not started.
-        assert!(!progress.is_stalled(10_000, 30));
+        // Nothing written yet and the recording has only just begun: not a stall. It
+        // becomes one once the limit has passed, which is the whole of R-67 and is
+        // asserted at the bottom of this test.
+        assert!(!progress.is_stalled(10_000, 30, 9_990));
 
         progress.last_write.store(10_000, Ordering::Relaxed);
-        assert!(!progress.is_stalled(10_020, 30));
-        assert!(progress.is_stalled(10_100, 30));
+        assert!(!progress.is_stalled(10_020, 30, 9_000));
+        assert!(progress.is_stalled(10_100, 30, 9_000));
+
+        // And the case the `last > 0` guard made unreachable: a recording that has
+        // received nothing at all, which is what a provider that accepts the connection
+        // and then sends nothing produces (R-67).
+        let silent = Progress::default();
+        assert_eq!(silent.bytes(), 0);
+        assert_eq!(silent.last_write(), 0);
+        assert!(
+            !silent.is_stalled(10_020, 30, 10_000),
+            "a recording that has just started is not stalled yet"
+        );
+        for limit in [30, 60, 600] {
+            assert!(
+                silent.is_stalled(10_000 + limit + 1, limit, 10_000),
+                "a recording that has received nothing for {limit}s is stalled"
+            );
+        }
     }
 
     #[test]

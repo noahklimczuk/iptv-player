@@ -95,6 +95,7 @@ pub fn parse<R: BufRead>(reader: R) -> Parsed {
                     message: "entry had no URL and was dropped".into(),
                 });
                 result.skipped += 1;
+                result.unusable += 1;
             }
             let (meta, name) = split_extinf(rest);
             pending = Pending {
@@ -161,12 +162,17 @@ pub fn parse<R: BufRead>(reader: R) -> Parsed {
                 message: format!("skipped unusable URL: {}", truncate(line, 80)),
             });
             result.skipped += 1;
+            result.unusable += 1;
             pending = Pending::default();
             continue;
         }
 
         if !seen_urls.insert(line.to_string()) {
+            // Silent, deliberately: a playlist that lists the same stream twice is
+            // ordinary and not something to warn about per row. Counted apart from the
+            // unusable ones so the total can be explained (R-04).
             result.skipped += 1;
+            result.duplicates += 1;
             pending = Pending::default();
             continue;
         }
@@ -181,6 +187,7 @@ pub fn parse<R: BufRead>(reader: R) -> Parsed {
             message: "trailing entry had no URL and was dropped".into(),
         });
         result.skipped += 1;
+        result.unusable += 1;
     }
     if !saw_header && result.entries.is_empty() {
         result.warnings.push(ParseWarning {
@@ -258,11 +265,30 @@ fn build_entry(pending: Pending, url: &str, line_no: usize) -> PlaylistEntry {
     }
 }
 
+/// How far a `tvg-shift` is allowed to move a channel's guide, in minutes.
+///
+/// A day either way. A real shift is a timezone correction -- the provider's guide is in
+/// one zone and the stream is in another -- so the honest range is about ±14 hours, and a
+/// day is generous without being nonsense.
+const MAX_SHIFT_MINUTES: i32 = 24 * 60;
+
 /// `tvg-shift` is in hours and may be fractional or negative (`-1.5`).
+///
+/// Clamped, because it was not. `(h * 60.0).round() as i32` on a provider's
+/// `tvg-shift="1e20"` saturates to `i32::MAX` -- Rust saturates rather than wrapping, so
+/// this was never unsafe -- and the guide for that channel was displaced by four
+/// thousand years. A value that cannot be a timezone is not a timezone: it is ignored,
+/// and the entry keeps its unshifted guide rather than being moved somewhere nothing can
+/// be found (R-02).
 fn parse_shift(value: Option<String>) -> i32 {
     value
         .and_then(|v| v.trim().parse::<f32>().ok())
-        .map(|h| (h * 60.0).round() as i32)
+        // NaN and the infinities first: `as i32` turns all three into a number, and
+        // `0 as i32` is the only honest reading of "not a quantity".
+        .filter(|h| h.is_finite())
+        .map(|h| (h * 60.0).round())
+        .filter(|m| m.abs() <= MAX_SHIFT_MINUTES as f32)
+        .map(|m| m as i32)
         .unwrap_or(0)
 }
 
@@ -392,6 +418,74 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `tvg-shift` that cannot be a timezone is ignored, not applied.
+    ///
+    /// `(h * 60.0).round() as i32` saturates, so `tvg-shift="1e20"` moved a channel's
+    /// guide by `i32::MAX` minutes -- four thousand years -- and everything on that
+    /// channel became unfindable. Never unsafe, because Rust saturates rather than
+    /// wrapping; just nonsense reaching the EPG (R-02).
+    #[test]
+    fn an_impossible_tvg_shift_is_ignored() {
+        // The real shapes, which still work.
+        assert_eq!(parse_shift(Some("1".into())), 60);
+        assert_eq!(parse_shift(Some("-1.5".into())), -90);
+        assert_eq!(parse_shift(Some(" 2 ".into())), 120);
+        assert_eq!(parse_shift(Some("0".into())), 0);
+        // The edge of what is allowed, and one minute past it.
+        assert_eq!(parse_shift(Some("24".into())), 24 * 60);
+        assert_eq!(parse_shift(Some("-24".into())), -24 * 60);
+        assert_eq!(parse_shift(Some("25".into())), 0);
+        // What R-02 found, and the rest of the family.
+        assert_eq!(parse_shift(Some("1e20".into())), 0);
+        assert_eq!(parse_shift(Some("-1e20".into())), 0);
+        assert_eq!(parse_shift(Some("inf".into())), 0);
+        assert_eq!(parse_shift(Some("-inf".into())), 0);
+        assert_eq!(parse_shift(Some("NaN".into())), 0);
+        // And the ones that were never numbers.
+        assert_eq!(parse_shift(Some("abc".into())), 0);
+        assert_eq!(parse_shift(None), 0);
+    }
+
+    /// The skipped count can be explained, which is the whole of R-04.
+    ///
+    /// A duplicate increments it silently; an unusable line increments it and logs a
+    /// warning. One number mixed the two, so "3,099 skipped" could mean three thousand
+    /// duplicates or three thousand unreadable lines -- and on the real playlist it was
+    /// the first, with zero warnings.
+    #[test]
+    fn a_skipped_row_says_which_kind_of_skipped_it_was() {
+        let playlist = concat!(
+            "#EXTM3U\n",
+            "#EXTINF:-1,One\n",
+            "http://host/1.ts\n",
+            // The same URL again: a duplicate, and not a complaint.
+            "#EXTINF:-1,One again\n",
+            "http://host/1.ts\n",
+            // Not a URL at all.
+            "#EXTINF:-1,Broken\n",
+            "nonsense\n",
+            // And an entry whose URL never arrives.
+            "#EXTINF:-1,Trailing\n",
+        );
+        let p = parse_str(playlist);
+
+        assert_eq!(p.result.entries.len(), 1, "{:?}", p.result.entries);
+        assert_eq!(p.result.skipped, 3);
+        assert_eq!(p.result.duplicates, 1);
+        assert_eq!(p.result.unusable, 2);
+        // The two halves account for the total, which is what makes the total
+        // explainable rather than just large.
+        assert_eq!(
+            p.result.duplicates + p.result.unusable,
+            p.result.skipped,
+            "{:?}",
+            p.result
+        );
+        // And only the unusable ones say anything, which is the asymmetry that made the
+        // single number misleading.
+        assert_eq!(p.result.warnings.len(), p.result.unusable);
+    }
     use crate::model::MediaKind;
 
     fn parse_str(s: &str) -> Parsed {
