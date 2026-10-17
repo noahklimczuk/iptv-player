@@ -12,12 +12,24 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
-/** The titles the "More Like This" grid is showing, in order. */
-async function similarTitles(page: Page): Promise<string[]> {
+/**
+ * The titles the "More Like This" grid is showing, in order, or null for a title that
+ * has no grid because nothing has enriched it.
+ *
+ * Similarity here is the item's first genre, and `genres` is one of the eight fields
+ * that come from TMDB and nothing else. One fixture row in six is left as an import
+ * writes it, which is the majority state of a real library (R-157), and such a title
+ * says so in words rather than drawing nine strangers. Walking past those is this
+ * test's business: the claim it makes is about titles there is something to compare.
+ */
+async function similarTitles(page: Page): Promise<string[] | null> {
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('tab', { name: 'More Like This' }).click();
   const grid = dialog.getByTestId('similar-grid');
-  await expect(grid).toBeVisible();
+  const unenriched = dialog.getByText('finding similar titles needs genres');
+  // Whichever of the two the tab settles on, rather than timing out on the grid.
+  await expect(grid.or(unenriched).first()).toBeVisible();
+  if ((await unenriched.count()) > 0) return null;
   // Settles the fetch the tab triggers before reading the cards.
   await expect(dialog.getByTestId('similar-card').first()).toBeVisible();
   return dialog.getByTestId('similar-title').allTextContents();
@@ -37,19 +49,24 @@ test('More Like This is about the title it sits under', async ({ page }) => {
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
 
+  // Five films that have a grid, which is not the same as the first five cards: a card
+  // in six is unenriched and has none.
   const seen: string[][] = [];
-  for (const nth of [0, 1, 2, 3, 4]) {
+  for (let nth = 0; seen.length < 5 && nth < 20; nth += 1) {
     const title = await openCard(page, nth);
     const titles = await similarTitles(page);
 
-    // A title is never like itself. The old query could return the open film in its own
-    // grid, since it knew nothing about it.
-    expect(titles, `${title} is in its own More Like This`).not.toContain(title);
+    if (titles !== null) {
+      // A title is never like itself. The old query could return the open film in its
+      // own grid, since it knew nothing about it.
+      expect(titles, `${title} is in its own More Like This`).not.toContain(title);
+      seen.push(titles);
+    }
 
-    seen.push(titles);
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog')).toHaveCount(0);
   }
+  expect(seen.length, 'the first twenty films produced fewer than five grids').toBe(5);
 
   // The point of the finding: five films, and not one grid in common. Against the old
   // code every one of these lists was byte-identical.
@@ -64,9 +81,18 @@ test('a show is compared to shows, not to films', async ({ page }) => {
   await page.goto('/#/series');
   await expect(page.getByRole('heading', { name: 'Series' })).toBeVisible();
 
-  await openCard(page, 0);
-  const titles = await similarTitles(page);
-  expect(titles.length).toBeGreaterThan(0);
+  // The first show with genres, for the same reason as above.
+  let titles: string[] | null = null;
+  for (let nth = 0; titles === null && nth < 20; nth += 1) {
+    await openCard(page, nth);
+    titles = await similarTitles(page);
+    if (titles === null) {
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    }
+  }
+  expect(titles, 'none of the first twenty shows had a grid').not.toBeNull();
+  expect(titles!.length).toBeGreaterThan(0);
 
   // Every row in a show's grid is a show, which is what the season count proves: a film
   // row shows a running time there instead.
