@@ -114,7 +114,9 @@ test('a resume label does not survive onto the next show', async ({ page }) => {
   await palette.getByRole('textbox').fill('the');
   // A *different* show: most fixture titles begin with "The", so the first hit is often
   // the one already open, and swapping a title for itself proves nothing.
-  const hits = palette.getByTestId('palette-group-series').getByRole('button');
+  // `option`, not `button`: the rows carry an explicit `role="option"` inside the
+  // results listbox, so asking for buttons here finds only the "Show N more" fold.
+  const hits = palette.getByTestId('palette-group-series').getByRole('option');
   await expect(hits.first()).toBeVisible();
   let picked = false;
   for (let i = 0; i < (await hits.count()); i += 1) {

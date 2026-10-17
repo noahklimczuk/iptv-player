@@ -112,7 +112,19 @@ export function DetailModal({
  */
 function useSeriesResume(item: CatalogItem, version: number): string | null {
   const profileId = useProfile((s) => s.active?.id ?? 1);
-  const [label, setLabel] = useState<string | null>(null);
+  /**
+   * The label carries the title it was read for, and is only shown on that title.
+   *
+   * Clearing it inside the effect is not enough on its own: effects run *after* the
+   * paint, so the render that swaps `item` draws the new show's heading beside the
+   * previous show's label for a frame, with the button live. Keyed this way the stale
+   * label is never on screen at all, however long the two commands take (R-101).
+   */
+  const [found, setFound] = useState<{ kind: string; id: number; label: string } | null>(
+    null,
+  );
+  const setLabel = (label: string | null) =>
+    setFound(label === null ? null : { kind: item.kind, id: item.id, label });
 
   useEffect(() => {
     // Cleared on the way *in*, not only on the way out.
@@ -151,7 +163,7 @@ function useSeriesResume(item: CatalogItem, version: number): string | null {
     return () => { live = false; };
   }, [item.kind, item.id, profileId, version]);
 
-  return label;
+  return found && found.kind === item.kind && found.id === item.id ? found.label : null;
 }
 
 function Hero({
