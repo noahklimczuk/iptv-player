@@ -194,9 +194,28 @@ pub fn fetch_one(client: &dyn MetadataClient, work: &Work) -> Outcome {
     // heard of "FR I, Robot". Asking under the tag is why 671 titles matched and 16,561
     // did not: see `aurora_core::lang::strip_language_prefix`.
     let searchable = lang::strip_language_prefix(&work.item.title);
+    let searchable = searchable.as_deref().unwrap_or(&work.item.title);
+
+    // `from_stream_name`, not `new`: the second layer of the same cleaning.
+    //
+    // `sync.rs` already runs `clean_movie_title` at ingest and stores its output, so for
+    // almost every title this is a no-op -- which is why calling `Query::new` on the
+    // stored string never showed. It is not a no-op for the ones ingest could not fully
+    // clean: `EN ★ The Academy - 2025[4K]` stored as `EN The Academy 2025`, searched
+    // under that, scoring 0.000 against "The Academy" and marked `nomatch` after one
+    // attempt. Thirty films on this subscription (R-59).
+    //
+    // The stored `year` still wins when there is one, because that is the value a
+    // human-readable column was lifted into; the cleaner's year is the fallback for a
+    // title that never gave ingest one.
+    let cleaned = Query::from_stream_name(searchable);
     let query = Query::new(
-        searchable.as_deref().unwrap_or(&work.item.title),
-        work.item.year,
+        if cleaned.title.is_empty() {
+            searchable
+        } else {
+            &cleaned.title
+        },
+        work.item.year.or(cleaned.year),
     );
     let candidates = match client.search(kind_of(work.kind), &query.title, query.year) {
         Ok(c) => c,

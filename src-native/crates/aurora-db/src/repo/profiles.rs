@@ -49,6 +49,38 @@ pub struct ParentalSettings {
     pub lock_settings: bool,
 }
 
+/// The age limit a stored `max_rating` means, and what an unreadable one means.
+///
+/// `min_age` returns `None` for anything it does not recognise, and `None` in
+/// `Profile::max_age` means **unrestricted**: `may_watch` hands
+/// `profile.max_age.map(AgeLimit)` to `is_allowed`, which allows every certification
+/// when the limit is `None`. So a `max_rating` this build cannot parse -- one written by
+/// a different build, or a certification string where an age was expected -- silently
+/// turned a kids profile into an unrestricted one.
+///
+/// The round trip works today: `create` and `set_limits` store `max_age.to_string()` and
+/// `min_age` reads every bare number back. What was wrong is the direction of failure.
+/// An unreadable limit now reads as the most restrictive one there is, so the failure is
+/// a nine-year-old seeing too little rather than too much, and `max_rating` being
+/// present at all is the signal that a limit was set (R-58, the same shape as R-45).
+fn stored_age_limit(max_rating: Option<&str>) -> Option<u8> {
+    let Some(raw) = max_rating.map(str::trim).filter(|s| !s.is_empty()) else {
+        // Nothing stored means nothing was ever set, which is the one case where "no
+        // limit" is the right reading.
+        return None;
+    };
+    match parental::min_age(raw) {
+        Some(age) => Some(age),
+        None => {
+            tracing::warn!(
+                "a profile's age limit {raw:?} is not one this build understands, so it \
+                 is being treated as the strictest limit rather than as none"
+            );
+            Some(0)
+        }
+    }
+}
+
 fn row_to_profile(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
     let max_rating: Option<String> = r.get(4)?;
     Ok(Profile {
@@ -56,7 +88,7 @@ fn row_to_profile(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
         name: r.get(1)?,
         avatar: r.get(2)?,
         is_kids: r.get::<_, i64>(3)? != 0,
-        max_age: max_rating.as_deref().and_then(parental::min_age),
+        max_age: stored_age_limit(max_rating.as_deref()),
         has_pin: r.get::<_, Option<String>>(5)?.is_some(),
         allow_unrated: r.get::<_, i64>(6)? != 0,
         daily_limit_min: r.get::<_, Option<i64>>(7)?.map(|v| v as u32),
@@ -688,6 +720,72 @@ mod tests {
             0,
             "outside the window"
         );
+    }
+
+    /// An age limit this build cannot read locks the profile down rather than opening it.
+    ///
+    /// `min_age` answers `None` for anything it does not recognise, and `None` in
+    /// `max_age` means unrestricted -- so a `max_rating` written by a different build,
+    /// or a certification string where an age was expected, turned a kids profile into
+    /// an unrestricted one (R-58).
+    #[test]
+    fn an_unreadable_age_limit_is_the_strictest_one_and_not_none() {
+        let conn = db();
+        let id = create(
+            &conn,
+            &NewProfile {
+                name: "Child".into(),
+                is_kids: true,
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        // Something no version of `min_age` accepts, written straight into the column
+        // the way another build could have left it.
+        conn.execute(
+            "UPDATE profiles SET max_rating = ?1 WHERE id = ?2",
+            params!["TV-MA-ISH", id],
+        )
+        .unwrap();
+
+        let profile = list(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("the profile");
+        assert_eq!(
+            profile.max_age,
+            Some(0),
+            "an unreadable limit came back as {:?}, which `is_allowed` reads as no \
+             limit at all",
+            profile.max_age
+        );
+
+        // And the consequence, which is the thing that matters: an 18 is refused.
+        let settings = ParentalSettings {
+            has_master_pin: false,
+            hide_adult: false,
+            lock_settings: false,
+        };
+        assert!(
+            !may_watch(&profile, &settings, Some("18"), None),
+            "a profile with an unreadable limit was allowed an 18"
+        );
+        // A U is still allowed, so this is a limit and not a block on everything.
+        assert!(may_watch(&profile, &settings, Some("U"), None));
+    }
+
+    /// And an empty or absent one still means no limit, because that is what it is.
+    #[test]
+    fn no_stored_limit_is_still_no_limit() {
+        assert_eq!(super::stored_age_limit(None), None);
+        assert_eq!(super::stored_age_limit(Some("")), None);
+        assert_eq!(super::stored_age_limit(Some("   ")), None);
+        // And a readable one is itself.
+        assert_eq!(super::stored_age_limit(Some("12")), Some(12));
+        assert_eq!(super::stored_age_limit(Some("PG")), Some(6));
     }
 
     #[test]

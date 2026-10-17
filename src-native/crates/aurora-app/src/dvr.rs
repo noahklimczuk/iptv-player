@@ -427,7 +427,13 @@ impl Dvr {
     fn note_stalls(&self, now: i64, report: &mut TickReport) {
         let active = self.active.lock();
         for (id, entry) in active.iter() {
-            if entry.handle.progress().is_stalled(now, STALL_SECS) {
+            // `started_at` as the baseline, which is what makes a recording that has
+            // received nothing reportable at all (R-67).
+            if entry
+                .handle
+                .progress()
+                .is_stalled(now, STALL_SECS, entry.started_at)
+            {
                 report.stalled.push(*id);
             }
         }
