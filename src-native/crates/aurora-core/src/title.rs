@@ -27,7 +27,6 @@ const RELEASE_TAGS: &[&str] = &[
     "web-dl",
     "webdl",
     "webrip",
-    "web",
     "bluray",
     "blu-ray",
     "brrip",
@@ -36,8 +35,6 @@ const RELEASE_TAGS: &[&str] = &[
     "dvdscr",
     "hdtv",
     "hdrip",
-    "cam",
-    "ts",
     "tc",
     "remux",
     "x264",
@@ -66,8 +63,6 @@ const RELEASE_TAGS: &[&str] = &[
     "dovi",
     "dv",
     "sdr",
-    "multi",
-    "dual",
     "dubbed",
     "subbed",
     "vostfr",
@@ -75,25 +70,127 @@ const RELEASE_TAGS: &[&str] = &[
     "vo",
     "vff",
     "subs",
-    "sub",
-    "extended",
     "unrated",
-    "proper",
     "repack",
-    "internal",
-    "limited",
     "imax",
     "remastered",
-    "directors",
-    "cut",
-    "uncut",
     "3d",
     "sbs",
     "hsbs",
 ];
 
-/// Channel-name noise stripped when building an EPG match key. Deliberately narrower than
-/// [`RELEASE_TAGS`] — stripping "web" or "cut" from a channel name would be wrong.
+/// Release tags that are also ordinary English words.
+///
+/// These were in [`RELEASE_TAGS`], which is stripped word by word wherever a word
+/// appears, so every one of them cut a real title short:
+///
+/// ```text
+/// Uncut Gems       -> Gems          Extended Family -> Family
+/// Internal Affairs -> Affairs       The Cut         -> The
+/// Cut Throat City  -> Throat City   Web of Lies     -> of Lies
+/// ```
+///
+/// A single-word title survived by accident -- `clean_movie_title` falls back to the raw
+/// string when it has stripped everything -- and everything else was quietly truncated.
+/// The damage is not only cosmetic: the cleaned title is what goes to TMDB, so these
+/// films get the wrong artwork or none, and it is what `match_key` is built from, so
+/// duplicate collapsing groups them with the wrong film (R-05).
+///
+/// A release tag is only a release tag in the places one appears. See
+/// [`strip_release_tags`] for where that is.
+const AMBIGUOUS_TAGS: &[&str] = &[
+    "cam", "cut", "directors", "dual", "extended", "internal", "limited", "multi",
+    "proper", "sub", "ts", "uncut", "web",
+];
+
+/// What one word of a VOD title is, before anything decides whether it is noise *here*.
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum Word {
+    /// Part of the title.
+    Title,
+    /// A tag that is nothing else: `1080p`, `x265`, `webrip`.
+    Tag,
+    /// A tag that is also an English word: `cut`, `web`, `extended`.
+    Maybe,
+    /// Punctuation on its own -- a `-` or a `|` between tags. Always dropped, and
+    /// transparent to the runs below, so `1080p - MULTI` is one run and not two.
+    Punctuation,
+}
+
+/// Decide which words of a VOD title are release tags, and drop those.
+///
+/// Returns the words that are left, and the keys of the ones removed in the order they
+/// were removed, which is where the quality comes from.
+///
+/// An unambiguous tag is noise wherever it appears. An ambiguous one -- a word that is
+/// also English -- is noise only where a tag is what it can be: in a run of tags that
+/// holds at least one unambiguous tag (`Inception 1080p WEB x265 MULTI`), or in a run of
+/// two or more at the very end of the name (`Blade Runner DIRECTORS CUT`).
+///
+/// So `The Cut` keeps its `Cut`: a lone ambiguous word at the end is a word. That is the
+/// conservative half of the trade, and deliberately so -- an `EXTENDED` left on a title
+/// costs a slightly worse TMDB query, while an `Extended` taken off `Extended Family`
+/// costs the right film.
+fn strip_release_tags(s: &str) -> (Vec<&str>, Vec<String>) {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let keys: Vec<String> = words
+        .iter()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_ascii_lowercase()
+        })
+        .collect();
+    let kinds: Vec<Word> = keys
+        .iter()
+        .map(|k| {
+            if k.is_empty() {
+                Word::Punctuation
+            } else if RELEASE_TAGS.contains(&k.as_str()) {
+                Word::Tag
+            } else if AMBIGUOUS_TAGS.contains(&k.as_str()) {
+                Word::Maybe
+            } else {
+                Word::Title
+            }
+        })
+        .collect();
+
+    let mut dropped = vec![false; words.len()];
+    let mut i = 0;
+    while i < words.len() {
+        if kinds[i] == Word::Title {
+            i += 1;
+            continue;
+        }
+        // The whole run of things that are not title words, punctuation included.
+        let start = i;
+        while i < words.len() && kinds[i] != Word::Title {
+            i += 1;
+        }
+        let run = start..i;
+        let tags = run.clone().filter(|&j| kinds[j] != Word::Punctuation).count();
+        let certain = run.clone().any(|j| kinds[j] == Word::Tag);
+        let at_end = i == words.len();
+        let all = certain || (at_end && tags >= 2);
+        for j in run {
+            dropped[j] = all || kinds[j] != Word::Maybe;
+        }
+    }
+
+    let kept = (0..words.len())
+        .filter(|&i| !dropped[i])
+        .map(|i| words[i])
+        .collect();
+    let removed = (0..words.len())
+        .filter(|&i| dropped[i] && kinds[i] != Word::Punctuation)
+        .map(|i| keys[i].clone())
+        .collect();
+    (kept, removed)
+}
+
+/// Channel-name noise stripped when building an EPG match key. Deliberately narrower
+/// than [`RELEASE_TAGS`], and narrower still than [`AMBIGUOUS_TAGS`]: a channel name is
+/// not a release name, and none of the words that are also English belong here at all.
 const CHANNEL_TAGS: &[&str] = &[
     "uhd", "fhd", "hd", "sd", "4k", "8k", "hevc", "h265", "h264", "1080p", "1080", "720p", "720",
     "480p", "raw", "backup", "alt", "vip", "plus", "\u{ac}",
@@ -215,21 +312,9 @@ pub fn clean_movie_title(raw: &str) -> CleanTitle {
 
     s = re_bracketed().replace_all(&s, " ").into_owned();
 
-    let mut kept: Vec<&str> = Vec::new();
-    for word in s.split_whitespace() {
-        let key = word
-            .trim_matches(|c: char| !c.is_alphanumeric())
-            .to_ascii_lowercase();
-        if key.is_empty() {
-            continue;
-        }
-        if RELEASE_TAGS.contains(&key.as_str()) {
-            if quality.is_none() {
-                quality = normalize_quality(&key);
-            }
-            continue;
-        }
-        kept.push(word);
+    let (kept, removed) = strip_release_tags(&s);
+    if quality.is_none() {
+        quality = removed.iter().find_map(|key| normalize_quality(key));
     }
 
     let title = kept
@@ -421,6 +506,68 @@ mod tests {
         assert_eq!(c.title, "Inception");
         assert_eq!(c.year, Some(2010));
         assert_eq!(c.quality.as_deref(), Some("FHD"));
+    }
+
+    /// The thirteen tags that are also English words, in the titles they were cutting
+    /// short. Every one of these lost a word before (R-05).
+    #[test]
+    fn an_english_word_that_is_also_a_release_tag_stays_in_the_title() {
+        for (raw, want) in [
+            ("Uncut Gems", "Uncut Gems"),
+            ("Internal Affairs", "Internal Affairs"),
+            ("Cut Throat City", "Cut Throat City"),
+            ("Extended Family", "Extended Family"),
+            ("The Cut", "The Cut"),
+            ("Web of Lies", "Web of Lies"),
+            ("Limited Partners", "Limited Partners"),
+            ("Dual Survival", "Dual Survival"),
+            ("Proper Manners", "Proper Manners"),
+            ("Multi Facial", "Multi Facial"),
+            ("The Sub", "The Sub"),
+            ("Cam", "Cam"),
+            ("Directors", "Directors"),
+            ("TS Spivet", "TS Spivet"),
+        ] {
+            assert_eq!(clean_movie_title(raw).title, want, "from {raw:?}");
+        }
+    }
+
+    /// And a tag is still a tag where a tag is what it can be: beside an unambiguous
+    /// one, or as a pair of them at the end of the name.
+    #[test]
+    fn a_release_tag_beside_other_tags_is_still_stripped() {
+        for (raw, want) in [
+            // No year to truncate at, so the run is all this has to go on.
+            ("Inception 1080p WEB-DL x265 MULTI", "Inception"),
+            ("Arrival 720p WEB", "Arrival"),
+            ("Heat UNCUT 1080p", "Heat"),
+            // Punctuation between tags does not break the run.
+            ("Sicario 1080p - MULTI", "Sicario"),
+            // Two ambiguous tags at the end, which is a tag pair and not a sentence.
+            ("Blade Runner DIRECTORS CUT", "Blade Runner"),
+            ("Dune EXTENDED CUT", "Dune"),
+            // A lone ambiguous word at the end is left alone, which is the half of the
+            // trade that keeps "The Cut" whole.
+            ("Some Film EXTENDED", "Some Film EXTENDED"),
+        ] {
+            assert_eq!(clean_movie_title(raw).title, want, "from {raw:?}");
+        }
+    }
+
+    /// The quality still comes off a stripped tag, which is read from the removals
+    /// rather than from the loop that used to do both jobs.
+    #[test]
+    fn quality_survives_the_split_between_certain_and_ambiguous_tags() {
+        assert_eq!(
+            clean_movie_title("Arrival 720p WEB").quality.as_deref(),
+            Some("HD")
+        );
+        assert_eq!(
+            clean_movie_title("Heat UNCUT 1080p").quality.as_deref(),
+            Some("FHD")
+        );
+        // And a title that only looks like a tag reports no quality at all.
+        assert_eq!(clean_movie_title("The Cut").quality, None);
     }
 
     #[test]

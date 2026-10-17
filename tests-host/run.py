@@ -379,7 +379,12 @@ def driver_env(github):
     # One fixed name rather than a unique one per run: these entries are not cleaned up
     # by the data-directory wipe, so a per-run name would leave a new orphan in Credential
     # Manager every time the suite ran.
-    env.setdefault("AURORA_CREDENTIAL_SERVICE", "AuroraTV-tests-host")
+    #
+    # `CREDENTIAL_SERVICE`, not the literal again: this is the value `reclaim_credentials`
+    # deletes under, and a second copy of the name here is a second place for the two to
+    # stop agreeing -- which is the shape R-164 had, where cleanup asked `cmdkey` to
+    # delete from `AuroraTV` while every secret was filed under `AuroraTV-tests-host`.
+    env.setdefault("AURORA_CREDENTIAL_SERVICE", CREDENTIAL_SERVICE)
     return env
 
 

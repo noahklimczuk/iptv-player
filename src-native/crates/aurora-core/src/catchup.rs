@@ -203,6 +203,11 @@ fn xtream_url(stream_url: &str, req: &Request<'_>) -> Option<String> {
         start.minute()
     );
     let duration_min = ((req.stop - req.start).max(60) + 59) / 60;
+    // Back out of two path segments and into a parameter list, so they are re-escaped
+    // for where they are going: an `&` or an `=` in a password rewrote this query
+    // instead of ending up in it (R-33).
+    let username = crate::percent::encode(&username);
+    let password = crate::percent::encode(&password);
     Some(format!(
         "{base}/streaming/timeshift.php?username={username}&password={password}\
          &stream={stream_id}&start={stamp}&duration={duration_min}"
@@ -239,8 +244,12 @@ pub fn split_xtream_stream_url(url: &str) -> Option<(String, String, String, Str
         return None;
     }
 
-    let username = parts[0].to_string();
-    let password = parts[1].to_string();
+    // Decoded, because the two segments are written encoded: this is the inverse of
+    // `xtream::stream_url`, and what comes back out is the credential itself rather
+    // than its escaped form (R-33). A URL stored before that, by a panel whose password
+    // held no `%`, decodes to itself.
+    let username = crate::percent::decode(parts[0]);
+    let password = crate::percent::decode(parts[1]);
     // `1234.ts` → `1234`.
     let stream_id = parts[2].split('.').next()?.to_string();
     if username.is_empty() || password.is_empty() || stream_id.is_empty() {

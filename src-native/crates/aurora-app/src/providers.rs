@@ -8,7 +8,7 @@ use aurora_ingest::source::{looks_like_panel_root, parse_pasted_xtream, SourceKi
 use aurora_ingest::sync::{self, Phase, Progress, SyncOptions, SyncReport};
 use aurora_ingest::xtream::XtreamClient;
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::error::{AppError, Result};
 use crate::services::Services;
@@ -1016,7 +1016,14 @@ pub fn refresh_provider(
         Err(e) => tracing::warn!("could not expand series rules after refresh: {e}"),
     }
 
-    let _ = app.emit(
+    // Through `crate::emit`, like the other seventeen. Written as a direct
+    // `let _ = app.emit("library.refreshed", ...)` this was the original bug exactly:
+    // Tauri 2 rejects an event name containing a `.`, so it returned
+    // `Err(IllegalEventName)` every time, and the discarded `Result` made a
+    // systematically dropped event look like a quiet one -- four lines below a call
+    // that does it correctly for `ingest.progress` (R-82).
+    crate::emit(
+        app,
         "library.refreshed",
         &serde_json::json!({
             "added": report.channels + report.movies + report.episodes,

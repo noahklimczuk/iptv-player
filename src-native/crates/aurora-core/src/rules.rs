@@ -257,11 +257,26 @@ fn replace_ci(haystack: &str, needle: &str, case_sensitive: bool) -> String {
 pub mod presets {
     use super::*;
 
+    /// Hide the groups a playlist files adult content under.
+    ///
+    /// The pattern was `\b(adult|xxx|porn|18\+)\b`, where the trailing `\b` can never
+    /// match after `18\+`: `+` is not a word character, so the boundary needs one next
+    /// to it, and in `18+` or `18+ Channels` what follows is a space or the end of the
+    /// string. So the alternative written for the form playlists most often use was
+    /// dead, and `adult` missed its own plural -- `FOR ADULTS` was not matched.
+    ///
+    /// The markers are now the ones `parental::looks_adult` uses, which is the other
+    /// half of the same question and had `erotic` and `for adults` while this had
+    /// neither. Two functions deciding "is this adult content" by different rules is how
+    /// "adult content is hidden by default" becomes untrue for a playlist that writes it
+    /// the other way (R-18).
     pub fn hide_adult() -> Rule {
         let mut r = Rule::new(
             Field::Group,
             Match::Regex,
-            r"(?i)\b(adult|xxx|porn|18\+)\b",
+            // `18\s*\+` ends at the `+` rather than asking for a boundary after it, and
+            // allows the `18 +` some playlists write.
+            r"(?i)\b(?:adults?|xxx|porn\w*|erotic\w*)\b|\b18\s*\+",
             Action::Hide,
         );
         r.id = "preset-hide-adult".into();
@@ -461,6 +476,44 @@ mod tests {
 
         let mut ok = entry("Kids TV", Some("Children"));
         assert!(!rs.apply(&mut ok).hidden);
+    }
+
+    /// The forms a playlist actually writes, two of which the preset could not match.
+    ///
+    /// `18+` is the common one and the trailing `\b` made it impossible; `FOR ADULTS`
+    /// was missed by a singular `adult`. Both were hidden by `parental::looks_adult` at
+    /// the same time, which is what made the disagreement invisible (R-18).
+    #[test]
+    fn hide_adult_preset_matches_the_forms_playlists_write() {
+        let rs = RuleSet::compile(&[presets::hide_adult()]).unwrap();
+        for group in [
+            "18+",
+            "18+ Channels",
+            "18 + VOD",
+            "ADULT 18+",
+            "FOR ADULTS",
+            "For Adults Only",
+            "XXX",
+            "Adult Movies",
+            "PORNO HD",
+            "Erotica",
+            "EROTIC VOD",
+        ] {
+            let mut e = entry("Some Channel", Some(group));
+            assert!(rs.apply(&mut e).hidden, "{group:?} was not hidden");
+            // And the preset agrees with the other half of the same question.
+            assert!(
+                crate::parental::looks_adult(Some(group)),
+                "{group:?} is hidden by the preset but not by looks_adult"
+            );
+        }
+
+        // Still not matching what it never should: a number that is not an age rating,
+        // and ordinary groups.
+        for group in ["Channel 18", "Documentaries", "Kids"] {
+            let mut e = entry("Some Channel", Some(group));
+            assert!(!rs.apply(&mut e).hidden, "{group:?} should not be hidden");
+        }
     }
 
     #[test]
