@@ -299,11 +299,50 @@ fn is_truthy(v: &str) -> bool {
     )
 }
 
+/// The URL schemes a playlist entry may carry.
+///
+/// What this list is: the schemes ffmpeg can open, and therefore the ones mpv can play.
+/// A playlist entry whose scheme is not here is counted as "skipped unusable URL" with a
+/// warning naming the line, which is visible rather than silent -- but the entry is lost,
+/// and a provider that uses the scheme loses its whole playlist that way.
+///
+/// `srt://` was the one that prompted this (R-03): ffmpeg supports it, providers do use
+/// it, and it was rejected. The others added with it are the same case -- `mms` and
+/// `mmsh` for older Windows Media streams, `rtmpe`/`rtmpt`/`rtmpte`/`rtmpts` for the
+/// tunnelled and encrypted RTMP variants, `hls` for the explicit demuxer prefix, `ftp`
+/// and `sftp` for a file served rather than streamed, and `data` for a tiny inline
+/// payload. Each is a scheme ffmpeg has a protocol for.
+///
+/// Deliberately not a "looks like scheme://" wildcard: the point of the check is to tell
+/// a URL from a stray line of text, and `anything://` would accept the stray line too.
+const SCHEMES: &[&str] = &[
+    "http://",
+    "https://",
+    "rtsp://",
+    "rtsps://",
+    "rtmp://",
+    "rtmps://",
+    "rtmpe://",
+    "rtmpt://",
+    "rtmpte://",
+    "rtmpts://",
+    "udp://",
+    "rtp://",
+    "srt://",
+    "srtp://",
+    "mms://",
+    "mmsh://",
+    "mmst://",
+    "hls://",
+    "ftp://",
+    "sftp://",
+    "file://",
+    "data:",
+];
+
 fn looks_like_url(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
-    ["http://", "https://", "rtsp://", "rtmp://", "rtmps://", "udp://", "rtp://", "file://"]
-        .iter()
-        .any(|p| lower.starts_with(p))
+    SCHEMES.iter().any(|p| lower.starts_with(p))
         // Bare UNC and Windows drive paths, which playlists pointing at local files use.
         || line.starts_with("\\\\")
         || is_drive_path(line)
@@ -418,6 +457,45 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The schemes a provider might actually write.
+    ///
+    /// `srt://` is supported by ffmpeg, and therefore by mpv, and providers use it --
+    /// and every such entry was counted as an unusable URL and dropped (R-03).
+    #[test]
+    fn a_stream_scheme_ffmpeg_supports_is_not_unusable() {
+        for url in [
+            "srt://host:9000?streamid=abc",
+            "SRT://host:9000",
+            "rtmpe://host/live/one",
+            "mmsh://host/stream",
+            "hls://http://host/playlist.m3u8",
+            "sftp://host/films/one.mkv",
+            // The ones that always worked, which must keep working.
+            "http://host/1.ts",
+            "https://host/1.ts",
+            "rtsp://host/1",
+            "udp://@239.0.0.1:1234",
+            "file:///C:/films/one.mkv",
+            "\\\\server\\share\\one.mkv",
+            "C:\\films\\one.mkv",
+        ] {
+            assert!(looks_like_url(url), "{url:?} was rejected");
+        }
+
+        // And a stray line is still a stray line, which is what the check is for.
+        for not_a_url in [
+            "nonsense",
+            "#EXTGRP:Sports",
+            "1:30",
+            "a:b",
+            "",
+            "   ",
+            "anything://host/1.ts",
+        ] {
+            assert!(!looks_like_url(not_a_url), "{not_a_url:?} was accepted");
+        }
+    }
 
     /// A `tvg-shift` that cannot be a timezone is ignored, not applied.
     ///

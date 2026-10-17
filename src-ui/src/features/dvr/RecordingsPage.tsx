@@ -11,6 +11,7 @@ import { Icon } from '@/components/Icon';
 import { Badge, Button, EmptyState, IconButton, ProgressBar, Skeleton } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke, onDvrTick } from '@/ipc';
+import { report } from '@/lib/errors';
 import { bytes, clockTime, dayLabel, duration, untilLabel } from '@/lib/format';
 
 type Tab = 'recorded' | 'scheduled' | 'rules';
@@ -218,6 +219,29 @@ function ConflictNotice({
   );
 }
 
+/**
+ * Run a host command from a click, and say so when it fails.
+ *
+ * Six call sites in this file were `onClick={async () => { await invoke(...); onChanged(); }}`
+ * with no `catch`. A rejected command was an unhandled promise rejection: it reached the
+ * console, the row did not change, and the viewer was left pressing a button that
+ * appeared to do nothing. `onChanged` is only called when the command actually worked,
+ * so a failed delete does not refetch as though it had (R-119).
+ */
+async function guard(
+  fn: () => Promise<unknown>,
+  whenItFails: string,
+  after: () => void,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (e) {
+    report(whenItFails)(e);
+    return;
+  }
+  after();
+}
+
 /* ── Rows ─────────────────────────────────────────────────────────────────── */
 
 function RowShell({
@@ -288,8 +312,18 @@ function RecordedRow({
   onPlay: (r: Recording) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  // Caught, because a click that fails has to say so. Six call sites in this file
+  // invoked a host command from an `onClick` and never caught: a rejected `dvr.delete`
+  // or `dvr.cancel` was an unhandled promise rejection, which reaches the console and
+  // nothing else -- the row simply did not change and the viewer was left pressing a
+  // button that appeared to do nothing (R-118's shape, R-119's scope).
   const act = async (fn: () => Promise<unknown>) => {
-    await fn();
+    try {
+      await fn();
+    } catch (e) {
+      report('That did not work')(e);
+      return;
+    }
     onChanged();
   };
 
@@ -397,9 +431,12 @@ function ScheduledRow({
         <Button
           size="sm"
           variant="ghost"
-          onClick={async () => {
-            await invoke('dvr.cancel', { id: rec.id });
-            onChanged();
+          onClick={() => {
+            void guard(
+              () => invoke('dvr.cancel', { id: rec.id }),
+              'Could not stop that recording',
+              onChanged,
+            );
           }}
         >
           {live ? 'Stop' : 'Cancel'}
@@ -430,9 +467,12 @@ function ProblemRow({
         size={32}
         icon="close"
         label={`Dismiss ${rec.title}`}
-        onClick={async () => {
-          await invoke('dvr.delete', { id: rec.id });
-          onChanged();
+        onClick={() => {
+          void guard(
+            () => invoke('dvr.delete', { id: rec.id }),
+            'Could not dismiss that recording',
+            onChanged,
+          );
         }}
       />
     </RowShell>
@@ -504,8 +544,11 @@ function RuleRow({
                 size="sm"
                 variant="danger"
                 onClick={async () => {
-                  await invoke('dvr.deleteRule', { id: rule.id });
-                  onChanged();
+                  void guard(
+                    () => invoke('dvr.deleteRule', { id: rule.id }),
+                    'Could not delete that rule',
+                    onChanged,
+                  );
                 }}
               >
                 Delete rule
@@ -514,15 +557,29 @@ function RuleRow({
             </>
           ) : (
             <>
+              {/*
+                * "tracked", not "recorded". `scheduled` counts rows in any state --
+                * `SELECT COUNT(*) FROM recordings WHERE rule_id = r.id`, with no
+                * `WHERE state`, which the Rust field's own doc comment says ("scheduled
+                * or made"). `RecordingState` has five values, so a rule for a show on a
+                * channel that keeps dying reported "5 recorded" with five failures and
+                * nothing on disk -- and R-108 makes `skipped` the expected outcome for a
+                * second concurrent recording on this subscription, so that is not an
+                * exotic case (R-119).
+                */}
               <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
-                {rule.scheduled} recorded
+                {rule.scheduled} tracked
               </span>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={async () => {
-                  await invoke('dvr.setRuleEnabled', { id: rule.id, value: !rule.enabled });
-                  onChanged();
+                  void guard(
+                    () =>
+                      invoke('dvr.setRuleEnabled', { id: rule.id, value: !rule.enabled }),
+                    rule.enabled ? 'Could not pause that rule' : 'Could not resume it',
+                    onChanged,
+                  );
                 }}
               >
                 {rule.enabled ? 'Pause' : 'Resume'}
