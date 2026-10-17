@@ -606,6 +606,40 @@ ALTER TABLE episodes        ADD COLUMN stream_id TEXT;
 ALTER TABLE episodes        ADD COLUMN container TEXT;
 "#,
     },
+    Migration {
+        version: 13,
+        name: "series_listing_attempts",
+        sql: r#"
+-- "We already asked, and the answer was no."
+--
+-- The episode sweep's queue was "shows with no episodes stored", which cannot tell a
+-- show nobody has asked about from one the provider will not list. A show whose listing
+-- comes back empty, or fails, writes no episodes, stays in the queue, and is returned by
+-- the very next batch -- and the ordering is deterministic, so the tail of a sweep
+-- re-asked the same unanswerable remainder on every pass until SWEEP_MAX_BATCHES (200)
+-- ran out. With N unanswerable shows that is up to 200 x N requests to the viewer's own
+-- panel: the same host their video comes from, on a line that answers HTTP 555 when it
+-- has one connection too many (R-83).
+--
+-- Metadata enrichment has had the answer to this since migration 7: the `enrichment`
+-- table records `matched` / `nomatch` / `failed` with an `attempted_at` precisely so a
+-- "no" is not re-asked for ever. This is the same thing for episode listings, and
+-- deliberately the same shape.
+--
+-- Only unsuccessful attempts are recorded. A listing that produced episodes leaves the
+-- queue because the episodes are there, which is the condition that was always right.
+CREATE TABLE series_listing_attempts (
+    series_id    INTEGER PRIMARY KEY REFERENCES series(id) ON DELETE CASCADE,
+    -- `empty`: the panel answered and listed nothing usable. `failed`: it would not
+    -- answer. Both are reasons to wait; they are kept apart because only one of them
+    -- says anything is wrong.
+    state        TEXT    NOT NULL CHECK (state IN ('empty','failed')),
+    attempted_at INTEGER NOT NULL
+);
+CREATE INDEX idx_series_listing_attempts_at
+    ON series_listing_attempts(attempted_at);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 12;
+pub const LATEST_VERSION: u32 = 13;

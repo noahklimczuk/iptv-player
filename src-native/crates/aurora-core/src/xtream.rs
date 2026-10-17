@@ -403,6 +403,12 @@ pub fn parse_json<T: serde::de::DeserializeOwned>(body: &str) -> Result<T> {
 }
 
 /// Build the playable URL for an Xtream stream.
+///
+/// The credentials are percent-encoded on the way in. They are two path segments here,
+/// so a password containing `/` used to add a third, `#` truncated the rest of the
+/// address into a fragment and `?` turned it into a query — and a panel answers 401 or
+/// 404 for an address that does not name what was meant, which from inside the app is
+/// indistinguishable from a wrong password (R-33).
 pub fn stream_url(
     base: &str,
     username: &str,
@@ -412,6 +418,8 @@ pub fn stream_url(
     extension: Option<&str>,
 ) -> String {
     let base = base.trim_end_matches('/');
+    let username = crate::percent::encode(username);
+    let password = crate::percent::encode(password);
     match kind {
         MediaKind::Live => format!("{base}/live/{username}/{password}/{stream_id}.ts"),
         MediaKind::Movie => format!(
@@ -426,6 +434,9 @@ pub fn stream_url(
 }
 
 /// Build a catch-up (timeshift) URL. `start` is `YYYY-MM-DD:HH-MM`, duration in minutes.
+///
+/// Same encoding, and here it is the parameter list that was at stake: an `&` or an `=`
+/// in a password rewrote the query rather than ending up in it (R-33).
 pub fn timeshift_url(
     base: &str,
     username: &str,
@@ -435,6 +446,8 @@ pub fn timeshift_url(
     duration_min: u32,
 ) -> String {
     let base = base.trim_end_matches('/');
+    let username = crate::percent::encode(username);
+    let password = crate::percent::encode(password);
     format!("{base}/streaming/timeshift.php?username={username}&password={password}&stream={stream_id}&start={start}&duration={duration_min}")
 }
 
@@ -531,6 +544,64 @@ mod tests {
         let u = timeshift_url("https://example.com", "u", "p", 5, "2024-01-15:20-00", 60);
         assert!(u.contains("stream=5"));
         assert!(u.contains("duration=60"));
+    }
+
+    /// A password with punctuation in it, which is the whole of R-33.
+    ///
+    /// The four characters below each rewrote the address rather than appearing in it:
+    /// `/` added a path segment, so the stream id moved one place along and the panel
+    /// was asked for a stream nobody named; `#` made everything after the password a
+    /// fragment, which is not sent at all; `?` made it a query. The provider answers 401
+    /// or 404, the app can only report that as a credential problem, and the viewer
+    /// retypes a password that was already correct.
+    #[test]
+    fn a_password_with_punctuation_still_addresses_the_right_stream() {
+        let url = stream_url(
+            "https://example.com",
+            "user@host",
+            "p/a#s?s&w=d",
+            MediaKind::Live,
+            12,
+            None,
+        );
+        assert_eq!(
+            url,
+            "https://example.com/live/user%40host/p%2Fa%23s%3Fs%26w%3Dd/12.ts"
+        );
+        // Four path segments after the host, whatever the password held: `live`, the
+        // user, the password, and `12.ts`.
+        let path = url.strip_prefix("https://example.com/").unwrap();
+        assert_eq!(path.split('/').count(), 4, "{url}");
+        assert!(path.ends_with("/12.ts"), "{url}");
+        // And nothing after the password can be dropped as a fragment or read as a
+        // query, which is what `#` and `?` did.
+        assert!(!url.contains('#'), "{url}");
+        assert!(!url.contains('?'), "{url}");
+        // The credential itself is recoverable from the address, which is what catch-up
+        // and the migration both read back out of it.
+        let decoded = crate::percent::decode(path.split('/').nth(2).unwrap());
+        assert_eq!(decoded, "p/a#s?s&w=d");
+    }
+
+    /// The same, where it is the parameter list that was at stake.
+    #[test]
+    fn a_password_with_punctuation_does_not_rewrite_the_timeshift_query() {
+        let u = timeshift_url(
+            "https://example.com",
+            "u",
+            "p&stream=99&duration=1",
+            5,
+            "2024-01-15:20-00",
+            60,
+        );
+        // Six parameters, not nine: the password's own `&`s used to become separators
+        // and its `=`s used to introduce parameters, so a password could silently
+        // replace the stream id and the duration.
+        let query = u.split('?').nth(1).unwrap();
+        assert_eq!(query.split('&').count(), 5, "{u}");
+        assert!(u.contains("stream=5"), "{u}");
+        assert!(u.contains("duration=60"), "{u}");
+        assert!(!u.contains("stream=99"), "{u}");
     }
 
     #[test]

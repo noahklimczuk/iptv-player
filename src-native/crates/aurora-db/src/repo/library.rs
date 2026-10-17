@@ -540,16 +540,25 @@ pub fn movie(conn: &Connection, id: i64) -> Result<Option<MovieRow>> {
 /// The library filter comes first, because a show the viewer has hidden, or that "English
 /// only" keeps off their screen, is a show worth no requests. Then anything they have
 /// already reached for, then the most recently added.
+/// `retry_before` is a timestamp: a show that was already asked about, and produced
+/// nothing, comes back only once its attempt is older than this. Without it the queue
+/// could not tell "not asked yet" from "asked, and there is nothing", so the tail of a
+/// sweep re-asked the same unanswerable shows on all 200 passes (R-83). A failed attempt
+/// still comes back, because the usual cause is an outage rather than the show.
 pub fn series_needing_episodes(
     conn: &Connection,
     filter: &crate::repo::filtering::LibraryFilter,
     limit: u32,
+    retry_before: i64,
 ) -> Result<Vec<i64>> {
     let visible = filter.where_sql(crate::repo::filtering::Kind::Series);
     let sql = format!(
         "SELECT series.id FROM series
           WHERE series.hidden = 0{visible}
             AND NOT EXISTS (SELECT 1 FROM episodes e WHERE e.series_id = series.id)
+            AND NOT EXISTS (SELECT 1 FROM series_listing_attempts a
+                             WHERE a.series_id = series.id
+                               AND a.attempted_at > ?2)
           ORDER BY
             CASE WHEN EXISTS (SELECT 1 FROM favorites f
                                WHERE f.item_kind = 'series' AND f.item_id = series.id)
@@ -562,8 +571,59 @@ pub fn series_needing_episodes(
           LIMIT ?1"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![limit], |r| r.get(0))?;
+    let rows = stmt.query_map(params![limit, retry_before], |r| r.get(0))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Why a show's episode listing produced nothing, for the queue above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingAttempt {
+    /// The panel answered and listed nothing this app can store.
+    Empty,
+    /// The panel would not answer.
+    Failed,
+}
+
+impl ListingAttempt {
+    fn as_str(self) -> &'static str {
+        match self {
+            ListingAttempt::Empty => "empty",
+            ListingAttempt::Failed => "failed",
+        }
+    }
+}
+
+/// Record that a show was asked about and produced no episodes.
+///
+/// Only the unsuccessful outcomes are written: a listing that produced episodes leaves
+/// the queue because the episodes are there. `clear_listing_attempt` is the other half,
+/// for the show that answers on a later pass.
+pub fn record_listing_attempt(
+    conn: &Connection,
+    series_id: i64,
+    outcome: ListingAttempt,
+    now: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO series_listing_attempts (series_id, state, attempted_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(series_id) DO UPDATE SET state = ?2, attempted_at = ?3",
+        params![series_id, outcome.as_str(), now],
+    )?;
+    Ok(())
+}
+
+/// Forget an earlier empty or failed listing, because this one worked.
+///
+/// The episodes alone would keep the show out of the queue, so this is housekeeping
+/// rather than correctness -- but a refresh that drops a show's episodes would otherwise
+/// leave a stale "we asked and there was nothing" behind it.
+pub fn clear_listing_attempt(conn: &Connection, series_id: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM series_listing_attempts WHERE series_id = ?1",
+        params![series_id],
+    )?;
+    Ok(())
 }
 
 pub fn series(conn: &Connection, id: i64) -> Result<Option<SeriesRow>> {
@@ -1512,7 +1572,7 @@ mod tests {
             hide_untagged: true,
             ..Default::default()
         };
-        let ids = series_needing_episodes(&conn, &strict, 50).unwrap();
+        let ids = series_needing_episodes(&conn, &strict, 50, 0).unwrap();
 
         assert!(
             !ids.contains(&2),
@@ -1528,14 +1588,130 @@ mod tests {
         assert!(ids.contains(&1));
 
         // And with no filter in force, the other-language show is in scope again.
-        let ids = series_needing_episodes(&conn, &LibraryFilter::default(), 50).unwrap();
+        let ids = series_needing_episodes(&conn, &LibraryFilter::default(), 50, 0).unwrap();
         assert!(
             ids.contains(&4),
             "nothing is filtered, so nothing should be skipped"
         );
 
         // The limit is a limit.
-        assert_eq!(series_needing_episodes(&conn, &strict, 1).unwrap().len(), 1);
+        assert_eq!(series_needing_episodes(&conn, &strict, 1, 0).unwrap().len(), 1);
+    }
+
+    /// A show the provider will not list leaves the queue, and comes back later.
+    ///
+    /// The queue was "shows with no episodes stored", which is the same answer for a
+    /// show nobody has asked about and for one that has been asked and produced
+    /// nothing. The sweep's order is deterministic and its loop ran until a batch asked
+    /// about nothing, so the unanswerable remainder was asked for again on every one of
+    /// 200 passes -- 200 requests per show, to the viewer's own panel (R-83).
+    #[test]
+    fn a_show_that_produced_no_episodes_is_not_asked_again_until_its_cooldown() {
+        use crate::repo::filtering::LibraryFilter;
+
+        const NOW: i64 = 1_700_000_000;
+        const COOLDOWN: i64 = 6 * 3600;
+
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','xtream','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for id in [1, 2, 3] {
+            conn.execute(
+                "INSERT INTO series (id, provider_id, provider_key, title, match_key,
+                                     hidden, added_at, last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 0, 0, 0)",
+                params![id, format!("series:{id}"), format!("Show {id}")],
+            )
+            .unwrap();
+        }
+
+        let filter = LibraryFilter::default();
+        let queue = |retry_before: i64| {
+            let mut ids = series_needing_episodes(&conn, &filter, 50, retry_before).unwrap();
+            ids.sort();
+            ids
+        };
+
+        // Nothing has been asked yet, so all three are in scope.
+        assert_eq!(queue(NOW - COOLDOWN), vec![1, 2, 3]);
+
+        // The panel answers for 1 and lists nothing for 2; 3 fails outright. This is
+        // what a sweep does with each outcome.
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, url, added_at)
+             VALUES (1, 1, 1, 'https://example.com/e.mkv', 0)",
+            [],
+        )
+        .unwrap();
+        clear_listing_attempt(&conn, 1).unwrap();
+        record_listing_attempt(&conn, 2, ListingAttempt::Empty, NOW).unwrap();
+        record_listing_attempt(&conn, 3, ListingAttempt::Failed, NOW).unwrap();
+
+        // The next batch asks about none of them, which is what ends the sweep instead
+        // of restarting it.
+        assert_eq!(
+            queue(NOW - COOLDOWN),
+            Vec::<i64>::new(),
+            "the sweep would have asked the same shows again"
+        );
+
+        // Still nothing a minute later.
+        assert_eq!(queue(NOW + 60 - COOLDOWN), Vec::<i64>::new());
+
+        // And both come back once the cooldown has passed, because an empty listing is
+        // not a permanent verdict and a failure is usually the line rather than the
+        // show.
+        assert_eq!(queue(NOW + COOLDOWN + 1 - COOLDOWN), vec![2, 3]);
+
+        // Asking again and getting the same answer moves the attempt forward rather
+        // than adding a second row.
+        let later = NOW + COOLDOWN + 1;
+        record_listing_attempt(&conn, 2, ListingAttempt::Empty, later).unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM series_listing_attempts WHERE series_id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "a second attempt added a row instead of updating");
+        assert_eq!(queue(later - COOLDOWN), vec![3]);
+    }
+
+    /// A show that answers on a later pass does not keep the record of the pass that
+    /// failed, so a refresh that drops its episodes does not leave it suppressed.
+    #[test]
+    fn a_listing_that_works_clears_the_attempt_before_it() {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','xtream','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO series (id, provider_id, provider_key, title, match_key,
+                                 hidden, added_at, last_seen_at)
+             VALUES (7, 1, 'series:7', 'Show', 'show', 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        record_listing_attempt(&conn, 7, ListingAttempt::Failed, 100).unwrap();
+        clear_listing_attempt(&conn, 7).unwrap();
+
+        let ids = series_needing_episodes(
+            &conn,
+            &crate::repo::filtering::LibraryFilter::default(),
+            50,
+            100,
+        )
+        .unwrap();
+        assert_eq!(ids, vec![7]);
     }
 
     /// Continue Watching stores progress against an episode and shows the *show*, so

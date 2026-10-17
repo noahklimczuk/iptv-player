@@ -83,16 +83,36 @@ pub fn is_allowed(
 
 /// Categories hidden unless the user explicitly opts in (README §11: "adult content is
 /// hidden by default on a fresh install").
+/// This and `rules::presets::hide_adult` answer the same question and have to agree.
+/// The preset allows `18 +` as well as `18+`, because playlists write both, so the
+/// spaces come out here before the markers are looked for -- otherwise a group one of
+/// them hides is left visible by the other (R-18).
 pub fn looks_adult(group: Option<&str>) -> bool {
     let Some(group) = group else { return false };
     let g = group.to_ascii_lowercase();
     const MARKERS: &[&str] = &["adult", "xxx", "porn", "erotic", "18+", "for adults"];
-    MARKERS.iter().any(|m| g.contains(m))
+    if MARKERS.iter().any(|m| g.contains(m)) {
+        return true;
+    }
+    let tight: String = g.chars().filter(|c| !c.is_whitespace()).collect();
+    tight.contains("18+")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The spaced form, which `rules::presets::hide_adult` matches (R-18).
+    #[test]
+    fn an_adult_group_is_recognised_however_it_spaces_its_age() {
+        for group in ["18+", "18+ Channels", "18 + VOD", "18  +  MOVIES", "FOR ADULTS"] {
+            assert!(looks_adult(Some(group)), "{group:?} was not recognised");
+        }
+        for group in ["Channel 18", "Documentaries", "Kids", "18"] {
+            assert!(!looks_adult(Some(group)), "{group:?} was recognised");
+        }
+        assert!(!looks_adult(None));
+    }
 
     #[test]
     fn maps_the_common_systems_onto_ages() {

@@ -22,6 +22,16 @@ use crate::services::Services;
 /// costs one batch rather than everything.
 pub const SWEEP_BATCH: u32 = 200;
 
+/// How long a show that produced no episodes waits before it is asked again.
+///
+/// The same six hours metadata enrichment gives a failed TMDB lookup
+/// (`aurora_ingest::enrich::RETRY_AFTER_SECS`), and for the same reason: a provider
+/// outage during one sweep must not mark a show unlistable for good, and a show that
+/// really has no listing must not be asked about twice in an afternoon. What this
+/// replaces is no memory at all -- the queue was "shows with no episodes stored", so
+/// the unanswerable tail of a sweep came back on every one of its 200 passes (R-83).
+pub const LISTING_RETRY_AFTER_SECS: i64 = 6 * 3600;
+
 /// How many listings are asked for at once.
 ///
 /// Deliberately smaller than the metadata setting, and not configurable. That one talks
@@ -67,10 +77,11 @@ pub fn sweep(
     limit: u32,
     on_progress: impl Fn(SweepProgress) + Sync,
 ) -> Result<SweepReport> {
+    let now = crate::now_unix();
     let ids = {
         let db = services.db.lock();
         let filter = aurora_db::repo::filtering::LibraryFilter::load(&db)?;
-        library::series_needing_episodes(&db, &filter, limit)?
+        library::series_needing_episodes(&db, &filter, limit, now - LISTING_RETRY_AFTER_SECS)?
     };
 
     let total = ids.len();
@@ -90,6 +101,28 @@ pub fn sweep(
                 let Some(&series_id) = ids.get(i) else { return };
 
                 let outcome = fetch_episodes(services, series_id);
+                // Written before the counters, because this is the part that has to
+                // survive: a show that produced nothing and is not recorded is a show
+                // the next batch asks about again (R-83).
+                let attempt = match &outcome {
+                    Ok(0) => Some(library::ListingAttempt::Empty),
+                    Ok(_) => None,
+                    Err(_) => Some(library::ListingAttempt::Failed),
+                };
+                {
+                    let db = services.db.lock();
+                    let wrote = match attempt {
+                        Some(attempt) => {
+                            library::record_listing_attempt(&db, series_id, attempt, now)
+                        }
+                        None => library::clear_listing_attempt(&db, series_id),
+                    };
+                    // Not fatal: the cost of losing one of these is one extra request
+                    // on a later sweep, which is what the whole sweep is made of.
+                    if let Err(e) = wrote {
+                        tracing::warn!(series = series_id, "could not record the attempt: {e}");
+                    }
+                }
                 {
                     let mut report = report.lock();
                     report.asked += 1;
@@ -218,6 +251,11 @@ const SWEEP_MAX_BATCHES: usize = 200;
 /// panel later says about one show, and a refresh must not wait for 28,000 requests.
 /// Stops as soon as a batch asks about nothing, which is how "there is no backlog left"
 /// arrives.
+///
+/// That ending depends on every asked-about show leaving the queue, which until R-83 was
+/// only true of the ones that answered. A show the provider would not list stayed in it,
+/// the order is deterministic, and so the last batch was asked for again as the next one
+/// -- up to 200 times, against the viewer's own panel. `sweep` now records the attempt.
 pub fn sweep_in_background(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         use tauri::Manager;

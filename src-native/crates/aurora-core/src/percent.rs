@@ -43,6 +43,34 @@ pub fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Percent-encode one path segment or one query value.
+///
+/// Everything outside the unreserved set of RFC 3986 — `A-Z a-z 0-9 - . _ ~` — goes out
+/// as `%XX` over the UTF-8 bytes. That is deliberately more than either context strictly
+/// requires, and it is the only rule that is correct in both: a password goes into
+/// `/live/<user>/<pass>/<id>.ts` and into `timeshift.php?password=…`, and the characters
+/// that break those two are not the same set.
+///
+/// What this is for: panels do issue passwords with punctuation in them, and the
+/// credentials went into both forms verbatim. A `/` added a path segment, `#` truncated
+/// everything after it into a fragment, `?` started a query, and in the query form `&`
+/// or `=` rewrote the parameters. The provider then answered 401 or 404 for an address
+/// that did not name what was meant — indistinguishable, from inside the app, from a
+/// wrong password, which is the one diagnosis a viewer acts on by retyping a password
+/// that was already right (R-33).
+pub fn encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 fn hex_digit(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -103,6 +131,36 @@ mod tests {
         assert_eq!(decode("%%41"), "%A");
         assert_eq!(decode("abc%"), "abc%");
         assert_eq!(decode(""), "");
+    }
+
+    /// The characters that rewrote the address they were pasted into.
+    #[test]
+    fn the_punctuation_a_password_can_contain_is_escaped() {
+        assert_eq!(encode("hunter2"), "hunter2");
+        // Unreserved, and left alone: escaping these would also work, but it would stop
+        // the URLs being comparable with the ones already stored.
+        assert_eq!(encode("a-b.c_d~e"), "a-b.c_d~e");
+        // A path segment's terminator, a fragment, a query, and the two that rewrite a
+        // parameter list.
+        assert_eq!(encode("p/w"), "p%2Fw");
+        assert_eq!(encode("p#w"), "p%23w");
+        assert_eq!(encode("p?w"), "p%3Fw");
+        assert_eq!(encode("p&w=x"), "p%26w%3Dx");
+        // `+` is a space once something decodes the query, so it cannot go out as `+`.
+        assert_eq!(encode("p+w"), "p%2Bw");
+        assert_eq!(encode("p w"), "p%20w");
+        assert_eq!(encode("100%"), "100%25");
+    }
+
+    /// Non-ASCII is escaped per UTF-8 byte, which is what the decoder reassembles.
+    #[test]
+    fn what_is_encoded_decodes_back_to_itself() {
+        for s in [
+            "hunter2", "p/w", "p#w", "p?w", "p&w=x", "p+w", "p w", "100%", "caf\u{e9}",
+            "p\u{e4}ss", "\u{20ac}5", "\u{1f600}", "a:b@c", "[]{}",
+        ] {
+            assert_eq!(decode(&encode(s)), s, "{s:?} did not survive the round trip");
+        }
     }
 
     /// Bytes that are not text survive as replacement characters rather than ending
