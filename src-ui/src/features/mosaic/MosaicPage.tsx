@@ -126,6 +126,8 @@ export function MosaicPage({
   const { data: channels, loading } = useCommand('channels.list', {}, []);
   const { data: check } = useCommand('mosaic.check', { layout }, [layout]);
   const [layoutNonce, setLayoutNonce] = useState(0);
+  /** The saved layout whose delete is waiting to be confirmed, if any (R-123). */
+  const [confirming, setConfirming] = useState<number | null>(null);
   const { data: saved } = useCommand('mosaic.layouts', undefined, [layoutNonce, layoutsVersion]);
 
   const tiles = MOSAIC_TILES[layout];
@@ -388,7 +390,50 @@ export function MosaicPage({
                 <Button icon="play" onClick={() => openSaved(row)}>
                   Open
                 </Button>
-                <Button variant="ghost" icon="close" onClick={() => deleteSaved(row)} aria-label={`Delete ${row.name}`} />
+                {/*
+                  * Asks first, like the other two irreversible things in the app.
+                  *
+                  * A saved layout is an arrangement plus up to nine channel choices and
+                  * it exists nowhere else — there is no undo and nothing to re-import
+                  * it from. This called `mosaic.deleteLayout` straight from the icon,
+                  * one 32px target from **Open**, which is worse than sitting next to
+                  * Keep: the two buttons beside each other are "watch this" and "lose
+                  * it". `RecordingsPage` is careful about exactly this shape twice over
+                  * (R-123).
+                  */}
+                {confirming === row.id ? (
+                  <>
+                    <span
+                      style={{
+                        fontSize: 'var(--fs-sm)',
+                        color: 'var(--danger)',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Delete this layout?
+                    </span>
+                    <Button
+                      variant="danger"
+                      data-testid="mosaic-delete-confirm"
+                      onClick={() => {
+                        setConfirming(null);
+                        deleteSaved(row);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                    <Button variant="ghost" onClick={() => setConfirming(null)}>
+                      Keep
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    icon="close"
+                    onClick={() => setConfirming(row.id)}
+                    aria-label={`Delete ${row.name}`}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -413,8 +458,39 @@ export function SaveLayoutDialog({
   // (R-102). Declared before the early return, like every other hook here.
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef, open);
+
+  /*
+   * Escape closes it, which it did not.
+   *
+   * There was no `keydown` handler and no click-away, so the only way out was the
+   * Cancel button -- in an app where every other dismissible surface takes Escape:
+   * `DetailModal`, `CommandPalette`, even the `Select` popover. A dialog that ignores
+   * the key everybody presses reads as stuck (R-123).
+   *
+   * On the document rather than on the element, which is what `DetailModal` does and
+   * for the same reason: the key has to work wherever focus happens to be inside the
+   * dialog.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onCancel]);
+
   if (!open) return null;
   return (
+    // Both rules read `role="dialog"` out of their role table as non-interactive, and
+    // want a key handler beside the backdrop's click. Escape is handled above, on the
+    // document, which is where it has to be: the key must work wherever focus happens
+    // to be inside the dialog, and this element is not it. Dismissing a modal by
+    // clicking away from it is the ordinary shape of one.
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions
     <div
       ref={dialogRef}
       tabIndex={-1}
@@ -422,6 +498,11 @@ export function SaveLayoutDialog({
       aria-modal="true"
       aria-label="Save this layout"
       data-testid="mosaic-save-dialog"
+      // The backdrop closes it. `currentTarget` is this element, so a click on the card
+      // inside does not.
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
       style={{
         position: 'fixed',
         inset: 0,

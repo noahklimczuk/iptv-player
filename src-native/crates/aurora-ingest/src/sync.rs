@@ -16,6 +16,7 @@ use aurora_db::rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::epg::{self, BatchingSink, BATCH_SIZE};
+use crate::spill::{Spill, SpillWriter};
 use crate::http::HttpClient;
 use crate::playlist;
 use crate::source::SourceKind;
@@ -198,8 +199,16 @@ struct FetchedSeries {
 #[derive(Debug, Default)]
 struct FetchedEpg {
     channels: Vec<EpgChannel>,
-    /// Kept batched exactly as they will be inserted, so `apply` does no regrouping.
-    programmes: Vec<Vec<Programme>>,
+    /// Batched exactly as they will be inserted, so `apply` does no regrouping -- and
+    /// spilled to a file rather than kept, because a real guide does not fit in the
+    /// memory budget. See `spill` for the measurement (R-64).
+    programmes: Spill,
+    /// Every channel id the programmes named, collected during the parse.
+    ///
+    /// `apply` needs this to clear the right rows before reimporting, and used to get
+    /// it by walking every programme it was holding. Collected here instead, so the
+    /// spill is read exactly once and only for the insert.
+    touched: Vec<String>,
     counted_channels: usize,
     counted_programmes: usize,
 }
@@ -522,20 +531,23 @@ pub fn apply(
         // can schedule against an id it never declared -- and those rows would
         // otherwise be the ones that duplicate.
         let mut touched: Vec<String> = source.channels.iter().map(|c| c.id.clone()).collect();
-        touched.extend(
-            source
-                .programmes
-                .iter()
-                .flatten()
-                .map(|p| p.channel_id.clone()),
-        );
+        // From the parse rather than from the programmes themselves, which are no longer
+        // in memory to be walked (R-64).
+        touched.extend(source.touched.iter().cloned());
         touched.sort_unstable();
         touched.dedup();
         epg_repo::clear_channels(db, &touched).map_err(db_failure)?;
 
-        for batch in &source.programmes {
-            epg_repo::insert_batch(db, batch).map_err(db_failure)?;
-        }
+        source
+            .programmes
+            .for_each(|batch| epg_repo::insert_batch(db, batch).map(|_| ()))
+            .map_err(|e| match e {
+                // A guide that cannot be read back is a failed import, not a quietly
+                // empty one: the rows were parsed, so saying nothing came back would be
+                // the same class of silence this split was written to prevent.
+                crate::spill::SpillError::Read(e) => NetFailure::classify(&e),
+                crate::spill::SpillError::Insert(e) => db_failure(e),
+            })?;
         report.epg_channels += source.counted_channels;
         report.epg_programmes += source.counted_programmes;
         epg_channels.extend(source.channels);
@@ -808,10 +820,19 @@ fn year_from(release_date: Option<&str>) -> Option<i32> {
 
 /// Download and parse one guide source. Writes nothing.
 fn fetch_epg(http: &HttpClient, url: &str) -> Result<FetchedEpg, NetFailure> {
-    // Two passes would mean two downloads, so channels are collected in memory (a few
-    // thousand small rows) while programmes stream straight through to SQLite.
+    // Two passes would mean two downloads, so channels are collected in memory -- a few
+    // thousand small rows -- while programmes go to a file as they are parsed.
+    //
+    // They used to be pushed onto a `Vec<Vec<Programme>>` and kept, under a comment
+    // saying they streamed to SQLite. They cannot: `fetch` is handed no database, on
+    // purpose. The real guide is 546,912 programmes and held 262 MB that way, beside
+    // 159 MB for the playlist in the same struct, against a 500 MB budget for the whole
+    // app -- and README §16 asks for this to be incremental against a document 2.8×
+    // larger (R-64).
     let mut channel_buf: Vec<EpgChannel> = Vec::new();
-    let mut programme_batches: Vec<Vec<Programme>> = Vec::new();
+    let mut spill = SpillWriter::new();
+    // The ids as they go past, so `apply` never has to read the spill to find them.
+    let mut touched: Vec<String> = Vec::new();
 
     let mut sink = BatchingSink::new(
         |chans: &[EpgChannel]| {
@@ -819,8 +840,8 @@ fn fetch_epg(http: &HttpClient, url: &str) -> Result<FetchedEpg, NetFailure> {
             Ok(())
         },
         |progs: &[Programme]| {
-            programme_batches.push(progs.to_vec());
-            Ok(())
+            touched.extend(progs.iter().map(|p| p.channel_id.clone()));
+            spill.push(progs)
         },
         BATCH_SIZE,
     );
@@ -832,9 +853,15 @@ fn fetch_epg(http: &HttpClient, url: &str) -> Result<FetchedEpg, NetFailure> {
     }
     drop(sink);
 
+    // Deduplicated here rather than per batch: a guide schedules thousands of rows
+    // against each id, and holding one copy of each is a few thousand strings.
+    touched.sort_unstable();
+    touched.dedup();
+
     Ok(FetchedEpg {
         channels: channel_buf,
-        programmes: programme_batches,
+        programmes: spill.finish().map_err(|e| NetFailure::classify(&e))?,
+        touched,
         counted_channels: stats.channels,
         counted_programmes: stats.programmes,
     })

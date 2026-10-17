@@ -167,8 +167,58 @@ test('a layout can be saved, reopened and deleted', async ({ page }) => {
 
   await page.getByTestId('mosaic-close').click();
   await openMultiview(page);
+
+  // Deleting asks first. A saved layout is an arrangement plus up to nine channel
+  // choices and exists nowhere else, and the delete icon sits one target from Open --
+  // so the two buttons beside each other were "watch this" and "lose it" (R-123).
   await page.getByRole('button', { name: 'Delete Sunday' }).click();
+  await expect(page.getByText('Delete this layout?')).toBeVisible();
+  await expect(page.getByTestId(/^mosaic-saved-/)).toHaveCount(1);
+
+  // Keep leaves it alone, which is the half that matters.
+  await page.getByRole('button', { name: 'Keep' }).click();
+  await expect(page.getByTestId(/^mosaic-saved-/)).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Delete Sunday' }).click();
+  await page.getByTestId('mosaic-delete-confirm').click();
   await expect(page.getByTestId(/^mosaic-saved-/)).toHaveCount(0);
+});
+
+/**
+ * The name prompt takes Escape, and a click away from it.
+ *
+ * It had neither: no `keydown` handler and no click-away, so the only way out was the
+ * Cancel button -- in an app where `DetailModal`, `CommandPalette` and even the `Select`
+ * popover all close on Escape. A dialog that ignores the key everybody presses reads as
+ * stuck (R-123).
+ */
+test('the save-layout prompt can be dismissed without finding Cancel', async ({ page }) => {
+  await stopTheRecording(page);
+  await openMultiview(page);
+  await pickTile(page, 0, 'Meridian News');
+  await page.getByTestId('mosaic-open').click();
+  await expect(page.getByTestId('mosaic-overlay')).toBeVisible();
+
+  const dialog = page.getByTestId('mosaic-save-dialog');
+
+  await page.getByTestId('mosaic-save').click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  // And it did not take the mosaic with it, which `Escape` would if the handler were
+  // on the overlay instead.
+  await expect(page.getByTestId('mosaic-overlay')).toBeVisible();
+
+  // The backdrop, which is the pointer half of the same gesture.
+  await page.getByTestId('mosaic-save').click();
+  await expect(dialog).toBeVisible();
+  // A click on the card itself must not close it: that is where the name goes.
+  await dialog.getByRole('textbox').click();
+  await expect(dialog).toBeVisible();
+  // The corner of the backdrop, well away from the card in the middle.
+  await dialog.click({ position: { x: 4, y: 4 } });
+  await expect(dialog).toBeHidden();
+  await expect(page.getByTestId('mosaic-overlay')).toBeVisible();
 });
 
 test('closing the mosaic gives the shell back', async ({ page }) => {

@@ -76,6 +76,14 @@ test('liking a title is remembered, and is not the same as My List', async ({ pa
   await page.goto('/#/');
   const hero = page.getByRole('region', { name: 'Featured' });
   await expect(hero).toBeVisible();
+
+  // Pinned to the first billboard item rather than "whatever is showing", because the
+  // billboard rotates and the assertion at the end of this test has to be about the
+  // same title. The dots are `Show <title>` buttons, and the one at a given index is
+  // always the same item -- which the *title* is not: the fixture vocabulary repeats,
+  // so two different films can be called the same thing.
+  const dot = hero.getByRole('button', { name: /^Show / }).first();
+  await dot.click();
   await hero.getByRole('button', { name: 'More Info' }).click();
 
   const dialog = page.getByRole('dialog');
@@ -98,9 +106,17 @@ test('liking a title is remembered, and is not the same as My List', async ({ pa
   await page.goto('/#/movies');
   await page.goto('/#/');
   await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
-  await page.getByRole('region', { name: 'Featured' })
-    .getByRole('button', { name: 'More Info' }).click();
+
+  // The same item again, by the same route: the first dot, whatever the rotation has
+  // done in between.
+  const reloadedHero = page.getByRole('region', { name: 'Featured' });
+  await reloadedHero.getByRole('button', { name: /^Show / }).first().click();
+  await expect(reloadedHero.getByRole('heading', { level: 1 })).toHaveText(title);
+  await reloadedHero.getByRole('button', { name: 'More Info' }).click();
+
+  const reopened = page.getByRole('dialog');
+  await expect(reopened.getByRole('heading', { level: 1 })).toHaveText(title);
   await expect(
-    page.getByRole('dialog').getByRole('button', { name: `Undo liking ${title}` }),
+    reopened.getByRole('button', { name: `Undo liking ${title}` }),
   ).toHaveAttribute('aria-pressed', 'true');
 });

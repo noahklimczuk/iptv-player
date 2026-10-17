@@ -9,6 +9,7 @@ pub mod playlist;
 pub mod recorder;
 pub mod selfupdate;
 pub mod source;
+pub mod spill;
 pub mod sync;
 pub mod tmdb;
 pub mod updates;
