@@ -82,3 +82,41 @@ test('a film offers no Record button, because there is nothing going past', asyn
   // And the button that never did anything is gone rather than inert.
   await expect(page.getByRole('button', { name: 'Picture-in-picture' })).toHaveCount(0);
 });
+
+/**
+ * A remote has no pointer, so a key has to bring the OSD back.
+ *
+ * `bump` — which shows the controls and restarts the 3,200 ms hide timer — was wired to
+ * `onMouseMove` and `onClick` and nothing else. Grepped: it appeared five times in
+ * `PlayerOverlay.tsx` and nowhere else in `src-ui`, while keyboard and remote input
+ * arrives at a global listener in `useHotkeys`.
+ *
+ * So 3.2 seconds after the last mouse movement, volume-up changed the volume with no
+ * indicator, seeking moved the playhead with no scrub bar, and pause paused with no sign
+ * of it. The action happened; the feedback did not. With a mouse that is an annoyance —
+ * one twitch restores everything. On a television driven by a remote, which README §1
+ * names as the target, the OSD is unreachable: there is no pointer to move (R-74).
+ */
+test('a key brings the OSD back after it has hidden itself', async ({ page }) => {
+  await page.goto('/#/?video');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await page.getByRole('button', { name: 'Play' }).first().click();
+
+  // `Pause` is unique to the OSD while something is playing — the hero behind it offers
+  // `Play` and `More Info` — and the controls are unmounted when the OSD hides, not
+  // merely faded, so "hidden" here means gone.
+  const osd = page.getByRole('button', { name: 'Pause' });
+  await expect(osd).toBeVisible();
+
+  // Let it hide itself. The mouse must not move, which is the state a remote is always
+  // in — Playwright's pointer stays where it was put.
+  await expect(osd).toBeHidden({ timeout: 8_000 });
+
+  // A key the player handles. Against the old code the volume changes and nothing on
+  // screen says so.
+  await page.keyboard.press('ArrowUp');
+  await expect(osd, 'the OSD stayed hidden through a keypress').toBeVisible();
+
+  // And it hides again afterwards, so this did not simply pin it open.
+  await expect(osd).toBeHidden({ timeout: 8_000 });
+});

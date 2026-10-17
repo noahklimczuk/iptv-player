@@ -12,9 +12,10 @@
  * a limit at all — every M3U playlist, so the common case — it says that instead of
  * pretending to know.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, MosaicCheck, MosaicLayout, SavedMosaicLayout } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { Button, EmptyState, Select, TextField } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
@@ -408,10 +409,17 @@ export function SaveLayoutDialog({
   onCancel: () => void;
 }) {
   const [name, setName] = useState('');
+  // Keeps the keyboard inside the dialog and hands focus back to whatever opened it
+  // (R-102). Declared before the early return, like every other hook here.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, open);
   if (!open) return null;
   return (
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
+      aria-modal="true"
       aria-label="Save this layout"
       data-testid="mosaic-save-dialog"
       style={{

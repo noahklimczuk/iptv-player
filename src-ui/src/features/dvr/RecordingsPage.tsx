@@ -5,8 +5,8 @@
  * questions: "what can I watch", "what is Aurora about to do", and "what went wrong".
  * Mixing them means the failures are the easiest thing to miss.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Channel, Recording, RecordingConflict, RecordingRule } from '@shared/ipc';
+import { useCallback, useEffect, useState } from 'react';
+import type { Recording, RecordingConflict, RecordingRule } from '@shared/ipc';
 import { Icon } from '@/components/Icon';
 import { Badge, Button, EmptyState, IconButton, ProgressBar, Skeleton } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
@@ -40,17 +40,10 @@ export function RecordingsPage({ onPlay }: { onPlay: (r: Recording) => void }) {
   const { data: rules } = useCommand('dvr.rules', undefined, [nonce]);
   const { data: conflicts } = useCommand('dvr.conflicts', undefined, [nonce]);
   const { data: storage } = useCommand('dvr.storage', undefined, [nonce]);
-  const { data: channels } = useCommand('channels.list', {}, []);
 
   // A recording starting or finishing changes this page, and the host already tells
   // us when that happens — polling would only make it slower to notice.
   useEffect(() => onDvrTick(() => refresh()), [refresh]);
-
-  const byName = useMemo(() => {
-    const m = new Map<number, Channel>();
-    for (const c of channels ?? []) m.set(c.id, c);
-    return m;
-  }, [channels]);
 
   const recordings = all ?? [];
   const recorded = recordings.filter((r) => r.state === 'completed');
@@ -117,7 +110,6 @@ export function RecordingsPage({ onPlay }: { onPlay: (r: Recording) => void }) {
               <RecordedRow
                 key={r.id}
                 rec={r}
-                channel={byName.get(r.channelId) ?? null}
                 onChanged={refresh}
                 onPlay={onPlay}
               />
@@ -140,7 +132,6 @@ export function RecordingsPage({ onPlay }: { onPlay: (r: Recording) => void }) {
                 <ScheduledRow
                   key={r.id}
                   rec={r}
-                  channel={byName.get(r.channelId) ?? null}
                   onChanged={refresh}
                 />
               ))}
@@ -155,7 +146,6 @@ export function RecordingsPage({ onPlay }: { onPlay: (r: Recording) => void }) {
                   <ProblemRow
                     key={r.id}
                     rec={r}
-                    channel={byName.get(r.channelId) ?? null}
                     onChanged={refresh}
                   />
                 ))}
@@ -166,7 +156,7 @@ export function RecordingsPage({ onPlay }: { onPlay: (r: Recording) => void }) {
       )}
 
       {!loading && tab === 'rules' && (
-        <RulesTab rules={rules ?? []} channels={byName} onChanged={refresh} />
+        <RulesTab rules={rules ?? []} onChanged={refresh} />
       )}
     </div>
   );
@@ -261,15 +251,15 @@ function RowShell({
  * channels it is naming, so the mark costs nothing to show and makes a long list scannable
  * without reading it.
  */
-function TitleBlock({ rec, channel }: { rec: Recording; channel: Channel | null }) {
+function TitleBlock({ rec }: { rec: Recording }) {
   const ep = rec.season != null && rec.episode != null
     ? `S${String(rec.season).padStart(2, '0')}E${String(rec.episode).padStart(2, '0')}`
     : null;
   return (
     <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-      {channel?.logo && (
+      {rec.channelLogo && (
         <img
-          src={channel.logo} alt=""
+          src={rec.channelLogo} alt=""
           style={{
             width: 34, height: 34, borderRadius: 'var(--r-sm)', objectFit: 'cover',
             flexShrink: 0,
@@ -282,7 +272,7 @@ function TitleBlock({ rec, channel }: { rec: Recording; channel: Channel | null 
           {ep && <span style={{ color: 'var(--text-faint)', fontWeight: 500 }}> · {ep}</span>}
         </div>
         <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
-          {channel && <>{channel.name} · </>}
+          {rec.channelName && <>{rec.channelName} · </>}
           {dayLabel(rec.airStart)} {clockTime(rec.airStart)}–{clockTime(rec.airStop)}
         </div>
       </div>
@@ -291,10 +281,9 @@ function TitleBlock({ rec, channel }: { rec: Recording; channel: Channel | null 
 }
 
 function RecordedRow({
-  rec, channel, onChanged, onPlay,
+  rec, onChanged, onPlay,
 }: {
   rec: Recording;
-  channel: Channel | null;
   onChanged: () => void;
   onPlay: (r: Recording) => void;
 }) {
@@ -315,7 +304,7 @@ function RecordedRow({
   if (confirming) {
     return (
       <RowShell accent="var(--danger)">
-        <TitleBlock rec={rec} channel={channel} />
+        <TitleBlock rec={rec} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
           <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)', whiteSpace: 'nowrap' }}>
             Delete permanently, freeing {bytes(rec.bytes)}?
@@ -335,7 +324,7 @@ function RecordedRow({
 
   return (
     <RowShell>
-      <TitleBlock rec={rec} channel={channel} />
+      <TitleBlock rec={rec} />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
         {rec.reason && (
@@ -374,10 +363,9 @@ function RecordedRow({
 }
 
 function ScheduledRow({
-  rec, channel, onChanged,
+  rec, onChanged,
 }: {
   rec: Recording;
-  channel: Channel | null;
   onChanged: () => void;
 }) {
   const live = rec.state === 'recording';
@@ -386,7 +374,7 @@ function ScheduledRow({
 
   return (
     <RowShell accent={live ? 'var(--live)' : undefined}>
-      <TitleBlock rec={rec} channel={channel} />
+      <TitleBlock rec={rec} />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
         {live ? (
@@ -422,16 +410,15 @@ function ScheduledRow({
 }
 
 function ProblemRow({
-  rec, channel, onChanged,
+  rec, onChanged,
 }: {
   rec: Recording;
-  channel: Channel | null;
   onChanged: () => void;
 }) {
   return (
     <RowShell accent="var(--danger)">
       <div style={{ minWidth: 0, flex: 1 }}>
-        <TitleBlock rec={rec} channel={channel} />
+        <TitleBlock rec={rec} />
         {rec.reason && (
           <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)', marginTop: 2 }}>
             {rec.reason}
@@ -455,10 +442,9 @@ function ProblemRow({
 /* ── Series rules ─────────────────────────────────────────────────────────── */
 
 function RulesTab({
-  rules, channels, onChanged,
+  rules, onChanged,
 }: {
   rules: RecordingRule[];
-  channels: Map<number, Channel>;
   onChanged: () => void;
 }) {
   if (rules.length === 0) {
@@ -473,7 +459,7 @@ function RulesTab({
   return (
     <div style={listStyle}>
       {rules.map((rule) => (
-        <RuleRow key={rule.id} rule={rule} channels={channels} onChanged={onChanged} />
+        <RuleRow key={rule.id} rule={rule} onChanged={onChanged} />
       ))}
     </div>
   );
@@ -488,10 +474,9 @@ function RulesTab({
  * to keep — that only exist here. Pausing is one click, because pausing is undoable.
  */
 function RuleRow({
-  rule, channels, onChanged,
+  rule, onChanged,
 }: {
   rule: RecordingRule;
-  channels: Map<number, Channel>;
   onChanged: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -500,7 +485,7 @@ function RuleRow({
           <div style={{ minWidth: 0, flex: 1, opacity: rule.enabled ? 1 : 0.55 }}>
             <div style={{ fontWeight: 700 }}>{rule.title}</div>
             <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
-              {rule.channelId ? (channels.get(rule.channelId)?.name ?? 'One channel') : 'Any channel'}
+              {rule.channelId ? (rule.channelName ?? 'One channel') : 'Any channel'}
               {rule.newOnly && ' · New episodes only'}
               {rule.weekdays && ` · ${rule.weekdays.map((d) => WEEKDAYS[d] ?? '?').join(', ')}`}
               {rule.aroundLocalMinute != null && ` · around ${

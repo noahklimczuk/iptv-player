@@ -70,6 +70,77 @@ test('finishing a season moves Play on to the next one', async ({ page }) => {
 });
 
 /**
+ * One show's resume label must not appear on the next show's Play button.
+ *
+ * `DetailModal` is one mounted component whose `item` changes, so `Hero` is not
+ * remounted when the title is *replaced* rather than closed — which is what the palette
+ * does: `onPick` calls `openDetail` straight over the open modal. The effect that
+ * fetches the resume point never cleared `label` on the way in, so the second show's
+ * Play button read the first show's "Resume S02E05 from 41:12" for as long as the two
+ * commands took, with the button live throughout. Pressing it in that window plays the
+ * wrong thing.
+ *
+ * And the `!ep` path returned without clearing either, so a resume point naming an
+ * episode the listing does not contain left the stale label up for good —
+ * `watch_progress` carries no foreign key to `episodes`, deliberately, so the host can
+ * really produce that (R-101).
+ */
+test('a resume label does not survive onto the next show', async ({ page }) => {
+  await page.goto('/#/series');
+  await expect(page.getByRole('heading', { name: 'Series' })).toBeVisible();
+
+  // Watch into an episode of the first show, so it has something to resume.
+  await page.getByTestId('catalog-card').first().click();
+  const dialog = page.getByRole('dialog');
+  const firstTitle = await dialog.getByRole('heading').first().innerText();
+  await dialog.getByRole('tab', { name: 'episodes' }).click();
+  await dialog.getByRole('button', { name: /^Mark S01E01 as played$/ }).click();
+  await expect(dialog.getByRole('button', { name: /^Play S01E02$/ })).toBeVisible();
+  const first = (await dialog.getByRole('button', { name: /^(Play|Resume) S\d+E\d+/ })
+    .innerText()).trim();
+
+  // Swap the title underneath the open modal, with the new one's resume lookup held
+  // open. `__auroraHang` is what makes the window observable: against the mock the two
+  // commands land in milliseconds, and on a real panel they do not.
+  await page.evaluate(() => {
+    (window as unknown as { __auroraHang: (name: string) => void })
+      .__auroraHang('progress.resumePoint');
+  });
+  // The palette, which is the path a viewer has: `onPick` calls `openDetail` straight
+  // over the modal that is already open, so `Hero` is never remounted.
+  await page.keyboard.press('Control+k');
+  const palette = page.getByRole('dialog', { name: 'Search' });
+  await expect(palette).toBeVisible();
+  await palette.getByRole('textbox').fill('the');
+  // A *different* show: most fixture titles begin with "The", so the first hit is often
+  // the one already open, and swapping a title for itself proves nothing.
+  // `option`, not `button`: the rows carry an explicit `role="option"` inside the
+  // results listbox, so asking for buttons here finds only the "Show N more" fold.
+  const hits = palette.getByTestId('palette-group-series').getByRole('option');
+  await expect(hits.first()).toBeVisible();
+  let picked = false;
+  for (let i = 0; i < (await hits.count()); i += 1) {
+    const text = (await hits.nth(i).innerText()).split('\n')[0]!.trim();
+    if (text && text !== firstTitle.trim()) {
+      await hits.nth(i).click();
+      picked = true;
+      break;
+    }
+  }
+  expect(picked, 'the palette offered no show other than the one already open').toBe(true);
+  await expect(dialog.getByRole('heading').first()).not.toHaveText(firstTitle);
+
+  const play = dialog.getByRole('button', { name: /^(Play|Resume)/ }).first();
+  await expect(play).toBeVisible();
+  expect(
+    (await play.innerText()).trim(),
+    `the second show offered "${first}", which belongs to the first`,
+  ).not.toBe(first);
+  // And it says something of its own rather than nothing at all.
+  await expect(play).toHaveText(/\S/);
+});
+
+/**
  * The resume bar on an episode without artwork, which was being clipped to nothing.
  *
  * The thumbnail box's only in-flow child was a conditional `<img>`. With `ep.still`

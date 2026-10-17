@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SearchHit, SearchResults } from '@shared/ipc';
 import { Icon, type IconName } from '@/components/Icon';
 import { invoke } from '@/ipc';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { report } from '@/lib/errors';
 
 /**
@@ -56,6 +57,15 @@ export function CommandPalette({
   const [cursor, setCursor] = useState(0);
   const [expanded, setExpanded] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  /**
+   * Hold the keyboard inside the palette.
+   *
+   * Focusing the input was not enough: eight of eight Tab presses from the open palette
+   * landed outside it, starting with the nav rail — so `aria-modal="true"` was telling
+   * assistive technology the background was unavailable while the keyboard walked into
+   * it. The input keeps the initial focus, which is where typing has to go (R-102).
+   */
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -135,6 +145,9 @@ export function CommandPalette({
     row?.scrollIntoView({ block: 'nearest' });
   }, [cursor, open, flat.length]);
 
+  // After the early return below there are no more hooks, so this is the last one.
+  useFocusTrap(dialogRef, open, inputRef);
+
   if (!open) return null;
 
   return (
@@ -149,6 +162,8 @@ export function CommandPalette({
         }}
       >
         <motion.div
+          ref={dialogRef}
+          tabIndex={-1}
           initial={{ y: -14, scale: 0.98 }} animate={{ y: 0, scale: 1 }}
           transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
           onClick={(e) => e.stopPropagation()}

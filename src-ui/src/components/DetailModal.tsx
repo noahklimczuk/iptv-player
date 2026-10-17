@@ -6,9 +6,10 @@
  * drawn here came from the browser fixtures alone (R-99).
  */
 import { AnimatePresence, motion } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogItem, Episode, EpisodeProgress, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { invoke } from '@/ipc';
 import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useProfile } from '@/state/profile';
@@ -39,6 +40,17 @@ export function DetailModal({
    */
   const watch = useSeriesProgress(item?.kind === 'series' ? item.id : 0);
 
+  /**
+   * Keep focus in here while it is open, and give it back on the way out.
+   *
+   * `aria-modal="true"` above was a promise nothing kept: measured in Chromium, twelve
+   * of twelve Tab presses from the open modal landed on controls behind the scrim —
+   * including Play buttons on other titles, which start playback with a modal over them
+   * (R-102).
+   */
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, item != null);
+
   useEffect(() => {
     if (!item) return;
     setTab(item.kind === 'series' ? 'episodes' : 'similar');
@@ -66,6 +78,10 @@ export function DetailModal({
           }}
         >
           <motion.div
+            ref={dialogRef}
+            // Focusable, so the dialog itself can take focus on open — which is what a
+            // screen reader reads the label from. See `useFocusTrap` (R-102).
+            tabIndex={-1}
             role="dialog" aria-modal="true" aria-label={item.title}
             initial={{ y: 24, scale: 0.97 }} animate={{ y: 0, scale: 1 }}
             exit={{ y: 16, scale: 0.98 }}
@@ -96,10 +112,33 @@ export function DetailModal({
  */
 function useSeriesResume(item: CatalogItem, version: number): string | null {
   const profileId = useProfile((s) => s.active?.id ?? 1);
-  const [label, setLabel] = useState<string | null>(null);
+  /**
+   * The label carries the title it was read for, and is only shown on that title.
+   *
+   * Clearing it inside the effect is not enough on its own: effects run *after* the
+   * paint, so the render that swaps `item` draws the new show's heading beside the
+   * previous show's label for a frame, with the button live. Keyed this way the stale
+   * label is never on screen at all, however long the two commands take (R-101).
+   */
+  const [found, setFound] = useState<{ kind: string; id: number; label: string } | null>(
+    null,
+  );
+  const setLabel = (label: string | null) =>
+    setFound(label === null ? null : { kind: item.kind, id: item.id, label });
 
   useEffect(() => {
-    if (item.kind !== 'series') { setLabel(null); return; }
+    // Cleared on the way *in*, not only on the way out.
+    //
+    // `DetailModal` is one mounted component whose `item` changes, so `Hero` is not
+    // remounted between titles. Closing a show you are partway through and opening a
+    // different one showed the **first** show's label — "Resume S02E05 from 41:12" — on
+    // the second show's Play button for as long as the two commands took, with the
+    // button live the whole time. And the `!ep` path below returns without clearing, so
+    // a resume point naming an episode the listing does not contain left the stale
+    // label up for good: `watch_progress` carries no foreign key to `episodes`, on
+    // purpose, so that is a state the host can really produce (R-101).
+    setLabel(null);
+    if (item.kind !== 'series') return;
     let live = true;
     void (async () => {
       try {
@@ -107,7 +146,9 @@ function useSeriesResume(item: CatalogItem, version: number): string | null {
         if (!live || !point) { if (live) setLabel(null); return; }
         const eps = await invoke('library.episodes', { seriesId: item.id });
         const ep = eps.find((e) => e.id === point.episodeId);
-        if (!live || !ep) return;
+        // An episode the listing does not have is a reason to say "Play", like every
+        // other way of not knowing in this effect.
+        if (!live || !ep) { if (live) setLabel(null); return; }
         const which = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`;
         setLabel(
           point.positionSecs > 0
@@ -122,7 +163,7 @@ function useSeriesResume(item: CatalogItem, version: number): string | null {
     return () => { live = false; };
   }, [item.kind, item.id, profileId, version]);
 
-  return label;
+  return found && found.kind === item.kind && found.id === item.id ? found.label : null;
 }
 
 function Hero({

@@ -31,7 +31,13 @@ export interface HotkeyHandlers {
 }
 
 /** True when focus is in a text field, where single-key shortcuts must not fire. */
-function isTyping(t: EventTarget | null): boolean {
+/**
+ * Whether this keystroke belongs to a text field.
+ *
+ * Exported because the player's OSD wakes on key input and has to draw the same line:
+ * two answers to "is somebody typing?" is one more than this app needs.
+ */
+export function isTyping(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
   if (!el) return false;
   const tag = el.tagName;

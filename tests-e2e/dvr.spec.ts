@@ -285,3 +285,47 @@ test('Remind me toggles, and Record series becomes the undo action', async ({ pa
   // outcome (R-133).
   await expect(row).not.toContainText('New episodes only');
 });
+
+/**
+ * A recording knows what channel it is from, without fetching the channel list.
+ *
+ * The page asked for `channels.list` with no filter — which the host reads as every
+ * channel — and built a `Map` of all of them purely to put a name and a logo beside each
+ * row. Measured against the live panel, projected into the `Channel` shape the contract
+ * declares: **6,699 channels, 1,804,009 bytes = 1.72 MB** of JSON across the bridge, to
+ * label as few as three recordings.
+ *
+ * The host has both tables and the recording row is already denormalised — `title`,
+ * `subTitle`, `season` and `episode` are all copied from the guide — so the channel's
+ * name and logo belong on it too (R-117).
+ */
+test('a recording carries its channel name rather than the page fetching one', async ({
+  page,
+}) => {
+  await page.goto('/#/recordings');
+  await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Play$/ }).first()).toBeVisible();
+
+  // The row the host sends carries the name, which is what makes the catalogue fetch
+  // unnecessary rather than merely unused.
+  const rows = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a: unknown) => Promise<
+        { channelId: number; channelName: string | null }[]
+      >;
+    };
+    return w.__auroraInvoke('dvr.list', {});
+  });
+  expect(rows.length, 'no recordings to check').toBeGreaterThan(0);
+  const named = rows.filter((r) => r.channelName && r.channelName.length > 0);
+  expect(named.length, 'the host sent no channel names with the rows').toBe(rows.length);
+
+  // And the screen is showing one of them, so the name reaches the eye and not just the
+  // payload. Any of them: `dvr.list` returns every state and the page opens on the
+  // Recorded tab, so the first row in the payload need not be the first on screen.
+  const shown = await page.innerText('body');
+  expect(
+    named.some((r) => shown.includes(r.channelName!)),
+    'no recording on screen is labelled with its channel',
+  ).toBe(true);
+});

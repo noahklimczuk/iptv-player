@@ -94,7 +94,39 @@ const NAV: { to: string; icon: IconName; label: string }[] = [
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
-  const ui = useUi();
+  /**
+   * The six fields this component reads, subscribed to one at a time.
+   *
+   * It was `useUi()` with no selector, which subscribes to the *entire* store — `theme`,
+   * `density`, `animations`, `hoverPreviews`, `use24h` and `catalogVersion` included —
+   * and `App` renders the whole route tree, so a write to any of them re-rendered the
+   * mounted page.
+   *
+   * The rate was already measured and written down thirteen lines below, on the banner
+   * effect: while the player is open the host's heartbeat writes `setPlayer` **four
+   * times a second**. That fix was right for the banner and left the cause in place
+   * here, so `App`, `<Routes>` and the mounted page re-rendered at the same rate — and
+   * the route elements are rebuilt as fresh JSX with inline closures, so no page could
+   * bail out on reference equality either. On the guide that is every visible row's JSX
+   * four times a second (R-134).
+   *
+   * Kept as one object so the 34 `ui.x` reads below are unchanged: what matters is
+   * *what is subscribed to*, and this subscribes to six fields instead of twelve. The
+   * actions are stable zustand functions, so selecting them subscribes to nothing that
+   * ever changes.
+   */
+  const ui = {
+    player: useUi((s) => s.player),
+    banner: useUi((s) => s.banner),
+    detail: useUi((s) => s.detail),
+    paletteOpen: useUi((s) => s.paletteOpen),
+    paletteQuery: useUi((s) => s.paletteQuery),
+    digits: useUi((s) => s.digits),
+    openDetail: useUi((s) => s.openDetail),
+    setPalette: useUi((s) => s.setPalette),
+    showBanner: useUi((s) => s.showBanner),
+    pushDigit: useUi((s) => s.pushDigit),
+  };
   const [playerOpen, setPlayerOpen] = useState(false);
   // Shown until a provider exists. `?setup` forces it for demos and tests.
   const [setupDone, setSetupDone] = useState(
@@ -372,10 +404,12 @@ export default function App() {
     (item: { kind: 'movie' | 'series' | 'live'; id: number }) => {
       if (item.kind === 'live') return;
       invoke('library.item', { kind: item.kind, id: item.id })
-        .then((found) => { if (found) ui.openDetail(found); })
+        // Read when the row is picked rather than captured when the callback is built,
+        // so this does not have to be rebuilt whenever the store moves (R-134).
+        .then((found) => { if (found) useUi.getState().openDetail(found); })
         .catch(report('Could not open that'));
     },
-    [ui],
+    [],
   );
 
   const onPick = useCallback((hit: SearchHit) => {
@@ -399,7 +433,7 @@ export default function App() {
       void invoke('library.item', { kind: hit.kind, id: hit.refId })
         .then((item) => {
           if (item) {
-            ui.openDetail(item);
+            useUi.getState().openDetail(item);
             return;
           }
           // The row went away between the search and the pick — a refresh can do that.
@@ -407,7 +441,7 @@ export default function App() {
         })
         .catch(report('Could not open that'));
     }
-  }, [channels, navigate, tune, ui]);
+  }, [channels, navigate, tune]);
 
   const handlers = useMemo(() => ({
     /**
@@ -425,20 +459,20 @@ export default function App() {
         }
         return;
       }
-      ui.pushDigit(d);
+      useUi.getState().pushDigit(d);
     },
     onChannelUp: () => zapper.step(1),
     onChannelDown: () => zapper.step(-1),
     onLastChannel: () => zapper.lastChannel(),
     onGuide: () => { closePlayer(); navigate('/guide'); },
-    onPalette: () => ui.setPalette(true),
+    onPalette: () => useUi.getState().setPalette(true),
     onBack: () => {
-      if (ui.detail) ui.openDetail(null);
+      if (useUi.getState().detail) useUi.getState().openDetail(null);
       else if (mosaicOpen) closeMosaic();
       else if (playerOpen) closePlayer();
     },
     onPlayPause: () => {
-      const s = ui.player?.status;
+      const s = useUi.getState().player?.status;
       if (s) {
         invoke(s === 'playing' ? 'player.pause' : 'player.resume')
           .catch(report('The player did not respond'));
@@ -450,7 +484,7 @@ export default function App() {
      * (README §7.6, §14.1). On anything else it is play-pause.
      */
     onTimeshift: () => {
-      const p = ui.player;
+      const p = useUi.getState().player;
       if (!p || p.status === 'idle') return;
       if (!p.isLive) {
         invoke(p.status === 'playing' ? 'player.pause' : 'player.resume')
@@ -468,10 +502,10 @@ export default function App() {
       invoke('player.seek', { positionSecs: secs, relative: true })
         .catch(report('Could not seek')),
     onVolume: (delta: number) =>
-      invoke('player.setVolume', { volume: (ui.player?.volume ?? 70) + delta })
+      invoke('player.setVolume', { volume: (useUi.getState().player?.volume ?? 70) + delta })
         .catch(report('Could not change the volume')),
     onMute: () =>
-      invoke('player.setMuted', { muted: !(ui.player?.muted ?? false) })
+      invoke('player.setMuted', { muted: !(useUi.getState().player?.muted ?? false) })
         .catch(report('Could not change the volume')),
     onFullscreen: fullscreen.toggle,
     /**
@@ -485,10 +519,10 @@ export default function App() {
      * search that browsing would hide.
      */
     onInfo: () => {
-      const p = ui.player;
+      const p = useUi.getState().player;
       if (!p) return;
       if (p.isLive) {
-        if (p.channelId != null) ui.showBanner(p.channelId);
+        if (p.channelId != null) useUi.getState().showBanner(p.channelId);
         return;
       }
       if (p.itemId == null || p.itemKind == null) return;
@@ -496,12 +530,20 @@ export default function App() {
       // is this?" about an episode is a question about the show it belongs to.
       const kind = p.itemKind === 'episode' ? 'series' : 'movie';
       invoke('library.item', { kind, id: p.itemId })
-        .then((found) => found && ui.openDetail(found))
+        .then((found) => found && useUi.getState().openDetail(found))
         .catch(report('Could not look that up'));
     },
     onPip: togglePip,
     onNavigate: (to: string) => { closePlayer(); navigate(to); },
-  }), [ui, zapper, navigate, playerOpen, closePlayer, fullscreen.toggle, mosaicOpen, closeMosaic, togglePip]);
+    // `ui` is deliberately absent. Every field the handlers read is read *when a key is
+    // pressed* rather than when the memo is built — `useUi.getState()` below — so the
+    // memo does not have to be rebuilt on a heartbeat. With `ui` in this list the global
+    // `keydown` listener was removed and re-added roughly four times a second for as
+    // long as anything was playing: pure churn, since React runs the cleanup and setup
+    // back to back, but churn on the hottest path in the app (R-134).
+    //
+    // The same pattern `closePlayer` and the banner effect already use.
+  }), [zapper, navigate, playerOpen, closePlayer, fullscreen.toggle, mosaicOpen, closeMosaic, togglePip]);
 
   useHotkeys(handlers, !ui.paletteOpen);
 

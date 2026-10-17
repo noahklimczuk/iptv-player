@@ -995,6 +995,10 @@ function scheduleRecording(a: {
     durationSecs: 0,
     keep: false,
     watched: false,
+    // Sent with the row, as the host sends it: the page used to ask for every channel
+    // in the library to put this one string beside each recording (R-117).
+    channelName: fx.channels.find((c) => c.id === a.channelId)?.name ?? null,
+    channelLogo: fx.channels.find((c) => c.id === a.channelId)?.logo ?? null,
   });
   return id;
 }
@@ -1067,12 +1071,15 @@ function seedDvr() {
     id: nextRuleId++, title: 'The Gilded Circuit', channelId: null, newOnly: true,
     weekdays: null, aroundLocalMinute: null, prePaddingSecs: PRE_PADDING,
     postPaddingSecs: POST_PADDING, keepEpisodes: 5, priority: 0, enabled: true, scheduled: 2,
+    // No channel: the row says "Any channel" for a rule with none.
+    channelName: null,
   });
   dvrRules.push({
     id: nextRuleId++, title: 'Nightfall Sessions', channelId: fx.channels[0]?.id ?? 1,
     newOnly: false, weekdays: [0, 1, 2, 3, 4], aroundLocalMinute: 22 * 60,
     prePaddingSecs: PRE_PADDING, postPaddingSecs: POST_PADDING, keepEpisodes: null,
     priority: 0, enabled: true, scheduled: 1,
+    channelName: fx.channels[0]?.name ?? null,
   });
 
   reminders.push({
@@ -2275,6 +2282,9 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       id,
       title: a.title,
       channelId: a.channelId ?? null,
+      channelName: a.channelId == null
+        ? null
+        : fx.channels.find((c) => c.id === a.channelId)?.name ?? null,
       newOnly: a.newOnly,
       weekdays: a.weekdays && a.weekdays.length ? a.weekdays : null,
       aroundLocalMinute: a.aroundLocalMinute ?? null,
