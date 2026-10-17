@@ -105,6 +105,18 @@ test('Skip Intro is gone once the intro has passed', async ({ page }) => {
   await playFirstEpisode(page);
   await seekTo(page, 600);
   await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+
+  // Still playing, and really past the intro. A hidden button is also what a player
+  // that failed to open looks like, and `toBeHidden()` cannot tell the two apart —
+  // which is exactly how a green test came to certify a feature that was dead (R-159).
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await expect
+    .poll(async () =>
+      page
+        .getByRole('slider', { name: 'Seek' })
+        .evaluate((el) => Number((el as HTMLInputElement).value)),
+    )
+    .toBeGreaterThan(92);
 });
 
 test('the Next Episode button plays the following episode', async ({ page }) => {

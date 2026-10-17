@@ -295,6 +295,36 @@ function filmTrailer(id: number): string | null {
   return id % 3 === 0 ? trailerKey(id) : null;
 }
 
+/**
+ * Whether this row is one TMDB enrichment has never reached.
+ *
+ * **A real library is mostly in this state.** What an import writes for a film is the
+ * ten fields of `NewMovie`: provider key, title, match key, year, quality, group, url,
+ * poster, added date and the provider's own rating. Eight of the fields these fixtures
+ * hand to every journey come from TMDB enrichment and from nothing else — `backdrop`,
+ * `overview`, `runtimeMins`, `certification`, `genres`, `cast`, `trailerKey`, and
+ * `logoArt` — which needs an API key a viewer may never set and a sweep that has
+ * reached that title.
+ *
+ * And it is not a transient first-run state. `docs/ROADMAP.md` records enrichment
+ * against the real service matching **39 of 80 titles**, so after a complete sweep
+ * roughly half the library still has none of those fields, permanently.
+ *
+ * So the unenriched row is the *majority* state of a real library, and until now no
+ * journey had ever rendered one. That single fact is the common cause behind five
+ * findings in the audit: the "% match" that only existed in the mock, the unconditional
+ * `CC` badge nothing contradicted, the Details tab's five invented rows sitting beside
+ * five always-populated real ones, the zero-height episode still box, and five guide
+ * features that are dead against a real guide (R-157).
+ *
+ * One in six, chosen by id so that no PRNG draw is consumed — a draw here would shift
+ * every later fixture, which is what `keepDraw` exists to prevent. Ids 1–5 stay
+ * enriched, so "the first card" is still the rich one every existing journey expects.
+ */
+export function unenrichedRow(id: number): boolean {
+  return id % 6 === 0;
+}
+
 function makeMovie(id: number): Movie {
   const t = title();
   const year = int(1978, 2026);
@@ -322,6 +352,29 @@ function makeMovie(id: number): Movie {
     addedAt: Math.floor(Date.now() / 1000) - int(0, 90) * 86400,
     lang: null,
     trailerKey: filmTrailer(id),
+    // Every draw above is taken either way, so the unenriched rows do not shift the
+    // ones after them. The fields are stripped afterwards instead.
+    ...(unenrichedRow(id) ? unenrichedMovie() : null),
+  };
+}
+
+/** The same, minus the one a show does not have. */
+function unenrichedShow() {
+  const { runtimeMins: _runtime, ...rest } = unenrichedMovie();
+  return rest;
+}
+
+/** The eight TMDB-only fields, as an import leaves them. */
+function unenrichedMovie() {
+  return {
+    backdrop: null,
+    logoArt: null,
+    overview: null,
+    runtimeMins: null,
+    certification: null,
+    genres: [] as string[],
+    cast: [] as string[],
+    trailerKey: null,
   };
 }
 
@@ -351,6 +404,8 @@ function makeSeries(id: number): Series {
     addedAt: Math.floor(Date.now() / 1000) - int(0, 120) * 86400,
     lang: null,
     trailerKey: trailerKey(id),
+    // A show's seasons come from the provider, so they survive; the rest does not.
+    ...(unenrichedRow(id) ? unenrichedShow() : null),
   };
 }
 

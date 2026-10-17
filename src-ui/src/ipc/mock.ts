@@ -89,14 +89,40 @@ let mockGeminiKey = '';
 /** Set through `gemini.setEnabled`. On by default, as a release build is. */
 let mockGeminiEnabled = true;
 /**
+ * `?builtInKey` — model a build that was compiled with a Gemini key.
+ *
+ * `BUILT_IN_KEY` is `option_env!("AURORA_GEMINI_KEY")`, resolved by `rustc`, and the mock
+ * had a mutable string and `keyIsBuiltIn: false` hardcoded. So the one state that matters
+ * for privacy — a release build where the viewer has cleared their own key and the
+ * compiled one takes over — could not be reached from a browser at all, and the journey
+ * that claimed to cover it ("removing the key takes the rail away again") passed only
+ * because the mock is kinder than the host. `docs/PRIVACY.md` told viewers to clear the
+ * key for exactly this purpose, and in an official build that did nothing (R-159).
+ *
+ * A compile-time fact cannot be mocked by setting a variable later, so it is a query
+ * flag, read once: the same mechanism as `?video` and for the same reason.
+ */
+const BUILT_IN_KEY =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('builtInKey')
+    ? 'built-into-this-build'
+    : '';
+
+/**
  * What the host's `resolve_key` returns, modelled.
  *
  * Switched off means there is no key *whatever is set* — which is the whole point of the
  * switch, because a release build is compiled with one and clearing the viewer's own
  * falls back to it. Every place the mock asked `mockGeminiKey` directly now asks this,
  * so the preview turns the rail and the assistant off the same way the host does.
+ *
+ * The fallback order is `aurora_app::gemini::resolve_key`'s: off beats everything, then
+ * the viewer's own key, then the one compiled in.
  */
-const geminiKey = () => (mockGeminiEnabled ? mockGeminiKey : '');
+const geminiKey = () => {
+  if (!mockGeminiEnabled) return '';
+  return mockGeminiKey || BUILT_IN_KEY;
+};
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -412,11 +438,54 @@ function editedChannels(): Channel[] {
   });
 }
 
+/**
+ * `?unenriched` — run the whole app against a library TMDB has never been asked about.
+ *
+ * The fourth seam, in the same spirit as `?video`, `?portable` and `failNextMock`, and
+ * for exactly the reason `setSilentDurationMock`'s comment gives: a state a real library
+ * is usually in, that no fixture could express.
+ *
+ * An import writes ten fields for a film. Eight of the fields these fixtures hand to
+ * every journey — `backdrop`, `logoArt`, `overview`, `runtimeMins`, `certification`,
+ * `genres`, `cast`, `trailerKey` — come from TMDB enrichment and from nothing else, which
+ * needs an API key a viewer may never set. `docs/ROADMAP.md` records a real sweep matching
+ * **39 of 80** titles, so about half a real library never gets them at all.
+ *
+ * `fixtures.ts` makes one row in six unenriched all the time, which puts the case on
+ * screen in every journey that draws a rail. This flag goes further and strips *every*
+ * row, so the existing journeys can be run a second time against the library a viewer
+ * actually has on the day they install (R-157).
+ */
+const UNENRICHED_EVERYTHING =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('unenriched');
+
+/** The eight TMDB-only fields, taken back off a row. */
+function stripEnrichment<T extends Movie | Series>(row: T): T {
+  return {
+    ...row,
+    backdrop: null,
+    logoArt: null,
+    overview: null,
+    certification: null,
+    genres: [],
+    cast: [],
+    trailerKey: null,
+    ...('runtimeMins' in row ? { runtimeMins: null } : {}),
+  };
+}
+
 const editedMovies = (): Movie[] =>
-  fx.movies.map((m) => ({ ...m, title: editOf('movies', m.id).name ?? m.title }));
+  fx.movies.map((m) => {
+    const row = { ...m, title: editOf('movies', m.id).name ?? m.title };
+    return UNENRICHED_EVERYTHING ? stripEnrichment(row) : row;
+  });
 
 const editedSeries = (): Series[] =>
-  fx.series.map((s) => ({ ...s, title: editOf('series', s.id).name ?? s.title }));
+  fx.series.map((s) => {
+    const row = { ...s, title: editOf('series', s.id).name ?? s.title };
+    return UNENRICHED_EVERYTHING ? stripEnrichment(row) : row;
+  });
 
 const isHidden = (kind: PlaylistKind, id: number, fallback = false): boolean =>
   editOf(kind, id).hidden ?? fallback;
@@ -1463,7 +1532,10 @@ const handlers: { [K in CommandName]: Handler<K> } = {
 
   'gemini.status': () => ({
     hasKey: geminiKey().length > 0,
-    keyIsBuiltIn: false,
+    // True when what is in play is the compiled-in key rather than one the viewer
+    // entered, which is what the panel's "Removing a key you entered falls back to this
+    // one" paragraph is for.
+    keyIsBuiltIn: mockGeminiKey.length === 0 && BUILT_IN_KEY.length > 0,
     keyIsPersistent: true,
     hasHistory: progress.size > 0,
     enabled: mockGeminiEnabled,

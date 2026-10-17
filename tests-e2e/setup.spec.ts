@@ -68,6 +68,13 @@ test('a plain playlist URL does not ask for credentials', async ({ page }) => {
 
   await expect(page.getByText(/Recognised an Xtream address/)).toBeHidden();
   await expect(page.getByLabel('Username')).toBeHidden();
+
+  // And the wizard is in the state those absences are supposed to describe: a playlist
+  // URL, accepted, with somewhere to go next. Two hidden fields say nothing on their own
+  // — they would also be hidden if the form had failed to render at all (R-159).
+  await expect(page.getByLabel('Provider address'))
+    .toHaveValue('http://example.com/list.m3u');
+  await expect(page.getByRole('button', { name: 'Continue' })).toBeEnabled();
 });
 
 test('validation reports account status before anything is saved', async ({ page }) => {
