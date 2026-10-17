@@ -734,6 +734,16 @@ pub struct NewEpisode {
     pub title: Option<String>,
     pub url: String,
     pub still: Option<String>,
+    /// The provider's plot for this episode, which `get_series_info` sends for 96% of
+    /// them on the panel this is measured against and which was parsed and dropped.
+    pub overview: Option<String>,
+    /// How long the episode runs, from the provider's own `duration_secs`.
+    ///
+    /// This is what `library_playback_aids` falls back to when the player reports no
+    /// duration, which a provider's VOD stream very often does -- so with the column
+    /// empty, Up Next, autoplay-next and Skip Credits were all dead on an ordinary
+    /// library until TMDB enrichment happened to reach the episode (R-139).
+    pub runtime_mins: Option<u32>,
 }
 
 /// A show as the provider describes it, before enrichment.
@@ -836,16 +846,27 @@ pub fn upsert_episodes(
     let mut n = 0;
     {
         let mut stmt = tx.prepare(
-            r#"INSERT INTO episodes (series_id, season, episode, title, url, still, added_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7)
+            r#"INSERT INTO episodes (series_id, season, episode, title, url, still,
+                                     overview, runtime_mins, added_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
                ON CONFLICT (series_id, season, episode) DO UPDATE SET
-                 title = COALESCE(excluded.title, episodes.title),
-                 url   = excluded.url,
-                 still = COALESCE(excluded.still, episodes.still)"#,
+                 title        = COALESCE(excluded.title, episodes.title),
+                 url          = excluded.url,
+                 still        = COALESCE(excluded.still, episodes.still),
+                 overview     = COALESCE(excluded.overview, episodes.overview),
+                 runtime_mins = COALESCE(excluded.runtime_mins, episodes.runtime_mins)"#,
         )?;
         for e in episodes {
             stmt.execute(params![
-                series_id, e.season, e.episode, e.title, e.url, e.still, now
+                series_id,
+                e.season,
+                e.episode,
+                e.title,
+                e.url,
+                e.still,
+                e.overview,
+                e.runtime_mins,
+                now
             ])?;
             n += 1;
         }
@@ -854,6 +875,17 @@ pub fn upsert_episodes(
     Ok(n)
 }
 
+/// One episode, as the UI draws it.
+///
+/// **There is deliberately no `url` here.** An Xtream episode's stream URL is
+/// `{base}/series/{username}/{password}/{id}.{ext}` — the credentials are in the path,
+/// by the protocol's design — and this struct is the return type of `library.episodes`
+/// and of `playbackAids.nextEpisode`, so the field was serialised straight into the
+/// WebView once per episode of every show opened. Nothing ever read it: playback
+/// resolves the URL with its own query (`aurora-app::window`), and `shared/ipc.ts`
+/// never declared the field, so no UI code referenced it and no type check mentioned it.
+///
+/// Anything that needs the stream addresses an episode by `id` and asks the database.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeRow {
@@ -864,7 +896,6 @@ pub struct EpisodeRow {
     pub overview: Option<String>,
     pub still: Option<String>,
     pub runtime_mins: Option<u32>,
-    pub url: String,
 }
 
 /// Which show an episode belongs to.
@@ -896,13 +927,12 @@ pub fn episodes_for(
             overview: r.get(4)?,
             still: r.get(5)?,
             runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-            url: r.get(7)?,
         })
     };
     let rows = match season {
         Some(s) => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins, url
+                "SELECT id, season, episode, title, overview, still, runtime_mins
                  FROM episodes WHERE series_id = ?1 AND season = ?2 ORDER BY episode",
             )?;
             let out = stmt
@@ -912,7 +942,7 @@ pub fn episodes_for(
         }
         None => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins, url
+                "SELECT id, season, episode, title, overview, still, runtime_mins
                  FROM episodes WHERE series_id = ?1 ORDER BY season, episode",
             )?;
             let out = stmt
@@ -949,7 +979,7 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
     Ok(conn
         .query_row(
-            "SELECT id, season, episode, title, overview, still, runtime_mins, url
+            "SELECT id, season, episode, title, overview, still, runtime_mins
              FROM episodes
              WHERE series_id = ?1
                AND (season > ?2 OR (season = ?2 AND episode > ?3))
@@ -965,7 +995,6 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
                     overview: r.get(4)?,
                     still: r.get(5)?,
                     runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                    url: r.get(7)?,
                 })
             },
         )
@@ -1485,6 +1514,7 @@ mod tests {
                 title: Some("Fourth".into()),
                 url: "u".into(),
                 still: None,
+                ..Default::default()
             }],
             0,
         )
@@ -2065,6 +2095,7 @@ mod tests {
                     title: Some("Two".into()),
                     url: "u2".into(),
                     still: None,
+                    ..Default::default()
                 },
                 NewEpisode {
                     season: 1,
@@ -2072,6 +2103,7 @@ mod tests {
                     title: Some("One".into()),
                     url: "u1".into(),
                     still: None,
+                    ..Default::default()
                 },
                 NewEpisode {
                     season: 2,
@@ -2079,6 +2111,7 @@ mod tests {
                     title: None,
                     url: "u3".into(),
                     still: None,
+                    ..Default::default()
                 },
             ],
             0,
@@ -2092,6 +2125,72 @@ mod tests {
 
         let s1 = episodes_for(&conn, sid, Some(1)).unwrap();
         assert_eq!(s1.len(), 2);
+    }
+
+    /// The two fields the provider sends for nearly every episode and the import used
+    /// to drop (R-139).
+    ///
+    /// `runtime_mins` is the one that costs a feature: `library_playback_aids` falls back
+    /// to it when the player reports no duration, which a provider's VOD stream very
+    /// often does -- so with the column empty, Up Next, autoplay-next and Skip Credits
+    /// had nothing to work from on an un-enriched library, which is most of one.
+    #[test]
+    fn an_episodes_plot_and_runtime_are_stored_and_survive_a_playlist_refresh() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let sid = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Show",
+                match_key: "show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[NewEpisode {
+                season: 1,
+                episode: 1,
+                title: Some("One".into()),
+                url: "u1".into(),
+                overview: Some("What happens in it.".into()),
+                runtime_mins: Some(59),
+                ..Default::default()
+            }],
+            0,
+        )
+        .unwrap();
+
+        let stored = &episodes_for(&conn, sid, None).unwrap()[0];
+        assert_eq!(stored.overview.as_deref(), Some("What happens in it."));
+        assert_eq!(stored.runtime_mins, Some(59));
+
+        // An M3U refresh carries neither -- a flat playlist line has no plot and no
+        // duration -- and must not blank what `get_series_info` supplied.
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[NewEpisode {
+                season: 1,
+                episode: 1,
+                title: Some("One".into()),
+                url: "u1-again".into(),
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+
+        let after = &episodes_for(&conn, sid, None).unwrap()[0];
+        assert_eq!(after.url, "u1-again", "the stream is always the newest one");
+        assert_eq!(after.overview.as_deref(), Some("What happens in it."));
+        assert_eq!(after.runtime_mins, Some(59));
     }
 
     #[test]
@@ -2115,7 +2214,7 @@ mod tests {
             episode: 1,
             title: Some("T".into()),
             url: "old".into(),
-            still: None,
+            ..Default::default()
         };
         upsert_episodes(&mut conn, sid, std::slice::from_ref(&ep), 0).unwrap();
         upsert_episodes(
@@ -2132,12 +2231,23 @@ mod tests {
 
         let rows = episodes_for(&conn, sid, None).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].url, "new");
         assert_eq!(
             rows[0].title.as_deref(),
             Some("T"),
             "title should not be nulled"
         );
+        // Asked of the table rather than of the row: `EpisodeRow` deliberately does not
+        // carry the URL, because it is the return type of `library.episodes` and an
+        // Xtream episode's URL has the credentials in its path. The upsert still has to
+        // replace it, which is what this was checking.
+        let stored: String = conn
+            .query_row(
+                "SELECT url FROM episodes WHERE id = ?1",
+                params![rows[0].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "new");
     }
 
     #[test]
@@ -2357,6 +2467,51 @@ mod runtime_tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    /// Nothing an episode row carries may be a credential.
+    ///
+    /// `EpisodeRow` used to hold `url`, and an Xtream episode's URL is
+    /// `{base}/series/{username}/{password}/{id}.{ext}` — so `library.episodes` handed
+    /// the subscription's password to the WebView once per episode of every show
+    /// opened. No UI code read it and `shared/ipc.ts` never declared it, so neither
+    /// `tsc` nor a reviewer reading the TypeScript could see it; it was only visible by
+    /// diffing the Rust struct against the contract.
+    ///
+    /// Asserted against the serialised form rather than the struct, because that is what
+    /// actually crosses the bridge.
+    #[test]
+    fn a_serialised_episode_carries_no_part_of_a_stream_url() {
+        let (conn, series_id) = seeded();
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, title, url)
+             VALUES (?1, 1, 1, 'Pilot', 'http://panel.example/series/alice/s3cret/9.mkv')",
+            params![series_id],
+        )
+        .unwrap();
+
+        let rows = episodes_for(&conn, series_id, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        let json = serde_json::to_string(&rows[0]).unwrap();
+        assert!(!json.contains("alice"), "the username crossed the bridge: {json}");
+        assert!(!json.contains("s3cret"), "the password crossed the bridge: {json}");
+        assert!(!json.contains("panel.example"), "the provider's host leaked: {json}");
+        assert!(!json.contains("url"), "there is a url field again: {json}");
+        // And the episode is still useful for what the UI draws it with.
+        assert!(json.contains("Pilot"), "{json}");
+
+        // The same for the Next Episode button's row, which is the other way out.
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, title, url)
+             VALUES (?1, 1, 2, 'Second', 'http://panel.example/series/alice/s3cret/10.mkv')",
+            params![series_id],
+        )
+        .unwrap();
+        let first = episodes_for(&conn, series_id, None).unwrap()[0].id;
+        let next = following_episode(&conn, first).unwrap().expect("a following episode");
+        let json = serde_json::to_string(&next).unwrap();
+        assert!(!json.contains("s3cret"), "nextEpisode leaked the password: {json}");
+        assert_eq!(next.title.as_deref(), Some("Second"));
     }
 
     /// The query runs. Worth asserting on its own, because `series` has no runtime

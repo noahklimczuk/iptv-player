@@ -42,6 +42,34 @@ export default defineConfig({
     deviceScaleFactor: 1,
     ...(existsSync(preinstalled) ? { launchOptions: { executablePath: preinstalled } } : {}),
   },
+  /**
+   * Every journey, twice: once as Chromium comes, once as a viewer who has turned
+   * animation effects off sees it.
+   *
+   * `state/ui.ts` derives `animations` from `prefers-reduced-motion`, so that media
+   * feature decides real behaviour and not just durations -- and nothing here set it, so
+   * 202 journeys only ever ran in the branch where it is `no-preference`. The bug that
+   * hid in the other branch cost a reduced-motion viewer four of the five buttons on
+   * every rail card, on the home screen and both browse grids, from first launch
+   * (R-115). One line of configuration covers it, and anything else that only breaks
+   * under the preference, without writing a single new journey.
+   */
+  projects: [
+    { name: 'default', use: {} },
+    {
+      name: 'reduced-motion',
+      use: { reducedMotion: 'reduce' },
+      /**
+       * Except the three journeys whose subject *is* the preference. Two of them turn
+       * the Animations switch off and assert what follows -- under the media feature it
+       * is already off, so the click turns it back *on* and they assert the opposite of
+       * what they mean -- and the third hovers a card expecting a trailer to start by
+       * itself, which this preference is supposed to prevent. They keep their coverage
+       * in `default`, where the switch starts on and clicking it means what it says.
+       */
+      grepInvert: /@motion/,
+    },
+  ],
   webServer: {
     /**
      * Build, then serve what was built.

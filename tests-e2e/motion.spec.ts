@@ -8,7 +8,7 @@
  */
 import { expect, test } from '@playwright/test';
 
-test('turning animations off stops the CSS animations too, not just the JS ones', async ({
+test('turning animations off stops the CSS animations too, not just the JS ones @motion', async ({
   page,
 }) => {
   await page.goto('/#/');

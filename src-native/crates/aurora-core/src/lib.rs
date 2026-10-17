@@ -17,6 +17,7 @@ pub mod model;
 pub mod mosaic;
 pub mod neterr;
 pub mod parental;
+pub mod percent;
 pub mod pin;
 pub mod pip;
 pub mod recommend;

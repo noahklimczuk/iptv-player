@@ -118,6 +118,8 @@ def run(d, ctx):
         f"recommender's heaviest signal and this panel sends one for almost all of them"
     )
 
+    _the_line_limit_is_stored_and_enforced(d, ctx)
+
     # Now the screen, which is the half that has been wrong before: a library full of
     # channels that the UI does not show is exactly bug #13.
     d.click(d.by_text("button", "Start watching"))
@@ -159,6 +161,61 @@ def run(d, ctx):
     _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx)
 
 
+def _the_line_limit_is_stored_and_enforced(d, ctx):
+    """
+    How many streams at once does the app think this line allows?
+
+    The one check that could only ever have been made here. `max_connections` is on the
+    authentication response, which the wizard displayed and then dropped: no production
+    path wrote the column, so it was NULL on every real install and every budget built on
+    it had nothing to enforce. The DVR fell back to two simultaneous recordings on a line
+    that allows one, the warning strip written for exactly this subscription could not
+    appear, and multi-view offered every layout. Three places asserted the refusal worked
+    and none of them could observe it -- the Playwright journeys because `fixtures.ts`
+    declares `maxConnections: 2`, and this file because it opens one tile. R-108.
+
+    Read out of the library and asked of the host, rather than off a screen: the number is
+    what the DVR and the mosaic budget consult, and neither draws it.
+    """
+    stored = ctx.rows("SELECT max_connections FROM providers WHERE enabled = 1")[0][0]
+    print(f"   line limit: providers.max_connections = {stored!r}")
+    assert stored is not None, (
+        "the panel declared a connection limit on the authentication response and the "
+        "column is still NULL -- nothing wrote it, which is R-108 exactly: the DVR, the "
+        "warning strip and multi-view all have no limit to enforce"
+    )
+    assert stored >= 1, f"a stored limit of {stored} is not a limit"
+
+    # The DVR's cap is the same number, asked per tick rather than once at startup --
+    # which on a first run is before any provider exists, so the session that set the
+    # subscription up ran on the default of two for its whole length.
+    storage = d.invoke("dvr.storage")
+    print(f"   dvr: maxConcurrent = {storage['maxConcurrent']}")
+    assert storage["maxConcurrent"] == stored, (
+        f"the line allows {stored} stream(s) and the DVR will run "
+        f"{storage['maxConcurrent']} recordings at once"
+    )
+
+    # And the budget now has an opinion. `unknown` is the answer that let every layout
+    # through; on a declared limit of one, four tiles must come back refused.
+    check = d.invoke("mosaic.check", {"layout": "grid2x2"})
+    print(
+        f"   mosaic grid2x2: verdict={check['verdict']} needed={check.get('needed')} "
+        f"limit={check.get('limit')} largestFitting={check.get('largestFitting')!r}"
+    )
+    assert check["verdict"] != "unknown", (
+        "the provider declared a limit and the budget still says it cannot know -- "
+        "`Budget::check` is reading a NULL column"
+    )
+    if stored < check["needed"]:
+        assert check["verdict"] == "exceeds", (
+            f"four tiles need {check['needed']} connections on a line that allows "
+            f"{stored}, and the budget says {check['verdict']!r}"
+        )
+        assert check["over"] == check["needed"] - stored
+    ctx.assert_no_panic()
+
+
 def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
     """
     Does a mosaic tile have anywhere to draw?
@@ -173,9 +230,14 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
     -- the window is still there, still full-window, still in front, and an mpv surface
     with nothing loaded is black.
 
-    One filled tile, deliberately. This line allows a single connection, so a four-stream
-    mosaic is refused by `Budget::check` and correctly so; one tile is the most that can
-    ever open here.
+    One filled tile, deliberately: this line allows a single connection, so one tile is
+    the most that can ever open here.
+
+    That the software *refuses* the other layouts is not this step's claim to make, and
+    it used to be made here -- until `providers.max_connections` was written, `Budget`
+    answered `Unknown` on this very subscription and a four-stream mosaic was opened
+    rather than refused, which this scenario could not see because it opens one tile
+    (R-108). `_the_line_limit_is_stored_and_enforced` asks that question directly.
     """
     if sys.platform != "win32":
         print("   mosaic: skipped, no mpv surface off Windows")

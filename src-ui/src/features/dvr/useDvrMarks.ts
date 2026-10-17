@@ -125,7 +125,19 @@ export function useDvrMarks(): DvrMarks {
         // "This channel only" is the safer default: the same title on another
         // provider's channel is usually a different broadcast, not the same show.
         channelId: anyChannel ? null : ch.id,
-        newOnly: true,
+        // `false`, because `true` made every rule this button creates inert.
+        //
+        // `SeriesRule::matches` returns false at its second check unless
+        // `programme.is_new`, and `is_new` has exactly two sources in the workspace --
+        // XMLTV's `<new/>` and `<premiere>`. Neither element appears anywhere in this
+        // subscription's guide: 789,764 programmes imported, 0 flagged new, 0 flagged
+        // premiere, the only `flags` value present is 0. So the rule was stored, the
+        // button flipped to "Stop recording series", the Series rules tab listed it --
+        // and no episode could ever be scheduled, with nothing logged because nothing
+        // failed. A rule that records a repeat is a far better failure than one that
+        // records nothing, and this flag is reachable from no UI, so there was no way to
+        // create a working rule or to repair a broken one (R-133).
+        newOnly: false,
       });
     }),
 

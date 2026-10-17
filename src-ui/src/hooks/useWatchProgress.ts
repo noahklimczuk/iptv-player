@@ -19,7 +19,11 @@ export function saveProgress(p: PlayerState | null, profileId: number): boolean 
   if (!p) return false;
   // Live TV has no position worth resuming and no duration to be a fraction of.
   if (p.isLive || p.itemId == null) return false;
-  if (p.itemKind !== 'movie' && p.itemKind !== 'episode') return false;
+  // Recordings included: `watch_progress` has always allowed the kind, and a
+  // two-hour capture is exactly the thing somebody watches in two sittings (R-118).
+  if (p.itemKind !== 'movie' && p.itemKind !== 'episode' && p.itemKind !== 'recording') {
+    return false;
+  }
   if (p.durationSecs <= 0 || p.positionSecs <= 0) return false;
 
   void invoke('progress.save', {

@@ -550,6 +550,7 @@ fn main() {
             pip::preview_clear,
             gemini::gemini_status,
             gemini::gemini_set_key,
+            gemini::gemini_set_enabled,
             timeshift::timeshift_settings,
             timeshift::timeshift_set_settings,
             timeshift::timeshift_clear,

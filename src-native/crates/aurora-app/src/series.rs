@@ -184,6 +184,18 @@ pub fn fetch_episodes(services: &Services, series_id: i64) -> Result<usize> {
                 ep.container_extension.as_deref(),
             ),
             still: ep.info.movie_image.clone().filter(|s| !s.trim().is_empty()),
+            // Both were parsed and then dropped on the floor here. The plot leaves the
+            // detail modal's episode list title-and-still only, and the runtime is what
+            // Up Next and Skip Credits fall back to when the stream reports no duration
+            // -- which is most of them (R-139).
+            overview: ep.info.plot.clone().filter(|s| !s.trim().is_empty()),
+            // Nearest minute, which is what the column holds. A 3,563-second episode is
+            // 59, not 0.
+            runtime_mins: ep
+                .info
+                .duration_secs
+                .filter(|s| *s > 0)
+                .map(|secs| ((secs + 30) / 60).max(1)),
         });
     }
 

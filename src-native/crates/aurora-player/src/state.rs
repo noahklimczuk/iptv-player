@@ -23,6 +23,14 @@ pub enum MediaKind {
     Live,
     Movie,
     Episode,
+    /// A finished DVR recording, played from the file on disk.
+    ///
+    /// `ItemKind` in `aurora-db` has always had this value -- `watch_progress`'s CHECK
+    /// constraint allows it and progress round-trips through it -- while the kind
+    /// *playback* uses did not. So resume for recordings was modelled end to end and
+    /// nothing could start one: the Play button on every completed recording called an
+    /// optional prop nobody passed, because there was no command to pass (R-118).
+    Recording,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

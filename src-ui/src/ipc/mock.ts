@@ -86,6 +86,17 @@ const myList = new Set<string>(['movie:2', 'series:1', 'movie:9', 'series:5', 'm
 const liked = new Set<string>(['movie:4', 'series:2']);
 /** Set through `gemini.setKey`, so the preview can show both sides of the switch. */
 let mockGeminiKey = '';
+/** Set through `gemini.setEnabled`. On by default, as a release build is. */
+let mockGeminiEnabled = true;
+/**
+ * What the host's `resolve_key` returns, modelled.
+ *
+ * Switched off means there is no key *whatever is set* — which is the whole point of the
+ * switch, because a release build is compiled with one and clearing the viewer's own
+ * falls back to it. Every place the mock asked `mockGeminiKey` directly now asks this,
+ * so the preview turns the rail and the assistant off the same way the host does.
+ */
+const geminiKey = () => (mockGeminiEnabled ? mockGeminiKey : '');
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -1439,15 +1450,17 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   /* ── Gemini recommendations ───────────────────────────────────────────── */
 
   'gemini.status': () => ({
-    hasKey: mockGeminiKey.length > 0,
+    hasKey: geminiKey().length > 0,
     keyIsBuiltIn: false,
     keyIsPersistent: true,
     hasHistory: progress.size > 0,
+    enabled: mockGeminiEnabled,
   }),
   'gemini.setKey': ({ key }) => { mockGeminiKey = key.trim(); },
+  'gemini.setEnabled': ({ enabled }) => { mockGeminiEnabled = enabled; },
 
   'assistant.status': ({ profileId }) => ({
-    hasKey: mockGeminiKey.length > 0,
+    hasKey: geminiKey().length > 0,
     model: 'gemini-flash-latest',
     messages: (assistantHistory.get(profileId) ?? []).length,
   }),
@@ -1456,7 +1469,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'assistant.send': ({ profileId, text }) => {
     const asked = text.trim();
     if (!asked) throw new Error('Ask me something first.');
-    if (!mockGeminiKey) {
+    if (!geminiKey()) {
       throw new Error('The assistant needs a Gemini key, which is set in Settings.');
     }
 
@@ -1491,7 +1504,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return { message, steps };
   },
   'gemini.recommendations': ({ refresh }) => {
-    if (!mockGeminiKey) throw new Error('No Gemini key is set. Add one in Settings.');
+    if (!geminiKey()) throw new Error('No Gemini key is set. Add one in Settings.');
     // The real thing asks a model for titles and then looks each one up here, dropping
     // what this library does not carry. The preview models the *shape* of that: a dozen
     // real rows with a sentence each, and a count of the ones that did not resolve.
@@ -1777,6 +1790,26 @@ const handlers: { [K in CommandName]: Handler<K> } = {
         status: 'playing', isLive: true, channelId: id, itemKind: 'live', itemId: id,
         title: ch?.name ?? null, subtitle: nn.now?.title ?? null,
         positionSecs: 0, durationSecs: 0, error: null, timeshift: windowFor(0),
+      });
+    }
+    // A finished recording plays from its file, which here means from its row. The
+    // host resolves `recordings.file_path` and hands mpv a local path (R-118).
+    if (kind === 'recording') {
+      const rec = recordings.find((r) => r.id === id);
+      if (!rec) throw new Error('This recording is no longer in your library.');
+      if (rec.state !== 'completed' || !rec.filePath) {
+        throw new Error(
+          rec.state === 'recording'
+            ? 'This recording is still being written. It can be played once it finishes.'
+            : 'This recording has no file on disk.',
+        );
+      }
+      return setPlayer({
+        status: 'playing', isLive: false, channelId: null, itemKind: 'recording',
+        itemId: id, title: rec.title, subtitle: rec.subTitle ?? null, timeshift: null,
+        positionSecs: positionSecs ?? 0,
+        durationSecs: silentDuration ? 0 : (rec.durationSecs || 5400),
+        error: null,
       });
     }
     const item = kind === 'movie'
@@ -2507,15 +2540,20 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
 };
 
-export function isInMyList(kind: 'movie' | 'series', id: number) {
-  return myList.has(`${kind}:${id}`);
-}
-export function isFavorite(channelId: number) {
-  return favorites.has(channelId);
-}
-export function getProgress(kind: 'movie' | 'episode', id: number) {
-  return progress.get(`${kind}:${id}`) ?? null;
-}
+/*
+ * `getProgress`, `isInMyList` and `isFavorite` used to live here.
+ *
+ * They read this module's own state and reached production code through
+ * `export * from './mock'` in `ipc/index.ts`, which looks exactly like importing a
+ * transport and is not one. `DetailModal` imported `getProgress` and therefore asked
+ * the mock for a film's resume position in release builds too, where nothing writes
+ * these maps -- but the seeding loop above runs at module evaluation in every build, so
+ * the answer was four fabricated rows for whichever real films held rowids 4, 12, 28
+ * and 53, and null for every other film (R-98). What production code should ask is
+ * `progress.get`, `lists.marks` (which `state/marks.ts` already goes through) and
+ * `channels.list` with `favoritesOnly`, as `LivePage` does. Through `invoke` like
+ * everything else, so these cannot come back.
+ */
 
 /**
  * Commands the next call to which should refuse, and with what.

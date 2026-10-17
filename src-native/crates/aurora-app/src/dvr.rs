@@ -25,6 +25,25 @@ use crate::AppError;
 /// Default ceiling on simultaneous recordings, used until a provider declares its own.
 pub const DEFAULT_MAX_CONCURRENT: usize = 2;
 
+/// The tightest connection limit across enabled providers, or `None` if no provider has
+/// declared one.
+///
+/// This is what actually caps simultaneous streams — exceeding it gets the line cut
+/// rather than queued; this subscription answers HTTP 555. Both the DVR and multi-view
+/// ask it, so it lives here rather than once each: they want different things from the
+/// `None` (a default, and "we cannot know"), which is why it is returned rather than
+/// resolved.
+pub fn line_limit(db: &Connection) -> Option<usize> {
+    db.query_row(
+        "SELECT MIN(max_connections) FROM providers WHERE enabled = 1 AND max_connections > 0",
+        [],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+    .map(|n| n.max(1) as usize)
+}
+
 /// How long a recording may produce nothing before it is called stalled.
 pub const STALL_SECS: i64 = 120;
 
@@ -72,7 +91,9 @@ pub struct Dvr {
     /// recording yet, and it must still be counted against the subscription's limit and
     /// not picked up twice by the next tick.
     starting: Arc<Mutex<HashSet<i64>>>,
-    max_concurrent: usize,
+    /// Set only by a test that needs a known cap. Production reads the real one from
+    /// the database on every tick — see [`Dvr::max_concurrent`].
+    forced_max_concurrent: Option<usize>,
 }
 
 impl Dvr {
@@ -83,7 +104,7 @@ impl Dvr {
             folder,
             active: Arc::new(Mutex::new(HashMap::new())),
             starting: Arc::new(Mutex::new(HashSet::new())),
-            max_concurrent: DEFAULT_MAX_CONCURRENT,
+            forced_max_concurrent: None,
         }
     }
 
@@ -108,8 +129,9 @@ impl Dvr {
         }
     }
 
+    /// Pin the cap, for a test that wants one regardless of what is in the database.
     pub fn with_max_concurrent(mut self, max: usize) -> Self {
-        self.max_concurrent = max.max(1);
+        self.forced_max_concurrent = Some(max.max(1));
         self
     }
 
@@ -117,8 +139,20 @@ impl Dvr {
         &self.folder
     }
 
-    pub fn max_concurrent(&self) -> usize {
-        self.max_concurrent
+    /// How many recordings this subscription allows at once.
+    ///
+    /// Asked per call rather than held, because the number is written by every refresh
+    /// that signs in to a panel (`providers_refresh`) and a provider can be added,
+    /// edited or disabled at any point in a session. It used to be read once, in
+    /// `Services::new`, which on a first run happens before there is a provider at all
+    /// — so the whole of the session that set the subscription up ran on the default of
+    /// two, on a line that allows one (R-108).
+    ///
+    /// Takes the connection rather than locking, so a caller that already holds the
+    /// lock cannot deadlock itself asking.
+    pub fn max_concurrent(&self, db: &Connection) -> usize {
+        self.forced_max_concurrent
+            .unwrap_or_else(|| line_limit(db).unwrap_or(DEFAULT_MAX_CONCURRENT))
     }
 
     pub fn active_ids(&self) -> Vec<i64> {
@@ -229,12 +263,18 @@ impl Dvr {
             repo::due(&db, now)?
         };
 
+        // Once per tick, and before anything takes the lock in the loop below.
+        let limit = {
+            let db = self.db.lock();
+            self.max_concurrent(&db)
+        };
+
         for rec in due {
             if self.active.lock().contains_key(&rec.id) || self.starting.lock().contains(&rec.id) {
                 continue;
             }
             let busy = self.active.lock().len() + self.starting.lock().len();
-            if busy >= self.max_concurrent {
+            if busy >= limit {
                 // Priority ordering in `due` means the ones that matter start first; the
                 // rest are skipped rather than queued, because their airtime is now.
                 let reason = "too many recordings at once for this subscription".to_string();
@@ -549,11 +589,8 @@ pub fn dvr_set_watched(services: State<'_, Services>, args: FlagArgs) -> Result<
 #[tauri::command(async)]
 pub fn dvr_conflicts(services: State<'_, Services>) -> Result<Vec<aurora_core::dvr::Conflict>> {
     let db = services.db.lock();
-    Ok(repo::conflicts(
-        &db,
-        now_unix(),
-        services.dvr.max_concurrent(),
-    )?)
+    let limit = services.dvr.max_concurrent(&db);
+    Ok(repo::conflicts(&db, now_unix(), limit)?)
 }
 
 #[tauri::command(async)]
@@ -700,7 +737,7 @@ pub fn dvr_storage(services: State<'_, Services>) -> Result<Storage> {
         } else {
             Vec::new()
         },
-        max_concurrent: services.dvr.max_concurrent(),
+        max_concurrent: services.dvr.max_concurrent(&db),
     })
 }
 
@@ -1088,6 +1125,70 @@ mod tests {
         assert_eq!(state_of(&db, b), RecordingState::Skipped);
 
         dvr.shutdown(1_010);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_one_connection_line_caps_the_dvr_without_being_told() {
+        let db = seeded_db();
+        let dir = tempdir("declared-limit");
+        {
+            let conn = db.lock();
+            conn.execute("UPDATE providers SET max_connections = 1 WHERE id = 1", [])
+                .unwrap();
+        }
+        let a = schedule_at(&db, "A", 1_000);
+        let b = schedule_at(&db, "B", 1_000);
+        {
+            let conn = db.lock();
+            conn.execute("UPDATE recordings SET priority = 5 WHERE id = ?1", [a])
+                .unwrap();
+        }
+
+        // No `with_max_concurrent`. The cap has to come from the provider row, which is
+        // the whole of R-108: the column was never written, so this fell back to two and
+        // the second recording went out on a line that allows one.
+        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
+        assert_eq!(dvr.max_concurrent(&db.lock()), 1);
+
+        let report = dvr.tick(1_000).unwrap();
+        assert_eq!(
+            report.started,
+            vec![a],
+            "only one recording may hold the line"
+        );
+        assert_eq!(state_of(&db, b), RecordingState::Skipped);
+
+        dvr.shutdown(1_010);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_limit_that_changes_mid_session_is_picked_up_by_the_next_tick() {
+        let db = seeded_db();
+        let dir = tempdir("changed-limit");
+        let dvr = Dvr::new(Arc::clone(&db), Arc::new(EndlessRecorder), dir.clone());
+
+        // No provider has declared anything yet, which on a first run is every tick
+        // until setup finishes.
+        assert_eq!(dvr.max_concurrent(&db.lock()), DEFAULT_MAX_CONCURRENT);
+
+        // A refresh signs in and stores what the panel said.
+        {
+            let conn = db.lock();
+            conn.execute("UPDATE providers SET max_connections = 4 WHERE id = 1", [])
+                .unwrap();
+        }
+        assert_eq!(dvr.max_concurrent(&db.lock()), 4);
+
+        // And a provider turned off stops counting towards it.
+        {
+            let conn = db.lock();
+            conn.execute("UPDATE providers SET enabled = 0 WHERE id = 1", [])
+                .unwrap();
+        }
+        assert_eq!(dvr.max_concurrent(&db.lock()), DEFAULT_MAX_CONCURRENT);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
