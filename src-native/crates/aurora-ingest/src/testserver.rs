@@ -48,6 +48,17 @@ impl Reply {
         }
     }
 
+    /// A failing status *with* a body, which is what an API's own error envelope is.
+    /// `status` alone sends `b"error"`, and a test about what the body said cannot use
+    /// it.
+    pub fn failing(status: u16, body: impl Into<Vec<u8>>) -> Self {
+        Reply::Body {
+            status,
+            headers: Vec::new(),
+            body: body.into(),
+        }
+    }
+
     pub fn with_header(mut self, name: &str, value: &str) -> Self {
         if let Reply::Body { headers, .. } = &mut self {
             headers.push((name.to_string(), value.to_string()));

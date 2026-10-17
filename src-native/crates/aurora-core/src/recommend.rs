@@ -180,6 +180,29 @@ pub enum Reason {
 }
 
 impl Reason {
+    /// Whether this says the candidate matched the viewer's taste.
+    ///
+    /// `Because` and `Genre` are reached only past the affinity check in `score_one`;
+    /// `HighlyRated` and `JustAdded` are what the discovery branch and the
+    /// nothing-watched-yet branch produce. So the reason already carries the kind, and
+    /// `rank` can split on it instead of guessing from the score.
+    ///
+    /// It used to guess. `rank`'s own comment said "the split is by kind rather than by
+    /// score" above a `partition` on `score > DISCOVERY_CEILING`, and the two disagreed
+    /// exactly where it mattered: `CATEGORY_WEIGHT` is 0.20 and `DISCOVERY_CEILING` is
+    /// 0.20, so a film whose only signal was a category the viewer watches scored
+    /// 0.2000 and `>` was false. This panel sends no genre field for films at all —
+    /// none of 27,494 — and 3,812 of them have no rating either, so for one film in
+    /// seven the category was the only signal there was and every one of them landed on
+    /// the boundary: placed by the discovery pass, after titles with nothing to do with
+    /// the viewer, under a poster still reading "Because you watched …" (R-38).
+    pub fn is_taste_match(&self) -> bool {
+        match self {
+            Reason::Because { .. } | Reason::Genre { .. } => true,
+            Reason::HighlyRated | Reason::JustAdded => false,
+        }
+    }
+
     /// The line a rail puts under a poster.
     pub fn label(&self) -> String {
         match self {
@@ -447,10 +470,11 @@ pub fn rank(
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
 
     // Anything that matched their taste outranks anything that did not, whatever the
-    // arithmetic says, so the split is by kind rather than by score.
+    // arithmetic says, so the split is by kind rather than by score -- which is what
+    // `Reason::is_taste_match` reads, and what this line used to only claim (R-38).
     let (matches, discoveries): (Vec<_>, Vec<_>) = scored
         .into_iter()
-        .partition(|(score, _, _)| *score > DISCOVERY_CEILING);
+        .partition(|(_, rec, _)| rec.reason.is_taste_match());
 
     let cap = ((limit as f32) * MAX_SHARE_PER_BUCKET).ceil().max(1.0) as usize;
     let mut state = Selection::default();
@@ -462,7 +486,14 @@ pub fn rank(
     // viewer's own history walling them in, and this is the thing doing the opposite.
     // The diversity decay still applies, so twenty documentaries do not replace
     // twenty science-fiction films.
-    select_into(discoveries, None, limit, &mut state, &mut out);
+    //
+    // Unless nothing matched, which is every rail shown to somebody with no history:
+    // `score_one` answers `HighlyRated` or `JustAdded` for all of them, so this pass is
+    // the only one there is and the cap belongs to it. Under the old score-based split
+    // those candidates landed in the *matched* pass whenever the rating pushed them past
+    // 0.20, so they were capped by accident; this keeps the rail as varied on purpose.
+    let discovery_cap = if out.is_empty() { Some(cap) } else { None };
+    select_into(discoveries, discovery_cap, limit, &mut state, &mut out);
     out
 }
 
@@ -1403,6 +1434,126 @@ mod tests {
 
     /// A category-only library must not produce twenty titles off one shelf, the same
     /// way a genre-led one must not produce twenty of one genre.
+    /// A film on a shelf they watch is a match, not a discovery.
+    ///
+    /// `rank` partitioned on `score > DISCOVERY_CEILING` under a comment saying the
+    /// split was by kind. `CATEGORY_WEIGHT` and `DISCOVERY_CEILING` are both 0.20, so a
+    /// candidate whose only signal was the viewer's own shelf scored exactly 0.2000 and
+    /// `>` was false: it went out in the discovery pass, after titles with nothing to do
+    /// with them, under a poster still reading "Because you watched …" because `explain`
+    /// is reached through the matched path.
+    ///
+    /// Not a corner case on the subscription this is measured against. The panel sends
+    /// no genre field for films at all — none of 27,494 — so the category is a film's
+    /// only description, and 3,812 of them have no rating either. One film in seven had
+    /// nothing but the shelf, and every one of them landed on the boundary (R-38).
+    #[test]
+    fn a_film_on_a_shelf_they_watch_is_placed_as_a_match() {
+        let shelf = "EN ✪ BOX OFFICE";
+        let mut seen = watched("Seen", &[], 1.0, 1);
+        seen.category = Some(shelf.into());
+        // No genres, which is this panel's films exactly: the category is all there is.
+        seen.genres = Vec::new();
+        let taste = profile(&[seen], NOW);
+
+        // The boundary candidate: their shelf, and nothing else going for it. Id 1, so
+        // it loses a tie on id.
+        let on_their_shelf = Candidate {
+            category: Some(shelf.into()),
+            rating: None,
+            year: None,
+            added_at: None,
+            ..candidate(1, &[])
+        };
+        // And a stranger scored as high as a discovery can be: nothing of theirs in it,
+        // but rated at their own average, in a decade they watch, added today —
+        // `DISCOVERY_CEILING * (0.70 + 0.20 + 0.10)`, which is also 0.2000. Id 0, so
+        // under the old split — where both of these were discoveries — it came first.
+        let stranger = Candidate {
+            category: Some("DE ✪ FILME".into()),
+            rating: Some(7.5),
+            year: Some(2020),
+            added_at: Some(NOW),
+            ..candidate(0, &[])
+        };
+
+        let out = rank(&taste, &[stranger, on_their_shelf], &nothing_seen, NOW, 2);
+        assert_eq!(out.len(), 2, "{out:?}");
+        // Both land on the ceiling, which is the whole difficulty: a score cannot tell
+        // these two apart and the reason can.
+        let other = out.iter().find(|r| r.id == 0).expect("the stranger");
+        assert!(
+            (other.score - 0.20).abs() < 1e-6,
+            "the stranger no longer reaches the ceiling, so the tie is gone: {}",
+            other.score
+        );
+        assert!(!other.reason.is_taste_match(), "{:?}", other.reason);
+
+        // The label and the placement have to be the same claim.
+        let theirs = out.iter().find(|r| r.id == 1).expect("their shelf's film");
+        assert!(
+            theirs.reason.is_taste_match(),
+            "a film on their own shelf came back as {:?}",
+            theirs.reason
+        );
+        assert_eq!(
+            out[0].id, 1,
+            "the film on their shelf was placed behind one with nothing in common: {out:?}"
+        );
+        // Which is exactly the score the old `>` rejected.
+        assert!(
+            (theirs.score - 0.20).abs() < 1e-6,
+            "the boundary has moved; this test no longer covers it: {}",
+            theirs.score
+        );
+    }
+
+    /// And a viewer with no history still gets a varied rail.
+    ///
+    /// Everything scores as `HighlyRated` or `JustAdded` for them, so under a split by
+    /// kind they are all discoveries — and the per-bucket cap, which the old score-based
+    /// split applied to them by accident whenever a rating pushed them past 0.20, has to
+    /// move to the pass that is doing the work (R-38).
+    #[test]
+    fn a_rail_for_somebody_with_no_history_is_not_all_one_shelf() {
+        let taste = profile(&[], NOW);
+        assert!(!taste.is_known(), "this test needs an unknown taste");
+
+        let mut library = Vec::new();
+        // Twenty on one shelf, rated best, so an uncapped pass would take them all.
+        for i in 0..20 {
+            library.push(Candidate {
+                category: Some("EN ✪ BOX OFFICE".into()),
+                rating: Some(9.0),
+                ..candidate(i, &["Action"])
+            });
+        }
+        for i in 20..30 {
+            library.push(Candidate {
+                category: Some("EN ✪ DOCUMENTARY".into()),
+                rating: Some(8.0),
+                ..candidate(i, &["Documentary"])
+            });
+        }
+
+        let out = rank(&taste, &library, &nothing_seen, NOW, 8);
+        // Six of the eight asked for, not eight: the cap is 35% per bucket, so a
+        // library of two buckets cannot fill a rail of eight. That is the same number
+        // the score-based split produced, because a rating of 9.0 put these in the
+        // matched pass and under the same cap -- by accident, which is the point.
+        assert!(out.len() >= 4, "only {} picks at all: {out:?}", out.len());
+        let one_shelf = out.iter().filter(|r| r.id < 20).count();
+        assert!(
+            one_shelf < out.len(),
+            "all {} picks came from one shelf: {out:?}",
+            out.len()
+        );
+        assert!(
+            one_shelf > 0,
+            "the best-rated shelf is missing entirely: {out:?}"
+        );
+    }
+
     #[test]
     fn a_category_only_library_is_still_diversified() {
         let shelves = ["EN ✪ BOX OFFICE", "FR ✪ ACTION", "DE ✪ FILME"];

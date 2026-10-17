@@ -79,6 +79,13 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc -p tsconfig.json --noEmit
 
+      - name: Lint
+        # There was no linter at all until R-155, while five files carried
+        # `eslint-disable` comments for rules nothing evaluated. It gates on errors; the
+        # `exhaustive-deps` findings are warnings on purpose, because the deliberate ones
+        # carry a reason beside them.
+        run: pnpm lint
+
       - name: UI unit tests
         # `pnpm test` answered "No test files found, exiting with code 1" until there
         # were some, which is why nothing ran it.

@@ -123,10 +123,13 @@ function useSeriesResume(item: CatalogItem, version: number): string | null {
   const [found, setFound] = useState<{ kind: string; id: number; label: string } | null>(
     null,
   );
-  const setLabel = (label: string | null) =>
-    setFound(label === null ? null : { kind: item.kind, id: item.id, label });
-
   useEffect(() => {
+    // Inside the effect, not beside it: a helper defined per render is a dependency
+    // this effect would have to list, and listing one that changes every render is the
+    // same as having no dependency array at all.
+    const setLabel = (label: string | null) =>
+      setFound(label === null ? null : { kind: item.kind, id: item.id, label });
+
     // Cleared on the way *in*, not only on the way out.
     //
     // `DetailModal` is one mounted component whose `item` changes, so `Hero` is not

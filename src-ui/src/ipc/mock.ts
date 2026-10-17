@@ -750,7 +750,9 @@ function buildRails(): Rail[] {
     .filter((p) => !p.completed && p.positionSecs > 60)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map((p) => {
-      let item: CatalogItem | null = null;
+      // Declared without a value: every branch below assigns one, and an initialiser
+      // here only hides a branch that forgot to.
+      let item: CatalogItem | null;
       if (p.itemKind === 'movie') {
         const m = shownMovies.find((x) => x.id === p.itemId);
         item = m ? asMovie(m) : null;

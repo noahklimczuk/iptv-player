@@ -154,7 +154,9 @@ export function SetupWizard({
     } finally {
       setChecking(false);
     }
-  }, [draft, content]);
+    // Not `content`: this checks the provider, and what to import is the next step's
+    // question. Listing it only rebuilt the callback for nothing.
+  }, [draft]);
 
   const runImport = useCallback(async () => {
     setStep('importing');
@@ -171,7 +173,13 @@ export function SetupWizard({
       setError(e instanceof Error ? e.message : String(e));
       setStep('content');
     }
-  }, [draft]);
+    // `content` as well as `draft`, which R-120 half-fixed and the linter finished: the
+    // value was passed to `providers.refresh` but left out of the dependencies, so this
+    // callback kept whichever `content` was current when `draft` last changed. The
+    // draft is settled on the first step and the switches are on the second, so that is
+    // the ordinary path -- unchecking Movies after typing the address left a closure
+    // still asking for them (R-155).
+  }, [draft, content]);
 
   return (
     <div

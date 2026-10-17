@@ -44,9 +44,21 @@ pub fn existing(data_dir: &Path) -> Vec<PathBuf> {
 
 /// Copy the logs somewhere a person can attach them to a message.
 ///
-/// Returns what was written. The destination is the viewer's own choice of folder,
-/// which is the whole point — a path under `%LOCALAPPDATA%` is not somewhere anyone is
-/// going to go looking.
+/// Returns what was written. The destination is passed in rather than decided here, and
+/// `logs_export` -- its only non-test caller -- passes a fixed folder under the data
+/// directory on purpose: "a command that writes wherever it is told is a way to
+/// overwrite something". This paragraph used to say the opposite, that the destination
+/// was "the viewer's own choice of folder, which is the whole point", describing a
+/// design that was abandoned before it shipped. Two paragraphs disagreeing about the
+/// same decision is worse than either of them alone, because the reader cannot tell
+/// which one the code does (R-140).
+///
+/// What makes the export safe to hand over is `http::redact`, which every URL written to
+/// the log goes through. That was once only half true -- the markerless form
+/// `http://host/<user>/<pass>/<id>` was not matched without a file extension, and
+/// 6,698 of this subscription's 6,699 stream addresses have none (R-61) -- so
+/// `aurora-ingest/tests/real_log_safety.rs` now checks the addresses this panel really
+/// produces against the real credentials.
 pub fn export_to(data_dir: &Path, destination: &Path) -> std::io::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(destination)?;
     let mut written = Vec::new();

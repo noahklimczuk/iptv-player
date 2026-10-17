@@ -198,3 +198,65 @@ fn every_command_runs_off_the_main_thread() {
         blocking.join("\n  ")
     );
 }
+
+/// Nothing answers for one channel by listing every channel.
+///
+/// `repo::channels::get` exists for this, and says so: `ChannelFilter::default()` has
+/// `radio_only: false`, which `list` turns into `AND is_radio = 0`, so reading one
+/// channel through the default filter cannot see a radio station at all and cannot see a
+/// hidden one either — and it sorts and materialises the whole table to answer for one
+/// row, 6,698 of them on the subscription this is measured against.
+///
+/// That was found and fixed once, in `window.rs` and at two call sites in `commands.rs`.
+/// `channels_by_number` was missed, so typing a radio station's number on the keypad
+/// found the channel and then threw it away: the keypad tuned nothing (R-78). A guard
+/// rather than a note, because the defect was a call site nobody noticed, which is
+/// exactly what a text scan is good at.
+#[test]
+fn no_command_reads_one_channel_by_listing_them_all() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(&app_crate(), &mut files);
+    files.sort();
+    assert!(!files.is_empty(), "found no sources to scan");
+
+    let mut offenders = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("source is readable");
+        let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        // Multi-line, because the call is written across two at the site that had it.
+        let code: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut rest = code.as_str();
+        while let Some(at) = rest.find("channels::list(") {
+            rest = &rest[at + "channels::list(".len()..];
+            let window = &rest[..rest.len().min(120)];
+            // A list filtered for the job is the point of `list`. A *default* filter is
+            // the bug: it is the one that cannot see radio or hidden channels.
+            if window.contains("ChannelFilter::default()") {
+                offenders.push(name.to_string());
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these read channels through the default filter, which excludes radio and \
+         hidden channels and materialises the whole table; use `channels::get`: {}",
+        offenders.join(", ")
+    );
+}
