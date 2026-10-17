@@ -1157,9 +1157,18 @@ mod local_cut_tests {
 
     /// A playlist on this machine, or on a box in the cupboard, really can refuse in
     /// twenty milliseconds. Telling those people their antivirus is at fault would be a
-    /// And a panel on the internet is not local, including the ones whose addresses look
+    /// lie about their own network, and the kind of lie that sends somebody to switch
+    /// off the thing protecting it. And a panel on the internet is not local, including
+    /// the ones whose addresses look local because the provider put them behind a
+    /// hostname that resolves into a private range.
+    ///
     /// The message has to point at the thing that is actually in the way, and name the
     /// host so it can be allowed.
+    ///
+    /// (Two clauses of this paragraph had been lost to hand-wrapping -- "would be a" and
+    /// "addresses look" both ended nowhere -- which left the reasoning for a diagnosis
+    /// that otherwise accuses the viewer's antivirus with nothing behind it. Same family
+    /// as R-12, in prose this codebase relies on (R-77).)
     #[test]
     fn the_message_names_the_host_and_the_likely_cause() {
         let f = locally_blocked(

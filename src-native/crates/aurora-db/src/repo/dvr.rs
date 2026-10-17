@@ -22,13 +22,31 @@ fn state_str(state: RecordingState) -> &'static str {
     }
 }
 
+/// How a stored `state` is read when this build does not recognise it.
+///
+/// `Failed`, which is the state that neither runs nor pretends to have worked. The
+/// fallback was `Scheduled`, and `repo::due` picks up a scheduled row whose start has
+/// passed -- so a value this build cannot read meant "start this recording", for a row
+/// whose actual state might have been `completed` or `failed` in a newer build. The
+/// permissive reading of an unknown state is the one that spends a connection and
+/// overwrites a file (R-81).
+///
+/// `Failed` is also visible: it appears on the Recordings screen with a reason, where
+/// `Scheduled` would have looked like ordinary pending work.
 fn parse_state(s: &str) -> RecordingState {
     match s {
+        "scheduled" => RecordingState::Scheduled,
         "recording" => RecordingState::Recording,
         "completed" => RecordingState::Completed,
         "failed" => RecordingState::Failed,
         "skipped" => RecordingState::Skipped,
-        _ => RecordingState::Scheduled,
+        other => {
+            tracing::warn!(
+                "a recording's state {other:?} is not one this build understands, so it \
+                 is being read as failed rather than started again"
+            );
+            RecordingState::Failed
+        }
     }
 }
 
@@ -716,6 +734,30 @@ pub fn prune_reminders(conn: &Connection, now: i64) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A state this build cannot read is not a reason to start a recording.
+    ///
+    /// The fallback was `Scheduled`, and `repo::due` picks up a scheduled row whose
+    /// start has passed -- so an unrecognised value meant "start this", for a row that
+    /// in a newer build might have been `completed`. It reads as `Failed` now, which
+    /// neither runs nor claims to have worked, and which the Recordings screen shows
+    /// (R-81).
+    #[test]
+    fn an_unreadable_recording_state_is_not_read_as_scheduled() {
+        assert_eq!(parse_state("scheduled"), RecordingState::Scheduled);
+        assert_eq!(parse_state("recording"), RecordingState::Recording);
+        assert_eq!(parse_state("completed"), RecordingState::Completed);
+        assert_eq!(parse_state("failed"), RecordingState::Failed);
+        assert_eq!(parse_state("skipped"), RecordingState::Skipped);
+
+        for unknown in ["", "paused", "QUEUED", "completed-ish", "scheduled "] {
+            assert_eq!(
+                parse_state(unknown),
+                RecordingState::Failed,
+                "{unknown:?} was read as something that runs"
+            );
+        }
+    }
 
     fn db() -> Connection {
         let conn = crate::open_memory().unwrap();
