@@ -246,11 +246,20 @@ impl SeriesRule {
         }
 
         if let Some(target) = self.around_local_minute {
+            // Reduced into the day first.
+            //
+            // `around_local_minute` is a public `u16` on a `Deserialize` struct and
+            // nothing bounded it to `0..1440`. At `target = 2000` the wrap-around term
+            // `1440 - |minute - target|` is negative, `min` picks it, and
+            // `diff * 60 > slack` compares a negative number -- so the time restriction
+            // passed for every programme and the rule recorded all day. A rule the UI
+            // writes is in range; one written by an older build or edited by hand need
+            // not be, and the failure is a disk filling up rather than an error (R-40).
+            let target = (target as i64).rem_euclid(1440);
             let minute_of_day = local.hour() as i64 * 60 + local.minute() as i64;
-            let diff = (minute_of_day - target as i64).abs().min(
-                // Wrap around midnight: 23:55 and 00:05 are ten minutes apart.
-                1440 - (minute_of_day - target as i64).abs(),
-            );
+            let apart = (minute_of_day - target).abs();
+            // Wrap around midnight: 23:55 and 00:05 are ten minutes apart.
+            let diff = apart.min(1440 - apart);
             if diff * 60 > self.time_slack_secs {
                 return false;
             }
@@ -480,6 +489,49 @@ mod tests {
         assert!(rule.matches(&programme("Show", base + 23 * 3600 + 55 * 60, false), 1, 0));
         assert!(rule.matches(&programme("Show", base + 5 * 60, false), 1, 0));
         assert!(!rule.matches(&programme("Show", base + 12 * 3600, false), 1, 0));
+    }
+
+    /// A target outside the day restricts the day it names, not nothing at all.
+    ///
+    /// `around_local_minute` is a public `u16` on a `Deserialize` struct and nothing
+    /// bounded it. At 2000 the wrap-around term `1440 - |minute - target|` goes negative,
+    /// `min` picks it, and `diff * 60 > slack` compares a negative number -- so the
+    /// restriction passed for every programme and the rule recorded all day, filling a
+    /// disk rather than reporting an error (R-40).
+    #[test]
+    fn a_time_target_outside_the_day_still_restricts() {
+        let base = 1_705_276_800; // 2024-01-15T00:00:00Z
+        let mut rule = SeriesRule::new(1, "Show");
+        rule.time_slack_secs = 900;
+
+        // 2000 minutes is 1 day + 560, so it means 09:20.
+        rule.around_local_minute = Some(2000);
+        assert!(
+            rule.matches(&programme("Show", base + 9 * 3600 + 20 * 60, false), 1, 0),
+            "2000 should mean 09:20"
+        );
+        // And the hours it does not name are refused, which is the part that was broken:
+        // every one of these passed.
+        for hour in [0, 3, 12, 18, 23] {
+            assert!(
+                !rule.matches(&programme("Show", base + hour * 3600, false), 1, 0),
+                "a rule for 09:20 recorded a programme at {hour:02}:00"
+            );
+        }
+
+        // The extremes of a `u16` are reduced the same way rather than wrapping into
+        // nonsense.
+        rule.around_local_minute = Some(u16::MAX);
+        let mut matched = 0;
+        for minute in 0..1440 {
+            if rule.matches(&programme("Show", base + minute * 60, false), 1, 0) {
+                matched += 1;
+            }
+        }
+        assert!(
+            (1..=40).contains(&matched),
+            "a 15-minute slack matched {matched} of the day's 1440 minutes"
+        );
     }
 
     #[test]

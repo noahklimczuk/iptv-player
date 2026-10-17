@@ -43,6 +43,26 @@ pub enum Action {
     SetNumber(u32),
 }
 
+impl Action {
+    /// A short word for the kind of action, for a rule's id.
+    ///
+    /// The payload is deliberately left out: a `SetGroup("Sports | UK")` or a
+    /// `Rename("4K")` would put arbitrary text, including the separator, into an id that
+    /// is compared and displayed. What an id has to do is tell two rules apart, and the
+    /// kind does that -- two rules of the same kind on the same field and pattern are
+    /// the same rule written twice.
+    fn tag(&self) -> &'static str {
+        match self {
+            Action::Hide => "hide",
+            Action::Favorite => "favorite",
+            Action::SetGroup(_) => "setgroup",
+            Action::Rename(_) => "rename",
+            Action::StripFromName => "strip",
+            Action::SetNumber(_) => "setnumber",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Rule {
@@ -59,7 +79,13 @@ pub struct Rule {
 impl Rule {
     pub fn new(field: Field, match_kind: Match, pattern: &str, action: Action) -> Self {
         Self {
-            id: format!("{field:?}-{pattern}").to_lowercase(),
+            // The action and the match kind as well as the field and the pattern.
+            //
+            // This was `{field:?}-{pattern}`, so "hide anything whose group contains
+            // SPORT" and "favourite anything whose group contains SPORT" were both
+            // `group-sport`. `Outcome::fired` records ids, so a preview listing which
+            // rules fired could not tell them apart (R-20).
+            id: format!("{field:?}-{match_kind:?}-{}-{pattern}", action.tag()).to_lowercase(),
             enabled: true,
             field,
             match_kind,
@@ -146,11 +172,26 @@ impl RuleSet {
                 }
                 Action::SetNumber(n) => entry.number = Some(*n),
                 Action::Rename(replacement) => {
+                    // The matched portion, for every match kind.
+                    //
+                    // `Rename` is documented as "Replace the matched portion", and did
+                    // that for `Match::Regex` only: the other three arms were
+                    // `_ => replacement.clone()`, which replaces the whole name. So a
+                    // viewer writing "rename `UHD` to `4K`" as a contains-match got a
+                    // channel called `4K` rather than one whose `UHD` had become `4K`.
+                    // Either behaviour is defensible; the documented one is the one that
+                    // matches what the words say, and is what `StripFromName` beside it
+                    // already does through the same helper (R-19).
                     entry.name = match (rule.match_kind, re.as_ref()) {
                         (Match::Regex, Some(re)) => re
                             .replace_all(&entry.name, replacement.as_str())
                             .into_owned(),
-                        _ => replacement.clone(),
+                        _ => replace_ci_with(
+                            &entry.name,
+                            &rule.pattern,
+                            replacement,
+                            rule.case_sensitive,
+                        ),
                     };
                     outcome.renamed = true;
                 }
@@ -229,8 +270,23 @@ fn ci_match_len(hay: &str, needle: &str) -> Option<usize> {
 }
 
 fn replace_ci(haystack: &str, needle: &str, case_sensitive: bool) -> String {
+    replace_ci_with(haystack, needle, "", case_sensitive)
+}
+
+/// The same walk, putting something in place of what it removed.
+///
+/// `Rename` on a non-regex match used to replace the entire name; this is what makes it
+/// able to replace only the part that matched (R-19). The character-by-character walk is
+/// the point -- see `ci_match_len` for why an offset from a lowercased copy cannot be
+/// used to slice the original.
+fn replace_ci_with(
+    haystack: &str,
+    needle: &str,
+    replacement: &str,
+    case_sensitive: bool,
+) -> String {
     if case_sensitive {
-        return haystack.replace(needle, "");
+        return haystack.replace(needle, replacement);
     }
     if needle.is_empty() {
         return haystack.to_string();
@@ -242,7 +298,10 @@ fn replace_ci(haystack: &str, needle: &str, case_sensitive: bool) -> String {
     // a lowercased copy.
     while i < haystack.len() {
         match ci_match_len(&haystack[i..], needle) {
-            Some(len) if len > 0 => i += len,
+            Some(len) if len > 0 => {
+                out.push_str(replacement);
+                i += len;
+            }
             _ => {
                 let c = haystack[i..].chars().next().expect("i is a char boundary");
                 out.push(c);
@@ -363,6 +422,80 @@ mod tests {
         rs.apply(&mut e);
         assert_eq!(e.group.as_deref(), Some("UK"));
         assert_eq!(e.number, Some(101));
+    }
+
+    /// A non-regex rename replaces what matched, not the whole name.
+    ///
+    /// `Action::Rename` is documented as "Replace the matched portion" and did that for
+    /// `Match::Regex` only; the other three arms replaced the entire name, so "rename
+    /// UHD to 4K" as a contains-match produced a channel called `4K` (R-19).
+    #[test]
+    fn a_rename_replaces_only_what_matched() {
+        for kind in [Match::Contains, Match::StartsWith, Match::EndsWith] {
+            let pattern = match kind {
+                Match::StartsWith => "Sky",
+                Match::EndsWith => "UHD",
+                _ => "UHD",
+            };
+            let rs = RuleSet::compile(&[Rule::new(
+                Field::Name,
+                kind,
+                pattern,
+                Action::Rename("4K".into()),
+            )])
+            .unwrap();
+            let mut e = entry("Sky Sports UHD", None);
+            let out = rs.apply(&mut e);
+            assert!(out.renamed, "{kind:?} did not rename");
+            assert_ne!(e.name, "4K", "{kind:?} replaced the whole name");
+            assert!(
+                e.name.contains("Sports"),
+                "{kind:?} lost the rest of the name: {}",
+                e.name
+            );
+        }
+
+        // Case-insensitively, like every other match in this module.
+        let rs = RuleSet::compile(&[Rule::new(
+            Field::Name,
+            Match::Contains,
+            "uhd",
+            Action::Rename("4K".into()),
+        )])
+        .unwrap();
+        let mut e = entry("Sky Sports UHD", None);
+        rs.apply(&mut e);
+        assert_eq!(e.name, "Sky Sports 4K");
+    }
+
+    /// Two rules a viewer can tell apart have ids that can tell them apart.
+    ///
+    /// The id was `{field:?}-{pattern}`, so "hide anything whose group contains SPORT"
+    /// and "favourite anything whose group contains SPORT" were both `group-sport` --
+    /// and `Outcome::fired` records ids, so a preview listing which rules fired could
+    /// not distinguish them (R-20).
+    #[test]
+    fn two_rules_on_the_same_pattern_have_different_ids() {
+        let hide = Rule::new(Field::Group, Match::Contains, "SPORT", Action::Hide);
+        let fave = Rule::new(Field::Group, Match::Contains, "SPORT", Action::Favorite);
+        assert_ne!(hide.id, fave.id, "{} == {}", hide.id, fave.id);
+
+        // The match kind too: "contains SPORT" and "is exactly SPORT" are different
+        // rules with the same field, pattern and action.
+        let exact = Rule::new(Field::Group, Match::Equals, "SPORT", Action::Hide);
+        assert_ne!(hide.id, exact.id, "{} == {}", hide.id, exact.id);
+
+        // And the same rule written twice is still the same rule.
+        let again = Rule::new(Field::Group, Match::Contains, "SPORT", Action::Hide);
+        assert_eq!(hide.id, again.id);
+
+        // `fired` is where this shows, so assert it there as well.
+        let rs = RuleSet::compile(&[hide.clone(), fave.clone()]).unwrap();
+        let mut e = entry("Some Channel", Some("UK SPORT"));
+        let out = rs.apply(&mut e);
+        assert_eq!(out.fired.len(), 2, "{:?}", out.fired);
+        assert!(out.fired.contains(&hide.id), "{:?}", out.fired);
+        assert!(out.fired.contains(&fave.id), "{:?}", out.fired);
     }
 
     #[test]

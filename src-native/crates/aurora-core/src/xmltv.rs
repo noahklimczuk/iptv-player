@@ -385,10 +385,33 @@ fn finish(p: ProgBuilder) -> Option<Programme> {
         return None;
     }
     // A missing stop is common; assume 30 minutes rather than discarding the programme.
-    let stop = p.stop.unwrap_or(start + 1800);
-    if stop <= start {
-        return None;
-    }
+    // A stop that is not *after* the start is the same kind of provider mistake and gets
+    // the same answer, which it did not: `if stop <= start { return None }` discarded it.
+    //
+    // Measured over the real guide, the 254 skipped programmes were 174 with an empty
+    // `<title>` -- rightly dropped, there is nothing to show -- and 80 with
+    // `stop == start`, each with a real title on a real channel:
+    //
+    // ```text
+    // channel='Historia.es' start='20261008101000 +0200' stop='20261008101000 +0200'
+    //   title='Augusto Pinochet: el golpe, la tortura y Occidente'
+    // ```
+    //
+    // So eighty real programmes were lost to a typo the line above already knows how to
+    // forgive (R-34).
+    //
+    // Only equality is forgiven. A stop *before* the start is contradictory rather than
+    // incomplete -- neither timestamp can be trusted when they disagree about which way
+    // time runs -- and `stop_before_start_is_rejected` is where that decision lives.
+    const ASSUMED_SECS: i64 = 1800;
+    let stop = match p.stop {
+        Some(stop) if stop > start => stop,
+        // The same timestamp twice: one obvious reading, and the same one a missing stop
+        // gets.
+        Some(stop) if stop == start => start + ASSUMED_SECS,
+        Some(_) => return None,
+        None => start + ASSUMED_SECS,
+    };
     Some(Programme {
         channel_id: p.channel_id,
         start,
@@ -748,6 +771,36 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("Ampersands &"));
+    }
+
+    /// A stop equal to the start is a typo, and is forgiven the way a missing one is.
+    ///
+    /// 80 of the real guide's 254 skipped programmes were this, each with a real title
+    /// on a real channel -- `stop="20261008101000 +0200"` the same as its start -- while
+    /// the line above already assumed 30 minutes for a provider that omitted the stop
+    /// entirely (R-34).
+    #[test]
+    fn a_zero_length_slot_is_given_the_benefit_of_the_doubt() {
+        let (stats, sink) = collect(
+            r#"<tv><programme start="20240115120000 +0000" stop="20240115120000 +0000" channel="a">
+            <title>Augusto Pinochet</title></programme></tv>"#,
+        );
+        assert_eq!(stats.programmes, 1, "a real programme was discarded");
+        assert_eq!(stats.skipped, 0);
+        let p = &sink.programmes[0];
+        assert_eq!(p.title, "Augusto Pinochet");
+        assert_eq!(p.stop - p.start, 1800, "the assumed length is the same 30 minutes");
+    }
+
+    /// And a programme with no title is still dropped, because there is nothing to show.
+    #[test]
+    fn an_untitled_programme_is_still_dropped() {
+        let (stats, _) = collect(
+            r#"<tv><programme start="20240115120000 +0000" stop="20240115130000 +0000" channel="a">
+            <title></title></programme></tv>"#,
+        );
+        assert_eq!(stats.programmes, 0);
+        assert_eq!(stats.skipped, 1);
     }
 
     #[test]

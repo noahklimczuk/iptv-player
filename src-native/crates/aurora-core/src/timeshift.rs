@@ -164,7 +164,23 @@ impl Window {
     /// Forward past live is the one that matters: nothing beyond the live edge exists
     /// yet, and asking mpv for it on a live stream is how a picture ends up frozen.
     pub fn clamp(&self, target_secs: f64) -> f64 {
-        target_secs.clamp(self.start_secs, self.live_secs)
+        // Not `f64::clamp`, which panics if `min > max` or if either bound is NaN.
+        //
+        // Built through `Budget::window` the invariant holds -- `aurora-player` makes
+        // `start_secs <= position_secs <= live_secs` true three times over -- but
+        // `Window` has public fields, derives `Deserialize`, crosses the IPC boundary,
+        // and its three numbers originate in mpv properties. With `panic = "abort"` in
+        // the release profile there is no recovering from either case, so the one place
+        // that can be made not to care is this function (R-26).
+        //
+        // An inverted or unreadable window answers with the target unchanged rather than
+        // with a guess: there is no buffer to hold a seek inside, and refusing to move
+        // the playhead is better than moving it somewhere arbitrary.
+        let (lo, hi) = (self.start_secs, self.live_secs);
+        if !lo.is_finite() || !hi.is_finite() || !target_secs.is_finite() || lo > hi {
+            return target_secs;
+        }
+        target_secs.clamp(lo, hi)
     }
 
     /// Hold a relative seek inside the buffer, in the same terms the caller asked in:
@@ -177,6 +193,41 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window that cannot be a window does not take the process with it.
+    ///
+    /// `f64::clamp` panics when `min > max` or when a bound is NaN, and `Window` is a
+    /// public, `Deserialize` struct whose numbers come from mpv properties. The release
+    /// profile aborts on a panic, so this is the one function worth making indifferent
+    /// to its own fields (R-26).
+    #[test]
+    fn clamping_against_a_nonsense_window_does_not_panic() {
+        let nonsense = [
+            // Inverted.
+            Window { start_secs: 100.0, position_secs: 50.0, live_secs: 10.0 },
+            // NaN in each position.
+            Window { start_secs: f64::NAN, position_secs: 0.0, live_secs: 10.0 },
+            Window { start_secs: 0.0, position_secs: 0.0, live_secs: f64::NAN },
+            // And the infinities, which `clamp` accepts but which cannot be a buffer.
+            Window { start_secs: f64::NEG_INFINITY, position_secs: 0.0, live_secs: 10.0 },
+            Window { start_secs: 0.0, position_secs: 0.0, live_secs: f64::INFINITY },
+        ];
+        for w in nonsense {
+            // The target comes back untouched: there is no buffer to hold it inside.
+            let out = w.clamp(42.0);
+            assert_eq!(out, 42.0, "{w:?}");
+            // And a relative seek is equally safe.
+            let _ = w.clamp_relative(-30.0);
+        }
+
+        // A real window still clamps.
+        let real = Window { start_secs: 10.0, position_secs: 50.0, live_secs: 100.0 };
+        assert_eq!(real.clamp(5.0), 10.0);
+        assert_eq!(real.clamp(500.0), 100.0);
+        assert_eq!(real.clamp(50.0), 50.0);
+        // A NaN target is refused rather than turned into a bound.
+        assert!(real.clamp(f64::NAN).is_nan());
+    }
 
     /// 1080p IPTV, roughly.
     const HD: u64 = 8_000_000;
