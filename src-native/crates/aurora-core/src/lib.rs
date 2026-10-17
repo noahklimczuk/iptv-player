@@ -21,6 +21,7 @@ pub mod percent;
 pub mod pin;
 pub mod pip;
 pub mod recommend;
+pub mod redact;
 pub mod rules;
 pub mod series;
 pub mod sources;

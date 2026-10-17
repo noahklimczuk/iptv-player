@@ -68,3 +68,42 @@ test('finishing a season moves Play on to the next one', async ({ page }) => {
   // episode it names is the next unwatched one wherever it lives.
   await expect(dialog.getByRole('button', { name: /^Play S02E01$/ })).toBeVisible();
 });
+
+/**
+ * The resume bar on an episode without artwork, which was being clipped to nothing.
+ *
+ * The thumbnail box's only in-flow child was a conditional `<img>`. With `ep.still`
+ * null it was 148px wide and 0px tall with `overflow: hidden`, so the play affordance
+ * and the resume bar — both absolutely positioned — were clipped away. `partway` is
+ * computed from real host data at the row above, rendered, and then vanished; the
+ * episode list is where you find the one you were partway through, and the bar is the
+ * only sign of it other than the tick.
+ *
+ * Invisible from here until now because every fixture episode carried a still, which no
+ * real library does: stills come from TMDB enrichment and nothing else (R-106).
+ */
+test('an episode without artwork still has a thumbnail box to draw progress in', async ({ page }) => {
+  const dialog = await openSeries(page);
+
+  const thumbs = dialog.getByTestId('episode-thumb');
+  const count = await thumbs.count();
+  expect(count, 'no episodes to measure').toBeGreaterThan(0);
+
+  // Every row, because which ones lack a still is the fixture's business and not this
+  // test's: a box of zero height is wrong whatever the reason for it.
+  let withoutImage = 0;
+  for (let i = 0; i < count; i++) {
+    const thumb = thumbs.nth(i);
+    if ((await thumb.locator('img').count()) === 0) withoutImage++;
+    const box = await thumb.boundingBox();
+    expect(box, `episode ${i + 1} has no thumbnail box at all`).not.toBeNull();
+    expect(box!.height, `episode ${i + 1}'s thumbnail is ${box!.height}px tall`)
+      .toBeGreaterThan(20);
+    // And the play affordance inside it is on screen rather than clipped.
+    await expect(thumb.locator('svg').first()).toBeVisible();
+  }
+
+  // If this is 0 the fixtures have gone back to enriching everything and the test above
+  // is no longer testing the case it was written for.
+  expect(withoutImage, 'every fixture episode has a still again').toBeGreaterThan(0);
+});

@@ -2634,6 +2634,47 @@ export function hangMock(name: string): void {
   hangs.add(name);
 }
 
+/**
+ * What the UI has asked for, and how big the answer was.
+ *
+ * A test seam like `__auroraFailNext`, and the one the mock was missing: every journey
+ * could see what the screen did with an answer and none of them could see what the
+ * question cost. That is how `epg.gridSlice` came to be called with
+ * `channelIds: []` — every channel, every programme in 24 hours, 14.8 MB measured
+ * against the live panel — on each of eight navigation controls, with no test able to
+ * notice (R-130).
+ *
+ * Bounded, because this is on for every journey: the last 200 calls is plenty to assert
+ * on and will not grow without limit in a long one.
+ */
+export interface MockCall {
+  name: string;
+  args: unknown;
+  /** The reply's size as JSON, which is what crosses the bridge on Windows. */
+  bytes: number;
+}
+
+const calls: MockCall[] = [];
+
+export function mockCalls(): MockCall[] {
+  return calls;
+}
+
+export function clearMockCalls(): void {
+  calls.length = 0;
+}
+
+function record(name: string, args: unknown, result: unknown): void {
+  if (calls.length >= 200) calls.shift();
+  let bytes = 0;
+  try {
+    bytes = JSON.stringify(result ?? null).length;
+  } catch {
+    // A reply that will not stringify is not one Tauri could have sent either.
+  }
+  calls.push({ name, args, bytes });
+}
+
 export async function invokeMock<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
@@ -2650,5 +2691,7 @@ export async function invokeMock<K extends CommandName>(
   }
   const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
-  return await fn(args);
+  const result = await fn(args);
+  record(name, args, result);
+  return result;
 }

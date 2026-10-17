@@ -15,7 +15,7 @@ pub const MAX_PROFILES: usize = 6;
 pub const MAX_PIN_FAILURES: i64 = 5;
 pub const PIN_LOCKOUT_SECS: i64 = 60;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub id: i64,

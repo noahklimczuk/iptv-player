@@ -443,7 +443,7 @@ function Body({
           />
         </>
       )}
-      {tab === 'similar' && <Similar />}
+      {tab === 'similar' && <Similar item={item} />}
       {tab === 'details' && <Details item={item} />}
     </div>
   );
@@ -699,6 +699,11 @@ function Episodes({
           style={{ display: 'flex', alignItems: 'center', borderRadius: 'var(--r-md)' }}
           onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface)')}
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          // The same highlight for the keyboard. `onFocus`/`onBlur` bubble from the
+          // buttons inside, so tabbing through the list now shows where you are
+          // instead of moving an invisible cursor.
+          onFocus={(e) => (e.currentTarget.style.background = 'var(--surface)')}
+          onBlur={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           <button
             onClick={() => onPlay(ep.id)}
@@ -722,7 +727,25 @@ function Episodes({
             >
               {watched ? <Icon name="check" size={18} /> : ep.episode}
             </div>
-            <div style={{ position: 'relative', borderRadius: 'var(--r-sm)', overflow: 'hidden' }}>
+            {/*
+              `aspectRatio` and a background, because the `<img>` is the only in-flow
+              child here and it is conditional. With `ep.still` null this box was 148px
+              wide and 0px tall with `overflow: hidden`, so both of the absolutely
+              positioned children were clipped to nothing: the play affordance, and --
+              the part that matters -- the resume bar. `partway` was computed correctly
+              from real host data, rendered, and then clipped away, which left the tick
+              as the only sign of which episode you were partway through. Episode stills
+              come from TMDB enrichment and nothing else, so this was the state of every
+              episode of every show until a key is configured, and the permanent state
+              of whatever enrichment never matches (R-106).
+            */}
+            <div
+              data-testid="episode-thumb"
+              style={{
+                position: 'relative', borderRadius: 'var(--r-sm)', overflow: 'hidden',
+                aspectRatio: '16/9', background: 'var(--surface-2, rgb(255 255 255 / 0.06))',
+              }}
+            >
               {ep.still && (
                 <img
                   src={ep.still} alt=""
@@ -793,30 +816,85 @@ function Episodes({
   );
 }
 
-function Similar() {
-  const { data } = useCommand('library.movies', { sort: 'rating', limit: 9, offset: 12 }, []);
+/**
+ * Titles that are actually like this one, or an honest nothing.
+ *
+ * This took no props. The query was a constant — `library.movies` by rating, nine of
+ * them, `offset: 12` — with an empty dependency array, so every film in the library
+ * showed the *same nine titles* under a heading that says **More Like This**, and a
+ * series showed nine films. It is also the default tab for a film (`:44`), so those
+ * nine unrelated titles were the first thing the detail view ever showed. The
+ * `offset: 12` was the tell: it existed so the grid would not repeat the home screen's
+ * top-rated rail, which is a layout concern standing in for a missing feature (R-105).
+ *
+ * There is no item-to-item similarity on the host — `library.recommended` is
+ * profile-based and nothing answers "like this one" — but `library.movies` and
+ * `library.series` both take a `genre`, and the item's genres are in hand here. Same
+ * kind as the item, sharing its first genre, best-rated first, itself removed.
+ *
+ * `item.genres` is empty until TMDB enrichment has reached the title, which is the
+ * state of a whole fresh library and the permanent state of anything enrichment never
+ * matches. That is the case the old code filled with nine strangers; saying there is
+ * nothing to show is the only answer available without inventing one.
+ */
+function Similar({ item }: { item: CatalogItem }) {
+  const genre = item.genres[0];
+  const isSeries = item.kind === 'series';
+  // One more than the grid needs, because the item itself is in its own genre and comes
+  // back in its own list.
+  const page = { sort: 'rating' as const, limit: 10, offset: 0, genre };
+  const films = useCommand('library.movies', page, [genre], !isSeries && genre != null);
+  const shows = useCommand('library.series', page, [genre], isSeries && genre != null);
+  const { data, loading } = isSeries ? shows : films;
+
+  if (genre == null) {
+    return (
+      <div style={{ padding: 'var(--sp-5)', color: 'var(--text-muted)' }}>
+        Nothing to compare this to yet — finding similar titles needs genres, which come
+        from the metadata sweep.
+      </div>
+    );
+  }
+
+  const similar = (data ?? []).filter((m) => m.id !== item.id).slice(0, 9);
+  if (!loading && similar.length === 0) {
+    return (
+      <div style={{ padding: 'var(--sp-5)', color: 'var(--text-muted)' }}>
+        Nothing else in {genre} yet.
+      </div>
+    );
+  }
+
   return (
     <div
+      data-testid="similar-grid"
       style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
         gap: 'var(--sp-3)',
       }}
     >
-      {(data ?? []).map((m) => (
-        <div key={m.id} style={{ borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--surface)' }}>
+      {loading && similar.length === 0
+        && [0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} h={160} />)}
+      {similar.map((m) => (
+        <div key={m.id} data-testid="similar-card" style={{ borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--surface)' }}>
           {m.backdrop && (
             <img src={m.backdrop} alt="" style={{ width: '100%', aspectRatio: '16/9', objectFit: 'cover', display: 'block' }} />
           )}
           <div style={{ padding: 'var(--sp-3)' }}>
-            <div style={{ fontWeight: 650, fontSize: 'var(--fs-sm)', marginBottom: 4 }}>{m.title}</div>
+            <div data-testid="similar-title" style={{ fontWeight: 650, fontSize: 'var(--fs-sm)', marginBottom: 4 }}>{m.title}</div>
             <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
-              {m.year} · {runtime(m.runtimeMins)}
+              {m.year} · {'runtimeMins' in m ? runtime(m.runtimeMins) : seasons(m.seasons)}
             </div>
           </div>
         </div>
       ))}
     </div>
   );
+}
+
+/** "3 seasons", for the row where a film shows its running time. */
+function seasons(list: number[]): string {
+  return list.length === 1 ? '1 season' : `${list.length} seasons`;
 }
 
 /**
