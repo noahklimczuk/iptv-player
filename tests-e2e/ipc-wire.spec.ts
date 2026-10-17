@@ -102,9 +102,14 @@ test('a pasted provider address reaches the host as args.text', async ({ page })
   const address = page.getByLabel('Provider address');
   await expect(address).toBeVisible();
   await address.fill('http://panel.example.com');
-  await page.waitForTimeout(300);
 
+  // Polled rather than slept on: typing is debounced now, so the call arrives a beat
+  // after the field stops changing rather than on the keystroke (R-122).
+  await expect
+    .poll(() => calls.some((c) => c.cmd === 'providers_detect'), {
+      message: 'the wizard never asked the host to detect anything',
+    })
+    .toBe(true);
   const detect = calls.find((c) => c.cmd === 'providers_detect');
-  expect(detect, 'the wizard never asked the host to detect anything').toBeTruthy();
   expect(detect!.payload).toEqual({ args: { text: 'http://panel.example.com' } });
 });

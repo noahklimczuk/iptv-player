@@ -56,7 +56,12 @@ test('recording what is on schedules the programme by name', async ({ page }) =>
   // afterwards rather than being a block of time.
   const notice = page.getByText(/^Recording /).first();
   await expect(notice).toBeVisible();
-  const announced = (await notice.innerText()).replace(/^Recording /, '').trim();
+  // The notice says how much of the programme is going to disk when some of it has
+  // already gone — "Recording the last 38 minutes of X" — because the recording starts
+  // now and not at the programme's start (R-109). The title is what this test is after.
+  const announced = (await notice.innerText())
+    .replace(/^Recording (?:the last \d+ minutes of )?/, '')
+    .trim();
 
   // And it is really scheduled, not just announced. Reached by navigating *within* the
   // app: the mock's library lives in the page, so a `goto` would reload it and throw away

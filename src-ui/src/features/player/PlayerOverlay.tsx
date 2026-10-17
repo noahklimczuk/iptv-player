@@ -24,6 +24,15 @@ const HIDE_AFTER_MS = 3200;
  */
 const UNGUIDED_RECORDING_SECS = 60 * 60;
 
+/**
+ * How much of a programme has to have gone before the notice says so.
+ *
+ * A minute, because pressing Record as something begins is the ordinary case and
+ * "Recording the last 60 minutes of Match of the Day" is a stranger sentence than
+ * "Recording Match of the Day" for the same thing.
+ */
+const PART_GONE_SECS = 60;
+
 /** Speeds the transport offers. Beyond this, pitch correction stops being convincing. */
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 
@@ -48,6 +57,17 @@ const ASPECTS: { value: PlayerState['aspect']; label: string; detail?: string }[
  * name and to its own end — which is what makes it appear in Recordings as something
  * recognisable rather than as a block of time. Without one, the next hour of the channel,
  * said plainly in the notice so nobody is surprised by where it stops.
+ *
+ * It records from **now**, and says how much that is. This used to pass the programme's
+ * own `start` as `airStart`, with a comment about the timeshift buffer holding the part
+ * already shown. The buffer is never consulted: `RecordRequest` carries a url, a
+ * destination, a window and two headers, `dvr.rs` fills the window with
+ * `(stop - now).max(1)` — a fresh HTTP stream from the moment recording starts — and the
+ * recorder has no reference to the buffer at all. So pressing Record fifty minutes into
+ * an hour-long programme produced a ten-minute file stored against a one-hour window,
+ * which Recordings then drew as `20:00–21:00` beside an honest ten-minute duration, with
+ * nothing to explain the gap. Prepending the buffer is a feature; it was not a comment
+ * (R-109).
  */
 async function recordNow(player: PlayerState): Promise<void> {
   const channelId = player.channelId;
@@ -59,23 +79,30 @@ async function recordNow(player: PlayerState): Promise<void> {
     // call either way.
     const guide = await invoke('epg.nowNext', { channelId }).catch(() => null);
     const programme = guide?.now ?? null;
+    // The window that will actually be recorded: from now to the programme's end, or
+    // the next hour on a channel with no guide.
+    const airStop = programme?.stop ?? now + UNGUIDED_RECORDING_SECS;
     const id = await invoke('dvr.schedule', {
       channelId,
       title: programme?.title ?? player.title ?? 'Recording',
       subTitle: programme?.subTitle ?? null,
-      // Start from the beginning of the programme: the buffer may well hold the part
-      // already shown, and a recording that begins where you happened to press the
-      // button is half a programme.
-      airStart: programme?.start ?? now,
-      airStop: programme?.stop ?? now + UNGUIDED_RECORDING_SECS,
+      airStart: now,
+      airStop,
     });
     if (id == null) {
       notify('That is already being recorded');
       return;
     }
+    // How much of the programme is actually going to disk. Only said once some of it
+    // has gone: pressing Record as something starts is the ordinary case and does not
+    // need arithmetic in the notice.
+    const missed = programme ? now - programme.start : 0;
+    const minutes = Math.max(1, Math.round((airStop - now) / 60));
     notify(
       programme
-        ? `Recording ${programme.title}`
+        ? missed >= PART_GONE_SECS
+          ? `Recording the last ${minutes} minutes of ${programme.title}`
+          : `Recording ${programme.title}`
         : `Recording the next hour — this channel has no guide data`,
     );
   } catch (e) {

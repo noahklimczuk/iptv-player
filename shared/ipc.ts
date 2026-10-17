@@ -41,6 +41,18 @@ export interface Channel {
   favorite: boolean;
   /** ISO 639-1 as the host worked it out, or null when the name never said. */
   lang?: string | null;
+  /**
+   * The provider no longer lists this channel.
+   *
+   * It was in the library before that provider's last refresh and not in the refresh
+   * itself. Such a channel is kept rather than deleted, because a favourite vanishing
+   * out from under somebody is worse than a row that does not tune (README §4.6) --
+   * and the wizard has always said so, in as many words: "channels your provider no
+   * longer lists were kept and flagged". Nothing flagged them. No query returned a
+   * staleness column and nothing here could have drawn one, so a dropped channel looked
+   * exactly like a working one and the only sign was a tune that failed (R-53).
+   */
+  stale: boolean;
 }
 
 export interface Programme {

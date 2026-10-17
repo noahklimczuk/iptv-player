@@ -373,7 +373,7 @@ function ScheduledRow({
   const pct = live ? (elapsed / Math.max(1, rec.stop - rec.start)) * 100 : 0;
 
   return (
-    <RowShell accent={live ? 'var(--live)' : undefined}>
+    <RowShell accent={live ? 'var(--live)' : undefined} testId="scheduled-row">
       <TitleBlock rec={rec} />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>

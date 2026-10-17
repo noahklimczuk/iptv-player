@@ -505,6 +505,23 @@ function ChannelRow({
       </div>
 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        {/*
+          * The badge the setup wizard has always promised.
+          *
+          * "Channels your provider no longer lists were kept and flagged" -- kept was
+          * true and flagged was not, so a dropped channel sat here looking exactly like
+          * a working one and the only sign was a tune that failed with a provider
+          * error. Being told to look for a flag that does not exist is worse than being
+          * told nothing (R-53).
+          */}
+        {channel.stale && (
+          <Badge
+            tone="outline"
+            style={{ color: 'var(--warning)', borderColor: 'var(--warning)' }}
+          >
+            <span title="Your provider no longer lists this channel">Dropped</span>
+          </Badge>
+        )}
         {channel.hasCatchup && <Badge tone="outline">Catch-up</Badge>}
         <button
           type="button"
