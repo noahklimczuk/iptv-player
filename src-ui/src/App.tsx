@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import type { CatalogItem, MosaicRect, MosaicView, PipView, SearchHit } from '@shared/ipc';
+import type { CatalogItem, MosaicRect, MosaicView, PipView, Recording, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
@@ -64,7 +64,7 @@ import { bindPlayerState, useUi } from '@/state/ui';
  * to refuse to play the thing.
  */
 async function resumeAt(
-  kind: 'movie' | 'episode',
+  kind: 'movie' | 'episode' | 'recording',
   id: number,
   profileId: number,
 ): Promise<number | undefined> {
@@ -267,6 +267,29 @@ export default function App() {
       report(`Could not play ${item.title}`)(e);
     }
   }, [ui, profileId]);
+
+  /**
+   * Play a finished recording.
+   *
+   * The Recordings screen had a Play button on every completed row that called an
+   * optional prop nobody passed, and there was no command to pass: `MediaKind` could
+   * not name a recording, so the DVR recorded to a file that could only be opened in
+   * Explorer (R-118). The host resolves the path and mpv plays it off disk.
+   */
+  const playRecording = useCallback(async (rec: Recording) => {
+    try {
+      await invoke('player.play', {
+        kind: 'recording',
+        id: rec.id,
+        positionSecs: await resumeAt('recording', rec.id, profileId),
+      });
+      setPlayerOpen(true);
+    } catch (e) {
+      // Surfaced, because every way this refuses is something the viewer can act on:
+      // still recording, never started, no file, file deleted outside Aurora.
+      report(`Could not play ${rec.title}`)(e);
+    }
+  }, [profileId]);
 
   /**
    * Play a past programme from its start.
@@ -756,7 +779,7 @@ export default function App() {
           />
           <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
           <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
-          <Route path="/recordings" element={<RecordingsPage />} />
+          <Route path="/recordings" element={<RecordingsPage onPlay={playRecording} />} />
           <Route
             path="/multiview"
             element={

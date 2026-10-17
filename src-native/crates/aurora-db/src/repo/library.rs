@@ -199,6 +199,15 @@ pub struct BrowseQuery {
 ///
 /// Built together because they have to agree: a clause with no parameter bound, or a
 /// parameter with no clause, is a runtime error rather than a compile-time one.
+/// The one SQL expression for "the title, as the viewer reads it".
+///
+/// `shown_title` is registered on every connection in `aurora_db::configure` and calls
+/// the same `aurora_core::lang` stripping that `map_movie` applies to the text it
+/// returns, so the letter bar, the A–Z sort and the screen cannot disagree (R-52).
+fn shown_title_sql(table: &str) -> String {
+    format!("shown_title(COALESCE({table}.custom_title, {table}.tmdb_title, {table}.title))")
+}
+
 fn browse_filters<'a>(
     table: &str,
     q: &'a BrowseQuery,
@@ -229,21 +238,31 @@ fn browse_filters<'a>(
     // A–Z sort orders by — otherwise the bar would filter on one name and the list would
     // be sorted by another, and "W" could land among the Vs.
     //
+    // It now actually is the same expression. It used to be
+    // `COALESCE(custom_title, title)` here, with no `tmdb_title` and no language prefix
+    // stripped, while the viewer read `shown_title(COALESCE(custom_title, tmdb_title,
+    // title))` and the sort ordered by the bare `title` — three descriptions of one
+    // thing. Since this subscription writes 27,416 of 27,494 film names with a leading
+    // language code, the "E" button returned 26,796 films, "T" returned 13 of the 5,372
+    // that begin with T, and I, J, K, O, V, X, Y and Z returned nothing at all. Every
+    // film was reachable by some button, under a letter with nothing to do with its
+    // name, which is worse than missing because the bar looks like it works (R-52).
+    //
     // `#` means everything else: a provider's library is full of titles starting with a
     // digit, a bracket or a language tag, and they have to be reachable by something.
     // Compared with `upper()` rather than a `LIKE` prefix because `LIKE` on a column with
     // no index would be no faster and the intent is clearer.
     match q.letter.as_deref() {
         Some("#") => {
-            let shown = format!("COALESCE({table}.custom_title, {table}.title)");
+            let shown = shown_title_sql(table);
             sql.push_str(&format!(
                 " AND (upper(substr({shown}, 1, 1)) < 'A' OR upper(substr({shown}, 1, 1)) > 'Z')"
             ));
         }
         Some(_) => {
+            let shown = shown_title_sql(table);
             sql.push_str(&format!(
-                " AND upper(substr(COALESCE({table}.custom_title, {table}.title), 1, 1)) \
-                   = upper(:letter)"
+                " AND upper(substr({shown}, 1, 1)) = upper(:letter)"
             ));
             params.push((":letter", &q.letter));
         }
@@ -312,10 +331,14 @@ pub fn find_by_title(
 
 pub fn list_movies(conn: &Connection, q: &BrowseQuery) -> Result<Vec<MovieRow>> {
     let order = match q.sort {
-        MovieSort::RecentlyAdded => "added_at DESC, movies.id DESC",
-        MovieSort::Title => "title COLLATE NOCASE",
-        MovieSort::Year => "year DESC NULLS LAST, title",
-        MovieSort::Rating => "rating DESC NULLS LAST, title",
+        MovieSort::RecentlyAdded => "added_at DESC, movies.id DESC".to_string(),
+        // The displayed title, not the raw one. Ordering by `title` was nearly right by
+        // accident -- almost every row carries the same prefix, so sorting by
+        // "EN * Alien" is sorting by "Alien" -- and wrong exactly where a different
+        // prefix interleaves: 18 adjacent pairs of 27,493 were out of order (R-52).
+        MovieSort::Title => format!("{} COLLATE NOCASE", shown_title_sql("movies")),
+        MovieSort::Year => format!("year DESC NULLS LAST, {}", shown_title_sql("movies")),
+        MovieSort::Rating => format!("rating DESC NULLS LAST, {}", shown_title_sql("movies")),
     };
     let (filters, mut params) = browse_filters("movies", q);
     let sql = format!(
@@ -413,10 +436,10 @@ fn map_series(r: &rusqlite::Row<'_>) -> rusqlite::Result<SeriesRow> {
 
 pub fn list_series(conn: &Connection, q: &BrowseQuery) -> Result<Vec<SeriesRow>> {
     let order = match q.sort {
-        MovieSort::RecentlyAdded => "added_at DESC, series.id DESC",
-        MovieSort::Title => "title COLLATE NOCASE",
-        MovieSort::Year => "year DESC NULLS LAST, title",
-        MovieSort::Rating => "rating DESC NULLS LAST, title",
+        MovieSort::RecentlyAdded => "added_at DESC, series.id DESC".to_string(),
+        MovieSort::Title => format!("{} COLLATE NOCASE", shown_title_sql("series")),
+        MovieSort::Year => format!("year DESC NULLS LAST, {}", shown_title_sql("series")),
+        MovieSort::Rating => format!("rating DESC NULLS LAST, {}", shown_title_sql("series")),
     };
     let (filters, mut params) = browse_filters("series", q);
     let sql = format!(
@@ -711,6 +734,16 @@ pub struct NewEpisode {
     pub title: Option<String>,
     pub url: String,
     pub still: Option<String>,
+    /// The provider's plot for this episode, which `get_series_info` sends for 96% of
+    /// them on the panel this is measured against and which was parsed and dropped.
+    pub overview: Option<String>,
+    /// How long the episode runs, from the provider's own `duration_secs`.
+    ///
+    /// This is what `library_playback_aids` falls back to when the player reports no
+    /// duration, which a provider's VOD stream very often does -- so with the column
+    /// empty, Up Next, autoplay-next and Skip Credits were all dead on an ordinary
+    /// library until TMDB enrichment happened to reach the episode (R-139).
+    pub runtime_mins: Option<u32>,
 }
 
 /// A show as the provider describes it, before enrichment.
@@ -813,16 +846,27 @@ pub fn upsert_episodes(
     let mut n = 0;
     {
         let mut stmt = tx.prepare(
-            r#"INSERT INTO episodes (series_id, season, episode, title, url, still, added_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7)
+            r#"INSERT INTO episodes (series_id, season, episode, title, url, still,
+                                     overview, runtime_mins, added_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
                ON CONFLICT (series_id, season, episode) DO UPDATE SET
-                 title = COALESCE(excluded.title, episodes.title),
-                 url   = excluded.url,
-                 still = COALESCE(excluded.still, episodes.still)"#,
+                 title        = COALESCE(excluded.title, episodes.title),
+                 url          = excluded.url,
+                 still        = COALESCE(excluded.still, episodes.still),
+                 overview     = COALESCE(excluded.overview, episodes.overview),
+                 runtime_mins = COALESCE(excluded.runtime_mins, episodes.runtime_mins)"#,
         )?;
         for e in episodes {
             stmt.execute(params![
-                series_id, e.season, e.episode, e.title, e.url, e.still, now
+                series_id,
+                e.season,
+                e.episode,
+                e.title,
+                e.url,
+                e.still,
+                e.overview,
+                e.runtime_mins,
+                now
             ])?;
             n += 1;
         }
@@ -831,6 +875,17 @@ pub fn upsert_episodes(
     Ok(n)
 }
 
+/// One episode, as the UI draws it.
+///
+/// **There is deliberately no `url` here.** An Xtream episode's stream URL is
+/// `{base}/series/{username}/{password}/{id}.{ext}` — the credentials are in the path,
+/// by the protocol's design — and this struct is the return type of `library.episodes`
+/// and of `playbackAids.nextEpisode`, so the field was serialised straight into the
+/// WebView once per episode of every show opened. Nothing ever read it: playback
+/// resolves the URL with its own query (`aurora-app::window`), and `shared/ipc.ts`
+/// never declared the field, so no UI code referenced it and no type check mentioned it.
+///
+/// Anything that needs the stream addresses an episode by `id` and asks the database.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeRow {
@@ -841,7 +896,6 @@ pub struct EpisodeRow {
     pub overview: Option<String>,
     pub still: Option<String>,
     pub runtime_mins: Option<u32>,
-    pub url: String,
 }
 
 /// Which show an episode belongs to.
@@ -873,13 +927,12 @@ pub fn episodes_for(
             overview: r.get(4)?,
             still: r.get(5)?,
             runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-            url: r.get(7)?,
         })
     };
     let rows = match season {
         Some(s) => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins, url
+                "SELECT id, season, episode, title, overview, still, runtime_mins
                  FROM episodes WHERE series_id = ?1 AND season = ?2 ORDER BY episode",
             )?;
             let out = stmt
@@ -889,7 +942,7 @@ pub fn episodes_for(
         }
         None => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins, url
+                "SELECT id, season, episode, title, overview, still, runtime_mins
                  FROM episodes WHERE series_id = ?1 ORDER BY season, episode",
             )?;
             let out = stmt
@@ -926,7 +979,7 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
     Ok(conn
         .query_row(
-            "SELECT id, season, episode, title, overview, still, runtime_mins, url
+            "SELECT id, season, episode, title, overview, still, runtime_mins
              FROM episodes
              WHERE series_id = ?1
                AND (season > ?2 OR (season = ?2 AND episode > ?3))
@@ -942,7 +995,6 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
                     overview: r.get(4)?,
                     still: r.get(5)?,
                     runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                    url: r.get(7)?,
                 })
             },
         )
@@ -1029,6 +1081,100 @@ mod tests {
 
     /// The count beside the heading has to be the count of what is on screen. Every
     /// letter's rows plus the `#` bucket's must add up to the library.
+    /// The shape this subscription actually writes: a language code in front of
+    /// everything.
+    ///
+    /// 27,416 of its 27,494 film names carry one, so the letter bar filtering on the raw
+    /// title sent 26,796 films to "E" and returned nothing at all for I, J, K, O, V, X,
+    /// Y and Z. "T" returned 13 of the 5,372 titles that begin with T. Every film was
+    /// reachable by some button, under a letter with nothing to do with its name (R-52).
+    #[test]
+    fn the_letter_bar_reads_the_title_the_viewer_sees() {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        // Separated and bare prefixes, which `lang::strip_language_prefix` handles as
+        // two different cases, plus a title with no prefix and one renamed by TMDB.
+        for (id, title) in [
+            (1, "EN \u{2605} Interstellar"),
+            (2, "EN Kill Bill"),
+            (3, "FR \u{2605} Oceans"),
+            (4, "Zodiac"),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 'https://example.com/m.mkv', 0)",
+                params![id, format!("m{id}"), title],
+            )
+            .unwrap();
+        }
+        // A TMDB name takes precedence over the provider's, so the bar has to read it.
+        conn.execute(
+            "UPDATE movies SET tmdb_title = 'Quiz Show' WHERE id = 4",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(by_letter(&conn, Some("I")), vec!["Interstellar"]);
+        assert_eq!(by_letter(&conn, Some("K")), vec!["Kill Bill"]);
+        assert_eq!(by_letter(&conn, Some("O")), vec!["Oceans"]);
+        assert_eq!(by_letter(&conn, Some("Q")), vec!["Quiz Show"]);
+        assert!(
+            by_letter(&conn, Some("E")).is_empty(),
+            "the language code is still deciding the letter: {:?}",
+            by_letter(&conn, Some("E"))
+        );
+        assert!(by_letter(&conn, Some("Z")).is_empty(), "tmdb_title ignored");
+        assert!(by_letter(&conn, Some("F")).is_empty());
+    }
+
+    /// And the A-Z sort orders by the same thing, so the list cannot be sorted by one
+    /// name while the bar filters on another.
+    #[test]
+    fn the_az_sort_orders_by_the_title_the_viewer_sees() {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        // Raw order would be AR, DE, EN, EN -> Elephant, Beehive, Andromeda, Zodiac.
+        for (id, title) in [
+            (1, "EN \u{2605} Andromeda"),
+            (2, "AR \u{2605} Elephant"),
+            (3, "EN \u{2605} Zodiac"),
+            (4, "DE \u{2605} Beehive"),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 'https://example.com/m.mkv', 0)",
+                params![id, format!("m{id}"), title],
+            )
+            .unwrap();
+        }
+
+        let titles: Vec<String> = list_movies(
+            &conn,
+            &BrowseQuery {
+                sort: MovieSort::Title,
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .map(|m| m.title)
+        .collect();
+        assert_eq!(titles, ["Andromeda", "Beehive", "Elephant", "Zodiac"]);
+    }
+
     #[test]
     fn the_letters_and_the_hash_bucket_partition_the_library() {
         let conn = lettered_library();
@@ -1368,6 +1514,7 @@ mod tests {
                 title: Some("Fourth".into()),
                 url: "u".into(),
                 still: None,
+                ..Default::default()
             }],
             0,
         )
@@ -1948,6 +2095,7 @@ mod tests {
                     title: Some("Two".into()),
                     url: "u2".into(),
                     still: None,
+                    ..Default::default()
                 },
                 NewEpisode {
                     season: 1,
@@ -1955,6 +2103,7 @@ mod tests {
                     title: Some("One".into()),
                     url: "u1".into(),
                     still: None,
+                    ..Default::default()
                 },
                 NewEpisode {
                     season: 2,
@@ -1962,6 +2111,7 @@ mod tests {
                     title: None,
                     url: "u3".into(),
                     still: None,
+                    ..Default::default()
                 },
             ],
             0,
@@ -1975,6 +2125,84 @@ mod tests {
 
         let s1 = episodes_for(&conn, sid, Some(1)).unwrap();
         assert_eq!(s1.len(), 2);
+    }
+
+    /// The two fields the provider sends for nearly every episode and the import used
+    /// to drop (R-139).
+    ///
+    /// `runtime_mins` is the one that costs a feature: `library_playback_aids` falls back
+    /// to it when the player reports no duration, which a provider's VOD stream very
+    /// often does -- so with the column empty, Up Next, autoplay-next and Skip Credits
+    /// had nothing to work from on an un-enriched library, which is most of one.
+    #[test]
+    fn an_episodes_plot_and_runtime_are_stored_and_survive_a_playlist_refresh() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let sid = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "Show",
+                match_key: "show",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[NewEpisode {
+                season: 1,
+                episode: 1,
+                title: Some("One".into()),
+                url: "u1".into(),
+                overview: Some("What happens in it.".into()),
+                runtime_mins: Some(59),
+                ..Default::default()
+            }],
+            0,
+        )
+        .unwrap();
+
+        let stored = &episodes_for(&conn, sid, None).unwrap()[0];
+        assert_eq!(stored.overview.as_deref(), Some("What happens in it."));
+        assert_eq!(stored.runtime_mins, Some(59));
+
+        // An M3U refresh carries neither -- a flat playlist line has no plot and no
+        // duration -- and must not blank what `get_series_info` supplied.
+        upsert_episodes(
+            &mut conn,
+            sid,
+            &[NewEpisode {
+                season: 1,
+                episode: 1,
+                title: Some("One".into()),
+                url: "u1-again".into(),
+                ..Default::default()
+            }],
+            1,
+        )
+        .unwrap();
+
+        let after = &episodes_for(&conn, sid, None).unwrap()[0];
+        assert_eq!(after.overview.as_deref(), Some("What happens in it."));
+        assert_eq!(after.runtime_mins, Some(59));
+
+        // Asked of the column rather than of `EpisodeRow`, which deliberately no longer
+        // carries the URL: it goes to the WebView, and an Xtream stream URL has the
+        // password in its path. These two changes were written on separate branches --
+        // one removing the field, one asserting on it -- and each was green alone.
+        let url: String = conn
+            .query_row(
+                "SELECT url FROM episodes WHERE series_id = ?1 AND season = 1 AND episode = 1",
+                params![sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(url, "u1-again", "the stream is always the newest one");
     }
 
     #[test]
@@ -1998,7 +2226,7 @@ mod tests {
             episode: 1,
             title: Some("T".into()),
             url: "old".into(),
-            still: None,
+            ..Default::default()
         };
         upsert_episodes(&mut conn, sid, std::slice::from_ref(&ep), 0).unwrap();
         upsert_episodes(
@@ -2015,12 +2243,23 @@ mod tests {
 
         let rows = episodes_for(&conn, sid, None).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].url, "new");
         assert_eq!(
             rows[0].title.as_deref(),
             Some("T"),
             "title should not be nulled"
         );
+        // Asked of the table rather than of the row: `EpisodeRow` deliberately does not
+        // carry the URL, because it is the return type of `library.episodes` and an
+        // Xtream episode's URL has the credentials in its path. The upsert still has to
+        // replace it, which is what this was checking.
+        let stored: String = conn
+            .query_row(
+                "SELECT url FROM episodes WHERE id = ?1",
+                params![rows[0].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "new");
     }
 
     #[test]
@@ -2240,6 +2479,65 @@ mod runtime_tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    /// Nothing an episode row carries may be a credential.
+    ///
+    /// `EpisodeRow` used to hold `url`, and an Xtream episode's URL is
+    /// `{base}/series/{username}/{password}/{id}.{ext}` — so `library.episodes` handed
+    /// the subscription's password to the WebView once per episode of every show
+    /// opened. No UI code read it and `shared/ipc.ts` never declared it, so neither
+    /// `tsc` nor a reviewer reading the TypeScript could see it; it was only visible by
+    /// diffing the Rust struct against the contract.
+    ///
+    /// Asserted against the serialised form rather than the struct, because that is what
+    /// actually crosses the bridge.
+    #[test]
+    fn a_serialised_episode_carries_no_part_of_a_stream_url() {
+        let (conn, series_id) = seeded();
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, title, url)
+             VALUES (?1, 1, 1, 'Pilot', 'http://panel.example/series/alice/s3cret/9.mkv')",
+            params![series_id],
+        )
+        .unwrap();
+
+        let rows = episodes_for(&conn, series_id, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        let json = serde_json::to_string(&rows[0]).unwrap();
+        assert!(
+            !json.contains("alice"),
+            "the username crossed the bridge: {json}"
+        );
+        assert!(
+            !json.contains("s3cret"),
+            "the password crossed the bridge: {json}"
+        );
+        assert!(
+            !json.contains("panel.example"),
+            "the provider's host leaked: {json}"
+        );
+        assert!(!json.contains("url"), "there is a url field again: {json}");
+        // And the episode is still useful for what the UI draws it with.
+        assert!(json.contains("Pilot"), "{json}");
+
+        // The same for the Next Episode button's row, which is the other way out.
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, title, url)
+             VALUES (?1, 1, 2, 'Second', 'http://panel.example/series/alice/s3cret/10.mkv')",
+            params![series_id],
+        )
+        .unwrap();
+        let first = episodes_for(&conn, series_id, None).unwrap()[0].id;
+        let next = following_episode(&conn, first)
+            .unwrap()
+            .expect("a following episode");
+        let json = serde_json::to_string(&next).unwrap();
+        assert!(
+            !json.contains("s3cret"),
+            "nextEpisode leaked the password: {json}"
+        );
+        assert_eq!(next.title.as_deref(), Some("Second"));
     }
 
     /// The query runs. Worth asserting on its own, because `series` has no runtime

@@ -591,7 +591,10 @@ A Netflix-style expanded modal (and a deep-linkable full page):
 - Backdrop with a gradient scrim, title logo, play/resume CTA with "Resume from 34:12", + My List,
   like/dislike, share (copy deep link), and download *(Optional, §8.6)*.
 - Metadata: year, certification, runtime, quality badges, audio/subtitle language pills, TMDB/IMDb
-  rating, and a computed **match %** from the user's viewing history.
+  rating. A computed **match %** from the user's viewing history is specified here and *not
+  built*: nothing on the host computes one, so the UI that drew it was reading a field only
+  the browser fixtures set, and it has been taken out until the recommender supplies a real
+  number (§12 personalization).
 - Synopsis, cast (horizontally scrollable with headshots, clickable → filmography within the
   library), director, writers, and genre chips (clickable → filtered browse).
 - Tabs: **Trailers & More**, **More Like This** (a grid of similar titles present in *this* library),

@@ -9,11 +9,14 @@ Each scenario gets a fresh library, a fresh app process and a fresh WebDriver se
 because the interesting state — an empty database, a first import — only happens once
 per install and a shared one would hide it.
 
-Deliberately the *release* binary, for two reasons. It is the build people run, with
-`panic = "abort"` set, so a panic that unwinds harmlessly in a debug build takes the
-whole application down here — which is the behaviour worth testing. And only a release
-build writes `aurora.log`: `init_logging` gives a debug build the console it already
-has, and `tauri-driver` does not carry the app's console anywhere this can read it.
+Deliberately the *release* binary, for two reasons. It is the build people run --
+optimised, inlined and stripped -- and only a release build writes `aurora.log`:
+`init_logging` gives a debug build the console it already has, and `tauri-driver` does
+not carry the app's console anywhere this can read it.
+
+(It used to differ in one more way: `panic = "abort"` was set for release, so a panic
+the debug build logged and survived killed the shipped one. The release profile unwinds
+now, so `supervise.rs` recovers in both -- see R-72.)
 A `portable.txt` beside the executable then puts both the log and the library in
 `target/release/data`, where a scenario can look at them.
 """
@@ -227,9 +230,22 @@ def _is_transport_error(e):
     )
 
 
-# What `keyring` files a secret under on Windows: the target name is `{user}.{service}`,
-# and the service is fixed by `aurora-ingest::credentials`.
-CREDENTIAL_SERVICE = "AuroraTV"
+# What `keyring` files a secret under on Windows: the target name is
+# `{user}.{service}`.
+#
+# Moved off the real one by default. Credential Manager is per *user*, so the service
+# name is the one piece of state a redirected data directory does not isolate -- and
+# while `reclaim_credentials` below is careful to delete only keys it read out of the
+# library it just destroyed, "careful" is what the `aurora-provider-{row id}` collision
+# was too, and that one took the machine owner's saved password with it. The host honours
+# this variable (`aurora_ingest::credentials::windows_store::SERVICE_ENV`), so setting it
+# here puts the whole run in its own vault: nothing a scenario writes can land on, or
+# delete, an entry belonging to the installed copy.
+#
+# `setdefault`, so a run that deliberately wants the real vault can say so.
+CREDENTIAL_SERVICE = os.environ.setdefault(
+    "AURORA_CREDENTIAL_SERVICE", "AuroraTV-tests-host"
+)
 
 
 def reclaim_credentials(path):

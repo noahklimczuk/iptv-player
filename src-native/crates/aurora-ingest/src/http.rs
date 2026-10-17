@@ -407,15 +407,31 @@ fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
     NetFailure::classify(&causes)
 }
 
-/// `1234.ts` — the last segment of an Xtream stream URL.
+/// `1234.ts`, or just `1234` — the last segment of an Xtream stream URL.
+///
+/// **The extension is optional, and that is the whole point of this function.** It used
+/// to be required, and the subscription this project is measured against serves every
+/// one of its 6,699 live channels as `http://host/<user>/<pass>/<id>` with no extension
+/// at all — so not one of them was redacted, while its films and series, which do carry
+/// `.mkv` and `.mp4`, were. `docs/PRIVACY.md` names this exact form and writes it with a
+/// `.ts` on the end, which is how a documented defence came to miss the commonest URL
+/// the app handles.
+///
+/// An all-digit segment in the fourth position of a four-segment URL is specific enough:
+/// `/a/b/c` and `/epg/guide/today.xml` are both left alone, and the cost of being wrong
+/// here is a log line that says `***` where it could have said a path.
 fn looks_like_stream_id(segment: &str) -> bool {
-    let Some((id, ext)) = segment.rsplit_once('.') else {
-        return false;
+    let (id, ext) = match segment.rsplit_once('.') {
+        Some((id, ext)) => (id, Some(ext)),
+        None => (segment, None),
     };
-    !id.is_empty()
-        && id.chars().all(|c| c.is_ascii_digit())
-        && !ext.is_empty()
-        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    match ext {
+        Some(ext) => !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric()),
+        None => true,
+    }
 }
 
 fn looks_gzipped(url: &str) -> bool {
@@ -882,6 +898,20 @@ mod tests {
             out.contains("1234.ts"),
             "the stream id is not a secret: {out}"
         );
+    }
+
+    /// The form this subscription actually serves, which carries no extension.
+    ///
+    /// Measured against the real playlist: 233,650 film and series URLs end in `.mkv`,
+    /// `.mp4` or `.avi` and were redacted; all 6,699 live URLs are
+    /// `http://host/<user>/<pass>/<id>` with nothing after the id, and none of them was.
+    /// The difference was one character, and live is the kind a session opens repeatedly.
+    #[test]
+    fn a_markerless_url_with_no_extension_is_redacted() {
+        let out = redact("http://panel.example/bob/hunter2/1234");
+        assert!(!out.contains("bob"), "{out}");
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(out.contains("1234"), "the stream id is not a secret: {out}");
     }
 
     /// The shape must be specific enough not to mangle an ordinary path.

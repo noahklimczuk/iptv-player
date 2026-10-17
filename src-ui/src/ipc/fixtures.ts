@@ -23,6 +23,23 @@ const rand = rng(20260922);
 const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
 const int = (lo: number, hi: number) => lo + Math.floor(rand() * (hi - lo + 1));
 
+/**
+ * Take a draw from the PRNG and throw it away, keeping the sequence where it was.
+ *
+ * Spread into an object literal at the position a removed field used to occupy. This
+ * file is one deterministic world built from a single mulberry32, and ~400 journeys and
+ * every screenshot are written against the shape it produces -- so dropping a draw
+ * shifts every value after it. Removing `match` (R-99: nothing on the host ever computed
+ * one) did exactly that, and moved the duplicated film out of the window
+ * `playlist.spec.ts` scans, failing a test about duplicate collapsing instead.
+ *
+ * Remove a `keepDraw` only together with whatever re-baselines the journeys it moves.
+ */
+function keepDraw(lo: number, hi: number): Record<string, never> {
+  int(lo, hi);
+  return {};
+}
+
 /* ── Invented title vocabulary ─────────────────────────────────────────────── */
 
 const ADJ = ['Silent', 'Crimson', 'Hollow', 'Northern', 'Last', 'Broken', 'Golden',
@@ -296,7 +313,7 @@ function makeMovie(id: number): Movie {
     certification: pick(CERTS),
     genres: [pick(GENRES), pick(GENRES)].filter((g, i, a) => a.indexOf(g) === i),
     cast: [person(), person(), person(), person()],
-    match: int(72, 99),
+    ...keepDraw(72, 99),
     addedAt: Math.floor(Date.now() / 1000) - int(0, 90) * 86400,
     lang: null,
     trailerKey: filmTrailer(id),
@@ -325,7 +342,7 @@ function makeSeries(id: number): Series {
     genres: [pick(GENRES), pick(GENRES)].filter((g, i, a) => a.indexOf(g) === i),
     cast: [person(), person(), person()],
     seasons: Array.from({ length: seasonCount }, (_, i) => i + 1),
-    match: int(70, 99),
+    ...keepDraw(70, 99),
     addedAt: Math.floor(Date.now() / 1000) - int(0, 120) * 86400,
     lang: null,
     trailerKey: trailerKey(id),

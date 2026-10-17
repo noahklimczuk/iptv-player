@@ -6,7 +6,14 @@
  * hand-kept mirror of the Rust side; `pnpm typecheck` fails if the UI drifts from it.
  */
 
-export type MediaKind = 'live' | 'movie' | 'episode';
+/**
+ * What the player can be asked to open.
+ *
+ * `'recording'` is a finished DVR capture, resolved host-side to the file on disk.
+ * `ItemKind` in the progress API has always carried it; this union did not, which is
+ * why nothing could play a recording (R-118).
+ */
+export type MediaKind = 'live' | 'movie' | 'episode' | 'recording';
 export type Quality = '4K' | 'FHD' | 'HD' | 'SD';
 
 export interface Channel {
@@ -59,8 +66,6 @@ export interface Movie {
   certification: string | null;
   genres: string[];
   cast: string[];
-  /** Percentage match computed locally from viewing history (README §8.4). */
-  match?: number;
   addedAt: number | null;
   lang?: string | null;
   /**
@@ -87,7 +92,6 @@ export interface Series {
   genres: string[];
   cast: string[];
   seasons: number[];
-  match?: number;
   addedAt: number | null;
   lang?: string | null;
   /** See `Movie.trailerKey`. */
@@ -1019,9 +1023,25 @@ export interface Commands {
     keyIsBuiltIn: boolean;
     keyIsPersistent: boolean;
     hasHistory: boolean;
+    /**
+     * Whether the viewer has left these two features on.
+     *
+     * Separate from `hasKey`, and the distinction is the point: an official build is
+     * compiled with a key, so clearing the viewer's own one falls back to that and
+     * stops nothing. This is the switch that does.
+     */
+    enabled: boolean;
   };
-  /** Empty clears the stored key. */
+  /** Empty clears the stored key. It does not turn the feature off — see `setEnabled`. */
   'gemini.setKey': (args: { key: string }) => void;
+  /**
+   * Turn the recommendation rail and the assistant off, or back on.
+   *
+   * Off means nothing is sent to Google whatever key is available, including the one
+   * compiled into a release. Also drops the cached answer, which was built from this
+   * viewer's history.
+   */
+  'gemini.setEnabled': (args: { enabled: boolean }) => void;
 
   /* ── The assistant ──────────────────────────────────────────────────────── */
 
@@ -1260,14 +1280,14 @@ export interface Commands {
 
   'progress.save': (args: {
     profileId: number;
-    kind: 'movie' | 'episode' | 'channel';
+    kind: 'movie' | 'episode' | 'channel' | 'recording';
     id: number;
     positionSecs: number;
     durationSecs: number;
   }) => void;
   'progress.get': (args: {
     profileId: number;
-    kind: 'movie' | 'episode';
+    kind: 'movie' | 'episode' | 'recording';
     id: number;
   }) => Progress | null;
   /**

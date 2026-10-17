@@ -19,7 +19,7 @@ use crate::epg::{self, BatchingSink, BATCH_SIZE};
 use crate::http::HttpClient;
 use crate::playlist;
 use crate::source::SourceKind;
-use crate::xtream::XtreamClient;
+use crate::xtream::{AccountStatus, XtreamClient};
 
 /// Progress, so a 40,000-entry import is not a frozen spinner (README §C8).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +131,12 @@ impl SyncOptions {
 }
 
 /// Run a full refresh. `on_progress` is called often enough to drive a progress bar.
+/// How much of the past the guide keeps, counted back from the moment of a refresh.
+///
+/// Eight days: a provider advertising catch-up on this subscription offers a week, and a
+/// guide row that has been pruned is a catch-up entry that cannot be found.
+const EPG_RETENTION_SECS: i64 = 8 * 24 * 60 * 60;
+
 /// Everything the network gave us, before a single row is written.
 ///
 /// The point of this type is the boundary it draws. A refresh downloads a playlist and
@@ -144,6 +150,13 @@ impl SyncOptions {
 /// the network for the same reason.
 #[derive(Debug, Default)]
 pub struct Fetched {
+    /// What the panel said about the subscription when this refresh signed in.
+    ///
+    /// `None` for an M3U source, which has nothing to sign in to. It is carried out of
+    /// here because `max_connections` arrives on the authentication response and
+    /// nowhere else, and the one place that can store it against a provider is the
+    /// command that asked for the refresh.
+    account: Option<AccountStatus>,
     live: Vec<PlaylistEntry>,
     movies: Vec<PlaylistEntry>,
     episodes: Vec<PlaylistEntry>,
@@ -154,6 +167,13 @@ pub struct Fetched {
     epg: Vec<FetchedEpg>,
     warnings: Vec<String>,
     dropped: Dropped,
+}
+
+impl Fetched {
+    /// What the subscription said about itself, for the caller to store.
+    pub fn account(&self) -> Option<&AccountStatus> {
+        self.account.as_ref()
+    }
 }
 
 /// One show as the provider listed it, owned so it can outlive the HTTP client.
@@ -222,7 +242,7 @@ pub fn fetch(
             let password = options.password.as_deref().unwrap_or_default();
             missing_sign_in(username, password)?;
             let client = XtreamClient::new(http, base_url, username, password);
-            client.authenticate(options.now_unix)?;
+            out.account = Some(client.authenticate(options.now_unix)?);
             epg_urls.push(client.xmltv_url());
 
             on_progress(Progress {
@@ -464,6 +484,11 @@ pub fn apply(
                     title: e.title.clone(),
                     url: e.url.clone(),
                     still: e.logo.clone(),
+                    // A flat playlist line carries neither. Episodes imported through
+                    // `get_series_info` do, and `upsert_episodes` COALESCEs, so a
+                    // playlist refresh does not blank what the API supplied.
+                    overview: None,
+                    runtime_mins: None,
                 })
             })
             .collect();
@@ -476,6 +501,38 @@ pub fn apply(
     let mut epg_channels: Vec<EpgChannel> = Vec::new();
     for source in fetched.epg {
         epg_repo::upsert_channels(db, &source.channels).map_err(db_failure)?;
+
+        // Everything this source is about to write, removed first.
+        //
+        // `insert_batch` is an unqualified INSERT and `epg_programmes` has no unique
+        // constraint, so a refresh used to add a second complete copy of the guide
+        // rather than replace the first. A refresh runs by itself once a day: on this
+        // subscription one copy is 547,166 programmes and roughly 128 MB of row
+        // payload, so the library grew by that much daily, `grid_slice` returned a row
+        // per copy -- seven identical entries in every slot after a week -- and "now
+        // and next" picked whichever copy SQLite reached first.
+        //
+        // `clear_channels` was written for exactly this ("Remove everything for a set
+        // of channels before reimporting them, so a refresh does not duplicate
+        // programmes") and had no caller anywhere outside its own test. Neither did
+        // `prune_before` below, whose comment cites README §4.4 on the database not
+        // growing unbounded (R-49).
+        //
+        // Taken from the programmes as well as the declared channels, because a guide
+        // can schedule against an id it never declared -- and those rows would
+        // otherwise be the ones that duplicate.
+        let mut touched: Vec<String> = source.channels.iter().map(|c| c.id.clone()).collect();
+        touched.extend(
+            source
+                .programmes
+                .iter()
+                .flatten()
+                .map(|p| p.channel_id.clone()),
+        );
+        touched.sort_unstable();
+        touched.dedup();
+        epg_repo::clear_channels(db, &touched).map_err(db_failure)?;
+
         for batch in &source.programmes {
             epg_repo::insert_batch(db, batch).map_err(db_failure)?;
         }
@@ -484,12 +541,50 @@ pub fn apply(
         epg_channels.extend(source.channels);
     }
 
+    // And whatever is left over from a channel this guide no longer carries, once it
+    // has finished airing. README §4.4. The window is generous because a provider that
+    // advertises catch-up expects yesterday to still be addressable.
+    if !epg_channels.is_empty() {
+        match epg_repo::prune_before(db, options.now_unix - EPG_RETENTION_SECS) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(pruned = n, "programmes that had already finished"),
+            // A refresh that imported a guide must not fail because tidying up did not.
+            Err(e) => tracing::warn!("could not prune finished programmes: {e}"),
+        }
+    }
+
     // ── Matching ────────────────────────────────────────────────────────────────
     on_progress(Progress {
         phase: Phase::MatchingEpg,
         done: 0,
         total: 0,
     });
+    if !epg_channels.is_empty() {
+        // Only channels the guide actually schedules something against.
+        //
+        // A declared channel with no programmes matches like any other, so 426 of this
+        // subscription's channels were handed a guide id that holds not one programme
+        // for them -- 359 by an exact `tvg-id` match. `Coverage::matched` counted them,
+        // the Settings "fix these" list left them out, and the guide drew an empty row
+        // rather than saying there was nothing there. The viewer's report is "the guide
+        // is blank for this channel" and the app's own diagnostics said it was fine.
+        //
+        // Pruned here rather than in `EpgIndex::build`, which cannot know: whether a
+        // channel has programmes is only settled once the whole document has been read,
+        // and by this point they are all in the table (R-21).
+        let scheduled = epg_repo::channels_with_programmes(db).map_err(db_failure)?;
+        let declared = epg_channels.len();
+        epg_channels.retain(|c| scheduled.contains(&c.id));
+        let dropped = declared - epg_channels.len();
+        if dropped > 0 {
+            tracing::info!(
+                declared,
+                scheduled = epg_channels.len(),
+                dropped,
+                "guide channels with nothing scheduled are not offered for matching"
+            );
+        }
+    }
     if !epg_channels.is_empty() {
         let index = EpgIndex::build(&epg_channels);
         let rows = channels::list(
@@ -1554,6 +1649,97 @@ mod tests {
         assert_eq!(cnn.epg_channel_id.as_deref(), Some("cnn.us"));
     }
 
+    /// A guide channel with nothing scheduled against it is not a match.
+    ///
+    /// Of the 4,827 ids this subscription's guide declares, 1,882 carry no programme at
+    /// all, and they matched like any other channel -- so 426 channels were told they
+    /// had a guide that holds nothing for them, 359 of them by an exact `tvg-id`.
+    /// `epg_matched` counted them, the "fix these" list left them out, and the guide
+    /// drew an empty row instead of saying there was nothing there (R-21).
+    #[test]
+    fn a_guide_channel_with_no_programmes_is_not_matched() {
+        // `cnn.us` is declared and scheduled; `bbcone.uk` is declared and never
+        // scheduled, which is the case this is about.
+        const EPG_WITH_AN_EMPTY_CHANNEL: &str = r#"<tv>
+            <channel id="cnn.us"><display-name>CNN</display-name></channel>
+            <channel id="bbcone.uk"><display-name>BBC One</display-name></channel>
+            <programme start="20240115120000 +0000" stop="20240115130000 +0000" channel="cnn.us">
+              <title>World News</title></programme>
+          </tv>"#;
+        let server = TestServer::start(|_, req| {
+            if req.path.starts_with("/epg") {
+                Reply::ok(EPG_WITH_AN_EMPTY_CHANNEL)
+            } else {
+                Reply::ok(PLAYLIST)
+            }
+        });
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        // CNN still matches. BBC One, which used to match its empty namesake by
+        // normalized name, now does not.
+        assert_eq!(
+            report.epg_matched, 1,
+            "unmatched: {:?}",
+            report.epg_unmatched
+        );
+        assert!(
+            report.epg_unmatched.iter().any(|n| n == "BBC One"),
+            "BBC One should be reported as having no guide: {:?}",
+            report.epg_unmatched
+        );
+
+        let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
+        let cnn = rows.iter().find(|r| r.name == "CNN HD").unwrap();
+        assert_eq!(cnn.epg_channel_id.as_deref(), Some("cnn.us"));
+        let bbc = rows.iter().find(|r| r.name == "BBC One").unwrap();
+        assert_eq!(
+            bbc.epg_channel_id, None,
+            "a channel with no programmes is worse than no match: the guide draws an              empty row and the diagnostics say it is fine"
+        );
+    }
+
+    /// A second refresh replaces the guide rather than adding another copy of it.
+    ///
+    /// `insert_batch` is an unqualified INSERT and `epg_programmes` has no unique
+    /// constraint, so three refreshes used to leave three identical rows in every slot.
+    /// A refresh runs by itself once a day, and one copy of this subscription's guide is
+    /// 547,166 programmes and roughly 128 MB of row payload (R-49).
+    #[test]
+    fn refreshing_twice_replaces_the_guide_rather_than_duplicating_it() {
+        let server = combined_server();
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let first = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        let after_one = epg_repo::count(&conn).unwrap();
+        assert_eq!(after_one, first.epg_programmes as i64);
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(
+            epg_repo::count(&conn).unwrap(),
+            after_one,
+            "a second refresh added another copy of the guide"
+        );
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(epg_repo::count(&conn).unwrap(), after_one);
+
+        // And the grid shows one row per airing, which is what the viewer sees.
+        let rows = epg_repo::grid_slice(&conn, &["cnn.us".to_string()], 0, i64::MAX / 4).unwrap();
+        let airings: std::collections::HashSet<(i64, &str)> =
+            rows.iter().map(|p| (p.start, p.title.as_str())).collect();
+        assert_eq!(
+            rows.len(),
+            airings.len(),
+            "the guide grid is showing the same airing more than once: {rows:?}"
+        );
+    }
+
     #[test]
     fn rules_are_applied_before_anything_is_written() {
         let server = combined_server();
@@ -2079,6 +2265,66 @@ mod tests {
         assert_eq!(rows[0].number, Some(202));
         assert!(rows[0].has_catchup);
         assert_eq!(rows[0].epg_channel_id.as_deref(), Some("cnn.us"));
+    }
+
+    /// What the panel says about the subscription has to survive the fetch.
+    ///
+    /// `max_connections` arrives on the authentication response and nowhere else, and
+    /// `fetch` signs in on every Xtream refresh — but it discarded the answer, so the
+    /// column stayed NULL on every real install and every connection budget in the app
+    /// had nothing to enforce (R-108).
+    #[test]
+    fn the_subscriptions_connection_limit_survives_the_fetch() {
+        let server = TestServer::start(|_, req| {
+            let p = &req.path;
+            if p.contains("action=") {
+                Reply::ok("[]")
+            } else if p.contains("xmltv.php") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(
+                    r#"{"user_info":{"username":"u","status":"Active",
+                              "max_connections":"1","active_cons":0}}"#,
+                )
+            }
+        });
+
+        let mut opts = SyncOptions::new(
+            1,
+            SourceKind::Xtream {
+                base_url: server.url(""),
+                username: "u".into(),
+            },
+            1_705_320_000,
+        );
+        opts.password = Some("p".into());
+
+        let fetched = fetch(&http(), &opts, &no_rules(), |_| {}).unwrap();
+        let account = fetched.account().expect("an Xtream fetch signed in");
+        assert_eq!(account.max_connections, Some(1));
+        assert_eq!(account.active_connections, Some(0));
+    }
+
+    /// An M3U playlist has nothing to sign in to, which the caller must be able to tell
+    /// apart from a line that declared no limit — it stores one and not the other.
+    #[test]
+    fn an_m3u_fetch_has_no_account_to_report() {
+        let server = TestServer::always(Reply::ok(
+            "#EXTM3U
+#EXTINF:-1 tvg-id=\"a\",A
+http://example.com/a.ts
+",
+        ));
+        let opts = SyncOptions::new(
+            1,
+            SourceKind::M3u {
+                url: server.url(""),
+            },
+            1_705_320_000,
+        );
+
+        let fetched = fetch(&http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert!(fetched.account().is_none());
     }
 
     /// The gap a real import found: 28,693 series downloaded and thrown away.

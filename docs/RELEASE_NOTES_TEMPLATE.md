@@ -47,8 +47,10 @@ and expensive to get wrong once.
 > Google by default** — see [PRIVACY.md](docs/PRIVACY.md), which says exactly what goes
 > where and how to turn it off.
 >
-> Your provider's password is kept in Windows Credential Manager, never in the database
-> and never in a log.
+> Your provider's password is kept in Windows Credential Manager, and never appears in a
+> log. It is not yet safe to send anybody your `library.db`, though — Xtream puts the
+> credentials inside every stream URL and the library stores those as they come. See
+> [PRIVACY.md](docs/PRIVACY.md).
 
 ---
 

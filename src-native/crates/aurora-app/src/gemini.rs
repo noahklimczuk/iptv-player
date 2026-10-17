@@ -59,6 +59,19 @@ const HISTORY_FOR_PROMPT: usize = 40;
 /// Where the cached answer is kept, as JSON, with what it was generated from.
 const CACHE_KEY: &str = "gemini.cache";
 
+/// Whether these two features may talk to Google at all.
+const ENABLED_KEY: &str = "gemini.enabled";
+
+/// On, because a release ships a key and the rail is meant to work out of the box (D19).
+///
+/// The switch exists because that trade needs an exit. `docs/PRIVACY.md` told viewers to
+/// clear the key in Settings to stop their history being sent, and in an official build
+/// that did nothing: clearing removed *their* key and `resolve_key` fell back to the one
+/// compiled in, so `key_available` stayed true and the rail went on asking. There was no
+/// other switch anywhere in the host, the contract or the UI — the only way to stop it
+/// was to compile the app yourself.
+const DEFAULT_ENABLED: bool = true;
+
 #[derive(Debug, Serialize, serde::Deserialize)]
 struct Cache {
     generated_at: i64,
@@ -92,15 +105,39 @@ fn built_in() -> Option<&'static str> {
     BUILT_IN_KEY.map(str::trim).filter(|k| !k.is_empty())
 }
 
+/// Whether the viewer has left these features switched on.
+pub fn enabled(services: &Services) -> bool {
+    let db = services.db.lock();
+    aurora_db::repo::settings::get_or(&db, ENABLED_KEY, DEFAULT_ENABLED).unwrap_or(DEFAULT_ENABLED)
+}
+
 /// The key to use, preferring the viewer's own.
+///
+/// `None` when the feature is switched off, which is what makes the switch an actual
+/// off rather than a label: both callers that send anything — the recommender here and
+/// `assistant::send` — ask for the key and refuse without one, and both status commands
+/// report `has_key` from `key_available`, so one check turns off the rail, the assistant
+/// and everything either of them says about itself.
 pub(crate) fn resolve_key(services: &Services) -> Option<String> {
-    services
-        .credentials
-        .get(CREDENTIAL_KEY)
-        .ok()
-        .map(|k| k.trim().to_string())
+    let own = services.credentials.get(CREDENTIAL_KEY).ok();
+    key_from(enabled(services), own.as_deref(), built_in())
+}
+
+/// The whole decision, as a function of its three inputs.
+///
+/// Pure so that the one case that was wrong can be asserted: **switched off means no key
+/// even when the build ships one.** That was the bug — `docs/PRIVACY.md` told viewers to
+/// clear the key to stop their history being sent, and clearing it fell through to the
+/// compiled-in key, so an official build never stopped. The off state had nowhere to be
+/// represented, so it could not be tested either.
+fn key_from(enabled: bool, own: Option<&str>, built_in: Option<&str>) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    own.map(str::trim)
         .filter(|k| !k.is_empty())
-        .or_else(|| built_in().map(str::to_string))
+        .or(built_in)
+        .map(str::to_string)
 }
 
 pub fn key_available(services: &Services) -> bool {
@@ -291,6 +328,9 @@ pub struct GeminiStatus {
     pub key_is_persistent: bool,
     /// Whether there is any history to recommend from at all.
     pub has_history: bool,
+    /// Whether the viewer has these features switched on. Off means nothing is sent,
+    /// whatever key is available.
+    pub enabled: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -315,6 +355,7 @@ pub fn gemini_status(services: State<'_, Services>, args: StatusArgs) -> Result<
         key_is_built_in: services.credentials.get(CREDENTIAL_KEY).is_err() && built_in().is_some(),
         key_is_persistent: services.credentials.is_persistent(),
         has_history,
+        enabled: enabled(&services),
     })
 }
 
@@ -323,6 +364,31 @@ pub fn gemini_status(services: State<'_, Services>, args: StatusArgs) -> Result<
 pub struct SetKeyArgs {
     /// Empty clears it.
     pub key: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetEnabledArgs {
+    pub enabled: bool,
+}
+
+/// Turn the rail and the assistant off, or back on.
+///
+/// The one control that actually stops anything being sent in a build that ships a key.
+/// Clearing the key cannot do it — `resolve_key` falls back to the compiled-in one — and
+/// `docs/PRIVACY.md` said otherwise for as long as that was the only lever there was.
+///
+/// Switching off drops the cached answer too. It was generated from this viewer's
+/// history, and leaving it behind would mean the rail could still draw from it after
+/// they asked for it to stop.
+#[tauri::command(async)]
+pub fn gemini_set_enabled(services: State<'_, Services>, args: SetEnabledArgs) -> Result<()> {
+    let db = services.db.lock();
+    aurora_db::repo::settings::set(&db, ENABLED_KEY, &args.enabled)?;
+    if !args.enabled {
+        let _ = aurora_db::repo::settings::set(&db, CACHE_KEY, &String::new());
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -351,6 +417,35 @@ mod tests {
     fn a_blank_built_in_key_is_no_key() {
         // CI sets the variable unconditionally, so an unset secret arrives as "".
         assert!(BUILT_IN_KEY.is_none() || built_in().is_none() || !built_in().unwrap().is_empty());
+    }
+
+    /// Every combination of the three inputs, because one of them was wrong in the
+    /// only build anybody runs.
+    #[test]
+    fn switching_off_beats_a_key_compiled_into_the_build() {
+        // On: the viewer's own key wins, then the built-in one.
+        assert_eq!(key_from(true, Some("mine"), Some("baked")).as_deref(), Some("mine"));
+        assert_eq!(key_from(true, None, Some("baked")).as_deref(), Some("baked"));
+        assert_eq!(key_from(true, Some("  "), Some("baked")).as_deref(), Some("baked"));
+        assert_eq!(key_from(true, Some(" mine "), None).as_deref(), Some("mine"));
+        assert_eq!(key_from(true, None, None), None);
+
+        // Off: nothing, whatever is available. This is the row that did not exist.
+        assert_eq!(key_from(false, Some("mine"), Some("baked")), None);
+        assert_eq!(key_from(false, None, Some("baked")), None);
+        assert_eq!(key_from(false, Some("mine"), None), None);
+        assert_eq!(key_from(false, None, None), None);
+    }
+
+    /// What clearing the key does on its own, which is the thing the privacy note
+    /// described and the thing it is not.
+    #[test]
+    fn clearing_the_key_falls_back_to_the_built_in_one() {
+        // So "Remove key" is not an off switch in a release build, and the panel now
+        // says so rather than leaving the viewer to find out.
+        assert_eq!(key_from(true, None, Some("baked")).as_deref(), Some("baked"));
+        // ...and the switch is.
+        assert_eq!(key_from(false, None, Some("baked")), None);
     }
 
     #[test]

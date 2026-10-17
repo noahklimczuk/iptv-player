@@ -198,6 +198,36 @@ fn matches(rule: &Rule, re: Option<&Regex>, subject: &str) -> bool {
     }
 }
 
+/// Does `hay` begin with `needle`, ignoring case? Returns how many of `hay`'s bytes the
+/// match consumed.
+///
+/// Which is not always `needle.len()`, and that is the whole reason this exists.
+/// Lowercasing is not length-preserving: `U+0130` Turkish dotted capital I lowercases
+/// to `i` plus a combining dot, two bytes becoming three, and `U+023A` and `U+023E` do
+/// the same. A search that lowercases the haystack and then uses the resulting byte
+/// offsets to slice the *original* is off by one byte per such character before the
+/// match -- which panics when it lands mid-character and silently eats a byte when it
+/// does not (R-17).
+///
+/// Every character the haystack character lowercases to must be one the needle wants,
+/// so a match can never end part-way through a character and strip half of one.
+fn ci_match_len(hay: &str, needle: &str) -> Option<usize> {
+    let mut wanted = needle.chars().flat_map(char::to_lowercase).peekable();
+    let mut consumed = 0;
+    for (idx, hc) in hay.char_indices() {
+        if wanted.peek().is_none() {
+            return Some(consumed);
+        }
+        for lc in hc.to_lowercase() {
+            if wanted.next() != Some(lc) {
+                return None;
+            }
+        }
+        consumed = idx + hc.len_utf8();
+    }
+    wanted.peek().is_none().then_some(consumed)
+}
+
 fn replace_ci(haystack: &str, needle: &str, case_sensitive: bool) -> String {
     if case_sensitive {
         return haystack.replace(needle, "");
@@ -205,16 +235,21 @@ fn replace_ci(haystack: &str, needle: &str, case_sensitive: bool) -> String {
     if needle.is_empty() {
         return haystack.to_string();
     }
-    let lower_hay = haystack.to_lowercase();
-    let lower_needle = needle.to_lowercase();
     let mut out = String::with_capacity(haystack.len());
     let mut i = 0;
-    while let Some(pos) = lower_hay[i..].find(&lower_needle) {
-        let abs = i + pos;
-        out.push_str(&haystack[i..abs]);
-        i = abs + needle.len();
+    // Walks the original string a character at a time, so every index used to slice it
+    // is a character boundary by construction and no offset is ever carried across from
+    // a lowercased copy.
+    while i < haystack.len() {
+        match ci_match_len(&haystack[i..], needle) {
+            Some(len) if len > 0 => i += len,
+            _ => {
+                let c = haystack[i..].chars().next().expect("i is a char boundary");
+                out.push(c);
+                i += c.len_utf8();
+            }
+        }
     }
-    out.push_str(&haystack[i..]);
     out
 }
 
@@ -344,6 +379,78 @@ mod tests {
         let mut e = entry("HD Cinema Classics", None);
         rs.apply(&mut e);
         assert_eq!(e.name, "HD Cinema Classics");
+    }
+
+    /// The three real titles on the subscription this is measured against that used to
+    /// take the whole process down.
+    ///
+    /// `panic = "abort"` is set, so there was no error path: the viewer adds exactly the
+    /// kind of house-keeping rule the preset list encourages -- strip " - 2026" from
+    /// names -- and some hours later a background refresh kills the application while
+    /// nobody is looking at it, with nothing in the log after it (R-17).
+    #[test]
+    fn stripping_around_a_turkish_dotted_capital_i_neither_panics_nor_eats_a_byte() {
+        // U+0130 is 2 bytes and lowercases to 3, which is what shifted every later
+        // offset by one.
+        let real = "EN \u{2605} Bu \u{130}\u{15F}in \u{15E}akas\u{131} Yok - 2026";
+
+        assert_eq!(
+            replace_ci(real, "2026", false),
+            "EN \u{2605} Bu \u{130}\u{15F}in \u{15E}akas\u{131} Yok - ",
+            "this is the case that panicked"
+        );
+        assert_eq!(
+            replace_ci(real, " - ", false),
+            "EN \u{2605} Bu \u{130}\u{15F}in \u{15E}akas\u{131} Yok2026",
+            "and this is the case that ate the 2"
+        );
+        // A match that precedes the character was always right, and still is.
+        assert_eq!(
+            replace_ci("ETR \u{2605} \u{130}yilik", "etr", false),
+            " \u{2605} \u{130}yilik"
+        );
+
+        // The other two code points that lowercase longer than they are.
+        assert_eq!(
+            replace_ci("\u{23A}X\u{23E}Y", "x", false),
+            "\u{23A}\u{23E}Y"
+        );
+        assert_eq!(replace_ci("\u{23E}tail", "TAIL", false), "\u{23E}");
+    }
+
+    /// A rule is reached through `apply`, not by calling `replace_ci` directly, so the
+    /// path a refresh actually takes is covered too.
+    #[test]
+    fn a_strip_rule_survives_a_real_turkish_title() {
+        let mut rule = Rule::new(
+            Field::Name,
+            Match::Contains,
+            " - 2026",
+            Action::StripFromName,
+        );
+        rule.case_sensitive = false;
+        let rs = RuleSet::compile(&[rule]).unwrap();
+
+        let mut e = entry(
+            "EN \u{2605} Bu \u{130}\u{15F}in \u{15E}akas\u{131} Yok - 2026",
+            None,
+        );
+        rs.apply(&mut e);
+        assert_eq!(
+            e.name,
+            "EN \u{2605} Bu \u{130}\u{15F}in \u{15E}akas\u{131} Yok"
+        );
+    }
+
+    /// Matching is per whole character: a needle that would cover only part of what a
+    /// character lowercases to is not a match, so half of one is never stripped.
+    #[test]
+    fn a_match_never_ends_part_way_through_a_character() {
+        // U+0130 lowercases to 'i' plus a combining dot. Asking for "i" must not take
+        // the dotted capital and leave the dot behind.
+        assert_eq!(replace_ci("\u{130}", "i", false), "\u{130}");
+        // A plain lowercase 'i' is still matched.
+        assert_eq!(replace_ci("mix", "i", false), "mx");
     }
 
     #[test]

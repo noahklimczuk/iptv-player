@@ -51,6 +51,56 @@ test('recordings library groups what is watchable, what is coming, and what fail
   await page.screenshot({ path: `${SHOTS}/20-recordings.png` });
 });
 
+/**
+ * Pressing Play on a recording plays it.
+ *
+ * The button existed, read "Play", looked enabled and did nothing: `onPlay` was an
+ * optional prop the only mount did not supply, and there was no command it could have
+ * been given -- `MediaKind` could not name a recording, so the DVR wrote files that
+ * could only be opened in Explorer (R-118). `onPlay?.()` is valid TypeScript, so
+ * neither the type checker nor a sweep for handler-less buttons could see it, and no
+ * journey pressed it.
+ */
+test('pressing Play on a recording opens the player on it', async ({ page }) => {
+  await page.goto('/#/recordings');
+  await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
+
+  const play = page.getByRole('button', { name: /^Play$/ }).first();
+  await expect(play).toBeVisible();
+
+  // What the Recorded tab can offer, asked of the transport rather than read off the
+  // screen, so the assertion does not depend on row order or on how a title is drawn.
+  const playable = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<
+        { id: number; title: string; state: string; filePath: string | null }[]>;
+    };
+    const rows = await w.__auroraInvoke('dvr.list', {});
+    return rows.filter((r) => r.state === 'completed' && r.filePath)
+      .map((r) => ({ id: r.id, title: r.title }));
+  });
+  expect(playable.length).toBeGreaterThan(0);
+
+  await play.click();
+
+  // The player is open, on one of those recordings, and knows what kind of thing it is.
+  const state = await page.evaluate(async () => {
+    const w = window as unknown as {
+      __auroraInvoke: (c: string, a?: unknown) => Promise<{ itemKind: string | null;
+        itemId: number | null; title: string | null; status: string }>;
+    };
+    return w.__auroraInvoke('player.state');
+  });
+  expect(state.itemKind).toBe('recording');
+  expect(state.status).toBe('playing');
+  expect(playable.map((r) => r.id)).toContain(state.itemId);
+  expect(state.title).toBe(playable.find((r) => r.id === state.itemId)?.title);
+  await expect(page.getByRole('slider', { name: 'Seek' })).toBeVisible();
+
+  await settle(page);
+  await page.screenshot({ path: `${SHOTS}/21-recording-playing.png` });
+});
+
 test('deleting a recording asks first, and backing out keeps the file', async ({ page }) => {
   await page.goto('/#/recordings');
   await expect(page.getByRole('heading', { name: 'Recordings' })).toBeVisible();
@@ -210,6 +260,7 @@ test('a scheduled airing from the guide appears in the recordings page', async (
 
 test('Remind me toggles, and Record series becomes the undo action', async ({ page }) => {
   await selectUpcoming(page);
+  const title = await page.locator('h2').first().innerText();
 
   const remind = page.getByRole('button', { name: 'Remind me' });
   await remind.click();
@@ -223,5 +274,14 @@ test('Remind me toggles, and Record series becomes the undo action', async ({ pa
   // The new rule is on the rules screen.
   await page.goto('/#/recordings');
   await page.getByRole('tab', { name: /Series rules/ }).click();
-  await expect(page.getByText('New episodes only').first()).toBeVisible();
+  const row = page.getByTestId('rule-row').filter({ hasText: title });
+  await expect(row).toHaveCount(1);
+
+  // And it is *not* restricted to new episodes. This used to assert the opposite, by
+  // name: `newOnly` was hardcoded `true`, which `SeriesRule::matches` turns into a
+  // rule that can never match a programme on a guide with no `<new/>` or `<premiere>`
+  // markers -- 0 of 789,764 on the subscription this is measured against. The label
+  // was the one visible trace of the flag, and the test checked for it as the expected
+  // outcome (R-133).
+  await expect(row).not.toContainText('New episodes only');
 });

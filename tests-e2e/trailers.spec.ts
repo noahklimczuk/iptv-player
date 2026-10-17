@@ -23,7 +23,7 @@ async function settle(page: Page, ms = 700) {
 /** The embed address, so the assertions are about YouTube and not about any iframe. */
 const EMBED = /^https:\/\/www\.youtube-nocookie\.com\/embed\//;
 
-test('hovering a show plays its trailer over the poster', async ({ page }) => {
+test('hovering a show plays its trailer over the poster @motion', async ({ page }) => {
   await page.goto('/#/series');
   await expect(page.getByRole('heading', { name: 'Series' })).toBeVisible();
   const cards = page.getByTestId('catalog-card');
@@ -93,7 +93,7 @@ test('the detail modal plays a trailer on request, with sound and controls', asy
   await expect(dialog.getByRole('button', { name: /^(Play|Resume)/ })).toBeVisible();
 });
 
-test('turning animations off stops trailers starting by themselves', async ({ page }) => {
+test('turning animations off stops trailers starting by themselves @motion', async ({ page }) => {
   await page.goto('/#/settings');
   await settle(page, 400);
   // The same switch already governed hover previews; it now governs something real.
@@ -106,4 +106,13 @@ test('turning animations off stops trailers starting by themselves', async ({ pa
   await card.hover();
   await page.waitForTimeout(1200);
   await expect(card.getByTestId('trailer-frame')).toHaveCount(0);
+
+  // The card still has to *work*. `toHaveCount(0)` cannot tell "the trailer was
+  // correctly suppressed" from "nothing happened at all", and for a long time it was
+  // the second: `enter()` returned before `setExpanded(true)` when animations were off,
+  // so this test read as proof about trailers while the card had in fact stopped
+  // responding to hover entirely -- no Play, no My List, no thumbs-up, no More info, for
+  // every viewer with reduced motion enabled in Windows (R-115). This is the positive
+  // assertion that tells the two apart.
+  await expect(card.getByRole('button', { name: /^Play / })).toBeVisible();
 });

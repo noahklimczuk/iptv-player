@@ -37,6 +37,26 @@ export function GeminiPanel() {
     }
   }, [key, reload]);
 
+  /**
+   * The switch that actually stops anything being sent.
+   *
+   * Clearing the key cannot: an official build is compiled with one, so the host falls
+   * back to it and the rail carries on. `docs/PRIVACY.md` told people to clear the key
+   * for exactly this purpose, which is why this exists.
+   */
+  const setEnabled = useCallback(async (next: boolean) => {
+    setBusy(true);
+    setResult(null);
+    try {
+      await invoke('gemini.setEnabled', { enabled: next });
+      reload();
+    } catch (e) {
+      report(next ? 'Could not turn suggestions on' : 'Could not turn suggestions off')(e);
+    } finally {
+      setBusy(false);
+    }
+  }, [reload]);
+
   /** Ask for a fresh set, and say plainly what came back. */
   const test = useCallback(async () => {
     setBusy(true);
@@ -67,7 +87,38 @@ export function GeminiPanel() {
         liked it — nothing about your provider, your sign-in or the rest of your library.
       </div>
 
-      {status && !status.hasKey && (
+      {status && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+            padding: 'var(--sp-3)', borderRadius: 'var(--r-md)',
+            background: 'var(--surface)', border: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 650 }}>Suggestions and the assistant</div>
+            <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
+              {status.enabled
+                ? 'On. Your watch history is sent to Google when the home screen builds the rail.'
+                : 'Off. Nothing is sent to Google, including by the key built into this build.'}
+            </div>
+          </div>
+          <Button
+            size="sm"
+            role="switch"
+            aria-checked={status.enabled}
+            aria-label="Suggestions and the assistant"
+            variant={status.enabled ? 'primary' : 'secondary'}
+            disabled={busy}
+            data-testid="gemini-enabled"
+            onClick={() => void setEnabled(!status.enabled)}
+          >
+            {status.enabled ? 'On' : 'Off'}
+          </Button>
+        </div>
+      )}
+
+      {status && status.enabled && !status.hasKey && (
         <div style={{ color: 'var(--text-muted)', fontSize: 'var(--fs-sm)' }}>
           No key yet. One is free from{' '}
           <span style={{ color: 'var(--accent)' }}>aistudio.google.com/apikey</span>.
@@ -77,7 +128,8 @@ export function GeminiPanel() {
       {status?.hasKey && status.keyIsBuiltIn && (
         <div style={{ color: 'var(--text-muted)', fontSize: 'var(--fs-sm)' }}>
           Using the key built into this build. Entering your own replaces it, and carries
-          your own rate limit rather than sharing one.
+          your own rate limit rather than sharing one. Removing a key you entered falls
+          back to this one — the switch above is what stops anything being sent.
         </div>
       )}
 

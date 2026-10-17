@@ -1,12 +1,15 @@
 /**
- * Expanded detail view (README §8.4): backdrop with scrim, resume CTA, match %,
- * metadata pills, cast, and tabs for episodes / more like this / details.
+ * Expanded detail view (README §8.4): backdrop with scrim, resume CTA, metadata pills,
+ * cast, and tabs for episodes / more like this / details.
+ *
+ * No match % -- README §8.4 specifies one and nothing computes it, so what used to be
+ * drawn here came from the browser fixtures alone (R-99).
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CatalogItem, Episode, EpisodeProgress, SeriesPrefs } from '@shared/ipc';
 import { useCommand } from '@/hooks/useCommand';
-import { getProgress, invoke } from '@/ipc';
+import { invoke } from '@/ipc';
 import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { report } from '@/lib/errors';
@@ -127,7 +130,31 @@ function Hero({
 }: {
   item: CatalogItem; onClose: () => void; onPlay: (i: CatalogItem) => void; watch: Watch;
 }) {
-  const prog = item.kind === 'movie' ? getProgress('movie', item.id) : null;
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  /*
+   * A film's resume position, from the host.
+   *
+   * This used to call `getProgress` -- which is not a command and not a transport. It
+   * is declared only in `ipc/mock.ts` and reached `@/ipc` through a star export, so on
+   * Windows it read a `Map` nothing writes. The map is not empty, though: the mock
+   * seeds it from `fixtures.seedProgress` at module-evaluation time, and `ipc/index.ts`
+   * imports the mock statically in every build. So whichever four real films happened
+   * to hold rowids 4, 12, 28 and 53 showed a progress bar, a "55:25 of 2:43:00" read
+   * off a fixture film's runtime and a "Resume from ..." button for a title nobody had
+   * opened -- and every other film showed no resume at all, however much of it had
+   * actually been watched. Pressing the button was always right, because that goes
+   * through the real `progress.get`, so the label and the action disagreed in both
+   * directions (R-98).
+   *
+   * `watch.version` is in the deps so the bar reflects a position saved since the modal
+   * opened, which is what the series label beside it already does.
+   */
+  const { data: prog } = useCommand(
+    'progress.get',
+    { profileId, kind: 'movie' as const, id: item.id },
+    [profileId, item.id, watch.version],
+    item.kind === 'movie',
+  );
   const pct = prog ? progressPct(prog.positionSecs, prog.durationSecs) : 0;
   /*
    * What Play means for a show, said on the button before it is pressed.
@@ -334,11 +361,13 @@ function Body({
               flexWrap: 'wrap', marginBottom: 'var(--sp-3)', fontSize: 'var(--fs-sm)',
             }}
           >
-            {item.match !== undefined && (
-              <span style={{ color: 'var(--success)', fontWeight: 700 }}>
-                {item.match}% match
-              </span>
-            )}
+            {/* No "% match" here any more. It was a documented feature that existed
+                only in the mock: `match` was assigned in `fixtures.ts` and nowhere
+                else, `MovieRow`/`SeriesRow` have no such field, so serde could not
+                produce one and the branch was dead in every real build (R-99). The
+                recommender does build a profile from viewing history, so the number is
+                derivable -- but a green screenshot of a figure the host cannot compute
+                is worse than no figure, so the claim goes until something computes it. */}
             {item.year && <span style={{ color: 'var(--text-muted)' }}>{item.year}</span>}
             {item.certification && <Badge tone="outline">{item.certification}</Badge>}
             {!isSeries && item.runtimeMins && (
@@ -358,7 +387,12 @@ function Body({
               </span>
             )}
             {item.quality && <Badge tone={item.quality === '4K' ? 'accent' : 'neutral'}>{item.quality}</Badge>}
-            <Badge tone="neutral">CC</Badge>
+            {/* The "CC" badge was here, unconditional. Nothing in the schema, the
+                playlist parse or enrichment records whether a title has subtitles, so
+                it asserted captions on all 27,494 films and every show without ever
+                being able to know (R-100). `get_vod_info` does return a subtitle list
+                per title, so this is answerable -- when it is asked, the badge can come
+                back keyed on the answer. */}
           </div>
           <p style={{ margin: 0, color: 'var(--text)', lineHeight: 1.6 }}>{item.overview}</p>
           <Sources item={item} onPlay={onPlay} />
