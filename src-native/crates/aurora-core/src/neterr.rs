@@ -324,7 +324,27 @@ impl NetFailure {
         if retryable {
             actions.push(ErrorAction::Retry);
         }
-        actions.push(ErrorAction::TryAnotherSource);
+        // Only where another source could exist.
+        //
+        // This was pushed unconditionally, for every code -- four lines above a comment
+        // reasoning carefully that a `BadRequest` must not offer `ReportBroken` "because
+        // the source is not what is wrong", which is equally an argument against
+        // offering to try a different one. And this classifier is shared, which is the
+        // point of it: the assistant's rejected Gemini call comes through here, as does
+        // a provider check in the setup wizard where no stream exists at all. Both
+        // presented a button whose only honest meaning is "this channel has several
+        // URLs; try the next" (R-13).
+        //
+        // What is left out: a rejected request, which no other source will accept any
+        // differently; credentials the provider refused, which are the same credentials
+        // on every source; and a line at its connection limit, which is a property of
+        // the subscription rather than of the address.
+        if !matches!(
+            code,
+            ErrorCode::BadRequest | ErrorCode::Unauthorized | ErrorCode::ConnectionLimit
+        ) {
+            actions.push(ErrorAction::TryAnotherSource);
+        }
         if matches!(code, ErrorCode::Unauthorized | ErrorCode::ConnectionLimit) {
             actions.push(ErrorAction::OpenSettings);
         }
@@ -355,6 +375,43 @@ impl NetFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "Try another source" is offered only where another source could help.
+    ///
+    /// It was pushed for every code, including the ones where it cannot mean anything:
+    /// a rejected request is rejected the same way everywhere, refused credentials are
+    /// the same credentials on every URL, and a connection limit belongs to the
+    /// subscription rather than to the address. This classifier is shared, so those
+    /// buttons appeared on the assistant's failures and in the setup wizard, where no
+    /// stream exists at all (R-13).
+    #[test]
+    fn another_source_is_offered_only_where_there_could_be_one() {
+        let has = |raw: &str| {
+            NetFailure::classify(raw)
+                .actions
+                .contains(&ErrorAction::TryAnotherSource)
+        };
+
+        // A channel that would not play: another URL for it is exactly the answer.
+        assert!(has("HTTP 404"), "a missing stream should offer another source");
+        assert!(has("connection refused"));
+        assert!(has("connection timed out"));
+        assert!(has("dns"));
+
+        // And the three where it is noise.
+        assert!(!has("HTTP 400"), "a rejected request has no other source");
+        assert!(!has("HTTP 401"), "refused credentials are the same everywhere");
+        assert!(
+            !has("HTTP 555"),
+            "a connection limit is the line, not the address"
+        );
+
+        // The ones that are left still carry something to do.
+        let rejected = NetFailure::classify("HTTP 400");
+        assert!(rejected.actions.contains(&ErrorAction::OpenSettings), "{rejected:?}");
+        let unauthorized = NetFailure::classify("HTTP 401");
+        assert!(unauthorized.actions.contains(&ErrorAction::OpenSettings));
+    }
 
     /// HTTP 555 with an empty body, which is how this subscription says "that is your
     /// second stream".

@@ -27,10 +27,21 @@ fn re_sxxexx() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)\bs(\d{1,3})[\s\._\-]?e(\d{1,4})\b").unwrap())
 }
 
+/// `1x02`, and not `4x4`.
+///
+/// The guard was `\b(\d{1,3})x(\d{1,4})\b`, which is careful enough that `1920x1080`
+/// does not match -- but `4x4` does, so a film with that in its name was classified as
+/// season 4 episode 4 and filed under Series (R-07).
+///
+/// Two things separate a real marker from a dimension or a product name, and the old
+/// pattern had neither. An episode number in this form is written with at least two
+/// digits (`1x02`, not `1x2`), which excludes `4x4`, `3x3` and `2x2`. And a season
+/// number is at most two digits: no television series has a hundred of them, while
+/// `300x450` -- a poster size, which this *also* read as season 300 episode 450 -- has
+/// three. `1920x1080` was already excluded by the word boundary and still is.
 fn re_nxnn() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    // 1x02
-    R.get_or_init(|| Regex::new(r"(?i)\b(\d{1,3})x(\d{1,4})\b").unwrap())
+    R.get_or_init(|| Regex::new(r"(?i)\b(\d{1,2})x(\d{2,4})\b").unwrap())
 }
 
 fn re_worded() -> &'static Regex {
@@ -143,17 +154,35 @@ pub fn group_series(entries: &[PlaylistEntry]) -> (Vec<SeriesGroup>, Vec<usize>)
             .clone()
             .or_else(|| title::detect_quality(&entry.name));
         if title::quality_rank(found.as_deref()) > title::quality_rank(slot.quality.as_deref()) {
-            slot.quality = found;
+            slot.quality = found.clone();
         }
 
         let season = slot.seasons.entry(marker.season).or_default();
-        if !season.iter().any(|e| e.number == marker.episode) {
-            season.push(EpisodeRef {
+        // The same episode twice keeps the better stream, not the earlier one.
+        //
+        // A provider listing `S01E01` in both 1080p and SD -- in either order -- decided
+        // which one played by file order, and the show's advertised quality could be one
+        // no episode actually played at, because `slot.quality` tracks the best seen
+        // across the whole show while the episode kept whichever URL arrived first
+        // (R-06).
+        match season.iter_mut().find(|e| e.number == marker.episode) {
+            Some(existing) => {
+                let better = title::quality_rank(found.as_deref())
+                    > title::quality_rank(existing.quality.as_deref());
+                if better {
+                    existing.title = ep_title;
+                    existing.url = entry.url.clone();
+                    existing.logo = entry.logo.clone();
+                    existing.quality = found;
+                }
+            }
+            None => season.push(EpisodeRef {
                 number: marker.episode,
                 title: ep_title,
                 url: entry.url.clone(),
                 logo: entry.logo.clone(),
-            });
+                quality: found,
+            }),
         }
     }
 
@@ -184,6 +213,66 @@ mod tests {
 
     fn ep(name: &str, url: &str) -> PlaylistEntry {
         PlaylistEntry::new(name, url)
+    }
+
+    /// `4x4` is not season four episode four.
+    ///
+    /// The guard was careful enough that `1920x1080` did not match, but `4x4` did, so a
+    /// film with that in its name was classified as an episode and filed under Series
+    /// (R-07). An episode in this form is written with at least two digits.
+    #[test]
+    fn a_product_name_with_an_x_in_it_is_not_an_episode() {
+        for name in [
+            "4x4",
+            "4x4 Evolution",
+            "The 4x4 Diaries",
+            "3x3 Basketball",
+            "Mazda CX 5 2x2",
+            // Already excluded, and still are.
+            "Something 1920x1080",
+            "Poster 300x450",
+        ] {
+            assert!(
+                parse_episode_marker(name).is_none(),
+                "{name:?} was read as an episode"
+            );
+        }
+
+        // And the real form still works, including three-digit episodes.
+        assert_eq!(parse_episode_marker("Show 1x02").unwrap().episode, 2);
+        assert_eq!(parse_episode_marker("Show 12x134").unwrap().episode, 134);
+        assert_eq!(parse_episode_marker("Show 99x999").unwrap().season, 99);
+        assert_eq!(parse_episode_marker("Show 1x02").unwrap().season, 1);
+    }
+
+    /// The same episode twice keeps the better stream, whichever order it arrived in.
+    ///
+    /// `group_series` tracked the best quality across a show but kept whichever URL came
+    /// first for a given `SxxEyy`, so the stream was decided by file order -- and the
+    /// show could advertise a quality no episode actually played at (R-06).
+    #[test]
+    fn a_duplicated_episode_keeps_the_better_stream() {
+        for (first, second, wanted) in [
+            // SD first, then FHD.
+            ("Show S01E01 SD", "Show S01E01 1080p", "http://host/second"),
+            // And the other way round, which is the half that was accidentally right.
+            ("Show S01E01 1080p", "Show S01E01 SD", "http://host/first"),
+        ] {
+            let (groups, _consumed) = group_series(&[
+                ep(first, "http://host/first"),
+                ep(second, "http://host/second"),
+            ]);
+            assert_eq!(groups.len(), 1, "{groups:?}");
+            let season = &groups[0].seasons[0];
+            assert_eq!(season.episodes.len(), 1, "the duplicate was kept as a second row");
+            assert_eq!(
+                season.episodes[0].url, wanted,
+                "from {first:?} then {second:?}"
+            );
+            // And what the show claims is what that episode can play.
+            assert_eq!(groups[0].quality.as_deref(), Some("FHD"));
+            assert_eq!(season.episodes[0].quality.as_deref(), Some("FHD"));
+        }
     }
 
     #[test]

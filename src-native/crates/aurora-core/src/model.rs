@@ -204,4 +204,11 @@ pub struct EpisodeRef {
     pub title: Option<String>,
     pub url: String,
     pub logo: Option<String>,
+    /// The quality of *this* stream, which is how a duplicate is resolved.
+    ///
+    /// `SeriesGroup::quality` is the best seen across the whole show, so it cannot
+    /// answer "is this copy better than the one already here" -- and without that, the
+    /// same `SxxEyy` listed twice kept whichever URL came first and the show could
+    /// advertise a quality no episode played at (R-06).
+    pub quality: Option<String>,
 }
