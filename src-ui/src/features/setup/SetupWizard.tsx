@@ -119,14 +119,18 @@ export function SetupWizard({
     } finally {
       setChecking(false);
     }
-  }, [draft]);
+  }, [draft, content]);
 
   const runImport = useCallback(async () => {
     setStep('importing');
     setError(null);
     try {
       const { id } = await invoke('providers.save', { draft });
-      setReport(await invoke('providers.refresh', { providerId: id }));
+      // `content` is what the previous step asked about. It used to be read by nothing
+      // but the switches' own rendering -- `runImport` did not even list it as a
+      // dependency -- so unchecking Movies and Series still imported every film and
+      // show the panel carries (R-120).
+      setReport(await invoke('providers.refresh', { providerId: id, content }));
       setStep('done');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -639,10 +643,20 @@ function DoneStep({
     ['Series', report.series],
     ['Episodes', report.episodes],
   ];
-  const coverage =
-    report.epgMatched + report.epgUnmatched.length > 0
-      ? Math.round((report.epgMatched / (report.epgMatched + report.epgUnmatched.length)) * 100)
-      : 0;
+  /*
+   * Coverage over every channel, not over the ones whose names fitted in the report.
+   *
+   * `epgUnmatched` is capped at 200 by the host -- sensibly, nobody wants four thousand
+   * channel names over the IPC bridge -- and this used to divide by that list's
+   * *length*. Past 200 unmatched the denominator stopped growing while the numerator
+   * kept going, so the figure drifted towards 100% in the flattering direction. On this
+   * subscription, where roughly 2,480 of 6,699 channels match, it reported
+   * 2480 / (2480 + 200) = 93% where the truth is 37% -- and then called four thousand
+   * channels "the rest" of 7% (R-121).
+   */
+  const unmatched = report.epgUnmatchedTotal;
+  const known = report.epgMatched + unmatched;
+  const coverage = known > 0 ? Math.round((report.epgMatched / known) * 100) : 0;
 
   return (
     <div style={card}>
@@ -676,8 +690,9 @@ function DoneStep({
       </div>
 
       <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', marginBottom: 'var(--sp-4)' }}>
-        Guide data matched {report.epgMatched.toLocaleString()} channels ({coverage}%).
-        {report.epgUnmatched.length > 0 && ' The rest can be mapped by hand in Settings.'}
+        Guide data matched {report.epgMatched.toLocaleString()} of{' '}
+        {known.toLocaleString()} channels ({coverage}%).
+        {unmatched > 0 && ` The other ${unmatched.toLocaleString()} can be mapped by hand in Settings.`}
         {report.channelsMissing > 0 &&
           ` ${report.channelsMissing} channels your provider no longer lists were kept and flagged.`}
       </div>

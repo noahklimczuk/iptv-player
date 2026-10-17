@@ -113,9 +113,13 @@ orphan in Credential Manager every time the suite ran. Set it for one-off script
 
 Two reasons, and both matter.
 
-`panic = "abort"` is set for release. A panic that unwinds harmlessly in a debug build
-takes the whole application down in the build people actually run, so a debug run can
-pass while the shipped binary dies.
+A release build optimises, inlines and strips, and that is the code people run. It used
+to differ in a sharper way than that: `panic = "abort"` was set for release, so a panic
+that a debug build caught and logged took the whole application down in the shipped one,
+and a debug run could pass while the real binary died. That is gone -- the release
+profile unwinds now, so `supervise.rs`'s `catch_unwind` actually catches, which is what
+its header always claimed (R-72). `tests/contract.rs` asserts `abort` does not come
+back.
 
 And only a release build writes a log this harness can read. `init_logging` gives a
 debug build the console it already has — but `tauri-driver` launches the app itself and

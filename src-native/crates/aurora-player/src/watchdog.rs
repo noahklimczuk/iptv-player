@@ -113,18 +113,43 @@ impl Watchdog {
         self.last_position = 0.0;
     }
 
+    /// Start the clock again from here, without forgetting where the playhead is.
+    ///
+    /// For a seek. The viewer has just asked for a part of the stream that may not be
+    /// buffered, so the time it takes to deliver the first frame of it should be
+    /// measured from the seek rather than counted against a window that was already
+    /// half gone (R-70).
+    pub fn seeked(&mut self, position_secs: f64) {
+        self.mark = None;
+        self.last_position = position_secs;
+    }
+
     /// Show the watchdog where things stand. `now_secs` is any monotonic clock.
     ///
     /// Returns a failure at most once per window: the verdict restarts the clock, so a
     /// caller that keeps polling a dead stream gets one answer now and the next only
     /// after another full window.
     pub fn observe(&mut self, now_secs: f64, phase: Phase, position_secs: f64) -> Verdict {
-        // Progress means the playhead moved. `Starting` has no position to move yet —
-        // arriving at `Running` *is* its progress — so there only the clock counts.
-        let advanced = position_secs > self.last_position + PROGRESS_EPSILON_SECS;
-        if position_secs > self.last_position {
-            self.last_position = position_secs;
-        }
+        // Progress means the playhead *moved*, in either direction. `Starting` has no
+        // position to move yet — arriving at `Running` *is* its progress — so there only
+        // the clock counts.
+        //
+        // This used to be a high-water mark: `last_position` only ever increased, so
+        // after a backwards seek nothing counted as progress until playback climbed back
+        // past where it had been. A rewind of more than `stall_timeout` worth of content
+        // — twelve seconds by default — therefore produced a `Stalled` verdict twelve
+        // seconds later, `pump` turned it into a failure, and `playback::tick` rolled
+        // over to another source. Which is README §7.6's headline feature, pause and
+        // rewind live TV, and ordinary scrubbing in a film. It was not obvious only
+        // because a nudge back of a few seconds recovers before the timer expires, so
+        // only a real rewind triggered it (R-70).
+        //
+        // A playhead that jumped backwards is a stream that is still answering. What the
+        // watchdog is for is the opposite: a provider that accepts the connection,
+        // answers 200, and then sends nothing at all.
+        let moved = (position_secs - self.last_position).abs() > PROGRESS_EPSILON_SECS;
+        let advanced = moved;
+        self.last_position = position_secs;
 
         // Nothing is being attempted, so nothing can be late. This also covers the
         // already-failed case: a stream that has reported an error does not need a
@@ -186,6 +211,61 @@ mod tests {
         assert_eq!(w.observe(0.0, Phase::Running, 100.0), Verdict::Healthy);
         assert_eq!(w.observe(5.0, Phase::Running, 100.0), Verdict::Healthy);
         assert_eq!(w.observe(12.0, Phase::Running, 100.0), Verdict::Stalled);
+    }
+
+    /// A thirty-minute live rewind is not a stall.
+    ///
+    /// `last_position` was a high-water mark, so after a backwards seek nothing counted
+    /// as progress until playback climbed back past where it had been -- and a rewind of
+    /// more than the stall window produced a `Stalled` verdict that long afterwards,
+    /// which `pump` turned into a failure and `playback::tick` turned into a rollover to
+    /// another source. That is README §7.6's headline feature killing itself twelve
+    /// seconds after it is used (R-70).
+    #[test]
+    fn a_long_rewind_is_not_a_stall() {
+        let mut w = Watchdog::new(20.0, 12.0);
+        // Half an hour into a live stream, playing normally.
+        assert_eq!(w.observe(0.0, Phase::Running, 1800.0), Verdict::Healthy);
+        assert_eq!(w.observe(2.0, Phase::Running, 1802.0), Verdict::Healthy);
+
+        // Rewind to the start of the buffer, then play on from there.
+        assert_eq!(w.observe(4.0, Phase::Running, 0.0), Verdict::Healthy);
+        for t in 5..40 {
+            let pos = (t - 4) as f64;
+            assert_eq!(
+                w.observe(t as f64, Phase::Running, pos),
+                Verdict::Healthy,
+                "t={t}s pos={pos}s was called a stall"
+            );
+        }
+    }
+
+    /// And a rewind into an unbuffered part still gets a full window before it is judged,
+    /// rather than whatever was left of the one already running.
+    #[test]
+    fn a_seek_restarts_the_stall_clock() {
+        let mut w = Watchdog::new(20.0, 12.0);
+        assert_eq!(w.observe(0.0, Phase::Running, 100.0), Verdict::Healthy);
+        // Eleven seconds of no progress: one more second would be a stall.
+        assert_eq!(w.observe(11.0, Phase::Running, 100.0), Verdict::Healthy);
+
+        w.seeked(40.0);
+
+        // The clock starts from the seek, so the old window does not expire under it.
+        assert_eq!(w.observe(12.0, Phase::Running, 40.0), Verdict::Healthy);
+        assert_eq!(w.observe(23.0, Phase::Running, 40.0), Verdict::Healthy);
+        // But a stream that genuinely sends nothing after the seek is still caught.
+        assert_eq!(w.observe(24.1, Phase::Running, 40.0), Verdict::Stalled);
+    }
+
+    /// A playhead that goes backwards and then stops really is a stall.
+    #[test]
+    fn a_rewind_that_leads_nowhere_is_still_caught() {
+        let mut w = Watchdog::new(20.0, 12.0);
+        assert_eq!(w.observe(0.0, Phase::Running, 1800.0), Verdict::Healthy);
+        assert_eq!(w.observe(1.0, Phase::Running, 0.0), Verdict::Healthy);
+        assert_eq!(w.observe(5.0, Phase::Running, 0.0), Verdict::Healthy);
+        assert_eq!(w.observe(13.1, Phase::Running, 0.0), Verdict::Stalled);
     }
 
     /// Rebuffering is normal and recovery is normal, so neither is reported.
