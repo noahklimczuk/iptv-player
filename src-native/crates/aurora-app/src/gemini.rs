@@ -75,10 +75,51 @@ const DEFAULT_ENABLED: bool = true;
 #[derive(Debug, Serialize, serde::Deserialize)]
 struct Cache {
     generated_at: i64,
-    /// How many things had been watched when this was asked. A changed count is a changed
-    /// viewer, and worth asking again for.
-    history_len: usize,
+    /// What had been watched when this was asked. A changed viewer is worth asking again
+    /// for, and this is how the cache notices.
+    ///
+    /// It was `history_len: usize`, taken from the *prompt* rather than from the
+    /// history: `watched_for_prompt` truncates to `HISTORY_FOR_PROMPT`, so the number
+    /// was `min(history, 40)` and therefore **40 for ever** once a viewer had watched
+    /// forty things. From then on `c.history_len == watched.len()` was always true and
+    /// the only things that refreshed the rail were the six-hour clock and an explicit
+    /// refresh -- while `FRESH_FOR_SECS`' own comment promised "finishing something gets
+    /// a new list without waiting for the clock" (R-84).
+    ///
+    /// A fingerprint rather than a count, so it also catches *re*-watching: finishing
+    /// something a second time changes the fractions without changing how many rows
+    /// there are, and a count can never see that.
+    ///
+    /// An older cache has `history_len` and no `taste`, so it fails to deserialise and
+    /// is simply a miss -- one extra model call, once, on the first launch after an
+    /// upgrade.
+    taste: String,
     suggestions: Vec<CachedSuggestion>,
+}
+
+/// A short, stable summary of what the viewer has watched.
+///
+/// Deliberately not a cryptographic hash: this decides whether to re-ask a model, and
+/// the cost of a collision is a stale rail for up to six hours. FNV-1a over the fields
+/// the prompt is built from, plus the untruncated history length so that watching a
+/// forty-first thing is visible even if the top forty have not changed.
+fn taste_fingerprint(history_len: usize, watched: &[WatchedTitle]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for b in bytes {
+            hash ^= u64::from(*b);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+    };
+    eat(&history_len.to_le_bytes());
+    for w in watched {
+        eat(w.title.as_bytes());
+        // Rounded to a percent: the fraction moves constantly while something plays,
+        // and re-asking the model on every heartbeat is the opposite of caching.
+        eat(&((w.watched * 100.0).round() as i64).to_le_bytes());
+        eat(&[u8::from(w.liked)]);
+    }
+    format!("{hash:016x}")
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -170,13 +211,24 @@ fn watched_for_prompt(db: &aurora_db::rusqlite::Connection, profile_id: i64) -> 
         .into_iter()
         .take(HISTORY_FOR_PROMPT)
         .map(|w| WatchedTitle {
-            title: w.title,
+            title: prompt_title(&w.title),
             year: w.year,
             genres: w.genres,
             watched: w.fraction,
             liked: w.favourite,
         })
         .collect()
+}
+
+/// A watched title as the model should see it: without the provider's language tag.
+///
+/// The stored title keeps the tag, so the model was being told the viewer watched "EN
+/// Inception" and "AR الأرجنتين Vs Spain". Resolution afterwards is fine -- it goes
+/// through `match_key`, which strips it -- so this costs prompt quality rather than
+/// correctness, and it is the same one-call fix `library::shown` and `enrich.rs` already
+/// use (R-84).
+fn prompt_title(stored: &str) -> String {
+    aurora_core::lang::strip_language_prefix(stored).unwrap_or_else(|| stored.to_string())
 }
 
 /// Titles the model should not suggest: everything they have already watched.
@@ -263,21 +315,27 @@ pub fn gemini_recommendations(services: State<'_, Services>, args: AiArgs) -> Re
         )
     })?;
 
-    let (watched, cached) = {
+    let (watched, history_len, cached) = {
         let db = services.db.lock();
         let watched = watched_for_prompt(&db, args.profile_id);
+        // The real length, not the prompt's: the truncation is what made the old key
+        // stop changing.
+        let history_len = store::history(&db, args.profile_id)
+            .map(|h| h.len())
+            .unwrap_or(watched.len());
         let cached: Option<Cache> = aurora_db::repo::settings::get(&db, CACHE_KEY)
             .ok()
             .flatten()
             .and_then(|raw: String| serde_json::from_str(&raw).ok());
-        (watched, cached)
+        (watched, history_len, cached)
     };
 
     let now = now_unix();
+    let taste = taste_fingerprint(history_len, &watched);
     let usable = cached.filter(|c| {
         !args.refresh
             && now - c.generated_at < FRESH_FOR_SECS
-            && c.history_len == watched.len()
+            && c.taste == taste
             && !c.suggestions.is_empty()
     });
 
@@ -300,7 +358,7 @@ pub fn gemini_recommendations(services: State<'_, Services>, args: AiArgs) -> Re
             let db = services.db.lock();
             let cache = Cache {
                 generated_at: now,
-                history_len: watched.len(),
+                taste: taste.clone(),
                 suggestions: fresh.clone(),
             };
             if let Ok(raw) = serde_json::to_string(&cache) {
@@ -412,6 +470,90 @@ pub fn gemini_set_key(services: State<'_, Services>, args: SetKeyArgs) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn watched(titles: &[(&str, f32, bool)]) -> Vec<WatchedTitle> {
+        titles
+            .iter()
+            .map(|(t, frac, liked)| WatchedTitle {
+                title: (*t).to_string(),
+                year: None,
+                genres: Vec::new(),
+                watched: *frac,
+                liked: *liked,
+            })
+            .collect()
+    }
+
+    /// The cache key has to keep changing after the fortieth title.
+    ///
+    /// It was `watched.len()`, and `watched` is the *prompt*, truncated to
+    /// `HISTORY_FOR_PROMPT`. So the number was 40 for ever once a viewer had watched
+    /// forty things, `c.history_len == watched.len()` was always true, and the only
+    /// things that refreshed the rail were the six-hour clock and an explicit refresh --
+    /// while `FRESH_FOR_SECS`' own comment promises that "finishing something gets a new
+    /// list without waiting for the clock" (R-84).
+    #[test]
+    fn watching_a_forty_first_thing_changes_the_cache_key() {
+        // The prompt is the same forty titles in both cases, which is the whole point:
+        // the old key could not tell these two viewers apart.
+        let prompt = watched(
+            &(0..HISTORY_FOR_PROMPT)
+                .map(|i| (format!("Film {i}"), 1.0, false))
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|(t, f, l)| (t.as_str(), *f, *l))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(prompt.len(), HISTORY_FOR_PROMPT);
+
+        let forty = taste_fingerprint(40, &prompt);
+        let forty_one = taste_fingerprint(41, &prompt);
+        assert_ne!(forty, forty_one, "the 41st title left the key unchanged");
+    }
+
+    /// And after re-watching, which a count can never see.
+    #[test]
+    fn finishing_something_again_changes_the_cache_key() {
+        let before = watched(&[("Heat", 0.3, false), ("Alien", 1.0, false)]);
+        let after = watched(&[("Heat", 1.0, false), ("Alien", 1.0, false)]);
+        assert_ne!(
+            taste_fingerprint(2, &before),
+            taste_fingerprint(2, &after),
+            "finishing a half-watched film left the key unchanged"
+        );
+
+        // A favourite is a stronger signal than a view, so it counts too.
+        let liked = watched(&[("Heat", 1.0, true), ("Alien", 1.0, false)]);
+        assert_ne!(taste_fingerprint(2, &after), taste_fingerprint(2, &liked));
+    }
+
+    /// But not while something is merely playing.
+    #[test]
+    fn a_playhead_moving_does_not_invalidate_the_cache() {
+        // The fraction is rounded to a percent: re-asking a model on every heartbeat is
+        // the opposite of caching.
+        let a = watched(&[("Heat", 0.5001, false)]);
+        let b = watched(&[("Heat", 0.5004, false)]);
+        assert_eq!(taste_fingerprint(1, &a), taste_fingerprint(1, &b));
+    }
+
+    /// The same viewing gives the same key, which is what makes it a cache at all.
+    #[test]
+    fn the_same_history_gives_the_same_key() {
+        let h = watched(&[("Heat", 1.0, false), ("Alien", 0.2, true)]);
+        assert_eq!(taste_fingerprint(9, &h), taste_fingerprint(9, &h.clone()));
+    }
+
+    /// The model is told what the viewer watched, not what the provider filed it as.
+    #[test]
+    fn the_prompt_drops_the_providers_language_tag() {
+        assert_eq!(prompt_title("EN Inception"), "Inception");
+        assert_eq!(prompt_title("EN ★ Inception"), "Inception");
+        // Nothing to strip, nothing stripped.
+        assert_eq!(prompt_title("Inception"), "Inception");
+        // And a title that merely begins with two capitals is not a language tag.
+        assert_eq!(prompt_title("JFK"), "JFK");
+    }
 
     #[test]
     fn a_blank_built_in_key_is_no_key() {
