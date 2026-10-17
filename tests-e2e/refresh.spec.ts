@@ -61,3 +61,44 @@ test('an empty channel list explains itself instead of blaming the setup', async
     'Add a provider in Settings to populate your channel list.',
   );
 });
+
+/**
+ * What the progress line says while a refresh runs, for every phase the host emits.
+ *
+ * `RefreshButton`'s label map was annotated `Record<string, string>` — which accepts any
+ * key and requires none — so it carried two keys that are not phases and was missing
+ * four that are, and the render fell through to the raw value. A viewer pressing Refresh
+ * watched the label read `authenticating`, then `fetchingPlaylist`, then Channels /
+ * Movies / Series, then `fetchingEpg`, then `matchingEpg`. On a real subscription those
+ * last two are not the quick ones: fetching a 165 MB guide and matching it across 6,699
+ * channels is the longest stretch of a 23.7-second refresh (R-145).
+ */
+test('the refresh progress never shows a phase identifier', async ({ page }) => {
+  await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+
+  const progress = page.getByTestId('refresh-progress');
+  const seen = new Set<string>();
+  // Sampled while it runs rather than asserted once: the phases go past in about a
+  // second here, and the ones that used to be wrong are whichever the sample catches.
+  // `count()` first and a short timeout on the read, because a locator that matches
+  // nothing makes `textContent` wait out its full timeout -- which is long enough for
+  // the refresh to finish and the screen to move on underneath the loop.
+  await page.getByRole('button', { name: 'Refresh' }).first().click();
+  await expect(progress).toBeVisible();
+  for (let i = 0; i < 200; i += 1) {
+    if ((await progress.count()) === 0) break;
+    const text = await progress.textContent({ timeout: 250 }).catch(() => null);
+    if (text) seen.add(text.replace(/\s+\d+\/\d+$/, '').trim());
+    await page.waitForTimeout(20);
+  }
+
+  expect(seen.size, `only saw ${[...seen].join(', ')}`).toBeGreaterThan(3);
+  for (const label of seen) {
+    // A camelCase identifier is the tell: every real label is a word or two of English.
+    expect(label, `"${label}" is the phase's own identifier`).not.toMatch(/^[a-z]+[A-Z]/);
+  }
+
+  // And it finishes, so the labels above were a real run and not a stuck one.
+  await expect(page.getByTestId('refresh-report')).toBeVisible({ timeout: 25_000 });
+});

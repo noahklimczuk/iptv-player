@@ -32,6 +32,12 @@ export function LetterBar({
     <div
       role="group"
       aria-label="Jump to letter"
+      // Said out loud, not only shown. The greying and the `title` reached a mouse user
+      // and nobody else: `pointer-events: none` does not remove an element from the tab
+      // order and does not stop Enter activating it, so all 27 buttons stayed reachable
+      // by Tab and fired `onSelect` while looking inert. The `disabled` attribute below
+      // is what actually makes them unavailable (R-112).
+      aria-disabled={disabled || undefined}
       title={disabled ? 'Sort by A–Z to filter by letter' : undefined}
       style={{
         display: 'flex',
@@ -51,6 +57,7 @@ export function LetterBar({
           <button
             key={letter}
             type="button"
+            disabled={disabled}
             aria-pressed={active}
             aria-label={letter === '#' ? 'Titles starting with a number or symbol' : letter}
             // Pressing the active letter again clears it: the bar is a filter, and every
@@ -63,7 +70,7 @@ export function LetterBar({
               placeItems: 'center',
               border: 'none',
               borderRadius: 3,
-              cursor: 'pointer',
+              cursor: disabled ? 'default' : 'pointer',
               fontSize: 10,
               fontWeight: active ? 800 : 600,
               lineHeight: 1,

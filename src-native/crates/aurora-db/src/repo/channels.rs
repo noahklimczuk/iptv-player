@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelRow {
     pub id: i64,

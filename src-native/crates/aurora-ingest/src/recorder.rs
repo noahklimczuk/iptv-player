@@ -156,7 +156,20 @@ impl Recorder for StreamRecorder {
         let response = client
             .get(&request.url)
             .send()
-            .map_err(|e| NetFailure::classify(&e.to_string()))?;
+            // The shared classifier, not `e.to_string()`.
+            //
+            // `reqwest`'s Display is `error sending request for url (<the whole URL>)`,
+            // and an Xtream stream URL carries the username and password in its path.
+            // No branch of `classify` matches that text -- it contains none of the
+            // keywords -- so it landed in `Unknown`, which is the one branch that logs
+            // its input verbatim: `unclassified network failure: error sending request
+            // for url (http://host/<user>/<pass>/95471)`, at warn level, in
+            // `aurora.log`. Every other caller in this crate goes through
+            // `classify_reqwest`, whose `cause_chain` exists precisely to keep that
+            // string away from here, and which also gets the diagnosis right -- a
+            // refused connection reads as refused rather than as "something went
+            // wrong" (R-66, R-71).
+            .map_err(|e| crate::http::classify_reqwest(&e))?;
         if !response.status().is_success() {
             return Err(NetFailure::classify(&format!(
                 "HTTP {}",
@@ -313,6 +326,50 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// A recording that cannot connect does not put the credentials in its reason.
+    ///
+    /// This classified with `e.to_string()`, and `reqwest`'s Display is `error sending
+    /// request for url (<the whole URL>)` -- an Xtream stream URL, with the username and
+    /// password in its path. No branch of `classify` matches that text, so it landed in
+    /// `Unknown`, the one branch that logs its input verbatim: `aurora.log` got
+    /// `unclassified network failure: error sending request for url
+    /// (http://host/<user>/<pass>/95471)` at warn level. `cause_chain` exists in
+    /// `http.rs` specifically to keep that string away from the classifier (R-66, R-71).
+    #[test]
+    fn a_failed_recording_says_nothing_about_the_credentials() {
+        // A port nothing is listening on, so `send()` fails with the URL in its Display.
+        let url = "http://127.0.0.1:1/secretuser/secretpass/95471".to_string();
+        let dir = tempdir();
+        let dest = dir.join("show.ts");
+
+        let failure = StreamRecorder
+            .start(request(url, dest))
+            .expect_err("connecting to a closed port should fail");
+
+        for (what, text) in [("message", &failure.message), ("cause", &failure.cause)] {
+            let lower = text.to_lowercase();
+            assert!(
+                !lower.contains("secretuser") && !lower.contains("secretpass"),
+                "the {what} carries the credentials: {text}"
+            );
+            assert!(
+                !lower.contains("95471") && !lower.contains("127.0.0.1"),
+                "the {what} carries the stream URL: {text}"
+            );
+        }
+
+        // And it is diagnosed, not shrugged at: "something went wrong with that request"
+        // was the old answer, from the branch that logs its input.
+        assert_ne!(
+            failure.code,
+            aurora_core::neterr::ErrorCode::Unknown,
+            "still unclassified: {} / {}",
+            failure.message,
+            failure.cause
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

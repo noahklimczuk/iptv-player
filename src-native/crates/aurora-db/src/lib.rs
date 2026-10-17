@@ -48,6 +48,33 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA temp_store = MEMORY;
          PRAGMA cache_size = -65536;", // 64 MiB page cache
     )?;
+    register_functions(conn)?;
+    Ok(())
+}
+
+/// `shown_title(raw)` -- the title as the viewer actually reads it.
+///
+/// Three expressions used to describe "the title" in the same query and no two agreed:
+/// what was displayed was `COALESCE(custom_title, tmdb_title, title)` with the provider's
+/// language prefix stripped in Rust, the letter bar filtered on
+/// `COALESCE(custom_title, title)` with no stripping, and the A-Z sort ordered by the
+/// bare `title`. This subscription writes 27,416 of its 27,494 film names with a leading
+/// language code, so the "E" button returned 26,796 films and eight letters returned
+/// nothing at all, in a library holding 733 films beginning with I and 482 with K (R-52).
+///
+/// Registered here rather than reimplemented in SQL so there is one definition, in
+/// `aurora_core::lang` -- the same one `map_movie` applies to the text it hands the UI.
+fn register_functions(conn: &Connection) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "shown_title",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let raw: Option<String> = ctx.get(0)?;
+            Ok(raw.map(|raw| aurora_core::lang::strip_language_prefix(&raw).unwrap_or(raw)))
+        },
+    )?;
     Ok(())
 }
 

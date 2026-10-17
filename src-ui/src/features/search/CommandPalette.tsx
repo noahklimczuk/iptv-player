@@ -104,9 +104,36 @@ export function CommandPalette({
     [shown],
   );
 
-  useEffect(() => setCursor(0), [flat.length]);
+  // Reset on a new *query*, not only when the number of hits changes. Keyed on
+  // `flat.length` alone, a new query that happened to return the same number of hits
+  // left the highlight on row N of a completely different list (R-147).
+  useEffect(() => setCursor(0), [flat.length, text]);
   // A new query is a new set of groups; whatever was unfolded no longer applies.
   useEffect(() => setExpanded([]), [text]);
+
+  /**
+   * Keep the highlighted row on screen, and say which one it is.
+   *
+   * The results list is a 52vh scroller and the highlight was a background colour on a
+   * numeric `cursor` and nothing else. With six groups showing four hits each plus their
+   * "Show N more" rows the list is routinely taller than that -- on a real subscription a
+   * common word matches channels, both guide groups, films and series at once -- so
+   * arrowing down past the fold moved the highlight to a row that was not on screen. The
+   * panel looked like it had stopped responding while Enter opened something the viewer
+   * could not see. README §12 asks for the opposite in as many words: "Focus is never
+   * lost, never invisible, and always scrolled into view."
+   *
+   * The `<input>` keeps focus throughout, which is right -- that is where typing
+   * continues -- so the highlight is reported through `aria-activedescendant` rather than
+   * by moving focus. Without it a screen-reader user pressing Down heard nothing change
+   * at all (R-147).
+   */
+  const activeId = flat[cursor] ? `palette-hit-${cursor}` : undefined;
+  useEffect(() => {
+    if (!open) return;
+    const row = document.getElementById(`palette-hit-${cursor}`);
+    row?.scrollIntoView({ block: 'nearest' });
+  }, [cursor, open, flat.length]);
 
   if (!open) return null;
 
@@ -143,6 +170,13 @@ export function CommandPalette({
               ref={inputRef}
               value={text}
               placeholder="Search channels, guide, movies, series, people…"
+              // `aria-activedescendant` on the text box itself rather than promoting it
+              // to a `combobox`: the input is already the thing with focus and the only
+              // thing being typed into, and `textbox` supports the attribute. A role
+              // change here would also rename the control for every existing journey
+              // that reaches it by role.
+              aria-controls="palette-results"
+              aria-activedescendant={activeId}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') onClose();
@@ -174,7 +208,12 @@ export function CommandPalette({
             </kbd>
           </div>
 
-          <div style={{ maxHeight: '52vh', overflowY: 'auto', padding: 'var(--sp-2)' }}>
+          <div
+            id="palette-results"
+            role="listbox"
+            aria-label="Results"
+            style={{ maxHeight: '52vh', overflowY: 'auto', padding: 'var(--sp-2)' }}
+          >
             {!text && (
               <div
                 style={{
@@ -209,6 +248,10 @@ export function CommandPalette({
               return (
                 <div
                   key={g.key}
+                  // `group` inside the listbox, which is how a listbox is allowed to be
+                  // sectioned: the heading below is decorative and the label carries it.
+                  role="group"
+                  aria-label={g.label}
                   // So a journey can click a result of a known kind: picking the first
                   // button in the dialog picks whatever group happens to be first, which
                   // is usually a channel.
@@ -232,6 +275,9 @@ export function CommandPalette({
                     return (
                       <button
                         key={`${hit.kind}-${hit.refId}-${i}`}
+                        id={`palette-hit-${idx}`}
+                        role="option"
+                        aria-selected={cursor === idx}
                         onMouseEnter={() => setCursor(idx)}
                         onClick={() => { onPick(hit); onClose(); }}
                         style={{

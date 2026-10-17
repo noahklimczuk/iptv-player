@@ -336,10 +336,43 @@ pub fn profile(history: &[Watched], now: i64) -> Taste {
     if rating_weight > 0.0 {
         taste.mean_rating = Some(rating_total / rating_weight);
     }
+    // How much watching there is to weigh an abandonment against, taken before the
+    // shares are normalised away.
+    let attention: f32 = taste.genres.values().sum();
+
     normalise_shares(&mut taste.genres);
     normalise_shares(&mut taste.categories);
     normalise_shares(&mut taste.eras);
-    normalise_shares(&mut taste.aversions);
+
+    // Aversion is measured against the attention, not against itself.
+    //
+    // `normalise_shares(&mut taste.aversions)` made each map a share of its own total,
+    // so the aversion side carried no information about *how much* was abandoned:
+    // abandon one film and that genre's aversion share was 1.0, exactly what it would
+    // have been after abandoning two hundred. `score_one` then subtracts one from the
+    // other, so a single film opened and left took a genre from 0.45 to 0.18 -- a 60%
+    // cut, below the match threshold, demoting it from the viewer's own taste to
+    // discovery -- and the second and third abandonment were free. A hundred finished
+    // films did not defend against one.
+    //
+    // The module header states the opposite as the goal: "Enough to pull a genre down
+    // and reorder a rail, not enough for three bad nights to erase a year of watching."
+    // `AVERSION_WEIGHT` was chosen as a fraction of a comparable quantity, and after
+    // normalising each side separately it was not comparable to anything (R-37).
+    //
+    // Dividing by `attention` makes an aversion share mean "abandonment relative to how
+    // much they watch", which is the quantity `AVERSION_WEIGHT` reads as a fraction of.
+    // It can exceed 1 -- more abandoned than finished -- and then the genre falls out of
+    // the matched pass entirely, which is right.
+    if attention > 0.0 {
+        for value in taste.aversions.values_mut() {
+            *value /= attention;
+        }
+    } else {
+        // Nothing was ever finished, so there is no attention to be relative to and the
+        // only signal there is is what they walked out of.
+        normalise_shares(&mut taste.aversions);
+    }
     // Heaviest first, so "because you watched…" names the thing they watched most
     // rather than whichever row came back first.
     taste.anchors.sort_by(|a, b| {
@@ -810,6 +843,99 @@ mod tests {
 
     fn nothing_seen(_: Kind, _: i64) -> bool {
         false
+    }
+
+    /// One abandonment does not erase a year of watching, and three do more than one.
+    ///
+    /// Each map used to be normalised to a share of its own total, so the aversion side
+    /// carried no magnitude: one abandoned film gave that genre an aversion share of
+    /// 1.0, exactly what two hundred would have given. Measured through this same code
+    /// before the fix, with ten action films finished:
+    ///
+    /// ```text
+    ///   nothing abandoned            0.4500
+    ///   one abandoned a month ago    0.1800   <- a 60% cut, and below the match floor
+    ///   three abandoned              0.1800   <- the same
+    ///   one hundred finished, one abandoned
+    ///                                0.1800   <- no defence at all
+    /// ```
+    ///
+    /// The module header asks for the opposite: "Enough to pull a genre down and
+    /// reorder a rail, not enough for three bad nights to erase a year of watching"
+    /// (R-37).
+    #[test]
+    fn abandonment_counts_against_how_much_was_watched() {
+        let finished = |n: usize| -> Vec<Watched> {
+            (0..n)
+                .map(|i| watched(&format!("Action {i}"), &["Action"], 0.98, 30))
+                .collect()
+        };
+        // Opened, barely watched, and untouched since -- which is what
+        // `aversion_weight` reads as abandonment.
+        let abandoned = |n: usize| -> Vec<Watched> {
+            (0..n)
+                .map(|i| watched(&format!("Dropped {i}"), &["Action"], 0.04, 30))
+                .collect()
+        };
+        let score_of = |history: Vec<Watched>| -> f32 {
+            let taste = profile(&history, NOW);
+            rank(
+                &taste,
+                &[candidate(9_001, &["Action"])],
+                &nothing_seen,
+                NOW,
+                1,
+            )
+            .first()
+            .map(|r| r.score)
+            .unwrap_or(0.0)
+        };
+
+        let clean = score_of(finished(10));
+        let one_bad = score_of([finished(10), abandoned(1)].concat());
+        let three_bad = score_of([finished(10), abandoned(3)].concat());
+        let a_year = score_of([finished(100), abandoned(1)].concat());
+
+        // One bad night costs something, but not most of it.
+        assert!(one_bad < clean, "{one_bad} should be below {clean}");
+        assert!(
+            one_bad > clean * 0.75,
+            "one abandoned film took {clean} down to {one_bad}, which is the 60% cut \
+             this is about"
+        );
+
+        // Three cost more than one. They used to cost exactly the same.
+        assert!(
+            three_bad < one_bad,
+            "three abandonments ({three_bad}) should outweigh one ({one_bad})"
+        );
+
+        // And a year of watching defends itself.
+        assert!(
+            a_year > one_bad,
+            "100 finished films ({a_year}) should resist one abandonment better than 10 \
+             do ({one_bad})"
+        );
+        assert!(
+            a_year > clean * 0.95,
+            "one abandoned film against a hundred finished took {clean} to {a_year}"
+        );
+    }
+
+    /// With nothing finished at all, what they walked out of is the only signal there
+    /// is -- so it still counts for something rather than being divided by zero.
+    #[test]
+    fn abandonment_alone_is_still_a_signal() {
+        let taste = profile(
+            &[
+                watched("Dropped A", &["Horror"], 0.04, 20),
+                watched("Dropped B", &["Horror"], 0.03, 20),
+            ],
+            NOW,
+        );
+        let share = taste.aversions.get("horror").copied().unwrap_or(0.0);
+        assert!(share > 0.0, "a history of nothing but abandonment lost it");
+        assert!(share.is_finite(), "divided by zero: {share}");
     }
 
     #[test]
