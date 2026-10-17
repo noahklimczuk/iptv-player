@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use aurora_core::model::Programme;
+use aurora_core::model::{Credit, Programme};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,14 @@ pub struct ProgrammeRow {
     pub sub_title: Option<String>,
     pub description: Option<String>,
     pub categories: Vec<String>,
+    /// The guide entry's own artwork, its rating out of ten, and its cast.
+    ///
+    /// All three are written by the parser on every import and none of them could be
+    /// read back: there were no fields for `icon` or `credits`, and `star_rating` was
+    /// fetched as column 11 and then skipped (R-51).
+    pub icon: Option<String>,
+    pub star_rating: Option<f32>,
+    pub credits: Vec<Credit>,
     pub season: Option<u16>,
     pub episode: Option<u16>,
     pub rating: Option<String>,
@@ -78,13 +86,23 @@ pub fn upsert_channels(
     let mut n = 0;
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO epg_channels (id, display_name, icon) VALUES (?1,?2,?3)
+            "INSERT INTO epg_channels (id, display_name, display_names, icon)
+             VALUES (?1,?2,?3,?4)
              ON CONFLICT(id) DO UPDATE SET
                display_name = excluded.display_name,
+               display_names = excluded.display_names,
                icon = COALESCE(excluded.icon, epg_channels.icon)",
         )?;
         for c in channels {
-            stmt.execute(params![c.id, c.display_names.first(), c.icon])?;
+            // All of them, not only the first. XMLTV allows several `<display-name>`
+            // elements and the alternative spellings are what fuzzy matching needs; the
+            // column was singular, so everything after the first was dropped here and
+            // nothing later could ever see it (R-50).
+            //
+            // `display_name` stays as the first one, because it is what every existing
+            // query reads and what a list shows.
+            let all = serde_json::to_string(&c.display_names).unwrap_or_else(|_| "[]".into());
+            stmt.execute(params![c.id, c.display_names.first(), all, c.icon])?;
             n += 1;
         }
     }
@@ -107,6 +125,19 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProgrammeRow> {
         season: r.get::<_, Option<i64>>(8)?.map(|v| v as u16),
         episode: r.get::<_, Option<i64>>(9)?.map(|v| v as u16),
         rating: r.get(10)?,
+        // Column 11 was fetched and then never read: `map_row` went straight from
+        // `rating` at 10 to `flags` at 12. Together with `icon` and `credits`, which the
+        // row had no fields for at all, that is three things written on every import and
+        // unable to reach the UI -- the guide entry's own artwork, its cast list and its
+        // star rating. This subscription sends none of them (R-31/R-132), which is
+        // presumably why nobody noticed; on a guide that carries them the work was being
+        // done and discarded (R-51).
+        star_rating: r.get(11)?,
+        icon: r.get(13)?,
+        credits: serde_json::from_str::<Vec<Credit>>(
+            &r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+        )
+        .unwrap_or_default(),
         is_new: flags & FLAG_NEW != 0,
         is_live: flags & FLAG_LIVE != 0,
         is_premiere: flags & FLAG_PREMIERE != 0,
@@ -114,7 +145,8 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProgrammeRow> {
 }
 
 const SELECT: &str = "SELECT id, channel_id, start, stop, title, sub_title, description,
-                             categories, season, episode, rating, star_rating, flags
+                             categories, season, episode, rating, star_rating, flags,
+                             icon, credits
                       FROM epg_programmes";
 
 /// Fetch every programme overlapping `[from, to)` for the given EPG channels.
