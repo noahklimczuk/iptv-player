@@ -126,9 +126,29 @@ impl LibraryFilter {
             } else {
                 String::new()
             };
+            // And a channel's country, because the prefix that carried it is not in the
+            // key.
+            //
+            // `match_key` is built from the name after `split_country_prefix` has taken
+            // the prefix off -- which is what makes `UK | BBC One` and `BBC One` one
+            // channel, and is wanted. The consequence not written down anywhere is that
+            // `US *  TNT` and `CA *  TNT` both key to `tnt`, so one of them disappeared
+            // when "hide duplicates" was on: two different regional channels, collapsed
+            // because the only thing distinguishing them had already been removed.
+            //
+            // The country survived that strip -- `channels.country` is written by the
+            // same split -- so it is what tells the two cases apart. Two feeds of one
+            // brand from one country still collapse, which is the case this feature is
+            // for. `IS` rather than `=` so that two untagged channels compare equal
+            // instead of both being kept (R-08).
+            let region = if matches!(kind, Kind::Live) {
+                format!(" AND dup.country IS {t}.country")
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
                 " AND NOT EXISTS (SELECT 1 FROM {t} dup
-                     WHERE dup.match_key = {t}.match_key{year}{lang}
+                     WHERE dup.match_key = {t}.match_key{year}{lang}{region}
                        AND dup.hidden = 0
                        AND (dup.quality_rank > {t}.quality_rank
                             OR (dup.quality_rank = {t}.quality_rank AND dup.id < {t}.id)))"
@@ -249,9 +269,24 @@ pub fn alternates(conn: &Connection, kind: Kind, id: i64) -> Result<Vec<Alternat
 
 /// Recompute `lang_code` and `quality_rank` for everything.
 ///
-/// Ingestion classifies as it writes, so this exists for the two cases ingestion cannot
-/// cover: a library that predates the columns, and a build whose classifier has changed
-/// its mind. It reads the same fields a fresh import would.
+/// **This is the only thing that sets them.** This comment used to say that ingestion
+/// classifies as it writes and that this existed for the two cases ingestion could not
+/// cover. It does not: neither `library::upsert_movies` nor `channels::upsert_batch`
+/// mentions `lang_code` or `quality_rank` in its insert, so both columns are set here
+/// and nowhere else -- by the call `sync.rs` makes at the end of every import. It reads
+/// the same fields a fresh import would.
+///
+/// That is correct and necessary, and it means the import has an ordering dependency
+/// worth knowing about rather than denying (R-55):
+///
+/// * An import interrupted between the upserts and this call leaves every new row with
+///   `lang_code = NULL` and `quality_rank = 0`, which the library filter reads as
+///   "untagged" and "worst copy" -- so "English only" hides them and "hide duplicates"
+///   prefers anything else. The next completed refresh fixes it.
+/// * `reclassify_if_stale`, the sibling that skips the work when the classifier version
+///   has not changed, would therefore be the *wrong* call at the end of an import: a
+///   fresh row has nothing to be stale against. Its only caller is
+///   `aurora-ingest/examples/import.rs`, which is right for what that does.
 pub fn reclassify(conn: &mut Connection) -> Result<usize> {
     let mut done = 0usize;
     done += reclassify_channels(conn)?;
@@ -622,6 +657,56 @@ mod tests {
         assert_eq!(ids(&conn, Kind::Movies, &OFF).len(), 4);
         assert_eq!(ids(&conn, Kind::Series, &OFF).len(), 2);
         assert!(OFF.where_sql(Kind::Live).is_empty());
+    }
+
+    /// Two regional feeds of one brand survive "hide duplicates".
+    ///
+    /// `match_key` is built after `split_country_prefix` has taken the prefix off, which
+    /// is what makes `UK | BBC One` and `BBC One` one channel. The consequence was that
+    /// `US TNT` and `CA TNT` both key to `tnt`, so one of them vanished -- two different
+    /// channels collapsed because the only thing telling them apart had been stripped
+    /// before the key was built (R-08).
+    #[test]
+    fn two_countries_feeds_are_not_duplicates_of_each_other() {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','http://example.invalid',0)",
+            [],
+        )
+        .unwrap();
+        // Two regional feeds, and two copies of one of them at different qualities.
+        for (id, name, country, rank) in [
+            (1, "TNT", Some("US"), 2),
+            (2, "TNT", Some("CA"), 2),
+            (3, "TNT", Some("US"), 1),
+            // And one with no country at all, twice, which must still collapse.
+            (4, "Discovery", None, 2),
+            (5, "Discovery", None, 1),
+        ] {
+            conn.execute(
+                "INSERT INTO channels (id, provider_id, provider_key, name, match_key,
+                                       country, quality_rank, lang_code, hidden,
+                                       last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, 'en', 0, 0)",
+                params![id, format!("c{id}"), name, name.to_lowercase(), country, rank],
+            )
+            .unwrap();
+        }
+
+        let dedup = LibraryFilter {
+            hide_duplicates: true,
+            ..Default::default()
+        };
+        let kept = ids(&conn, Kind::Live, &dedup);
+
+        assert!(kept.contains(&1), "the US feed was hidden: {kept:?}");
+        assert!(kept.contains(&2), "the CA feed was hidden: {kept:?}");
+        // The lesser copy of the US feed is still a duplicate, which is the feature.
+        assert!(!kept.contains(&3), "a worse copy of the US feed survived: {kept:?}");
+        // And two untagged copies of one channel still collapse to the better one.
+        assert!(kept.contains(&4), "{kept:?}");
+        assert!(!kept.contains(&5), "{kept:?}");
     }
 
     #[test]

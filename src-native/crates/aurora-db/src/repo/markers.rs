@@ -67,9 +67,10 @@ impl Default for SeriesPrefs {
 /// clock silently cutting the last minute of an episode whose runtime was wrong, which
 /// is how somebody loses the final scene of a finale."
 ///
-/// Today the column cannot hold an unrecognised value -- `schema.rs` constrains it with
-/// `CHECK (source IN ('chapters','user','learned'))` -- so this is a guard for the first
-/// migration that widens it, which is exactly when the old fallback would have bitten.
+/// The column constrains what can be stored -- `CHECK (source IN
+/// ('chapters','user','learned','convention'))`, which migration 14 widened to match the
+/// enum (R-44) -- so an unrecognised value can only arrive from a build newer than this
+/// one. That is exactly when the old fallback would have bitten.
 /// `convention` is itself such a value: it is computed and never stored, and if it ever
 /// is, the old fallback would have turned the one source that must not auto-skip into
 /// one that does (R-45).

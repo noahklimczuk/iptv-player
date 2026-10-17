@@ -234,7 +234,20 @@ pub fn resolve_playback(
         "movie" => {
             let (stream, title) = db
                 .query_row(
-                    "SELECT url, title, stream_id, container, provider_id
+                    // `shown_title(COALESCE(custom_title, tmdb_title, title))`, which
+                    // is what every list shows and what the OSD did not.
+                    //
+                    // The bare `title` column still carries the provider's language tag
+                    // -- `EN Inception`, `AR الأرجنتين Vs Spain` -- because `shown` is
+                    // where that comes off, and `shown` is registered on every
+                    // connection precisely so the filing string and the name on screen
+                    // cannot drift. It also ignored a film the viewer had renamed, and
+                    // the enriched title, so an enriched film played under the filing
+                    // string rather than what it is actually called. `MOVIE_SELECT` has
+                    // the right expression eleven lines of SQL away (R-76).
+                    "SELECT url,
+                            shown_title(COALESCE(custom_title, tmdb_title, title)),
+                            stream_id, container, provider_id
                      FROM movies WHERE id = ?1",
                     [id],
                     |r| {
@@ -291,7 +304,11 @@ pub fn resolve_playback(
         "episode" => {
             let (stream, title) = db
                 .query_row(
-                    "SELECT e.url, e.title, e.stream_id, e.container, s.provider_id
+                    // The episode's own title is the provider's, with the same tag on
+                    // it (R-76). An episode has no `custom_title` or `tmdb_title`
+                    // column, so there is nothing to coalesce -- only the tag to strip.
+                    "SELECT e.url, shown_title(e.title), e.stream_id, e.container,
+                            s.provider_id
                      FROM episodes e
                      JOIN series s ON s.id = e.series_id
                      WHERE e.id = ?1",

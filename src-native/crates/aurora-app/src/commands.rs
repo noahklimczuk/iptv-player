@@ -733,7 +733,20 @@ pub fn progress_save(services: State<'_, Services>, args: SaveProgressArgs) -> R
         // *movie's* -- against the same rowid, so it collided with whatever film held
         // it. Nothing sent this kind until recordings became playable (R-118).
         "recording" => progress::ItemKind::Recording,
-        _ => progress::ItemKind::Movie,
+        "movie" => progress::ItemKind::Movie,
+        // Refused rather than filed as a movie.
+        //
+        // `watch_progress`'s primary key is `(profile_id, item_kind, item_id)`, so an
+        // unrecognised kind written as `Movie` lands on whatever film holds that rowid
+        // and silently overwrites its position. The UI only ever sends the four above --
+        // `useWatchProgress` guards on them -- so this is the guard for the first caller
+        // that does not, and saying no is the only answer that cannot corrupt a row
+        // belonging to something else (R-81).
+        other => {
+            return Err(crate::error::AppError::Other(format!(
+                "Aurora does not know how to remember a position for a {other:?}."
+            )))
+        }
     };
     let db = services.db.lock();
     Ok(progress::save(
