@@ -791,7 +791,7 @@ These are what separate a tech demo from software people actually keep installed
 | Context | Key | Action |
 |---|---|---|
 | Global | `Ctrl+K` / `/` | Command palette / search |
-| Global | `F11` | Fullscreen |
+| Global | `F` / `F11` | Fullscreen |
 | Global | `Esc` | Back / exit fullscreen / close modal |
 | Global | `Alt+1..5` | Home, Live TV, Guide, Movies, Series |
 | Global | `Ctrl+,` | Settings |
@@ -807,7 +807,7 @@ These are what separate a tech demo from software people actually keep installed
 | Player | `I` | Info overlay · `I I` full stats |
 | Player | `R` | Record · `T` timeshift pause |
 | Player | `P` | Picture-in-Picture · `Shift+P` mini-player |
-| Player | `F` | Favorite current item |
+| Player | — | Favourite the current item — **not built**; `F` is fullscreen above, and the heart beside a channel is how favouriting is done |
 | Player | `Ctrl+S` | Screenshot |
 | Live TV | `PgUp/PgDn` or `Ch+/Ch-` | Channel up/down |
 | Live TV | `0-9` | Direct channel entry |

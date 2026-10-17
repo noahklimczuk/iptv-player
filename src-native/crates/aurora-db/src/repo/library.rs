@@ -207,6 +207,15 @@ pub struct BrowseQuery {
 ///
 /// Built together because they have to agree: a clause with no parameter bound, or a
 /// parameter with no clause, is a runtime error rather than a compile-time one.
+/// The one SQL expression for "the title, as the viewer reads it".
+///
+/// `shown_title` is registered on every connection in `aurora_db::configure` and calls
+/// the same `aurora_core::lang` stripping that `map_movie` applies to the text it
+/// returns, so the letter bar, the A–Z sort and the screen cannot disagree (R-52).
+fn shown_title_sql(table: &str) -> String {
+    format!("shown_title(COALESCE({table}.custom_title, {table}.tmdb_title, {table}.title))")
+}
+
 fn browse_filters<'a>(
     table: &str,
     q: &'a BrowseQuery,
@@ -237,21 +246,31 @@ fn browse_filters<'a>(
     // A–Z sort orders by — otherwise the bar would filter on one name and the list would
     // be sorted by another, and "W" could land among the Vs.
     //
+    // It now actually is the same expression. It used to be
+    // `COALESCE(custom_title, title)` here, with no `tmdb_title` and no language prefix
+    // stripped, while the viewer read `shown_title(COALESCE(custom_title, tmdb_title,
+    // title))` and the sort ordered by the bare `title` — three descriptions of one
+    // thing. Since this subscription writes 27,416 of 27,494 film names with a leading
+    // language code, the "E" button returned 26,796 films, "T" returned 13 of the 5,372
+    // that begin with T, and I, J, K, O, V, X, Y and Z returned nothing at all. Every
+    // film was reachable by some button, under a letter with nothing to do with its
+    // name, which is worse than missing because the bar looks like it works (R-52).
+    //
     // `#` means everything else: a provider's library is full of titles starting with a
     // digit, a bracket or a language tag, and they have to be reachable by something.
     // Compared with `upper()` rather than a `LIKE` prefix because `LIKE` on a column with
     // no index would be no faster and the intent is clearer.
     match q.letter.as_deref() {
         Some("#") => {
-            let shown = format!("COALESCE({table}.custom_title, {table}.title)");
+            let shown = shown_title_sql(table);
             sql.push_str(&format!(
                 " AND (upper(substr({shown}, 1, 1)) < 'A' OR upper(substr({shown}, 1, 1)) > 'Z')"
             ));
         }
         Some(_) => {
+            let shown = shown_title_sql(table);
             sql.push_str(&format!(
-                " AND upper(substr(COALESCE({table}.custom_title, {table}.title), 1, 1)) \
-                   = upper(:letter)"
+                " AND upper(substr({shown}, 1, 1)) = upper(:letter)"
             ));
             params.push((":letter", &q.letter));
         }
@@ -320,10 +339,14 @@ pub fn find_by_title(
 
 pub fn list_movies(conn: &Connection, q: &BrowseQuery) -> Result<Vec<MovieRow>> {
     let order = match q.sort {
-        MovieSort::RecentlyAdded => "added_at DESC, movies.id DESC",
-        MovieSort::Title => "title COLLATE NOCASE",
-        MovieSort::Year => "year DESC NULLS LAST, title",
-        MovieSort::Rating => "rating DESC NULLS LAST, title",
+        MovieSort::RecentlyAdded => "added_at DESC, movies.id DESC".to_string(),
+        // The displayed title, not the raw one. Ordering by `title` was nearly right by
+        // accident -- almost every row carries the same prefix, so sorting by
+        // "EN * Alien" is sorting by "Alien" -- and wrong exactly where a different
+        // prefix interleaves: 18 adjacent pairs of 27,493 were out of order (R-52).
+        MovieSort::Title => format!("{} COLLATE NOCASE", shown_title_sql("movies")),
+        MovieSort::Year => format!("year DESC NULLS LAST, {}", shown_title_sql("movies")),
+        MovieSort::Rating => format!("rating DESC NULLS LAST, {}", shown_title_sql("movies")),
     };
     let (filters, mut params) = browse_filters("movies", q);
     let sql = format!(
@@ -354,7 +377,7 @@ pub fn count_movies(conn: &Connection, q: &BrowseQuery) -> Result<u32> {
     Ok(conn.query_row(&sql, params.as_slice(), |r| r.get(0))?)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesRow {
     pub id: i64,
@@ -421,10 +444,10 @@ fn map_series(r: &rusqlite::Row<'_>) -> rusqlite::Result<SeriesRow> {
 
 pub fn list_series(conn: &Connection, q: &BrowseQuery) -> Result<Vec<SeriesRow>> {
     let order = match q.sort {
-        MovieSort::RecentlyAdded => "added_at DESC, series.id DESC",
-        MovieSort::Title => "title COLLATE NOCASE",
-        MovieSort::Year => "year DESC NULLS LAST, title",
-        MovieSort::Rating => "rating DESC NULLS LAST, title",
+        MovieSort::RecentlyAdded => "added_at DESC, series.id DESC".to_string(),
+        MovieSort::Title => format!("{} COLLATE NOCASE", shown_title_sql("series")),
+        MovieSort::Year => format!("year DESC NULLS LAST, {}", shown_title_sql("series")),
+        MovieSort::Rating => format!("rating DESC NULLS LAST, {}", shown_title_sql("series")),
     };
     let (filters, mut params) = browse_filters("series", q);
     let sql = format!(
@@ -452,7 +475,7 @@ pub fn count_series(conn: &Connection, q: &BrowseQuery) -> Result<u32> {
 }
 
 /// One shelf the provider files titles under, and how many are on it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Category {
     pub name: String,
@@ -549,7 +572,7 @@ pub fn series(conn: &Connection, id: i64) -> Result<Option<SeriesRow>> {
 }
 
 /// What the library holds, for the Settings screen.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryStats {
     pub channels: i64,
@@ -565,7 +588,7 @@ pub struct LibraryStats {
 /// The number that matters is not how many programmes were imported but how many
 /// channels ended up with any — an EPG that parsed perfectly and matched nothing looks
 /// identical to a missing one from the sofa.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpgCoverage {
     pub total: i64,
@@ -894,16 +917,30 @@ pub fn upsert_episodes(
 /// never declared the field, so no UI code referenced it and no type check mentioned it.
 ///
 /// Anything that needs the stream addresses an episode by `id` and asks the database.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeRow {
     pub id: i64,
+    /// Which show this is an episode of.
+    ///
+    /// `shared/ipc.ts` has declared `Episode.seriesId` all along and nothing sent it,
+    /// so every episode the UI held claimed to belong to no show. Free to send: the
+    /// query already takes the series id as its argument (R-154).
+    pub series_id: i64,
     pub season: u16,
     pub episode: u16,
     pub title: Option<String>,
     pub overview: Option<String>,
     pub still: Option<String>,
     pub runtime_mins: Option<u32>,
+    /// When it first went out, or null.
+    ///
+    /// Also declared in the contract and never sent. The column exists in `schema.rs`
+    /// and **nothing in the workspace writes it** — neither the Xtream import nor the
+    /// TMDB sweep — so this is null for every episode of every show today. Sent anyway,
+    /// because the contract declares it nullable and a truthful null is an answer; the
+    /// fixtures give every episode an air date, which is the part that is wrong.
+    pub air_date: Option<i64>,
 }
 
 /// Which show an episode belongs to.
@@ -929,18 +966,21 @@ pub fn episodes_for(
     let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<EpisodeRow> {
         Ok(EpisodeRow {
             id: r.get(0)?,
+            series_id: r.get(7)?,
             season: r.get::<_, i64>(1)? as u16,
             episode: r.get::<_, i64>(2)? as u16,
             title: r.get(3)?,
             overview: r.get(4)?,
             still: r.get(5)?,
             runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+            air_date: r.get(8)?,
         })
     };
     let rows = match season {
         Some(s) => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins
+                "SELECT id, season, episode, title, overview, still, runtime_mins,
+                        series_id, air_date
                  FROM episodes WHERE series_id = ?1 AND season = ?2 ORDER BY episode",
             )?;
             let out = stmt
@@ -950,7 +990,8 @@ pub fn episodes_for(
         }
         None => {
             let mut stmt = conn.prepare(
-                "SELECT id, season, episode, title, overview, still, runtime_mins
+                "SELECT id, season, episode, title, overview, still, runtime_mins,
+                        series_id, air_date
                  FROM episodes WHERE series_id = ?1 ORDER BY season, episode",
             )?;
             let out = stmt
@@ -987,7 +1028,8 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
 
     Ok(conn
         .query_row(
-            "SELECT id, season, episode, title, overview, still, runtime_mins
+            "SELECT id, season, episode, title, overview, still, runtime_mins,
+                    series_id, air_date
              FROM episodes
              WHERE series_id = ?1
                AND (season > ?2 OR (season = ?2 AND episode > ?3))
@@ -997,12 +1039,14 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
             |r| {
                 Ok(EpisodeRow {
                     id: r.get(0)?,
+                    series_id: r.get(7)?,
                     season: r.get::<_, i64>(1)? as u16,
                     episode: r.get::<_, i64>(2)? as u16,
                     title: r.get(3)?,
                     overview: r.get(4)?,
                     still: r.get(5)?,
                     runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    air_date: r.get(8)?,
                 })
             },
         )
@@ -1089,6 +1133,100 @@ mod tests {
 
     /// The count beside the heading has to be the count of what is on screen. Every
     /// letter's rows plus the `#` bucket's must add up to the library.
+    /// The shape this subscription actually writes: a language code in front of
+    /// everything.
+    ///
+    /// 27,416 of its 27,494 film names carry one, so the letter bar filtering on the raw
+    /// title sent 26,796 films to "E" and returned nothing at all for I, J, K, O, V, X,
+    /// Y and Z. "T" returned 13 of the 5,372 titles that begin with T. Every film was
+    /// reachable by some button, under a letter with nothing to do with its name (R-52).
+    #[test]
+    fn the_letter_bar_reads_the_title_the_viewer_sees() {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        // Separated and bare prefixes, which `lang::strip_language_prefix` handles as
+        // two different cases, plus a title with no prefix and one renamed by TMDB.
+        for (id, title) in [
+            (1, "EN \u{2605} Interstellar"),
+            (2, "EN Kill Bill"),
+            (3, "FR \u{2605} Oceans"),
+            (4, "Zodiac"),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 'https://example.com/m.mkv', 0)",
+                params![id, format!("m{id}"), title],
+            )
+            .unwrap();
+        }
+        // A TMDB name takes precedence over the provider's, so the bar has to read it.
+        conn.execute(
+            "UPDATE movies SET tmdb_title = 'Quiz Show' WHERE id = 4",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(by_letter(&conn, Some("I")), vec!["Interstellar"]);
+        assert_eq!(by_letter(&conn, Some("K")), vec!["Kill Bill"]);
+        assert_eq!(by_letter(&conn, Some("O")), vec!["Oceans"]);
+        assert_eq!(by_letter(&conn, Some("Q")), vec!["Quiz Show"]);
+        assert!(
+            by_letter(&conn, Some("E")).is_empty(),
+            "the language code is still deciding the letter: {:?}",
+            by_letter(&conn, Some("E"))
+        );
+        assert!(by_letter(&conn, Some("Z")).is_empty(), "tmdb_title ignored");
+        assert!(by_letter(&conn, Some("F")).is_empty());
+    }
+
+    /// And the A-Z sort orders by the same thing, so the list cannot be sorted by one
+    /// name while the bar filters on another.
+    #[test]
+    fn the_az_sort_orders_by_the_title_the_viewer_sees() {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        // Raw order would be AR, DE, EN, EN -> Elephant, Beehive, Andromeda, Zodiac.
+        for (id, title) in [
+            (1, "EN \u{2605} Andromeda"),
+            (2, "AR \u{2605} Elephant"),
+            (3, "EN \u{2605} Zodiac"),
+            (4, "DE \u{2605} Beehive"),
+        ] {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 'https://example.com/m.mkv', 0)",
+                params![id, format!("m{id}"), title],
+            )
+            .unwrap();
+        }
+
+        let titles: Vec<String> = list_movies(
+            &conn,
+            &BrowseQuery {
+                sort: MovieSort::Title,
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .map(|m| m.title)
+        .collect();
+        assert_eq!(titles, ["Andromeda", "Beehive", "Elephant", "Zodiac"]);
+    }
+
     #[test]
     fn the_letters_and_the_hash_bucket_partition_the_library() {
         let conn = lettered_library();

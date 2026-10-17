@@ -160,6 +160,38 @@ pub fn already_seen(conn: &Connection, profile_id: i64) -> Result<Vec<(Kind, i64
 /// collapsed duplicates governed every list in the app and not this one, so a viewer who
 /// had asked to be shown English titles was still recommended French ones — on the home
 /// screen, which is the first thing they see. A rail is a list like any other.
+/// Every `group_title` in `table` that folds to one of `wanted`.
+///
+/// `wanted` is what the taste profile stores, which is `normalise`d — trimmed and
+/// lowercased by Rust, so Unicode-aware. Folding the database's side in Rust as well is
+/// the whole point: SQLite's `LOWER()` is ASCII-only and the two disagree on any
+/// accented letter (R-57).
+///
+/// One pass over the distinct shelf names, which is 145 rows on the subscription this is
+/// measured against — the `group_title` index makes it a scan of the index rather than
+/// of the 27,494 films.
+fn shelf_spellings(conn: &Connection, table: &str, wanted: &[String]) -> Result<Vec<String>> {
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "SELECT DISTINCT group_title FROM {table}          WHERE group_title IS NOT NULL AND group_title <> ''"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let name = row?;
+        if wanted
+            .iter()
+            .any(|w| w == &aurora_core::recommend::fold_key(&name))
+        {
+            out.push(name);
+        }
+    }
+    Ok(out)
+}
+
 pub fn candidates(
     conn: &Connection,
     categories: &[String],
@@ -176,18 +208,43 @@ pub fn candidates(
         ("series", Kind::Series, crate::repo::filtering::Kind::Series),
     ] {
         let visible = filter.where_sql(filter_kind);
-        // Each shelf the viewer watches. `group_title` is compared case-insensitively
-        // because the taste profile lowercases everything it stores.
-        for category in categories {
+        // Each shelf the viewer watches, matched by its real spelling.
+        //
+        // This was `LOWER(group_title) = ?1` against
+        // `aurora_core::recommend::normalise(category)`, and the two fold differently:
+        // `normalise` is Rust's `to_lowercase`, which is Unicode-aware, while SQLite's
+        // built-in `LOWER()` folds **ASCII only**. For any shelf whose name contains a
+        // non-ASCII uppercase letter the equality could never hold. Two of this
+        // subscription's 145 categories are like that:
+        //
+        // ```text
+        // 'CA ✪ QUEBEC NOËL'              rust 'ca ✪ quebec noël'
+        //                               sqlite 'ca ✪ quebec noËl'
+        // 'CA ◉ TÉLÉRÉALITÉS ET VARIÉTÉS' rust 'ca ◉ téléréalités et variétés'
+        //                               sqlite 'ca ◉ tÉlÉrÉalitÉs et variÉtÉs'
+        // ```
+        //
+        // Measured through this function with the real names: those two shelves
+        // returned 0 candidates where the ASCII-named ones returned 50. So a viewer who
+        // watches Québécois films got a rail built from every shelf except the one they
+        // watch, and nothing reported a problem. The decorative `✪` and `★` are
+        // unaffected -- `LOWER` leaves non-letters alone -- so it is specifically the
+        // accented letters (R-57).
+        //
+        // Resolving the spelling first keeps the fold in one language. It also matches
+        // *every* spelling of a shelf, which is what the old comment said it was doing:
+        // a provider that files some rows under "Action" and some under "ACTION" has
+        // one shelf as far as the taste profile is concerned.
+        for spelling in shelf_spellings(conn, table, categories)? {
             let sql = format!(
-                "{} WHERE hidden = 0 AND LOWER(group_title) = ?1{visible} {ORDER} LIMIT ?2",
+                "{} WHERE hidden = 0 AND group_title = ?1{visible} {ORDER} LIMIT ?2",
                 select(table),
                 ORDER = ORDER_BY,
             );
             collect(
                 conn,
                 &sql,
-                (category, per_bucket),
+                (&spelling, per_bucket),
                 kind,
                 &mut seen,
                 &mut out,
@@ -481,6 +538,87 @@ mod tests {
         let shelved = pool.iter().find(|c| c.title == "Nothing").unwrap();
         assert!(shelved.genres.is_empty());
         assert_eq!(shelved.category.as_deref(), Some("EN ✪ BOX OFFICE"));
+    }
+
+    /// A shelf with an accent in its name is retrievable, which it was not.
+    ///
+    /// The query was `LOWER(group_title) = ?1` against
+    /// `aurora_core::recommend::normalise(category)`. `normalise` is Rust's
+    /// `to_lowercase`, which is Unicode-aware; SQLite's `LOWER()` folds ASCII only. So
+    /// for any shelf whose name has a non-ASCII uppercase letter the equality could
+    /// never hold, and the real subscription has two such shelves out of 145:
+    ///
+    /// ```text
+    /// EN ✪ BOX OFFICE                 ->  50 candidates
+    /// CA ✪ QUEBEC NOËL                ->   0 candidates
+    /// CA ◉ TÉLÉRÉALITÉS ET VARIÉTÉS   ->   0 candidates
+    /// ```
+    ///
+    /// A viewer who watches Québécois films got a rail built from every shelf except
+    /// the one they watch, and nothing reported a problem (R-57).
+    #[test]
+    fn an_accented_shelf_is_retrievable() {
+        let conn = seeded();
+        // The two real names, on two real rows.
+        conn.execute(
+            "UPDATE movies SET group_title = 'CA ✪ QUEBEC NOËL' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE movies SET group_title = 'CA ◉ TÉLÉRÉALITÉS ET VARIÉTÉS' WHERE id = 2",
+            [],
+        )
+        .unwrap();
+
+        // Exactly what the taste profile stores: the shelf name, normalised.
+        let wanted: Vec<String> = ["CA ✪ QUEBEC NOËL", "CA ◉ TÉLÉRÉALITÉS ET VARIÉTÉS"]
+            .iter()
+            .map(|c| aurora_core::recommend::fold_key(c))
+            .collect();
+
+        // `explore: 0`, so the only way these two can appear is through their shelf.
+        let pool = candidates(
+            &conn,
+            &wanted,
+            &[],
+            100,
+            0,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
+
+        let titles: Vec<&str> = pool.iter().map(|c| c.title.as_str()).collect();
+        assert!(titles.contains(&"Alien"), "{titles:?}");
+        assert!(titles.contains(&"Heat"), "{titles:?}");
+    }
+
+    /// Every spelling of a shelf is the same shelf.
+    ///
+    /// This passed before the change too — SQLite's ASCII fold handles
+    /// `Action`/`ACTION` perfectly well — and it is here because the fix replaced a
+    /// case-insensitive comparison with an exact one. The insensitivity now comes from
+    /// resolving the spellings in Rust, and this is what says it did not get lost.
+    #[test]
+    fn two_spellings_of_one_shelf_are_the_same_shelf() {
+        let conn = seeded();
+        conn.execute("UPDATE movies SET group_title = 'Action' WHERE id = 1", [])
+            .unwrap();
+        conn.execute("UPDATE movies SET group_title = 'ACTION' WHERE id = 2", [])
+            .unwrap();
+
+        let pool = candidates(
+            &conn,
+            &[aurora_core::recommend::fold_key("action")],
+            &[],
+            100,
+            0,
+            &crate::repo::filtering::LibraryFilter::default(),
+        )
+        .unwrap();
+        let titles: Vec<&str> = pool.iter().map(|c| c.title.as_str()).collect();
+        assert!(titles.contains(&"Alien"), "{titles:?}");
+        assert!(titles.contains(&"Heat"), "{titles:?}");
     }
 
     #[test]

@@ -74,6 +74,33 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA temp_store = MEMORY;
          PRAGMA cache_size = -65536;", // 64 MiB page cache
     )?;
+    register_functions(conn)?;
+    Ok(())
+}
+
+/// `shown_title(raw)` -- the title as the viewer actually reads it.
+///
+/// Three expressions used to describe "the title" in the same query and no two agreed:
+/// what was displayed was `COALESCE(custom_title, tmdb_title, title)` with the provider's
+/// language prefix stripped in Rust, the letter bar filtered on
+/// `COALESCE(custom_title, title)` with no stripping, and the A-Z sort ordered by the
+/// bare `title`. This subscription writes 27,416 of its 27,494 film names with a leading
+/// language code, so the "E" button returned 26,796 films and eight letters returned
+/// nothing at all, in a library holding 733 films beginning with I and 482 with K (R-52).
+///
+/// Registered here rather than reimplemented in SQL so there is one definition, in
+/// `aurora_core::lang` -- the same one `map_movie` applies to the text it hands the UI.
+fn register_functions(conn: &Connection) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "shown_title",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let raw: Option<String> = ctx.get(0)?;
+            Ok(raw.map(|raw| aurora_core::lang::strip_language_prefix(&raw).unwrap_or(raw)))
+        },
+    )?;
     Ok(())
 }
 
@@ -246,6 +273,27 @@ pub enum Opened {
     Replaced { corrupt_copy: std::path::PathBuf },
 }
 
+/// Whether a failure to open means "refuse" rather than "replace the library".
+///
+/// The two outcomes are not comparable: one shows a message, the other renames
+/// somebody's favourites, watch progress and recordings metadata and starts again. So
+/// the decision is made on the error's *variant*, which cannot drift.
+///
+/// * `SchemaTooNew` — a newer build wrote this. Replacing it would throw away a library
+///   this build simply cannot read yet.
+/// * `Migration` — our own SQL failed. The file is almost certainly fine; the bug is in
+///   the release, and a release that moves every viewer's library aside on first launch
+///   is a far worse outcome than one that will not start.
+///
+/// Everything else — a file that is not a database, a truncated one, a failed integrity
+/// check — is corruption, and is what the replace path exists for (R-46).
+fn should_refuse(error: &DbError) -> bool {
+    matches!(
+        error,
+        DbError::SchemaTooNew { .. } | DbError::Migration { .. }
+    )
+}
+
 /// Open the library, or start a new one if the file on disk cannot be used.
 ///
 /// `open` alone propagates a corrupt file out of `Services::new`, which Tauri turns
@@ -265,16 +313,33 @@ pub fn open_or_recover(path: impl AsRef<Path>) -> Result<(Connection, Opened)> {
             Ok(false) => "failed its integrity check".to_string(),
             Err(e) => format!("could not be checked: {e}"),
         },
+        // A database this build is too old for is a different problem, and replacing it
+        // would silently throw away a newer library. Refuse instead, so the message says
+        // to update rather than pretending nothing was there.
+        //
+        // Matched on the *variant*. This was
+        // `failure.contains("newer version of Aurora") || failure.contains("schema")`
+        // against the formatted message, and that was fragile in two ways. The first
+        // phrase occurs exactly once in the repository -- in the line that looked for
+        // it -- so it matched nothing. The second was doing all the work by coincidence
+        // of wording: `SchemaTooNew` reads "database is newer than this build (schema
+        // v9999, supported v11)", and it was the word `schema` in that parenthesis that
+        // saved the library. Reword the message -- drop the parenthetical, say "format"
+        // instead of "schema" -- and the next launch against a newer database renames
+        // the viewer's library and starts an empty one.
+        //
+        // A migration bug had the same shape: `DbError::Migration` carries a SQL error
+        // whose text contains "schema" only if it happens to, so a broken release could
+        // move every viewer's library aside and report it as corruption. Both are
+        // refusals now, which is the direction this function's own doc comment argues
+        // for -- destroying the one copy of somebody's favourites and watch history is
+        // "not a trade this should make on its own" (R-46).
+        Err(e) if should_refuse(&e) => {
+            tracing::error!("the library database could not be opened: {e}");
+            return Err(e);
+        }
         Err(e) => e.to_string(),
     };
-
-    // A database this build is too old for is a different problem, and replacing it
-    // would silently throw away a newer library. Refuse instead, so the message says
-    // to update rather than pretending nothing was there.
-    if failure.contains("newer version of Aurora") || failure.contains("schema") {
-        tracing::error!("the library database {failure}");
-        return open(path).map(|c| (c, Opened::Intact));
-    }
 
     tracing::error!("the library database {failure}; starting a new one");
     let corrupt_copy = aside(path);
@@ -559,6 +624,100 @@ mod tests {
             .query_row("SELECT url FROM movies WHERE id = 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(url, "http://host/movie/bob/hunter2/555.mkv");
+    }
+
+    /// What decides between a message and renaming somebody's library.
+    ///
+    /// The old rule was a substring match on the formatted error:
+    /// `failure.contains("newer version of Aurora") || failure.contains("schema")`.
+    /// This test holds the two cases apart and shows where that rule got it wrong —
+    /// a migration bug produces a SQL error whose text need not mention a schema at
+    /// all, so a broken release would have renamed every viewer's library and reported
+    /// it as corruption (R-46).
+    #[test]
+    fn a_failed_migration_is_refused_where_the_old_text_rule_replaced() {
+        let migration = DbError::Migration {
+            version: 12,
+            source: rusqlite::Error::ExecuteReturnedResults,
+        };
+        assert!(should_refuse(&migration), "{migration}");
+
+        // The old rule, for comparison. If this ever becomes true the message has
+        // changed to mention a schema by chance, which is precisely the fragility.
+        let text = migration.to_string();
+        assert!(
+            !(text.contains("newer version of Aurora") || text.contains("schema")),
+            "the old text rule happened to catch this one: {text}"
+        );
+
+        // And corruption is still corruption: these are what the replace path is for.
+        assert!(!should_refuse(&DbError::Sqlite(
+            rusqlite::Error::ExecuteReturnedResults
+        )));
+    }
+
+    /// A library from a newer build is refused, not renamed.
+    ///
+    /// This branch had no test. It decided between *refusing* a database and *moving
+    /// the viewer's library aside* by substring-matching an error message:
+    /// `failure.contains("newer version of Aurora") || failure.contains("schema")`.
+    /// The first phrase occurs exactly once in the repository — in the line that looked
+    /// for it — so it matched nothing, and the second was doing all the work by
+    /// coincidence of wording: `SchemaTooNew` happens to say "(schema v9999, supported
+    /// v11)". Reword that message and the next launch renames somebody's favourites,
+    /// watch history and recordings metadata and starts an empty library (R-46).
+    #[test]
+    fn a_library_from_a_newer_build_is_refused_rather_than_replaced() {
+        let dir = scratch("too-new");
+        let path = dir.join("library.db");
+        {
+            let conn = open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO providers (name, kind, base_url, created_at)
+                 VALUES ('P','m3u','https://example.com',0)",
+                [],
+            )
+            .unwrap();
+            // What a newer build leaves behind.
+            conn.execute_batch("PRAGMA user_version = 9999").unwrap();
+        }
+
+        let err = open_or_recover(&path).unwrap_err();
+        assert!(
+            matches!(err, DbError::SchemaTooNew { .. }),
+            "expected a refusal, got {err:?}"
+        );
+
+        // And the library is still where the viewer left it, with their row in it.
+        assert!(path.exists(), "the library was moved aside");
+        let aside: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("corrupt"))
+            .collect();
+        assert!(aside.is_empty(), "something was renamed: {aside:?}");
+    }
+
+    /// The same, for the message this does *not* depend on any more.
+    ///
+    /// The point of the variant match is that the wording is free to change. This
+    /// asserts the two are independent by checking the refusal while the message says
+    /// nothing about a schema.
+    #[test]
+    fn the_refusal_does_not_depend_on_the_wording_of_the_message() {
+        let err = DbError::SchemaTooNew {
+            found: 9999,
+            supported: 11,
+        };
+        let text = err.to_string();
+        // If this assertion ever fails, the message has been reworded — which is
+        // allowed, and is exactly what used to break the guard.
+        assert!(
+            text.contains("schema"),
+            "the message has changed, which is fine: {text}"
+        );
+        assert!(matches!(err, DbError::SchemaTooNew { .. }));
     }
 
     /// The bug: a corrupt file propagated out of `Services::new`, Tauri turned that

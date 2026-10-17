@@ -55,6 +55,13 @@ function flip(set: Set<string>, key: string): { next: Set<string>; added: boolea
   return { next, added };
 }
 
+/**
+ * Which `load` is the newest. Module-level, because it is about the sequence of calls
+ * rather than about any one of them, and a value kept in the store would be read back
+ * through the same `get()` that caused the bug it exists to fix.
+ */
+let requests = 0;
+
 export const useMarks = create<MarksState>((set, get) => ({
   myList: new Set(),
   liked: new Set(),
@@ -62,18 +69,45 @@ export const useMarks = create<MarksState>((set, get) => ({
   loaded: false,
 
   load: async (profileId) => {
+    /*
+     * The guard here used to be `get().profileId !== profileId`, and
+     * `get().profileId` is the profile whose marks are *currently loaded* -- written in
+     * the `finally` below, after the guard. So the request was compared against a value
+     * it was itself about to write, and it was wrong both times it mattered:
+     *
+     *   - On the first load `profileId` is still `null`, so `null !== 1` returned early
+     *     and the answer was thrown away. `App.tsx` calls `load` once per profile
+     *     change, so for the chosen profile that is the only load -- every plus on
+     *     every card rendered as a plus and every thumb as unset, for titles that were
+     *     on the list. It came right on any second load, which is why it survived:
+     *     invisible to anyone testing a flow rather than a cold start.
+     *   - Switching profile returned early too, and the `finally` then moved
+     *     `profileId` to the new person while leaving the old person's `myList` and
+     *     `liked` on screen -- exactly what the comment said the guard prevented.
+     *
+     * A ticket instead, which is what `usePages` and `Playback::generation` already do
+     * for this race (R-86).
+     */
+    const ticket = ++requests;
+    // And the previous profile's ticks go now rather than when the answer arrives, so
+    // there is no window in which one person's list is drawn on another's screen.
+    if (get().profileId !== profileId) {
+      set({ profileId, myList: new Set(), liked: new Set() });
+    }
     try {
       const marks = await invoke('lists.marks', { profileId });
-      // Still the profile that was asked about: switching profile mid-flight must not
-      // apply one person's list to another's screen.
-      if (get().profileId !== profileId) return;
+      // A late answer for a profile that is no longer the selected one is dropped.
+      if (ticket !== requests) return;
       set({ myList: new Set(marks.myList), liked: new Set(marks.liked) });
     } catch (e) {
       // The buttons stay usable: a toggle writes to the host regardless, and the worst
       // case is a tick that starts in the wrong state until the next load.
       report('Could not read your lists')(e);
     } finally {
-      set({ profileId, loaded: true });
+      // However it finished -- the shell waits on `loaded` before it paints, so this
+      // must happen on failure too. Only for the newest request: an older one landing
+      // late must not announce itself as the current state.
+      if (ticket === requests) set({ profileId, loaded: true });
     }
   },
 

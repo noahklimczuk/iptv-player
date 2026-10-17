@@ -462,9 +462,14 @@ impl Playback {
 
         session.retries += 1;
         session.failed_at = None;
+        // Redacted. `session.url` is the playable stream URL -- `movies.url` or
+        // `episodes.url` -- which carries `/<user>/<pass>/` in its path, and this fires
+        // at *info* level every time a film's stream dies, up to three times per
+        // failure. The shape is one `redact` has always handled; the call was simply
+        // missing (R-71).
         tracing::info!(
             "reloading {} at {died_at:.0}s, attempt {} of {MAX_VOD_RETRIES}",
-            session.url,
+            aurora_ingest::http::redact(&session.url),
             session.retries
         );
         let loaded = self.player.lock().load(&session.url, &session.options);

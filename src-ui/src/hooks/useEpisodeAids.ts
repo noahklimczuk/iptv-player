@@ -13,6 +13,15 @@ import { activeProfileId } from '@/state/profile';
 
 export interface EpisodeAids {
   aids: PlaybackAids | null;
+  /**
+   * Which episode these aids are about, or null when what is playing is not one.
+   *
+   * Exported so the screen can key per-episode state on it. `SkipButton` keeps a set of
+   * regions it has already auto-skipped -- so that seeking back into an intro does not
+   * yank the viewer forward again -- and that set is per episode, which nothing told it
+   * (R-149).
+   */
+  episodeId: number | null;
   /** The marker under the playhead right now, if any. */
   activeMarker: SkipMarker | null;
   /** Whether the current marker should be skipped without being asked. */
@@ -22,6 +31,23 @@ export interface EpisodeAids {
   playNext: () => void;
   dismissUpNext: () => void;
 }
+
+/**
+ * Which marker sources may fire without being asked.
+ *
+ * Mirrors `aurora_core::markers::MarkerSource::may_auto_skip`, the host's half of the
+ * same rule. A map rather than `!== 'convention'`, for two reasons: an unrecognised
+ * source reads as `undefined` and so is excluded rather than admitted, and
+ * `Record<SkipMarker['source'], boolean>` is exhaustiveness-checked — adding a source to
+ * the contract will not compile until somebody decides which side of this line it is on.
+ */
+const MAY_AUTO_SKIP: Record<SkipMarker['source'], boolean> = {
+  chapters: true,
+  user: true,
+  learned: true,
+  // Placed by the clock rather than by evidence. See the comment on `autoSkip`.
+  convention: false,
+};
 
 export function useEpisodeAids(
   player: PlayerState | null,
@@ -104,16 +130,23 @@ export function useEpisodeAids(
   /**
    * Whether to jump without being asked.
    *
-   * `source !== 'convention'` is the guard that matters: a conventional marker is placed
-   * by the clock rather than by evidence, so it is a button somebody may press and never
-   * something that fires on its own. Auto-skipping a guess would mean a wrong runtime
-   * silently cutting the last minute of an episode — which is how you lose the final
-   * scene of a finale.
+   * The source has to be one of the evidence-backed ones, named. A conventional marker
+   * is placed by the clock rather than by evidence, so it is a button somebody may press
+   * and never something that fires on its own: auto-skipping a guess would mean a wrong
+   * runtime silently cutting the last minute of an episode — which is how you lose the
+   * final scene of a finale.
+   *
+   * Looked up in a table rather than asked as `!== 'convention'`. The negative form
+   * says yes to anything it does not recognise, and the host's own fallback did the same
+   * thing — an unparseable `source` column was read back as `learned`, which auto-skips
+   * — so the two guards were one decision made twice from the same wrong value, with no
+   * second line of defence. An unrecognised source now declines to fire by itself, which
+   * is the direction that costs a button press rather than a final scene (R-45).
    */
   const autoSkip =
     !!activeMarker &&
     !!aids &&
-    activeMarker.source !== 'convention' &&
+    MAY_AUTO_SKIP[activeMarker.source] === true &&
     ((activeMarker.kind === 'intro' && aids.prefs.alwaysSkipIntro) ||
       (activeMarker.kind === 'recap' && aids.prefs.alwaysSkipRecap));
 
@@ -160,5 +193,7 @@ export function useEpisodeAids(
 
   const dismissUpNext = useCallback(() => setDismissed(episodeId), [episodeId]);
 
-  return { aids, activeMarker, autoSkip, upNextVisible, skip, playNext, dismissUpNext };
+  return {
+    aids, episodeId, activeMarker, autoSkip, upNextVisible, skip, playNext, dismissUpNext,
+  };
 }
