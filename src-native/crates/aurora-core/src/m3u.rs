@@ -130,8 +130,12 @@ pub fn parse<R: BufRead>(reader: R) -> Parsed {
                     for part in v.split('&') {
                         let (hk, hv) = split_once_trim(part, '=');
                         match hk.to_ascii_lowercase().as_str() {
-                            "user-agent" => pending.http.user_agent = Some(crate::percent::decode(hv)),
-                            "referer" | "referrer" => pending.http.referrer = Some(crate::percent::decode(hv)),
+                            "user-agent" => {
+                                pending.http.user_agent = Some(crate::percent::decode(hv))
+                            }
+                            "referer" | "referrer" => {
+                                pending.http.referrer = Some(crate::percent::decode(hv))
+                            }
                             _ => {}
                         }
                     }

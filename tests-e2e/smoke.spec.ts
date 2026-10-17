@@ -120,6 +120,41 @@ test('detail modal opens with metadata and tabs', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/03-detail-modal.png` });
 });
 
+/**
+ * The Details tab says only what the library knows.
+ *
+ * Five of its ten rows were string literals, so every one of 27,494 films reported the
+ * same container, codec, resolution, frame rate, audio layout and subtitle tracks, with
+ * `example.com` as its source -- sitting in the same list as the five real rows, with
+ * identical styling, under a heading that says Details (R-104).
+ */
+test('the Details tab invents nothing', async ({ page }) => {
+  await page.goto('/#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  await page.locator('[role="button"]').first().click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('tab', { name: /Details/i }).click();
+
+  const details = await dialog.innerText();
+  for (const invented of [
+    'matroska',
+    'HEVC Main 10',
+    '3840x2160',
+    '23.976',
+    'E-AC-3',
+    'SRT (eng)',
+    'example.com',
+  ]) {
+    expect(details, `Details still claims ${invented}`).not.toContain(invented);
+  }
+
+  // And still says the things it does know.
+  await expect(dialog.getByText('Title', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Genres', { exact: true })).toBeVisible();
+});
+
 test('EPG guide renders a cable-style grid with a now line and preview', async ({ page }) => {
   await page.goto('/#/guide');
   await expect(page.getByRole('heading', { name: 'TV Guide' })).toBeVisible();
@@ -255,7 +290,9 @@ test('command palette searches across every content kind', async ({ page }) => {
   // assertion passed the whole time the library was being pushed below the fold.
   const movies = dialog.getByTestId('palette-group-movies');
   await expect(movies).toBeVisible();
-  await expect(movies.getByRole('button')).not.toHaveCount(0);
+  // `option`, not `button`: the result rows are the options of a labelled listbox, so
+  // that arrowing through them can be announced and scrolled into view (R-147).
+  await expect(movies.getByRole('option')).not.toHaveCount(0);
 
   // Before anything is unfolded, so the shot shows what a search actually looks like.
   await page.screenshot({ path: `${SHOTS}/10-search.png` });
@@ -263,12 +300,13 @@ test('command palette searches across every content kind', async ({ page }) => {
   // Capped per group, so the guide's matches cannot bury the library. The rest are a
   // click away rather than thrown away.
   const onNow = dialog.getByTestId('palette-group-onNow');
+  // The "Show N more" row is still a button: it is a control, not a result.
   const more = onNow.getByRole('button', { name: /^Show \d+ more on now$/ });
   if (await more.count()) {
-    const before = await onNow.getByRole('button').count();
+    const before = await onNow.getByRole('option').count();
     await more.click();
     await expect(more).toHaveCount(0);
-    expect(await onNow.getByRole('button').count()).toBeGreaterThan(before);
+    expect(await onNow.getByRole('option').count()).toBeGreaterThan(before);
   }
 });
 
@@ -290,7 +328,7 @@ test('picking a film in the palette opens that film', async ({ page }) => {
   // first button in the dialog belongs to whichever group comes first, usually a channel.
   const movies = dialog.locator('[data-testid="palette-group-movies"]');
   await expect(movies).toBeVisible();
-  const hit = movies.getByRole('button').first();
+  const hit = movies.getByRole('option').first();
   const picked = (await hit.innerText()).split('\n')[0]!.trim();
   await hit.click();
 

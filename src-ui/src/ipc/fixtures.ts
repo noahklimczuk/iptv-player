@@ -132,6 +132,10 @@ export const channels: Channel[] = (() => {
         logo: art(name, 96, 96),
         group: g.name,
         epgChannelId: `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
+        // The raw `tvg-id` the playlist carried. The same value here, because the mock
+        // does not model guide matching -- on a real panel the two differ constantly,
+        // which is the reason the field is sent at all.
+        tvgId: `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
         quality: q,
         hidden: false,
         isRadio: false,
@@ -166,6 +170,7 @@ export const channels: Channel[] = (() => {
       logo: art(f.name, 96, 96),
       group: f.group,
       epgChannelId: `${f.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
+      tvgId: `${f.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.example`,
       quality: 'HD',
       hidden: false,
       isRadio: false,
@@ -394,7 +399,12 @@ export const episodes: Episode[] = (() => {
               'breaks the rule', 'tells the truth'])}; ` +
             `${person()} ${pick(['pays for it', 'disagrees', 'disappears',
               'covers the trail'])}.`,
-          still: art(`${s.id}-${season}-${e}`, 480, 270),
+          // Not every episode has one. Stills come from TMDB enrichment, which misses
+          // individual episodes constantly -- recent ones especially -- so a library
+          // where every episode has artwork is a library that does not exist, and it
+          // is what hid R-106 from all 154 journeys. Deterministic, and deliberately
+          // not drawn from the PRNG: a draw here would shift every later fixture.
+          still: (s.id + e) % 3 === 0 ? null : art(`${s.id}-${season}-${e}`, 480, 270),
           runtimeMins: int(38, 62),
           airDate: Math.floor(Date.now() / 1000) - int(30, 2000) * 86400,
         });

@@ -380,7 +380,11 @@ fn cause_chain(e: &reqwest::Error) -> String {
 
 /// `reqwest`'s Display strings do not mention the words the shared classifier looks
 /// for, so map its typed predicates first and fall back to the cause chain.
-fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
+///
+/// `pub(crate)` because the recorder needs it too. It used to classify with
+/// `e.to_string()`, which is the one string in this module everything else is careful to
+/// keep away from the classifier -- see `cause_chain` above (R-66).
+pub(crate) fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
     if e.is_timeout() {
         return NetFailure::classify("connection timed out");
     }
@@ -407,32 +411,15 @@ fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
     NetFailure::classify(&causes)
 }
 
-/// `1234.ts`, or just `1234` — the last segment of an Xtream stream URL.
+/// Where `redact` lives now: `aurora-core`, so `aurora-player` can reach it.
 ///
-/// **The extension is optional, and that is the whole point of this function.** It used
-/// to be required, and the subscription this project is measured against serves every
-/// one of its 6,699 live channels as `http://host/<user>/<pass>/<id>` with no extension
-/// at all — so not one of them was redacted, while its films and series, which do carry
-/// `.mkv` and `.mp4`, were. `docs/PRIVACY.md` names this exact form and writes it with a
-/// `.ts` on the end, which is how a documented defence came to miss the commonest URL
-/// the app handles.
-///
-/// An all-digit segment in the fourth position of a four-segment URL is specific enough:
-/// `/a/b/c` and `/epg/guide/today.xml` are both left alone, and the cost of being wrong
-/// here is a log line that says `***` where it could have said a path.
-fn looks_like_stream_id(segment: &str) -> bool {
-    let (id, ext) = match segment.rsplit_once('.') {
-        Some((id, ext)) => (id, Some(ext)),
-        None => (segment, None),
-    };
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    match ext {
-        Some(ext) => !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric()),
-        None => true,
-    }
-}
+/// It was here, in the crate that also carries `reqwest`, and `aurora-player` cannot
+/// depend on that to redact a log line — which is why `mpv.rs` logged mpv's output with
+/// no redaction at all (R-62). The function is pure string work and belongs beside
+/// `catchup::split_xtream_stream_url`, which parses the same URL form. Re-exported
+/// rather than moved at every call site, because `http::redact` is the name 14 of them
+/// already use and the one `docs/PRIVACY.md` writes down.
+pub use aurora_core::redact::redact;
 
 fn looks_gzipped(url: &str) -> bool {
     let path = url
@@ -441,65 +428,6 @@ fn looks_gzipped(url: &str) -> bool {
         .unwrap_or(url)
         .to_ascii_lowercase();
     path.ends_with(".gz") || path.ends_with(".gzip")
-}
-
-/// Strip credentials before a URL reaches a log line (README C10).
-pub fn redact(url: &str) -> String {
-    let mut out = url.to_string();
-    // Xtream carries them as query parameters. Every occurrence, not the first: a
-    // panel that repeats a parameter, or a URL assembled from two of them, would
-    // otherwise leave the second copy in the log.
-    for key in [
-        "password", "pass", "token", "username", "user", "api_key", "apikey",
-    ] {
-        let needle = format!("{key}=");
-        let mut from = 0usize;
-        while let Some(offset) = out[from..].to_ascii_lowercase().find(&needle) {
-            let start = from + offset;
-            let value_start = start + needle.len();
-            let end = out[value_start..]
-                .find('&')
-                .map(|i| value_start + i)
-                .unwrap_or(out.len());
-            out.replace_range(value_start..end, "***");
-            from = value_start + 3;
-            if from >= out.len() {
-                break;
-            }
-        }
-    }
-    // ...and path segments carry them in stream URLs: /live/user/pass/123.ts
-    if let Some(idx) = out.find("://") {
-        let (scheme, rest) = out.split_at(idx + 3);
-        let mut segments: Vec<&str> = rest.split('/').collect();
-        let mut redacted = false;
-        for marker in ["live", "movie", "series"] {
-            if let Some(pos) = segments.iter().position(|s| *s == marker) {
-                for seg in segments.iter_mut().skip(pos + 1).take(2) {
-                    *seg = "***";
-                }
-                redacted = true;
-            }
-        }
-        // Many panels serve `http://host/<user>/<pass>/<id>.ts` with no marker at all
-        // — `aurora_core::catchup::split_xtream_stream_url` supports exactly that
-        // form, so the codebase already knows it exists. Without this the commonest
-        // stream URL there is went into the log intact.
-        if !redacted && segments.len() == 4 && looks_like_stream_id(segments[3]) {
-            segments[1] = "***";
-            segments[2] = "***";
-        }
-        out = format!("{scheme}{}", segments.join("/"));
-    }
-    // userinfo form: http://user:pass@host
-    if let Some(at) = out.find('@') {
-        if let Some(scheme_end) = out.find("://") {
-            if at > scheme_end {
-                out.replace_range(scheme_end + 3..at, "***");
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -866,84 +794,6 @@ mod tests {
         assert!(!err.actions.is_empty());
     }
 
-    #[test]
-    fn redacts_xtream_query_credentials() {
-        let got =
-            redact("http://example.com/player_api.php?username=alice&password=hunter2&action=x");
-        assert!(!got.contains("alice"), "{got}");
-        assert!(!got.contains("hunter2"), "{got}");
-        assert!(got.contains("action=x"), "non-secret params survive: {got}");
-    }
-
-    #[test]
-    fn redacts_credentials_in_stream_paths() {
-        let got = redact("http://example.com/live/alice/hunter2/123.ts");
-        assert!(!got.contains("alice"), "{got}");
-        assert!(!got.contains("hunter2"), "{got}");
-        assert!(got.contains("123.ts"), "{got}");
-    }
-
-    /// The commonest stream URL a panel serves, and the one `redact` walked past.
-    ///
-    /// Path redaction only fired after a literal `live`, `movie` or `series` segment.
-    /// Plenty of panels serve `http://host/<user>/<pass>/<id>.ts` with no marker —
-    /// `aurora_core::catchup::split_xtream_stream_url` supports exactly that form —
-    /// and every retry logs the URL it is retrying.
-    #[test]
-    fn a_markerless_user_pass_id_url_is_redacted() {
-        let out = redact("http://panel.example/bob/hunter2/1234.ts");
-        assert!(!out.contains("bob"), "{out}");
-        assert!(!out.contains("hunter2"), "{out}");
-        assert!(
-            out.contains("1234.ts"),
-            "the stream id is not a secret: {out}"
-        );
-    }
-
-    /// The form this subscription actually serves, which carries no extension.
-    ///
-    /// Measured against the real playlist: 233,650 film and series URLs end in `.mkv`,
-    /// `.mp4` or `.avi` and were redacted; all 6,699 live URLs are
-    /// `http://host/<user>/<pass>/<id>` with nothing after the id, and none of them was.
-    /// The difference was one character, and live is the kind a session opens repeatedly.
-    #[test]
-    fn a_markerless_url_with_no_extension_is_redacted() {
-        let out = redact("http://panel.example/bob/hunter2/1234");
-        assert!(!out.contains("bob"), "{out}");
-        assert!(!out.contains("hunter2"), "{out}");
-        assert!(out.contains("1234"), "the stream id is not a secret: {out}");
-    }
-
-    /// The shape must be specific enough not to mangle an ordinary path.
-    #[test]
-    fn an_ordinary_three_segment_path_is_left_alone() {
-        for url in [
-            "http://example.com/epg/guide/today.xml",
-            "http://example.com/a/b/c",
-            "http://example.com/one/two/three.html",
-        ] {
-            assert_eq!(redact(url), url, "{url}");
-        }
-    }
-
-    #[test]
-    fn a_repeated_credential_parameter_is_redacted_every_time() {
-        let out = redact(
-            "http://panel.example/player_api.php?username=bob&password=hunter2\
-             &action=get_series&password=hunter2",
-        );
-        assert!(!out.contains("hunter2"), "{out}");
-        assert!(!out.contains("bob"), "{out}");
-        assert!(out.contains("action=get_series"), "{out}");
-    }
-
-    #[test]
-    fn redacts_userinfo() {
-        let got = redact("http://alice:hunter2@example.com/x");
-        assert!(!got.contains("hunter2"), "{got}");
-        assert!(got.contains("example.com"), "{got}");
-    }
-
     /// Provoke a connect failure whose URL carries credentials.
     ///
     /// What an OS does with a dead port is not portable — Linux refuses immediately,
@@ -1037,26 +887,5 @@ mod tests {
         assert_eq!(dns.code, ErrorCode::Dns);
         // One sends you to the address you typed, the other to your network settings.
         assert_ne!(refused.message, dns.message);
-    }
-
-    #[test]
-    fn a_metadata_api_key_is_redacted_too() {
-        // TMDB carries its key in the query string, and a key in a log line is a leaked
-        // credential exactly like a provider password is.
-        let got = redact("https://api.themoviedb.org/3/search/movie?api_key=abcd1234&query=Heat");
-        assert!(!got.contains("abcd1234"), "{got}");
-        assert!(
-            got.contains("query=Heat"),
-            "the rest of the URL is still readable"
-        );
-
-        let got = redact("https://example.com/x?apikey=secret");
-        assert!(!got.contains("secret"), "{got}");
-    }
-
-    #[test]
-    fn redaction_leaves_a_clean_url_alone() {
-        let url = "http://example.com/epg.xml.gz";
-        assert_eq!(redact(url), url);
     }
 }
