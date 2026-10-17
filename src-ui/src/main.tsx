@@ -5,7 +5,8 @@ import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
 import {
-  clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setSilentDurationMock,
+  clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setPlayerErrorMock,
+  setSilentDurationMock,
 } from './ipc';
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
@@ -30,6 +31,11 @@ installGlobalErrorHandlers();
 // …and lets them make one go quiet rather than refuse, which is the failure the boot
 // screen exists to survive and the one nothing could express before.
 (window as unknown as { __auroraHang?: unknown }).__auroraHang = hangMock;
+// …and lets them put the player into the state the error panel is for, which a refusing
+// command cannot: `player.error` comes from the host's `NetFailure`, so until this
+// existed no journey could press the panel's buttons.
+(window as unknown as { __auroraPlayerError?: unknown }).__auroraPlayerError =
+  setPlayerErrorMock;
 // …and the icon set, so a test can measure every glyph's geometry rather than only the
 // handful that happen to be on one screen. `getBBox` needs a real SVG engine, so this is
 // the only place the measurement can be made from.

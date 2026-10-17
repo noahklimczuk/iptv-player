@@ -380,7 +380,11 @@ fn cause_chain(e: &reqwest::Error) -> String {
 
 /// `reqwest`'s Display strings do not mention the words the shared classifier looks
 /// for, so map its typed predicates first and fall back to the cause chain.
-fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
+///
+/// `pub(crate)` because the recorder needs it too. It used to classify with
+/// `e.to_string()`, which is the one string in this module everything else is careful to
+/// keep away from the classifier -- see `cause_chain` above (R-66).
+pub(crate) fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
     if e.is_timeout() {
         return NetFailure::classify("connection timed out");
     }

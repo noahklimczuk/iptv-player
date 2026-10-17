@@ -601,6 +601,44 @@ fn the_updaters_bundle_identifier_matches_the_manifest() {
     );
 }
 
+/// The release profile must not set `panic = "abort"`.
+///
+/// `supervise.rs` is built on `catch_unwind` and exists so one panicking tick does not
+/// end a background thread for the rest of the session. Under `abort` it cannot catch
+/// anything -- the process is gone before `catch_unwind` returns -- so the safety net
+/// was present in every debug build and absent from every shipped one, at all six
+/// `supervised` call sites (R-72).
+///
+/// This is asserted here, from the manifest, because no ordinary test can: `cargo test`
+/// builds with the test profile, which unwinds, so `a_panicking_tick_does_not_end_the_loop`
+/// passes either way and never exercises the configuration that ships.
+#[test]
+fn the_release_profile_still_unwinds_so_the_supervisor_can_work() {
+    let manifest = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("Cargo.toml"),
+    )
+    .expect("the workspace Cargo.toml");
+
+    // Only lines that are actually a setting, so the explanation above it does not
+    // count as the thing it is explaining.
+    let aborts = manifest
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .any(|l| l.starts_with("panic") && l.contains("abort"));
+
+    assert!(
+        !aborts,
+        "the release profile sets panic = \"abort\", which turns every `catch_unwind` in \
+         `supervise.rs` into a no-op: a panicking tick takes the whole application \
+         instead of being logged and skipped, and the test that covers that cannot see \
+         it because tests unwind (R-72)"
+    );
+}
+
 /// The installer must put Aurora somewhere it can write to.
 ///
 /// This is the whole reason in-app updates work. `updates::asset_kind` asks one
