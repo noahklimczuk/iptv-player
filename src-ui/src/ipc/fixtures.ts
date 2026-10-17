@@ -237,6 +237,30 @@ const PROG_BY_GROUP: Record<string, readonly string[]> = {
 
 const HALF_HOUR = 1800;
 
+/**
+ * Whether this channel's guide carries anything beyond a title and a description.
+ *
+ * **A real guide mostly does not.** Counted in this subscription's own XMLTV, over
+ * 777,513 imported programmes: `categories` and `credits` are `[]` for every single
+ * row, `flags` is 0 for every row, and `season`, `episode`, `sub_title`, `rating` and
+ * `star_rating` are null throughout. The source document carries `<title>` and `<desc>`
+ * and none of `<category>`, `<episode-num>`, `<premiere>`, `<new/>`, `<star-rating>`,
+ * `<credits>`, `<rating>` or `<sub-title>`.
+ *
+ * Five guide features depend on those fields and are inert on this panel: the genre
+ * colour coding in the grid, the New badge, the Live badge, the "S1E2" suffix and the
+ * programme rating badge. Each is correctly guarded with `&&`, so nothing breaks and
+ * nothing draws -- which is exactly why nothing noticed. The fixtures populated all of
+ * them, so every journey ran against a guide no viewer has (R-132).
+ *
+ * Two channels in three are bare, chosen by channel id so no PRNG draw moves and the
+ * same channel is always the same way round. Not all three, because the features are
+ * not dead everywhere: a guide that does send a category should still colour its block.
+ */
+function guideIsBare(ch: Channel): boolean {
+  return ch.id % 3 !== 0;
+}
+
 /** Programmes for a channel across a window, on clean 30-minute boundaries. */
 export function programmesFor(ch: Channel, from: number, to: number): Programme[] {
   const out: Programme[] = [];
@@ -245,6 +269,8 @@ export function programmesFor(ch: Channel, from: number, to: number): Programme[
   let seed = 0;
   for (const c of ch.epgChannelId ?? ch.name) seed = (seed * 31 + c.charCodeAt(0)) >>> 0;
   const r = rng(seed);
+
+  const bare = guideIsBare(ch);
 
   let t = Math.floor(from / HALF_HOUR) * HALF_HOUR;
   let id = seed % 100000;
@@ -256,26 +282,42 @@ export function programmesFor(ch: Channel, from: number, to: number): Programme[
     const name = isFilm || pool.length === 0 ? title() : pool[Math.floor(r() * pool.length)]!;
     const isSeries = !isFilm && r() > 0.5;
 
+    // Drawn unconditionally and kept together, so a bare channel consumes exactly the
+    // same sequence as a populated one and the two differ only in what is stored.
+    const drawn = {
+      subTitle: isSeries ? `Episode ${int(1, 12)}` : null,
+      categories: isFilm ? ['Movie', pick(GENRES)] : [ch.group ?? 'General'],
+      season: isSeries ? int(1, 6) : null,
+      episode: isSeries ? int(1, 12) : null,
+      rating: pick(CERTS) as string | null,
+      isNew: r() > 0.75,
+      isLive: ch.group === 'Sports' && r() > 0.5,
+      isPremiere: r() > 0.94,
+    };
+
     out.push({
       id: id++,
       channelId: ch.epgChannelId ?? String(ch.id),
       start: t,
       stop: t + dur,
       title: name,
-      subTitle: isSeries ? `Episode ${int(1, 12)}` : null,
+      subTitle: bare ? null : drawn.subTitle,
       description:
         `${name} — ${isFilm
           ? `${withArticle(pick(GENRES).toLowerCase())} feature starring ` +
             `${person()} and ${person()}.`
           : `${pick(['Coverage', 'Analysis', 'A new edition', 'Highlights'])} ` +
             `with ${person()}.`}`,
-      categories: isFilm ? ['Movie', pick(GENRES)] : [ch.group ?? 'General'],
-      season: isSeries ? int(1, 6) : null,
-      episode: isSeries ? int(1, 12) : null,
-      rating: pick(CERTS),
-      isNew: r() > 0.75,
-      isLive: ch.group === 'Sports' && r() > 0.5,
-      isPremiere: r() > 0.94,
+      // Everything from here down comes from an XMLTV element this panel never sends,
+      // so on a bare channel it is dropped -- *after* being drawn, because skipping a
+      // draw would shift every value after it and rewrite the fixture world.
+      categories: bare ? [] : drawn.categories,
+      season: bare ? null : drawn.season,
+      episode: bare ? null : drawn.episode,
+      rating: bare ? null : drawn.rating,
+      isNew: bare ? false : drawn.isNew,
+      isLive: bare ? false : drawn.isLive,
+      isPremiere: bare ? false : drawn.isPremiere,
     });
     t += dur;
   }
