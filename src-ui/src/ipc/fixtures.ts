@@ -201,7 +201,7 @@ export const channels: Channel[] = (() => {
  */
 export function matchKey(name: string): string {
   return name
-    .replace(/^\s*[\[(]?[A-Za-z]{2,4}[\])]?\s*[:|\-–]\s*/, '')
+    .replace(/^\s*[[(]?[A-Za-z]{2,4}[\])]?\s*[:|\-–]\s*/, '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')

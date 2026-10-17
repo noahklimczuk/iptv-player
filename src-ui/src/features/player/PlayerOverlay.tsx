@@ -195,6 +195,14 @@ export function PlayerOverlay({
   const picture = showingPicture(player);
 
   return (
+    // The keyboard half of this is the `keydown` listener above, on the window.
+    //
+    // Both rules want a key handler here beside the click, and this div is the wrong
+    // place for one: it never takes focus, and the keys that matter are handled
+    // globally -- which is what R-74 fixed and what the effect above says in as many
+    // words. Named here rather than answered with a `tabIndex` on a full-screen div,
+    // which would put a focus stop in front of every control it contains.
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
       onMouseMove={bump}
       onClick={bump}

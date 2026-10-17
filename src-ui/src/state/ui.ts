@@ -91,7 +91,7 @@ const THEMES: Theme[] = ['dark', 'oled', 'light', 'contrast'];
 const DENSITIES: Density[] = ['desktop', 'tv'];
 
 function loadAppearance(): Partial<SavedAppearance> {
-  let raw: string | null = null;
+  let raw: string | null;
   try {
     raw = window.localStorage.getItem(SAVED_KEY);
   } catch {

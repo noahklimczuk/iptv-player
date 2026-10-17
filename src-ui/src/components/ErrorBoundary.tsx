@@ -26,7 +26,11 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Not swallowed: a release build has no console, but it does have a host that
     // logs, and this is the one place that knows a component tree died.
-    // eslint-disable-next-line no-console
+    //
+    // The `eslint-disable-next-line no-console` that used to sit here was one of the
+    // five suppressions written for a linter that was never installed (R-155). There is
+    // one now, and it allows `console.error` and `console.warn` -- which is how the UI
+    // reports what it cannot show -- so the directive was dead on arrival.
     console.error('Aurora UI crashed', error, info.componentStack);
   }
 

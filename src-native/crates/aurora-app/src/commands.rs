@@ -80,9 +80,14 @@ pub fn channels_by_number(
     let Some(id) = channels::find_by_number(&db, args.number)? else {
         return Ok(None);
     };
-    Ok(channels::list(&db, &channels::ChannelFilter::default())?
-        .into_iter()
-        .find(|c| c.id == id))
+    // `get`, not `list(default)`. This is the call site `repo::channels::get` was
+    // written for and the one that was missed: `ChannelFilter::default()` has
+    // `radio_only: false`, which `list` turns into `AND is_radio = 0`, so a radio
+    // station was found by its number and then thrown away -- a keypad entry for one
+    // tuned nothing at all. A hidden channel went the same way. And it answered for one
+    // channel by sorting and materialising every row, which on this subscription is
+    // 6,698 of them, on every keypad entry (R-78).
+    Ok(channels::get(&db, id)?)
 }
 
 #[derive(Debug, Deserialize)]

@@ -209,12 +209,87 @@ impl Recommender for GeminiClient<'_> {
             },
         });
 
-        let raw = self.http.post_json(
+        // With the status, so a refusal can say what Google said about it. `post_json`
+        // turns a non-2xx into a `NetFailure` before the body is read, which is how the
+        // rail came to report an invalid key as "that request was rejected" (R-68).
+        let (status, raw) = self.http.post_json_with_status(
             &self.url(),
             &body.to_string(),
             &[(API_KEY_HEADER, self.api_key.as_str())],
         )?;
+        if status >= 400 {
+            return Err(rejected(status, &raw, "Recommendations"));
+        }
         parse_reply(&raw)
+    }
+}
+
+/// What the API said about a request it would not accept.
+///
+/// Gemini answers a bad request with `400` and an envelope whose `error.message` names
+/// the problem exactly -- an invalid key, a malformed payload, a tool declaration it
+/// would not take. None of that used to reach anybody: a non-2xx became a `NetFailure`
+/// before the body was read, `400` matched no branch in the classifier, and every one of
+/// them surfaced as "Your provider didn't respond. It may be temporarily offline." --
+/// which blames the IPTV provider for something Google said, and gives the reader
+/// nothing to do about it.
+///
+/// `subject` is who is speaking, because this is shared now: the assistant and the
+/// recommendation rail both talk to the same API and both have to be able to say an
+/// invalid key is an invalid key. The rail could not. It called `post_json`, which turns
+/// a non-2xx into a `NetFailure` before the body is read, so `parse_reply`'s error
+/// branch -- the one that reads `error.message` and maps "api key" onto `Unauthorized`
+/// plus `OpenSettings` -- was unreachable for every HTTP error status. A viewer with a
+/// mistyped key was told by the assistant that the key was invalid and, on the home
+/// screen, that "that request was rejected", with a "Try another source" button for a
+/// thing that has no other source (R-68).
+pub(crate) fn rejected(status: u16, raw: &str, subject: &str) -> NetFailure {
+    let said = serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        });
+
+    // A key problem is worth naming as one, because the action is different: nothing
+    // about waiting or retrying helps, and the viewer has somewhere to go and fix it.
+    let about_the_key = said
+        .as_deref()
+        .map(|m| {
+            let l = m.to_ascii_lowercase();
+            l.contains("api key") || l.contains("api_key") || l.contains("permission denied")
+        })
+        .unwrap_or(false);
+
+    if about_the_key || status == 401 || status == 403 {
+        return NetFailure {
+            code: ErrorCode::Unauthorized,
+            message: format!("{subject}'s API key was refused"),
+            cause: said
+                .unwrap_or_else(|| "Google rejected the key this build was given.".to_string()),
+            actions: vec![ErrorAction::OpenSettings],
+            retryable: false,
+        };
+    }
+
+    // 429 and 5xx do pass through `send_with_retry` first, so arriving here means the
+    // retries are already spent.
+    let retryable = status == 429 || status >= 500;
+    NetFailure {
+        // `Unknown` rather than a new variant: the taxonomy is serialised to the UI and
+        // mirrored in `shared/ipc.ts`, and what the reader needs here is the sentence
+        // Google sent, not a new code to branch on.
+        code: ErrorCode::Unknown,
+        message: if retryable {
+            format!("{subject} is busy")
+        } else {
+            format!("{subject} could not answer that")
+        },
+        cause: said.unwrap_or_else(|| format!("The model's API returned HTTP {status}.")),
+        actions: vec![ErrorAction::Retry],
+        retryable,
     }
 }
 
@@ -337,6 +412,56 @@ mod tests {
         assert_eq!(out[0].kind.as_deref(), Some("movie"));
         assert!(out[0].reason.contains("Arrival"));
         assert_eq!(out[1].kind.as_deref(), Some("series"));
+    }
+
+    /// A bad key says so, on the rail as well as in the assistant.
+    ///
+    /// The rail called `post_json`, which turns a non-2xx into a `NetFailure` before
+    /// anything reads the response, so the branch that recognises "API key not valid"
+    /// was unreachable for every HTTP error status. The viewer got `BadRequest` / "That
+    /// request was rejected" and a "Try another source" button, for the one thing in the
+    /// app that has no other source — while the assistant, over the same key and the
+    /// same envelope, said the key was refused and offered Settings (R-68).
+    #[test]
+    fn a_refused_key_names_the_key_rather_than_the_request() {
+        // The envelope Google really sends, verbatim.
+        let body = serde_json::json!({
+            "error": {
+                "code": 400,
+                "message": "API key not valid. Please pass a valid API key.",
+                "status": "INVALID_ARGUMENT",
+            }
+        })
+        .to_string();
+        let server = TestServer::always(Reply::failing(400, body));
+        let http = client();
+        let err = GeminiClient::new(&http, "wrong")
+            .with_endpoint(&server.url(""))
+            .suggest(&watched(), &[])
+            .expect_err("a 400 is not a list of suggestions");
+
+        assert_eq!(err.code, aurora_core::neterr::ErrorCode::Unauthorized, "{err:?}");
+        assert!(
+            err.message.contains("API key was refused"),
+            "the rail still blames the request: {:?}",
+            err.message
+        );
+        // Google's own sentence reaches the reader, which is the whole point of reading
+        // the body at all.
+        assert!(
+            err.cause.contains("API key not valid"),
+            "what Google said was thrown away: {:?}",
+            err.cause
+        );
+        // And the action is the one that can fix it. "Try another source" was the old
+        // one, for a rail with no other source.
+        assert_eq!(
+            err.actions,
+            vec![aurora_core::neterr::ErrorAction::OpenSettings],
+            "{:?}",
+            err.actions
+        );
+        assert!(!err.retryable, "a wrong key does not improve by being retried");
     }
 
     /// The key is a header, and the URL is clean.
