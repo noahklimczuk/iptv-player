@@ -557,7 +557,16 @@ export interface SyncReport {
   epgProgrammes: number;
   channelsMissing: number;
   epgMatched: number;
+  /** Names of channels with no guide, capped at 200 by the host. */
   epgUnmatched: string[];
+  /**
+   * How many channels have no guide altogether, which is *not* `epgUnmatched.length`.
+   *
+   * The setup screen used the capped list's length as the unmatched total, so past 200
+   * the percentage it computed drifted towards 100% -- 93% where the truth was 37%
+   * (R-121). Divide by `epgMatched + epgUnmatchedTotal`.
+   */
+  epgUnmatchedTotal: number;
   warnings: string[];
   /**
    * Everything the import saw and did not keep, and why.
@@ -1466,7 +1475,18 @@ export interface Commands {
   'providers.detect': (args: { text: string }) => DetectedSource;
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
   'providers.save': (args: { draft: DraftProvider }) => { id: number };
-  'providers.refresh': (args: { providerId: number }) => SyncReport;
+  /**
+   * Import, or re-import, everything this provider offers.
+   *
+   * `content` says what kinds to keep, and is stored when given: the nightly sweep
+   * refreshes without arguments and has to honour the same answer. Omit it to use
+   * whatever was last chosen, which for a library that predates the question is
+   * everything.
+   */
+  'providers.refresh': (args: {
+    providerId: number;
+    content?: { live: boolean; vod: boolean; series: boolean };
+  }) => SyncReport;
   /** A provider's settings, password included, for editing. */
   'providers.credentials': (args: { providerId: number }) => ProviderCredentials;
   /**
