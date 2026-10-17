@@ -19,6 +19,14 @@ import { PHASE_SENTENCE } from '@/lib/phases';
 
 type Step = 'source' | 'content' | 'importing' | 'done';
 
+/**
+ * How long after the last keystroke the host is asked what an address is.
+ *
+ * Long enough that typing a URL by hand is one question rather than one per character,
+ * short enough that it still feels like the field is paying attention (R-122).
+ */
+const DETECT_AFTER_TYPING_MS = 200;
+
 export function SetupWizard({
   onFinished,
   onSkip,
@@ -63,11 +71,16 @@ export function SetupWizard({
    * alone. Only on a paste: this runs on every keystroke, and rewriting the field under
    * somebody typing a URL by hand would make it impossible to finish the sentence.
    */
-  const detect = useCallback(async (text: string, fromPaste = false) => {
-    setPasted(text);
-    setValidation(null);
-    if (!text.trim()) { setDetected('none'); return; }
-    const d = await invoke('providers.detect', { text });
+  /** The pending detection, so typing does not queue one per keystroke. */
+  const pending = useRef<number | null>(null);
+
+  const runDetect = useCallback(async (text: string, fromPaste: boolean) => {
+    const d = await invoke('providers.detect', { text }).catch(() => null);
+    // A guess that failed is not an error to show. This is the first field of the first
+    // screen, and `detect` has no try/catch of its own, so one rejection surfaced as
+    // "Something went wrong" from the global handler in the middle of typing -- for a
+    // call whose only job is to offer to fill the fields in (R-122).
+    if (!d) { setDetected('none'); return; }
     // Two different things, and saying the wrong one is a lie the user can see: a URL
     // carrying credentials fills the fields in, a bare panel host only offers them.
     if (d.kind !== 'xtream') setDetected('none');
@@ -81,6 +94,37 @@ export function SetupWizard({
       name: prev.name || hostOf(d.url),
     }));
     if (fromPaste && d.username && d.password) setPasted(d.url);
+  }, []);
+
+  /**
+   * Ask the host what this address is — on paste at once, after typing a beat later.
+   *
+   * This ran from `onChange` with no delay, so typing a sixty-character address by hand
+   * was sixty IPC round trips, each one reaching `parse_pasted_xtream` and the
+   * percent-decoder behind it. The field still updates on every keystroke; only the
+   * question is held back (R-122).
+   */
+  const detect = useCallback((text: string, fromPaste = false) => {
+    setPasted(text);
+    setValidation(null);
+    if (pending.current != null) {
+      window.clearTimeout(pending.current);
+      pending.current = null;
+    }
+    if (!text.trim()) { setDetected('none'); return; }
+    if (fromPaste) {
+      void runDetect(text, true);
+      return;
+    }
+    pending.current = window.setTimeout(() => {
+      pending.current = null;
+      void runDetect(text, false);
+    }, DETECT_AFTER_TYPING_MS);
+  }, [runDetect]);
+
+  // Nothing should fire into a wizard that has gone.
+  useEffect(() => () => {
+    if (pending.current != null) window.clearTimeout(pending.current);
   }, []);
 
   /**
@@ -162,7 +206,9 @@ export function SetupWizard({
                 onBack={() => setStep('source')} onImport={runImport}
               />
             )}
-            {step === 'importing' && <ImportingStep progress={progress} />}
+            {step === 'importing' && (
+              <ImportingStep progress={progress} onBackground={onFinished} />
+            )}
             {step === 'done' && <DoneStep report={report} onFinished={onFinished} />}
           </motion.div>
         </AnimatePresence>
@@ -181,7 +227,19 @@ export function SetupWizard({
           </div>
         )}
 
-        <div style={{ marginTop: 'var(--sp-5)', textAlign: 'center' }}>
+        {/*
+          * Not during the import. By then a provider has been saved and a refresh is
+          * running, so "Skip for now" -- which means "carry on with no provider" --
+          * describes something that can no longer happen. `ImportingStep` offers
+          * "Continue in the background" instead, which is what is actually on offer.
+          */}
+        <div
+          style={{
+            marginTop: 'var(--sp-5)',
+            textAlign: 'center',
+            visibility: step === 'importing' ? 'hidden' : 'visible',
+          }}
+        >
           <button
             onClick={onSkip}
             style={{
@@ -574,7 +632,33 @@ function ContentStep({
   );
 }
 
-function ImportingStep({ progress }: { progress: IngestProgress | null }) {
+/**
+ * The import, with a way out of it.
+ *
+ * "You can keep using Aurora while this runs" was said by an opaque, full-viewport
+ * modal — `position: fixed; inset: 0; z-index: 400` — that rendered a spinner, a phase
+ * label, a progress bar and that sentence. The only control anywhere on it was "Skip for
+ * now" in the shell below, which is the wording for abandoning setup and not for
+ * stepping aside from an import that is already running. So for the duration the viewer
+ * could do nothing but watch, which is the opposite of what the paragraph claimed.
+ *
+ * The claim is true of the host: `providers.refresh` downloads with no database lock
+ * held, specifically so the rest of the app keeps working, and `RefreshButton` in
+ * Settings shows the same `ingest.progress` events from a screen that does not block.
+ * It was only this screen that blocked, and only because it never offered to leave
+ * (R-122).
+ *
+ * "A minute" is also optimistic against a real subscription — a 51 MB playlist, a 178 MB
+ * guide that takes about a second just to parse, three `player_api` calls and 237,170
+ * entries classified — so the sentence no longer promises one.
+ */
+function ImportingStep({
+  progress, onBackground,
+}: {
+  progress: IngestProgress | null;
+  /** Leave the import running and go to the app. */
+  onBackground: () => void;
+}) {
   const phase = progress?.phase ?? 'fetchingPlaylist';
   const pct =
     progress && progress.total > 0
@@ -616,8 +700,14 @@ function ImportingStep({ progress }: { progress: IngestProgress | null }) {
         </div>
       )}
       <p style={{ marginTop: 'var(--sp-4)', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
-        Large subscriptions can take a minute. You can keep using Aurora while this runs.
+        A large subscription can take several minutes. You can leave this running and
+        start watching — the progress carries on in Settings.
       </p>
+      <div style={{ marginTop: 'var(--sp-4)' }}>
+        <Button onClick={onBackground} icon="chevronRight">
+          Continue in the background
+        </Button>
+      </div>
     </div>
   );
 }
@@ -684,8 +774,15 @@ function DoneStep({
         Guide data matched {report.epgMatched.toLocaleString()} of{' '}
         {known.toLocaleString()} channels ({coverage}%).
         {unmatched > 0 && ` The other ${unmatched.toLocaleString()} can be mapped by hand in Settings.`}
+        {/*
+          * "Flagged" names something real now: `Channel.stale` and the Dropped badge on
+          * the live list. Until R-53 the sentence described a badge nothing drew, which
+          * sent the viewer looking for a mark that did not exist -- so it says where to
+          * look rather than only that it happened.
+          */}
         {report.channelsMissing > 0 &&
-          ` ${report.channelsMissing} channels your provider no longer lists were kept and flagged.`}
+          ` ${report.channelsMissing} channels your provider no longer lists were kept,`
+            + ' marked Dropped in Live TV.'}
       </div>
 
       {report.warnings.length > 0 && (

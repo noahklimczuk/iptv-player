@@ -19,7 +19,19 @@
 //! the macro generates does not expose the key it chose, and the thing worth pinning is
 //! the convention a person breaks when they write the next command.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// `aurora-app/src`, which is what this file reads.
+///
+/// A path and not a dependency, so a bare `cargo test` can run these without building
+/// Tauri -- which is why they are in `aurora-contract` and not in `aurora-app` (R-162).
+fn app_crate() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/")
+        .join("aurora-app")
+        .join("src")
+}
 
 /// Parameters supplied by the framework rather than sent by the caller.
 fn is_injected(param: &str) -> bool {
@@ -61,7 +73,7 @@ fn split_params(params: &str) -> Vec<String> {
 
 #[test]
 fn every_command_names_its_argument_parameter_args() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let dir = app_crate();
     let mut checked = 0usize;
     let mut offenders = Vec::new();
 
@@ -120,7 +132,7 @@ fn command_offsets(source: &str) -> Vec<(usize, &str)> {
 
 /// Every source file under `src/`, so a new module cannot quietly opt out.
 fn command_sources() -> Vec<(String, String)> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let dir = app_crate();
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&dir).expect("src directory") {
         let path = entry.expect("dir entry").path();

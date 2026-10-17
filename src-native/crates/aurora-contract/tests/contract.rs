@@ -14,12 +14,24 @@
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
-    // crates/aurora-app -> crates -> src-native -> repo root
+    // crates/aurora-contract -> crates -> src-native -> repo root
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
         .expect("repo root")
         .to_path_buf()
+}
+
+/// `aurora-app`'s crate directory, which is what this file reads.
+///
+/// Named rather than depended on: taking a dependency on `aurora-app` would put Tauri
+/// in the way of a bare `cargo test`, which is the reason these tests moved out of it
+/// (R-162). Everything here is text analysis, so a path is all it needs.
+fn app_crate() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/")
+        .join("aurora-app")
 }
 
 /// `'library.setFilters'` in the contract is `library_set_filters` on the host.
@@ -392,7 +404,7 @@ fn the_field_scan_reads_names_and_not_the_prose_around_them() {
 #[test]
 fn the_csp_allows_the_image_schemes_providers_actually_use() {
     let config =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+        std::fs::read_to_string(app_crate().join("tauri.conf.json"))
             .expect("tauri.conf.json");
     let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
     let csp = parsed["app"]["security"]["csp"]
@@ -442,7 +454,7 @@ fn the_csp_allows_the_image_schemes_providers_actually_use() {
 /// can run the Windows path, so what is worth pinning is that the calls are there.
 #[test]
 fn the_video_surface_and_the_event_pump_are_actually_called() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let src = app_crate().join("src");
     let read = |name: &str| std::fs::read_to_string(src.join(name)).expect(name);
 
     let main = read("main.rs");
@@ -566,7 +578,7 @@ fn the_refresh_sweep_runs_more_often_than_the_staleness_it_looks_for() {
 #[test]
 fn the_window_is_transparent_so_video_can_show_through() {
     let config =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+        std::fs::read_to_string(app_crate().join("tauri.conf.json"))
             .expect("tauri.conf.json");
     let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
     let window = &parsed["app"]["windows"][0];
@@ -592,11 +604,29 @@ fn the_window_is_transparent_so_video_can_show_through() {
 /// the update would silently never apply.
 #[test]
 fn the_updaters_bundle_identifier_matches_the_manifest() {
-    let conf: serde_json::Value =
-        serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+    let conf: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(app_crate().join("tauri.conf.json"))
+            .expect("tauri.conf.json"),
+    )
+    .expect("tauri.conf.json");
+
+    // Read out of the source rather than linked, for the reason on `app_crate`: the
+    // constant exists precisely because it is needed before Tauri does, and this test
+    // should not need Tauri either.
+    let updates = std::fs::read_to_string(app_crate().join("src").join("updates.rs"))
+        .expect("updates.rs");
+    let declared = updates
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("pub const BUNDLE_IDENTIFIER: &str = \"")?
+                .strip_suffix("\";")
+        })
+        .expect("updates.rs should declare BUNDLE_IDENTIFIER as a string literal");
+
     assert_eq!(
         conf["identifier"].as_str(),
-        Some(aurora_app::updates::BUNDLE_IDENTIFIER),
+        Some(declared),
         "tauri.conf.json's identifier and updates::BUNDLE_IDENTIFIER must agree"
     );
 }
@@ -658,7 +688,7 @@ fn the_release_profile_still_unwinds_so_the_supervisor_can_work() {
 #[test]
 fn the_bundle_installs_per_user_so_a_copy_can_update_itself() {
     let config =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+        std::fs::read_to_string(app_crate().join("tauri.conf.json"))
             .expect("tauri.conf.json");
     let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
 

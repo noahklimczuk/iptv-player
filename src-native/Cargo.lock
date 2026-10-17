@@ -133,6 +133,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurora-contract"
+version = "1.0.0"
+dependencies = [
+ "aurora-core",
+ "aurora-db",
+ "aurora-ingest",
+ "aurora-player",
+ "serde_json",
+]
+
+[[package]]
 name = "aurora-core"
 version = "1.0.0"
 dependencies = [

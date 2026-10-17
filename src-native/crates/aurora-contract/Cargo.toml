@@ -1,0 +1,17 @@
+[package]
+name = "aurora-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mechanical checks on the IPC contract — text analysis, no host build"
+
+[dependencies]
+
+# The structs whose field names the contract is checked against. None of these pulls in
+# Tauri, which is the only constraint this crate has.
+[dev-dependencies]
+serde_json.workspace = true
+aurora-core.workspace = true
+aurora-db.workspace = true
+aurora-player.workspace = true
+aurora-ingest.workspace = true

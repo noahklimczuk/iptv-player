@@ -125,8 +125,9 @@ export const channels: Channel[] = (() => {
   for (const g of CHANNEL_GROUPS) {
     g.names.forEach((name, i) => {
       const q = pick(['4K', 'FHD', 'HD', 'HD', 'FHD'] as const);
+      const cid = id++;
       out.push({
-        id: id++,
+        id: cid,
         name,
         number: g.base + i + 1,
         logo: art(name, 96, 96),
@@ -142,6 +143,13 @@ export const channels: Channel[] = (() => {
         hasCatchup: rand() > 0.45,
         favorite: rand() > 0.8,
         lang: null,
+        // A few channels the provider has stopped listing, which every real library
+        // acquires: a refresh drops them from the panel's catalogue and Aurora keeps
+        // the row so a favourite does not vanish (README §4.6).
+        //
+        // Chosen by id rather than by a draw, because a `rand()` here would shift every
+        // subsequent draw and rewrite the whole fixture world -- see `keepDraw`.
+        stale: cid % 7 === 3,
       });
     });
   }
@@ -157,6 +165,9 @@ export const channels: Channel[] = (() => {
         number: 900 + out.length,
         quality: q,
         favorite: false,
+        // A quality variant is its own row on the panel, so it is listed or dropped on
+        // its own rather than inheriting the original's answer.
+        stale: false,
         // The same EPG channel: it is the same channel.
         epgChannelId: original.epgChannelId,
       });
@@ -177,6 +188,7 @@ export const channels: Channel[] = (() => {
       hasCatchup: false,
       favorite: false,
       lang: f.lang,
+      stale: false,
     });
   }
   return out;

@@ -5,16 +5,24 @@ members = [
   "crates/aurora-db",
   "crates/aurora-player",
   "crates/aurora-ingest",
+  "crates/aurora-contract",
   "crates/aurora-app",
 ]
 # aurora-app pulls in Tauri, whose Linux backend needs GTK and whose Windows build
 # needs the MSVC toolchain. Excluding it from the default set keeps a bare
 # `cargo test` working on any host; CI builds it explicitly on windows-latest.
+#
+# What that cost until R-162: the two mechanical guards on the IPC contract lived in
+# `aurora-app/tests`, so a plain `cargo test` ran four crates and neither of them --
+# including the one that catches "the UI declares a command the host never registered",
+# which is the defect class they were written for. They are pure text analysis, so they
+# now live in `aurora-contract`, which depends on nothing and is in the default set.
 default-members = [
   "crates/aurora-core",
   "crates/aurora-db",
   "crates/aurora-player",
   "crates/aurora-ingest",
+  "crates/aurora-contract",
 ]
 
 [workspace.package]

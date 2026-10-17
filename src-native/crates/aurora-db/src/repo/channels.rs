@@ -26,6 +26,19 @@ pub struct ChannelRow {
     /// Whether the profile the query was made for has this channel in Favourites.
     /// False when the query named no profile.
     pub favorite: bool,
+    /// The provider no longer lists this channel: it was in the library before the last
+    /// refresh and not in the refresh itself.
+    ///
+    /// Kept rather than deleted, because a favourite vanishing out from under somebody
+    /// is worse than a row that does not tune (README §4.6) -- but until R-53 that was
+    /// the whole of it. `stale` existed as a count in the refresh report and nothing
+    /// else, while the wizard told the viewer in as many words that these channels had
+    /// been "kept and flagged". Nothing flagged them, no query returned a staleness
+    /// column, and nothing in the UI could have drawn one, so a dropped channel sat in
+    /// the list looking exactly like a working one and the only sign was a tune that
+    /// failed. Being told to look for a badge that does not exist is worse than being
+    /// told nothing.
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -114,8 +127,13 @@ ON CONFLICT (provider_id, provider_key) DO UPDATE SET
     Ok(written)
 }
 
-/// Channels not seen in the latest refresh. README §4.6 keeps them visible with a badge
-/// rather than deleting them out from under the user's favorites.
+/// Channels not seen in the latest refresh, for the refresh report's count.
+///
+/// README §4.6 keeps them visible with a badge rather than deleting them out from under
+/// the user's favourites. The badge is `ChannelRow::stale`, which `list` and `get`
+/// compute the same way this does; this function stays because the count in the refresh
+/// report is a different question from "is this row dropped" and is asked once per
+/// refresh rather than once per row.
 pub fn stale(conn: &Connection, provider_id: i64, before: i64) -> Result<Vec<i64>> {
     let mut stmt =
         conn.prepare("SELECT id FROM channels WHERE provider_id = ?1 AND last_seen_at < ?2")?;
@@ -139,13 +157,21 @@ SELECT channels.id,
        COALESCE(channels.custom_group, channels.group_title),
        channels.tvg_id, channels.epg_channel_id, channels.quality, channels.hidden,
        channels.is_radio, channels.catchup_days, channels.lang_code,
-       fav.item_id IS NOT NULL
+       fav.item_id IS NOT NULL,
+       -- Dropped by the provider: in the library before the last refresh of its own
+       -- provider, and not in that refresh. Compared against `last_refresh_at` rather
+       -- than against "now" because a library nobody has refreshed for a week has not
+       -- lost anything -- and `LEFT JOIN`, so a row whose provider is somehow missing
+       -- reads as present rather than as dropped.
+       (prov.last_refresh_at IS NOT NULL
+        AND channels.last_seen_at < prov.last_refresh_at)
 FROM channels
 LEFT JOIN favorites fav
        ON fav.item_id = channels.id
       AND fav.item_kind = 'channel'
       AND fav.list_name = 'Favorites'
       AND fav.profile_id = :profile
+LEFT JOIN providers prov ON prov.id = channels.provider_id
 WHERE 1=1
 "#,
     );
@@ -209,6 +235,7 @@ fn row_to_channel(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelRow> {
         has_catchup: r.get::<_, i64>(10)? > 0,
         lang: r.get(11)?,
         favorite: r.get::<_, i64>(12)? != 0,
+        stale: r.get::<_, i64>(13)? != 0,
     })
 }
 
@@ -288,15 +315,22 @@ pub fn get(conn: &Connection, channel_id: i64) -> Result<Option<ChannelRow>> {
         .query_row(
             r#"
 SELECT channels.id,
-       COALESCE(custom_name, name),
-       COALESCE(custom_number, number),
-       COALESCE(custom_logo, logo),
-       COALESCE(custom_group, group_title),
-       tvg_id, epg_channel_id, quality, hidden, is_radio, catchup_days, lang_code,
+       -- Qualified throughout: `providers` has a `name` of its own, so the join below
+       -- makes a bare one ambiguous.
+       COALESCE(channels.custom_name, channels.name),
+       COALESCE(channels.custom_number, channels.number),
+       COALESCE(channels.custom_logo, channels.logo),
+       COALESCE(channels.custom_group, channels.group_title),
+       channels.tvg_id, channels.epg_channel_id, channels.quality, channels.hidden,
+       channels.is_radio, channels.catchup_days, channels.lang_code,
        -- Favourites are per profile and this lookup has no profile to ask about.
        -- The callers are playback, recording and now/next, none of which care.
-       0
-FROM channels WHERE channels.id = ?1
+       0,
+       (prov.last_refresh_at IS NOT NULL
+        AND channels.last_seen_at < prov.last_refresh_at)
+FROM channels
+LEFT JOIN providers prov ON prov.id = channels.provider_id
+WHERE channels.id = ?1
 "#,
             params![channel_id],
             row_to_channel,
@@ -600,6 +634,45 @@ mod tests {
         let gone = stale(&conn, p, 200).unwrap();
         assert_eq!(gone.len(), 1);
         assert_eq!(list(&conn, &ChannelFilter::default()).unwrap().len(), 2);
+    }
+
+    /// And the row says which one it is, which is the half that was missing.
+    ///
+    /// `stale` counted them for the refresh report and nothing marked the rows, while
+    /// the setup wizard told the viewer they had been "kept and flagged". No query
+    /// returned a staleness column, so a dropped channel was indistinguishable from a
+    /// working one until a tune failed (R-53).
+    #[test]
+    fn a_dropped_channel_says_so_on_its_own_row() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = entry("Keep", Some(1));
+        let b = entry("Drop", Some(2));
+        upsert_batch(&mut conn, p, &[("k1".into(), &a), ("k2".into(), &b)], 100).unwrap();
+
+        // Nothing has refreshed yet, so nothing is dropped: a library with no refresh
+        // behind it has not lost anything.
+        for row in list(&conn, &ChannelFilter::default()).unwrap() {
+            assert!(!row.stale, "{} is dropped before any refresh", row.name);
+        }
+
+        // A refresh that sees only one of the two.
+        upsert_batch(&mut conn, p, &[("k1".into(), &a)], 200).unwrap();
+        conn.execute(
+            "UPDATE providers SET last_refresh_at = 200 WHERE id = ?1",
+            params![p],
+        )
+        .unwrap();
+
+        let rows = list(&conn, &ChannelFilter::default()).unwrap();
+        let keep = rows.iter().find(|r| r.name == "Keep").expect("Keep");
+        let drop = rows.iter().find(|r| r.name == "Drop").expect("Drop");
+        assert!(!keep.stale, "a channel the refresh listed is marked dropped");
+        assert!(drop.stale, "a channel the refresh did not list is not marked");
+
+        // `get` answers the same way, which is what keeps the two from drifting.
+        assert!(get(&conn, drop.id).unwrap().expect("the row").stale);
+        assert!(!get(&conn, keep.id).unwrap().expect("the row").stale);
     }
 
     #[test]
