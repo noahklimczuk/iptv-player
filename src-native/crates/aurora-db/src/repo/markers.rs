@@ -43,12 +43,46 @@ impl Default for SeriesPrefs {
     }
 }
 
+/// A stored row, with the safe reading of anything this build does not recognise.
+///
+/// The source fell back to `Learned`, and `may_auto_skip()` is
+/// `!matches!(self, Convention)` -- so `Learned` returns **true**. A `source` value this
+/// build does not know was therefore read back as a marker the per-show "always skip"
+/// preference is allowed to fire automatically, which is the one thing
+/// `may_auto_skip`'s own comment exists to prevent: "auto-skipping one would mean a
+/// clock silently cutting the last minute of an episode whose runtime was wrong, which
+/// is how somebody loses the final scene of a finale."
+///
+/// The safe fallback for an unknown value is the *least* trusted source, not the second
+/// most. Reachable as soon as a newer build writes a source this one does not know, and
+/// the UI's guard is the same string -- `activeMarker.source !== 'convention'` -- so it
+/// inherited the fault rather than providing a second line of defence (R-45).
+/// How a stored `source` is read when this build does not recognise it.
+///
+/// `Convention`, which is the only source `may_auto_skip()` says no to. The fallback was
+/// `Learned`, and `may_auto_skip()` is `!matches!(self, Convention)` -- so `Learned` is
+/// **true**, and an unrecognised value was read back as a marker the per-show "always
+/// skip" preference is allowed to fire automatically. That is the one thing
+/// `may_auto_skip`'s own comment exists to prevent: "auto-skipping one would mean a
+/// clock silently cutting the last minute of an episode whose runtime was wrong, which
+/// is how somebody loses the final scene of a finale."
+///
+/// Today the column cannot hold an unrecognised value -- `schema.rs` constrains it with
+/// `CHECK (source IN ('chapters','user','learned'))` -- so this is a guard for the first
+/// migration that widens it, which is exactly when the old fallback would have bitten.
+/// `convention` is itself such a value: it is computed and never stored, and if it ever
+/// is, the old fallback would have turned the one source that must not auto-skip into
+/// one that does (R-45).
+fn source_or_safe(raw: &str) -> MarkerSource {
+    MarkerSource::parse(raw).unwrap_or(MarkerSource::Convention)
+}
+
 fn row_to_marker(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkipMarker> {
     let kind: String = r.get(0)?;
     let source: String = r.get(1)?;
     Ok(SkipMarker {
         kind: MarkerKind::parse(&kind).unwrap_or(MarkerKind::Intro),
-        source: MarkerSource::parse(&source).unwrap_or(MarkerSource::Learned),
+        source: source_or_safe(&source),
         start_secs: r.get(2)?,
         end_secs: r.get(3)?,
     })
@@ -310,6 +344,47 @@ mod tests {
 
     fn intro(start: f64, end: f64, source: MarkerSource) -> SkipMarker {
         SkipMarker::new(MarkerKind::Intro, start, end, source)
+    }
+
+    /// A source this build does not recognise may not fire by itself.
+    ///
+    /// The fallback was `MarkerSource::Learned`, and `may_auto_skip()` is
+    /// `!matches!(self, Convention)` — so `Learned` is **true**. An unrecognised
+    /// `source` was therefore read back as a marker the per-show "always skip"
+    /// preference is allowed to fire automatically, which is precisely what
+    /// `may_auto_skip`'s own comment exists to prevent.
+    ///
+    /// Tested at the function rather than through a row, because `schema.rs` constrains
+    /// the column to the three values this build writes — so the case arrives with the
+    /// first migration that widens it, and `convention` is itself one of the values that
+    /// would arrive that way (R-45).
+    #[test]
+    fn an_unknown_marker_source_is_never_skipped_automatically() {
+        for raw in [
+            "something-a-later-build-invented",
+            "convention",
+            "",
+            "CHAPTERS",
+        ] {
+            let source = source_or_safe(raw);
+            assert!(
+                !source.may_auto_skip(),
+                "{raw:?} was read back as {source:?}, which auto-skips"
+            );
+        }
+    }
+
+    /// And the three it does recognise still mean what they say.
+    #[test]
+    fn a_known_marker_source_round_trips() {
+        for source in [
+            MarkerSource::Chapters,
+            MarkerSource::User,
+            MarkerSource::Learned,
+        ] {
+            assert_eq!(source_or_safe(source.as_str()), source);
+            assert!(source.may_auto_skip());
+        }
     }
 
     /// The tier that was missing. A provider that ships chapters on one file should give

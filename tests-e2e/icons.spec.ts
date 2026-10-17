@@ -107,12 +107,19 @@ test('a glyph is drawn for every name, and an unknown name falls back', async ({
   await page.goto('/#/');
   // The fallback matters: `Icon` renders `info` for a name it does not have, so a typo is
   // a visible wrong icon rather than an empty box that reads as a layout bug.
-  const empty = await page.evaluate(() => {
+  const { empty, total } = await page.evaluate(() => {
     const paths = (window as unknown as { __auroraIconPaths: Record<string, string> })
       .__auroraIconPaths;
-    return Object.entries(paths)
-      .filter(([, d]) => !d || d.trim().length < 4)
-      .map(([name]) => name);
+    return {
+      empty: Object.entries(paths)
+        .filter(([, d]) => !d || d.trim().length < 4)
+        .map(([name]) => name),
+      total: Object.keys(paths).length,
+    };
   });
+  // How many were looked at, first. `expect(empty).toEqual([])` on its own passes
+  // perfectly well against an icon table that is not there — which is the shape of
+  // defect this suite has been caught by before (R-159).
+  expect(total, 'no icons were examined').toBeGreaterThan(20);
   expect(empty).toEqual([]);
 });

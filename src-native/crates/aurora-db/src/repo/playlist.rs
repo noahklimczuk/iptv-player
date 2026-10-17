@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::repo::filtering::Kind;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistRow {
     pub id: i64,

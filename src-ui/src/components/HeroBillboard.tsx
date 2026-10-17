@@ -70,13 +70,16 @@ export function HeroBillboard({
   }, [index, animations, hoverPreviews, trailerKey]);
 
   useEffect(() => {
-    if (paused || items.length < 2) return;
+    // `animations` stops it entirely, which is what README §12 asks for and what the
+    // reduce-motion setting means: a billboard that re-renders itself every twelve
+    // seconds is motion, whether or not it is animated on the way.
+    if (paused || !animations || items.length < 2) return;
     const t = window.setTimeout(
       () => setIndex((i) => (i + 1) % items.length),
       trailer ? ROTATE_WITH_TRAILER_MS : ROTATE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [index, paused, items.length, trailer]);
+  }, [index, paused, animations, items.length, trailer]);
 
   if (!item) return null;
 
@@ -85,6 +88,22 @@ export function HeroBillboard({
       aria-label="Featured"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
+      /*
+       * And for the keyboard, which had nothing.
+       *
+       * Pausing was hover-only, and this billboard carries three large focusable
+       * buttons. So somebody who tabbed to **Play** and stopped to read the synopsis got
+       * twelve seconds — thirty-two if a trailer had started — before `setIndex`
+       * advanced: the focused element is not remounted, so focus stays put and the label
+       * changes under it, and Enter plays a film they did not choose. WCAG 2.2.2 asks
+       * for a way to pause anything moving for more than five seconds, and the dot
+       * indicators let a viewer jump but not stop (R-151).
+       *
+       * `onFocus`/`onBlur` bubble from the buttons inside, which is the same one-line
+       * omission as the episode rows in `DetailModal` and `SelectRow`'s hover.
+       */
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
       style={{
         position: 'relative', height: '62vh', minHeight: 420,
         marginBottom: 'var(--sp-5)',

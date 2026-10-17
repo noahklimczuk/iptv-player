@@ -58,7 +58,16 @@ pub struct SyncReport {
     /// Channels the provider stopped listing. Kept in the library, flagged, not deleted.
     pub channels_missing: usize,
     pub epg_matched: usize,
+    /// Names of channels with no guide, **capped at 200** -- nobody wants four thousand
+    /// of them over the IPC bridge.
     pub epg_unmatched: Vec<String>,
+    /// How many channels have no guide in total, which is not `epg_unmatched.len()`.
+    ///
+    /// The setup screen divided by the capped list's length, so past 200 unmatched the
+    /// denominator stopped growing while the numerator kept going and the percentage
+    /// converged on 100% -- it reported 93% coverage where the truth was 37%, and then
+    /// described four thousand channels as "the rest" of 7% (R-121).
+    pub epg_unmatched_total: usize,
     /// Non-fatal problems worth surfacing after the refresh.
     pub warnings: Vec<String>,
     /// What the import saw and did not keep. Zero everywhere is the claim that
@@ -122,6 +131,12 @@ impl SyncOptions {
 }
 
 /// Run a full refresh. `on_progress` is called often enough to drive a progress bar.
+/// How much of the past the guide keeps, counted back from the moment of a refresh.
+///
+/// Eight days: a provider advertising catch-up on this subscription offers a week, and a
+/// guide row that has been pruned is a catch-up entry that cannot be found.
+const EPG_RETENTION_SECS: i64 = 8 * 24 * 60 * 60;
+
 /// Everything the network gave us, before a single row is written.
 ///
 /// The point of this type is the boundary it draws. A refresh downloads a playlist and
@@ -486,12 +501,56 @@ pub fn apply(
     let mut epg_channels: Vec<EpgChannel> = Vec::new();
     for source in fetched.epg {
         epg_repo::upsert_channels(db, &source.channels).map_err(db_failure)?;
+
+        // Everything this source is about to write, removed first.
+        //
+        // `insert_batch` is an unqualified INSERT and `epg_programmes` has no unique
+        // constraint, so a refresh used to add a second complete copy of the guide
+        // rather than replace the first. A refresh runs by itself once a day: on this
+        // subscription one copy is 547,166 programmes and roughly 128 MB of row
+        // payload, so the library grew by that much daily, `grid_slice` returned a row
+        // per copy -- seven identical entries in every slot after a week -- and "now
+        // and next" picked whichever copy SQLite reached first.
+        //
+        // `clear_channels` was written for exactly this ("Remove everything for a set
+        // of channels before reimporting them, so a refresh does not duplicate
+        // programmes") and had no caller anywhere outside its own test. Neither did
+        // `prune_before` below, whose comment cites README §4.4 on the database not
+        // growing unbounded (R-49).
+        //
+        // Taken from the programmes as well as the declared channels, because a guide
+        // can schedule against an id it never declared -- and those rows would
+        // otherwise be the ones that duplicate.
+        let mut touched: Vec<String> = source.channels.iter().map(|c| c.id.clone()).collect();
+        touched.extend(
+            source
+                .programmes
+                .iter()
+                .flatten()
+                .map(|p| p.channel_id.clone()),
+        );
+        touched.sort_unstable();
+        touched.dedup();
+        epg_repo::clear_channels(db, &touched).map_err(db_failure)?;
+
         for batch in &source.programmes {
             epg_repo::insert_batch(db, batch).map_err(db_failure)?;
         }
         report.epg_channels += source.counted_channels;
         report.epg_programmes += source.counted_programmes;
         epg_channels.extend(source.channels);
+    }
+
+    // And whatever is left over from a channel this guide no longer carries, once it
+    // has finished airing. README §4.4. The window is generous because a provider that
+    // advertises catch-up expects yesterday to still be addressable.
+    if !epg_channels.is_empty() {
+        match epg_repo::prune_before(db, options.now_unix - EPG_RETENTION_SECS) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(pruned = n, "programmes that had already finished"),
+            // A refresh that imported a guide must not fail because tidying up did not.
+            Err(e) => tracing::warn!("could not prune finished programmes: {e}"),
+        }
     }
 
     // ── Matching ────────────────────────────────────────────────────────────────
@@ -556,6 +615,7 @@ pub fn apply(
                     report.epg_matched += 1;
                 }
                 None => {
+                    report.epg_unmatched_total += 1;
                     if report.epg_unmatched.len() < 200 {
                         report.epg_unmatched.push(row.name.clone());
                     }
@@ -571,6 +631,11 @@ pub fn apply(
             total = coverage.total,
             "EPG coverage {:.1}%",
             coverage.percent()
+        );
+        debug_assert_eq!(
+            report.epg_matched + report.epg_unmatched_total,
+            rows.len(),
+            "every channel is either matched or counted as unmatched"
         );
     }
 
@@ -784,13 +849,23 @@ fn write_channel_sources(
     {
         let mut lookup =
             tx.prepare("SELECT id FROM channels WHERE provider_id = ?1 AND provider_key = ?2")?;
+        // The row is identified by what it stores, which for a provider whose addresses
+        // are rebuilt is the stream id rather than the URL. The `NOT EXISTS` guard is
+        // what makes a refresh add nothing it already has, so it has to compare the same
+        // thing that is written -- against `url` alone it would insert a second row for
+        // every channel on every refresh, for ever (R-126).
         let mut insert = tx.prepare(
-            "INSERT INTO channel_sources (channel_id, url, priority, quality)
-             SELECT ?1, ?2, 0, ?3
+            "INSERT INTO channel_sources (channel_id, url, priority, quality, stream_id,
+                                          container)
+             SELECT ?1, ?2, 0, ?3, ?4, ?5
              WHERE NOT EXISTS (
-                 SELECT 1 FROM channel_sources WHERE channel_id = ?1 AND url = ?2
+                 SELECT 1 FROM channel_sources
+                  WHERE channel_id = ?1
+                    AND url = ?2
+                    AND COALESCE(stream_id, '') = COALESCE(?4, '')
              )",
         )?;
+        let rebuild = aurora_db::provider_rebuilds_urls(&tx, provider_id)?;
         for (key, entry) in entries {
             let id: i64 = match lookup
                 .query_row(aurora_db::rusqlite::params![provider_id, key], |r| r.get(0))
@@ -798,10 +873,13 @@ fn write_channel_sources(
                 Ok(id) => id,
                 Err(_) => continue,
             };
+            let (url, stream_id, container) = aurora_db::stored_stream(rebuild, &entry.url);
             insert.execute(aurora_db::rusqlite::params![
                 id,
-                entry.url,
-                title::detect_quality(&entry.name)
+                url,
+                title::detect_quality(&entry.name),
+                stream_id,
+                container
             ])?;
         }
     }
@@ -1488,6 +1566,81 @@ mod tests {
         assert_eq!(rows[0].number, Some(101));
     }
 
+    /// Past 200 unmatched channels, the report still says how many there are.
+    ///
+    /// `epg_unmatched` is capped at 200 and the setup screen divided by that list's
+    /// length, so the denominator stopped growing while the numerator kept going: on
+    /// this subscription it reported 93% coverage where the truth was 37%, then
+    /// described four thousand channels as "the rest" of 7% (R-121).
+    #[test]
+    fn the_unmatched_total_is_not_the_length_of_the_capped_list() {
+        // Enough of each that the two percentages round differently: 200 of 450 is 44%,
+        // while 200 of (200 + the capped 200) is 50%.
+        const WITH_GUIDE: usize = 200;
+        const WITHOUT: usize = 250;
+
+        let mut playlist = String::from("#EXTM3U\n");
+        let mut epg = String::from("<tv>\n");
+        for i in 0..WITH_GUIDE {
+            playlist.push_str(&format!(
+                "#EXTINF:-1 tvg-id=\"ch{i}.test\" group-title=\"News\",Channel {i}\n\
+                 http://example.com/live/u/p/{}.ts\n",
+                i + 1
+            ));
+            epg.push_str(&format!(
+                "<channel id=\"ch{i}.test\"><display-name>Channel {i}</display-name></channel>\n\
+                 <programme start=\"20240115120000 +0000\" stop=\"20240115130000 +0000\" \
+                 channel=\"ch{i}.test\"><title>Something</title></programme>\n"
+            ));
+        }
+        for i in 0..WITHOUT {
+            playlist.push_str(&format!(
+                "#EXTINF:-1 group-title=\"News\",Nameless Channel {i}\n\
+                 http://example.com/live/u/p/{}.ts\n",
+                WITH_GUIDE + i + 1
+            ));
+        }
+        epg.push_str("</tv>\n");
+
+        let server = TestServer::start(move |_, req| {
+            if req.path.starts_with("/epg") {
+                Reply::ok(epg.as_str())
+            } else {
+                Reply::ok(playlist.as_str())
+            }
+        });
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let report = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        assert_eq!(report.channels, WITH_GUIDE + WITHOUT);
+        assert_eq!(report.epg_matched, WITH_GUIDE);
+        assert_eq!(
+            report.epg_unmatched.len(),
+            200,
+            "the list of names is still capped"
+        );
+        assert_eq!(
+            report.epg_unmatched_total, WITHOUT,
+            "but the count is every channel without a guide"
+        );
+
+        // Which is the whole point: the percentage the setup screen computes.
+        let known = report.epg_matched + report.epg_unmatched_total;
+        let honest = (report.epg_matched as f64 / known as f64 * 100.0).round() as i64;
+        let from_the_capped_list = (report.epg_matched as f64
+            / (report.epg_matched + report.epg_unmatched.len()) as f64
+            * 100.0)
+            .round() as i64;
+        assert_eq!(honest, 44, "200 of 450");
+        assert_eq!(
+            from_the_capped_list, 50,
+            "200 of 400, which is what it used to say"
+        );
+    }
+
     #[test]
     fn epg_is_matched_onto_channels() {
         let server = combined_server();
@@ -1559,6 +1712,44 @@ mod tests {
         assert_eq!(
             bbc.epg_channel_id, None,
             "a channel with no programmes is worse than no match: the guide draws an              empty row and the diagnostics say it is fine"
+        );
+    }
+
+    /// A second refresh replaces the guide rather than adding another copy of it.
+    ///
+    /// `insert_batch` is an unqualified INSERT and `epg_programmes` has no unique
+    /// constraint, so three refreshes used to leave three identical rows in every slot.
+    /// A refresh runs by itself once a day, and one copy of this subscription's guide is
+    /// 547,166 programmes and roughly 128 MB of row payload (R-49).
+    #[test]
+    fn refreshing_twice_replaces_the_guide_rather_than_duplicating_it() {
+        let server = combined_server();
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+
+        let first = run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        let after_one = epg_repo::count(&conn).unwrap();
+        assert_eq!(after_one, first.epg_programmes as i64);
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(
+            epg_repo::count(&conn).unwrap(),
+            after_one,
+            "a second refresh added another copy of the guide"
+        );
+
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+        assert_eq!(epg_repo::count(&conn).unwrap(), after_one);
+
+        // And the grid shows one row per airing, which is what the viewer sees.
+        let rows = epg_repo::grid_slice(&conn, &["cnn.us".to_string()], 0, i64::MAX / 4).unwrap();
+        let airings: std::collections::HashSet<(i64, &str)> =
+            rows.iter().map(|p| (p.start, p.title.as_str())).collect();
+        assert_eq!(
+            rows.len(),
+            airings.len(),
+            "the guide grid is showing the same airing more than once: {rows:?}"
         );
     }
 

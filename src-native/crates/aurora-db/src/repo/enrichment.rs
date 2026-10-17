@@ -345,7 +345,7 @@ pub fn save(
 }
 
 /// One person as a detail page lists them.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreditRow {
     pub person_id: i64,

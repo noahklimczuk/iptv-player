@@ -79,12 +79,15 @@ pub struct Scored<'a> {
     pub score: f32,
 }
 
-/// Normalized word set, via the same `match_key` the rest of the library matches on.
+/// Normalized word set, via the same normalisation `match_key` applies.
+///
+/// `title::key_words`, not `match_key(s).split_whitespace()`. `match_key`
+/// concatenates — "The Matrix Reloaded" comes back as "thematrixreloaded" — so the
+/// split could only ever yield one element and the F1 below collapsed to `ta == tb`.
+/// Punctuation and spacing differences still matched, which is why it worked at all,
+/// but any difference of a *word* scored zero (R-25).
 fn tokens(s: &str) -> Vec<String> {
-    title::match_key(s)
-        .split_whitespace()
-        .map(|t| t.to_string())
-        .collect()
+    title::key_words(s)
 }
 
 /// Token-set F1 between two titles.
@@ -95,7 +98,17 @@ fn tokens(s: &str) -> Vec<String> {
 /// match *The Matrix Reloaded*. Penalising extra words on either side is what keeps a
 /// sequel from wearing its predecessor's poster.
 pub fn title_similarity(a: &str, b: &str) -> f32 {
-    let (ta, tb) = (tokens(a), tokens(b));
+    // Sets, not lists, which is what "token-set" means and what keeps the answer inside
+    // `0.0..=1.0`. A repeated word used to be counted once per occurrence on the query
+    // side and once overall on the candidate side, so "The Lord of the Rings" against
+    // "Lord of the Rings" scored **1.111** -- better than an exact match. Unreachable
+    // while `tokens` returned a single element, and the first thing real tokens found
+    // (R-25).
+    let (mut ta, mut tb) = (tokens(a), tokens(b));
+    ta.sort_unstable();
+    ta.dedup();
+    tb.sort_unstable();
+    tb.dedup();
     if ta.is_empty() || tb.is_empty() {
         return 0.0;
     }
@@ -274,6 +287,104 @@ mod tests {
         assert_eq!(title_similarity("The Matrix", "The Matrix"), 1.0);
         // Normalization means punctuation and case do not count against it.
         assert_eq!(title_similarity("spider-man", "Spider Man"), 1.0);
+    }
+
+    /// A title differing by a word scores like a near miss, not like a stranger.
+    ///
+    /// `tokens` was `match_key(s).split_whitespace()`, and `match_key` concatenates, so
+    /// it always returned one element and the F1 below collapsed to `ta == tb`. Measured
+    /// before the fix:
+    ///
+    /// ```text
+    ///   0.000  "The Matrix" vs "The Matrix Reloaded"
+    ///   0.000  "Blade Runner" vs "Blade Runner 2049"
+    ///   0.000  "The Lord of the Rings" vs "Lord of the Rings"
+    /// ```
+    ///
+    /// Over a realistic spread of titles, years and popularity the whole reachable set
+    /// of `score` was eight values, with nothing between 0.42 and 0.95 -- so
+    /// `MIN_CONFIDENCE = 0.72` sat in a gap and the two mechanisms that read the score
+    /// as a degree of confidence had a step function underneath them (R-25).
+    #[test]
+    fn a_title_that_differs_by_one_word_is_a_near_miss() {
+        // One word apart: close enough to clear `MIN_CONFIDENCE` and take the metadata,
+        // which is what scoring 0 used to prevent.
+        for (a, b) in [
+            ("The Matrix", "The Matrix Reloaded"),
+            ("Blade Runner", "Blade Runner 2049"),
+        ] {
+            let s = title_similarity(a, b);
+            assert!(
+                (MIN_CONFIDENCE..1.0).contains(&s),
+                "{a:?} vs {b:?} scored {s}, and MIN_CONFIDENCE is {MIN_CONFIDENCE}"
+            );
+        }
+
+        // Further apart: a real score, and below the threshold, so it declines rather
+        // than guessing. "Dune Part One" is not "Dune".
+        for (a, b) in [
+            ("Dune Part One", "Dune"),
+            ("Lord of the Rings The Two Towers", "The Two Towers"),
+        ] {
+            let s = title_similarity(a, b);
+            assert!(s > 0.0, "{a:?} vs {b:?} scored {s}");
+            assert!(s < MIN_CONFIDENCE, "{a:?} vs {b:?} scored {s}");
+        }
+
+        // Still nothing like each other.
+        assert_eq!(title_similarity("The Matrix", "Amelie"), 0.0);
+
+        // A leading article is not a different word set, so this is an exact match and
+        // not a near miss -- and it is the case that used to score 1.111, above the
+        // perfect score the function documents as its ceiling.
+        let article = title_similarity("The Lord of the Rings", "Lord of the Rings");
+        assert_eq!(article, 1.0, "scored {article}");
+
+        // And word order does not matter, which is the point of a token *set*.
+        assert_eq!(
+            title_similarity("Impossible Mission", "Mission Impossible"),
+            1.0
+        );
+    }
+
+    /// The scores in between exist now, which is what `MIN_CONFIDENCE` is for.
+    #[test]
+    fn the_score_is_not_a_step_function() {
+        let titles = [
+            "The Matrix",
+            "The Matrix Reloaded",
+            "The Matrix Revolutions",
+            "Blade Runner",
+            "Blade Runner 2049",
+            "Dune",
+            "Dune Part One",
+            "Dune Part Two",
+            "The Lord of the Rings",
+            "Lord of the Rings The Two Towers",
+        ];
+        let mut seen: Vec<String> = Vec::new();
+        for a in titles {
+            for b in titles {
+                let s = title_similarity(a, b);
+                let key = format!("{s:.4}");
+                if !seen.contains(&key) {
+                    seen.push(key);
+                }
+            }
+        }
+        // Before the fix this set was {0.0000, 1.0000}: equality, nothing else.
+        assert!(
+            seen.len() > 4,
+            "only {} distinct similarities across ten related titles: {seen:?}",
+            seen.len()
+        );
+        assert!(
+            seen.iter().any(|v| {
+                let n: f32 = v.parse().unwrap();
+                (0.5..0.95).contains(&n)
+            }),
+            "nothing lands where MIN_CONFIDENCE has to discriminate: {seen:?}"
+        );
     }
 
     #[test]

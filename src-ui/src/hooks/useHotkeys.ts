@@ -1,6 +1,11 @@
 /**
- * Global keyboard map (README §14.1). Every binding here is remappable in Settings in
- * the shipped product; this hook is the single place they are interpreted.
+ * Global keyboard map (README §14.1). This hook is the single place they are
+ * interpreted.
+ *
+ * It used to say "Every binding here is remappable in Settings in the shipped product".
+ * Settings → Keyboard is a read-only list, and remapping is not built -- `docs/ROADMAP.md`
+ * is honest about that, which made this comment the only place that overstated it
+ * (R-143).
  */
 import { useEffect } from 'react';
 
@@ -75,7 +80,11 @@ export function useHotkeys(h: HotkeyHandlers, enabled = true) {
         case 'l': h.onSeek(10); break;
         case 'm': h.onMute(); break;
         case 't': h.onTimeshift(); break;
-        case 'f': h.onFullscreen(); break;
+        // Both, because README §14.1 assigns `F11` and the implementation took `f`.
+        // Binding the one that was declared costs a line, and leaves nothing that the
+        // table promises unbound.
+        case 'f':
+        case 'F11': e.preventDefault(); h.onFullscreen(); break;
         case 'p': h.onPip(); break;
         case 'i': h.onInfo(); break;
         case 'g': h.onGuide(); break;

@@ -89,14 +89,40 @@ let mockGeminiKey = '';
 /** Set through `gemini.setEnabled`. On by default, as a release build is. */
 let mockGeminiEnabled = true;
 /**
+ * `?builtInKey` — model a build that was compiled with a Gemini key.
+ *
+ * `BUILT_IN_KEY` is `option_env!("AURORA_GEMINI_KEY")`, resolved by `rustc`, and the mock
+ * had a mutable string and `keyIsBuiltIn: false` hardcoded. So the one state that matters
+ * for privacy — a release build where the viewer has cleared their own key and the
+ * compiled one takes over — could not be reached from a browser at all, and the journey
+ * that claimed to cover it ("removing the key takes the rail away again") passed only
+ * because the mock is kinder than the host. `docs/PRIVACY.md` told viewers to clear the
+ * key for exactly this purpose, and in an official build that did nothing (R-159).
+ *
+ * A compile-time fact cannot be mocked by setting a variable later, so it is a query
+ * flag, read once: the same mechanism as `?video` and for the same reason.
+ */
+const BUILT_IN_KEY =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('builtInKey')
+    ? 'built-into-this-build'
+    : '';
+
+/**
  * What the host's `resolve_key` returns, modelled.
  *
  * Switched off means there is no key *whatever is set* — which is the whole point of the
  * switch, because a release build is compiled with one and clearing the viewer's own
  * falls back to it. Every place the mock asked `mockGeminiKey` directly now asks this,
  * so the preview turns the rail and the assistant off the same way the host does.
+ *
+ * The fallback order is `aurora_app::gemini::resolve_key`'s: off beats everything, then
+ * the viewer's own key, then the one compiled in.
  */
-const geminiKey = () => (mockGeminiEnabled ? mockGeminiKey : '');
+const geminiKey = () => {
+  if (!mockGeminiEnabled) return '';
+  return mockGeminiKey || BUILT_IN_KEY;
+};
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -241,6 +267,18 @@ const mockProfiles: Profile[] = [
 ];
 const mockPins = new Map<number, string | null>();
 let mockMasterPin: string | null = null;
+/**
+ * The host's own two numbers, from `aurora-db/src/repo/profiles.rs`.
+ *
+ * Mirrored rather than shortened: a lockout the mock lets go of in three seconds is a
+ * lockout no journey has really tested, and the UI reads the deadline off the timestamp
+ * either way.
+ */
+const MAX_PIN_FAILURES = 5;
+const PIN_LOCKOUT_SECS = 60;
+/** Wrong attempts, and the deadline they earn, keyed by profile (0 is the master PIN). */
+const pinFailures = new Map<number, number>();
+const pinLockouts = new Map<number, number>();
 let mockParental: ParentalSettings = {
   hasMasterPin: false, hideAdult: true, lockSettings: false,
 };
@@ -400,11 +438,54 @@ function editedChannels(): Channel[] {
   });
 }
 
+/**
+ * `?unenriched` — run the whole app against a library TMDB has never been asked about.
+ *
+ * The fourth seam, in the same spirit as `?video`, `?portable` and `failNextMock`, and
+ * for exactly the reason `setSilentDurationMock`'s comment gives: a state a real library
+ * is usually in, that no fixture could express.
+ *
+ * An import writes ten fields for a film. Eight of the fields these fixtures hand to
+ * every journey — `backdrop`, `logoArt`, `overview`, `runtimeMins`, `certification`,
+ * `genres`, `cast`, `trailerKey` — come from TMDB enrichment and from nothing else, which
+ * needs an API key a viewer may never set. `docs/ROADMAP.md` records a real sweep matching
+ * **39 of 80** titles, so about half a real library never gets them at all.
+ *
+ * `fixtures.ts` makes one row in six unenriched all the time, which puts the case on
+ * screen in every journey that draws a rail. This flag goes further and strips *every*
+ * row, so the existing journeys can be run a second time against the library a viewer
+ * actually has on the day they install (R-157).
+ */
+const UNENRICHED_EVERYTHING =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('unenriched');
+
+/** The eight TMDB-only fields, taken back off a row. */
+function stripEnrichment<T extends Movie | Series>(row: T): T {
+  return {
+    ...row,
+    backdrop: null,
+    logoArt: null,
+    overview: null,
+    certification: null,
+    genres: [],
+    cast: [],
+    trailerKey: null,
+    ...('runtimeMins' in row ? { runtimeMins: null } : {}),
+  };
+}
+
 const editedMovies = (): Movie[] =>
-  fx.movies.map((m) => ({ ...m, title: editOf('movies', m.id).name ?? m.title }));
+  fx.movies.map((m) => {
+    const row = { ...m, title: editOf('movies', m.id).name ?? m.title };
+    return UNENRICHED_EVERYTHING ? stripEnrichment(row) : row;
+  });
 
 const editedSeries = (): Series[] =>
-  fx.series.map((s) => ({ ...s, title: editOf('series', s.id).name ?? s.title }));
+  fx.series.map((s) => {
+    const row = { ...s, title: editOf('series', s.id).name ?? s.title };
+    return UNENRICHED_EVERYTHING ? stripEnrichment(row) : row;
+  });
 
 const isHidden = (kind: PlaylistKind, id: number, fallback = false): boolean =>
   editOf(kind, id).hidden ?? fallback;
@@ -1458,7 +1539,10 @@ const handlers: { [K in CommandName]: Handler<K> } = {
 
   'gemini.status': () => ({
     hasKey: geminiKey().length > 0,
-    keyIsBuiltIn: false,
+    // True when what is in play is the compiled-in key rather than one the viewer
+    // entered, which is what the panel's "Removing a key you entered falls back to this
+    // one" paragraph is for.
+    keyIsBuiltIn: mockGeminiKey.length === 0 && BUILT_IN_KEY.length > 0,
     keyIsPersistent: true,
     hasHistory: progress.size > 0,
     enabled: mockGeminiEnabled,
@@ -2115,10 +2199,38 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     const p = mockProfiles.find((x) => x.id === profileId);
     if (p) { p.hasPin = pin !== null; mockPins.set(profileId, pin); }
   },
+  /**
+   * Wrong PINs are counted here, and five of them lock the pad -- as the host does.
+   *
+   * This used to answer `{ wrong: { remaining: 4 } }` to every wrong PIN, for ever: a
+   * constant, so no journey could reach the locked-out state at all, and the UI's
+   * handling of it went unexamined. `repo::profiles` counts failures per scope, clears
+   * them on success, and returns a real `lockedOut.until` timestamp after
+   * `MAX_PIN_FAILURES`; those two numbers are mirrored exactly rather than shortened,
+   * because a mock that is kinder than the host is how [R-159]'s five tests came to
+   * certify behaviour a shipped build does not have.
+   */
   'profiles.verifyPin': ({ profileId, pin }): PinOutcome => {
     const stored = profileId == null ? mockMasterPin : mockPins.get(profileId) ?? null;
     if (stored == null) return 'notRequired';
-    return stored === pin ? 'ok' : { wrong: { remaining: 4 } };
+    const scope = profileId ?? 0;
+    const now = Math.floor(Date.now() / 1000);
+    const locked = pinLockouts.get(scope) ?? 0;
+    if (locked > now) return { lockedOut: { until: locked } };
+    if (stored === pin) {
+      pinFailures.delete(scope);
+      pinLockouts.delete(scope);
+      return 'ok';
+    }
+    const failures = (pinFailures.get(scope) ?? 0) + 1;
+    pinFailures.set(scope, failures);
+    if (failures >= MAX_PIN_FAILURES) {
+      const until = now + PIN_LOCKOUT_SECS;
+      pinLockouts.set(scope, until);
+      pinFailures.delete(scope);
+      return { lockedOut: { until } };
+    }
+    return { wrong: { remaining: MAX_PIN_FAILURES - failures } };
   },
   'profiles.parental': (): ParentalSettings => mockParental,
   'profiles.setParental': ({ hideAdult, lockSettings, masterPin }) => {
@@ -2515,14 +2627,28 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return true;
   },
 
-  'providers.refresh': async (): Promise<SyncReport> => {
+  'providers.refresh': async ({ content }): Promise<SyncReport> => {
+    // What the viewer asked for, honoured the way `sync::fetch` honours it: an excluded
+    // kind is not imported and is *counted* as excluded rather than silently absent.
+    // The mock used to ignore this argument and report the whole fixture either way,
+    // so a journey could not tell the wizard's three switches did nothing (R-120).
+    const want = content ?? { live: true, vod: true, series: true };
+    const channels = want.live ? fx.channels.length : 0;
+    const movies = want.vod ? fx.movies.length : 0;
+    const series = want.series ? fx.series.length : 0;
+    const episodes = want.series ? fx.episodes.length : 0;
+    const excluded =
+      (want.live ? 0 : fx.channels.length)
+      + (want.vod ? 0 : fx.movies.length)
+      + (want.series ? 0 : fx.episodes.length);
+
     // Walk the same phases the host emits, and only resolve once they are done —
     // so the wizard's progress UI is genuinely exercised rather than skipped past.
     const phases: IngestProgress[] = [
       { phase: 'fetchingPlaylist', done: 0, total: 0 },
-      { phase: 'importingChannels', done: fx.channels.length, total: fx.channels.length },
-      { phase: 'importingMovies', done: fx.movies.length, total: fx.movies.length },
-      { phase: 'importingSeries', done: fx.series.length, total: fx.series.length },
+      { phase: 'importingChannels', done: channels, total: channels },
+      { phase: 'importingMovies', done: movies, total: movies },
+      { phase: 'importingSeries', done: series, total: series },
       { phase: 'fetchingEpg', done: 0, total: 0 },
       { phase: 'matchingEpg', done: 0, total: 0 },
       { phase: 'indexing', done: 0, total: 0 },
@@ -2534,18 +2660,23 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     }
 
     return {
-      channels: fx.channels.length,
-      movies: fx.movies.length,
-      series: fx.series.length,
-      episodes: fx.episodes.length,
-      epgChannels: fx.channels.length,
-      epgProgrammes: fx.channels.length * 48,
+      channels,
+      movies,
+      series,
+      episodes,
+      epgChannels: channels,
+      epgProgrammes: channels * 48,
       channelsMissing: 0,
-      epgMatched: fx.channels.length - 2,
-      epgUnmatched: fx.channels.slice(-2).map((c) => c.name),
+      epgMatched: Math.max(0, channels - 2),
+      epgUnmatched: want.live ? fx.channels.slice(-2).map((c) => c.name) : [],
+      epgUnmatchedTotal: want.live ? Math.min(2, fx.channels.length) : 0,
       warnings: [],
-      // A clean import loses nothing, which is what the host reports too.
-      dropped: { hiddenByRule: 0, kindExcluded: 0, noStreamId: 0, noEpisodeMarker: 0 },
+      // A clean import loses nothing it was asked to keep, which is what the host
+      // reports too — `kindExcluded` is the one number that is allowed to be non-zero
+      // here, because the viewer asked for it.
+      dropped: {
+        hiddenByRule: 0, kindExcluded: excluded, noStreamId: 0, noEpisodeMarker: 0,
+      },
     };
   },
 };
@@ -2581,6 +2712,18 @@ export function failNextMock(name: string, message: string): void {
 }
 
 /**
+ * Put the player into the state the error panel is for.
+ *
+ * `player.error` is filled in by the host from `NetFailure`, so a browser cannot reach
+ * it by making a command refuse -- a refusal is a rejected promise, which goes to a
+ * notice, not to the panel. Which is why the panel's four dead buttons went unpressed by
+ * any journey for as long as they existed (R-110).
+ */
+export function setPlayerErrorMock(error: PlayerState['error']): PlayerState {
+  return setPlayer({ error, status: error ? 'error' : player.status });
+}
+
+/**
  * Whether the player pretends not to know how long anything is.
  *
  * Not a hypothetical: a provider's VOD stream very often reports no duration, because
@@ -2613,6 +2756,47 @@ export function hangMock(name: string): void {
   hangs.add(name);
 }
 
+/**
+ * What the UI has asked for, and how big the answer was.
+ *
+ * A test seam like `__auroraFailNext`, and the one the mock was missing: every journey
+ * could see what the screen did with an answer and none of them could see what the
+ * question cost. That is how `epg.gridSlice` came to be called with
+ * `channelIds: []` — every channel, every programme in 24 hours, 14.8 MB measured
+ * against the live panel — on each of eight navigation controls, with no test able to
+ * notice (R-130).
+ *
+ * Bounded, because this is on for every journey: the last 200 calls is plenty to assert
+ * on and will not grow without limit in a long one.
+ */
+export interface MockCall {
+  name: string;
+  args: unknown;
+  /** The reply's size as JSON, which is what crosses the bridge on Windows. */
+  bytes: number;
+}
+
+const calls: MockCall[] = [];
+
+export function mockCalls(): MockCall[] {
+  return calls;
+}
+
+export function clearMockCalls(): void {
+  calls.length = 0;
+}
+
+function record(name: string, args: unknown, result: unknown): void {
+  if (calls.length >= 200) calls.shift();
+  let bytes = 0;
+  try {
+    bytes = JSON.stringify(result ?? null).length;
+  } catch {
+    // A reply that will not stringify is not one Tauri could have sent either.
+  }
+  calls.push({ name, args, bytes });
+}
+
 export async function invokeMock<K extends CommandName>(
   name: K,
   args: CommandArgs<K>,
@@ -2629,5 +2813,7 @@ export async function invokeMock<K extends CommandName>(
   }
   const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
-  return await fn(args);
+  const result = await fn(args);
+  record(name, args, result);
+  return result;
 }

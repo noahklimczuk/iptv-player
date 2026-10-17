@@ -212,7 +212,12 @@ fn xtream_url(stream_url: &str, req: &Request<'_>) -> Option<String> {
 /// `http://host:port/live/user/pass/1234.ts` → its four parts.
 ///
 /// Also accepts the form without the `/live` segment, which some panels serve.
-fn split_xtream_stream_url(url: &str) -> Option<(String, String, String, String)> {
+///
+/// Public because the migration that takes the credentials out of `library.db` has to
+/// read the URLs already stored there, and this is the parser that knows the shape
+/// (R-126). The extension is *not* returned — see `split_xtream_stream_ref` below, which
+/// is the same walk and keeps it.
+pub fn split_xtream_stream_url(url: &str) -> Option<(String, String, String, String)> {
     let without_query = url.split('?').next().unwrap_or(url);
     let scheme_end = without_query.find("://")? + 3;
     let (scheme, rest) = without_query.split_at(scheme_end);
@@ -242,6 +247,29 @@ fn split_xtream_stream_url(url: &str) -> Option<(String, String, String, String)
         return None;
     }
     Some((format!("{scheme}{host}"), username, password, stream_id))
+}
+
+/// The same walk, returning what a stored row needs instead of what a catch-up URL does.
+///
+/// `(stream_id, container)` — the id without its extension, and the extension on its own
+/// — or `None` when the URL is not an Xtream stream address at all, which is how an M3U
+/// row says "keep me as I am" (R-126).
+pub fn split_xtream_stream_ref(url: &str) -> Option<(String, Option<String>)> {
+    let without_query = url.split('?').next().unwrap_or(url);
+    let last = without_query.rsplit('/').next()?;
+    // Only a stream address has an all-digit last segment, which is what distinguishes
+    // the form from a playlist's own URL. `redact` leans on the same property.
+    let (id, container) = match last.rsplit_once('.') {
+        Some((id, ext)) => (id, Some(ext.to_string())),
+        None => (last, None),
+    };
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    // And the user/pass/id shape has to be there, so a bare `http://host/1234.ts` is
+    // left alone rather than turned into a reference with nothing to rebuild it from.
+    split_xtream_stream_url(url)?;
+    Some((id.to_string(), container))
 }
 
 #[cfg(test)]

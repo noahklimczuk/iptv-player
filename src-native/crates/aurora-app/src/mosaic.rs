@@ -118,6 +118,8 @@ struct Session {
 
 pub struct Mosaic {
     db: Arc<Mutex<Connection>>,
+    /// Provider passwords, for rebuilding a tile's stream address (R-126).
+    credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
     dvr: Arc<crate::dvr::Dvr>,
     factory: TileFactory,
     session: Mutex<Option<Session>>,
@@ -192,9 +194,11 @@ impl Mosaic {
         factory: TileFactory,
         data_dir: PathBuf,
         main: Arc<Mutex<Box<dyn PlayerBackend>>>,
+        credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
     ) -> Self {
         Self {
             db,
+            credentials,
             dvr,
             factory,
             session: Mutex::new(None),
@@ -397,7 +401,32 @@ impl Mosaic {
         }
         let _ = player.set_muted(true);
 
-        match player.load(&source.url, &options) {
+        // The tile's address, rebuilt where the library holds a stream id instead of a
+        // URL (R-126). A tile reports its own failure, so this does not fail the mosaic.
+        let url = {
+            let db = self.db.lock();
+            let mut access = std::collections::HashMap::new();
+            crate::streams::playable(
+                &db,
+                self.credentials.as_ref(),
+                &mut access,
+                aurora_core::model::MediaKind::Live,
+                &crate::streams::StreamRef::from(&source),
+            )
+        };
+        let url = match url {
+            Ok(url) => url,
+            Err(e) => {
+                return Tile {
+                    channel_id: Some(channel_id),
+                    name,
+                    player: None,
+                    error: Some(e.to_string()),
+                }
+            }
+        };
+
+        match player.load(&url, &options) {
             Ok(()) => Tile {
                 channel_id: Some(channel_id),
                 name,
@@ -891,6 +920,7 @@ mod tests {
             Arc::clone(&db),
             Arc::new(NoRecorder),
             std::env::temp_dir(),
+            std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
         ));
         let factory: TileFactory = Arc::new(|| Box::new(NullBackend::default()));
         (
@@ -900,6 +930,7 @@ mod tests {
                 factory,
                 std::env::temp_dir(),
                 Arc::new(Mutex::new(Box::new(NullBackend::default()))),
+                std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
             ),
             db,
         )

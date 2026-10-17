@@ -105,6 +105,18 @@ test('Skip Intro is gone once the intro has passed', async ({ page }) => {
   await playFirstEpisode(page);
   await seekTo(page, 600);
   await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+
+  // Still playing, and really past the intro. A hidden button is also what a player
+  // that failed to open looks like, and `toBeHidden()` cannot tell the two apart —
+  // which is exactly how a green test came to certify a feature that was dead (R-159).
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await expect
+    .poll(async () =>
+      page
+        .getByRole('slider', { name: 'Seek' })
+        .evaluate((el) => Number((el as HTMLInputElement).value)),
+    )
+    .toBeGreaterThan(92);
 });
 
 test('the Next Episode button plays the following episode', async ({ page }) => {
@@ -321,4 +333,61 @@ test('the aids work on a stream that never reports a duration', async ({ page })
   await expect(page.getByRole('button', { name: 'Skip Credits' })).toBeVisible();
   await expect(page.getByText(/Up next/i).first()).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/aids-without-a-duration.png` });
+});
+
+/**
+ * Auto-skip on the *second* episode of a session, which is where it stopped.
+ *
+ * `SkipButton` remembers the regions it has already auto-skipped, so that seeking back
+ * into an intro does not immediately yank the viewer forward again. The guard is right;
+ * the key was `${marker.kind}:${marker.startSecs}` with nothing about which episode —
+ * and the component is never remounted between episodes, because autoplay-next keeps
+ * the player open. So the memory accumulated for a whole viewing session.
+ *
+ * The keys collide by construction rather than by chance. `autoSkip` is restricted to
+ * markers that are not conventional guesses, which leaves chapters, the viewer's own
+ * skips, and `learned` — and a marker learned from a show's episodes is the same number
+ * for all of them. A show whose intro is learned at 42s has `intro:42` on every episode.
+ * The fixtures have the same property for the same reason: every episode of an
+ * odd-numbered series carries its intro at 28–92s.
+ *
+ * So "Always skip intros" worked on the first episode of a session and appeared to have
+ * turned itself off after that, with the manual Skip button still there to make it look
+ * like the setting had not saved (R-149).
+ */
+test('auto-skip still fires on the next episode', async ({ page }) => {
+  await page.goto('/#/series');
+  await page.locator('[role="button"]').first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('tab', { name: 'episodes' }).click();
+  await dialog.getByRole('switch', { name: 'Always skip intros' }).click();
+  await dialog.locator('button', { hasText: /^\d/ }).first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+
+  const playhead = () =>
+    page.getByRole('slider', { name: 'Seek' })
+      .evaluate((el) => Number((el as HTMLInputElement).value));
+
+  // Episode one: the intro skips itself, as the existing journey above checks.
+  await seekTo(page, 45);
+  await expect.poll(playhead).toBeGreaterThanOrEqual(92);
+
+  // On to episode two *without closing the player*, which is the whole point: closing
+  // it would remount `SkipButton` and reset the memory, hiding the defect.
+  const duration = await page
+    .getByRole('slider', { name: 'Seek' })
+    .evaluate((el) => Number((el as HTMLInputElement).max));
+  await seekTo(page, duration - 30);
+  const card = page.getByRole('complementary', { name: 'Up next' });
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: 'Play now' }).click();
+  await expect(card).toBeHidden();
+  await expect.poll(playhead).toBeLessThan(5);
+
+  // Same show, same learned intro, same preference — so it must skip itself again.
+  await seekTo(page, 45);
+  await expect
+    .poll(playhead, { message: 'the second episode played its intro' })
+    .toBeGreaterThanOrEqual(92);
+  await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
 });

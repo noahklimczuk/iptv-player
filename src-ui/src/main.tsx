@@ -4,7 +4,10 @@ import { HashRouter } from 'react-router-dom';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
-import { failNextMock, hangMock, invoke, setSilentDurationMock } from './ipc';
+import {
+  clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setPlayerErrorMock,
+  setSilentDurationMock,
+} from './ipc';
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
 
@@ -16,6 +19,10 @@ installGlobalErrorHandlers();
 (window as unknown as { __auroraInvoke?: unknown }).__auroraInvoke = invoke;
 // …and lets them make one refuse, so "the failure reaches the viewer" is testable.
 (window as unknown as { __auroraFailNext?: unknown }).__auroraFailNext = failNextMock;
+// What was asked for and how big the answer was, for the journeys that assert on the
+// cost of a screen rather than on its contents.
+(window as unknown as { __auroraCalls?: unknown }).__auroraCalls = mockCalls;
+(window as unknown as { __auroraClearCalls?: unknown }).__auroraClearCalls = clearMockCalls;
 // …and lets them play something whose duration the stream never reports, which is the
 // ordinary case on provider VOD and the one in which Skip Credits and autoplay used to
 // be dead.
@@ -24,6 +31,11 @@ installGlobalErrorHandlers();
 // …and lets them make one go quiet rather than refuse, which is the failure the boot
 // screen exists to survive and the one nothing could express before.
 (window as unknown as { __auroraHang?: unknown }).__auroraHang = hangMock;
+// …and lets them put the player into the state the error panel is for, which a refusing
+// command cannot: `player.error` comes from the host's `NetFailure`, so until this
+// existed no journey could press the panel's buttons.
+(window as unknown as { __auroraPlayerError?: unknown }).__auroraPlayerError =
+  setPlayerErrorMock;
 // …and the icon set, so a test can measure every glyph's geometry rather than only the
 // handful that happen to be on one screen. `getBBox` needs a real SVG engine, so this is
 // the only place the measurement can be made from.

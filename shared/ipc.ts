@@ -23,6 +23,15 @@ export interface Channel {
   logo: string | null;
   group: string | null;
   epgChannelId: string | null;
+  /**
+   * The raw `tvg-id` the playlist carried, before any guide matching.
+   *
+   * Declared because the host sends it and did not say so. `epgChannelId` above is the
+   * guide id this channel was *matched* to, which is the one to use; this is what the
+   * provider wrote, kept because the two differ constantly and the difference is the
+   * only evidence of how a channel came to be matched (R-154).
+   */
+  tvgId: string | null;
   quality: Quality | null;
   hidden: boolean;
   isRadio: boolean;
@@ -557,7 +566,16 @@ export interface SyncReport {
   epgProgrammes: number;
   channelsMissing: number;
   epgMatched: number;
+  /** Names of channels with no guide, capped at 200 by the host. */
   epgUnmatched: string[];
+  /**
+   * How many channels have no guide altogether, which is *not* `epgUnmatched.length`.
+   *
+   * The setup screen used the capped list's length as the unmatched total, so past 200
+   * the percentage it computed drifted towards 100% -- 93% where the truth was 37%
+   * (R-121). Divide by `epgMatched + epgUnmatchedTotal`.
+   */
+  epgUnmatchedTotal: number;
   warnings: string[];
   /**
    * Everything the import saw and did not keep, and why.
@@ -1483,7 +1501,18 @@ export interface Commands {
   'providers.detect': (args: { text: string }) => DetectedSource;
   'providers.validate': (args: { draft: DraftProvider }) => ValidationResult;
   'providers.save': (args: { draft: DraftProvider }) => { id: number };
-  'providers.refresh': (args: { providerId: number }) => SyncReport;
+  /**
+   * Import, or re-import, everything this provider offers.
+   *
+   * `content` says what kinds to keep, and is stored when given: the nightly sweep
+   * refreshes without arguments and has to honour the same answer. Omit it to use
+   * whatever was last chosen, which for a library that predates the question is
+   * everything.
+   */
+  'providers.refresh': (args: {
+    providerId: number;
+    content?: { live: boolean; vod: boolean; series: boolean };
+  }) => SyncReport;
   /** A provider's settings, password included, for editing. */
   'providers.credentials': (args: { providerId: number }) => ProviderCredentials;
   /**

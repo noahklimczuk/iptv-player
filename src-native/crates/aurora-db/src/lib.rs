@@ -16,13 +16,39 @@ pub use rusqlite;
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Open (or create) the library database with the pragmas the workload needs.
 pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     let conn = Connection::open(path)?;
     configure(&conn)?;
     migrate::run(&conn)?;
+    // Takes the credentials out of the three URL columns, once. In `open` rather than in
+    // a migration because it has to parse a URL, which SQL does badly; it is guarded on
+    // its own result, so the second launch does nothing. See `backfill_stream_ids`.
+    let rewritten = backfill_stream_ids(&conn)?;
+    if rewritten > 0 {
+        tracing::info!(rows = rewritten, "rewrote stored stream URLs as stream ids");
+        // **And then rewrite the file.** Blanking a column does not remove the bytes
+        // from the database: SQLite leaves the old row in a freed page, and a freed page
+        // keeps its contents until something reuses it. Measured on the real library
+        // after the rewrite: 34,702 raw occurrences of the password still in the file
+        // while every one of the three columns was clean (R-126).
+        //
+        // The whole point of this work is that `library.db` can be handed to somebody,
+        // so a file that still has the password in its unallocated pages is not fixed.
+        // `VACUUM` rebuilds it. Once, on the first launch after an upgrade, which is the
+        // only time anything is rewritten; it needs temporary space about the size of
+        // the library, and a failure is logged rather than fatal — the columns are
+        // already clean, and refusing to start would be a worse answer than a file that
+        // needs one more launch.
+        match conn.execute_batch("VACUUM") {
+            Ok(()) => tracing::info!("library compacted, so the old rows are gone from the file"),
+            Err(e) => tracing::error!(
+                "the library could not be compacted, so the previous stream URLs may                  still be recoverable from unused pages of the file: {e}"
+            ),
+        }
+    }
     // A library that predates `analyze` being called at all — every library that
     // already exists — gets its statistics here, once. See `analyze`.
     if !has_statistics(&conn)? {
@@ -47,6 +73,33 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA foreign_keys = ON;
          PRAGMA temp_store = MEMORY;
          PRAGMA cache_size = -65536;", // 64 MiB page cache
+    )?;
+    register_functions(conn)?;
+    Ok(())
+}
+
+/// `shown_title(raw)` -- the title as the viewer actually reads it.
+///
+/// Three expressions used to describe "the title" in the same query and no two agreed:
+/// what was displayed was `COALESCE(custom_title, tmdb_title, title)` with the provider's
+/// language prefix stripped in Rust, the letter bar filtered on
+/// `COALESCE(custom_title, title)` with no stripping, and the A-Z sort ordered by the
+/// bare `title`. This subscription writes 27,416 of its 27,494 film names with a leading
+/// language code, so the "E" button returned 26,796 films and eight letters returned
+/// nothing at all, in a library holding 733 films beginning with I and 482 with K (R-52).
+///
+/// Registered here rather than reimplemented in SQL so there is one definition, in
+/// `aurora_core::lang` -- the same one `map_movie` applies to the text it hands the UI.
+fn register_functions(conn: &Connection) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "shown_title",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let raw: Option<String> = ctx.get(0)?;
+            Ok(raw.map(|raw| aurora_core::lang::strip_language_prefix(&raw).unwrap_or(raw)))
+        },
     )?;
     Ok(())
 }
@@ -86,6 +139,114 @@ pub fn analyze(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// How a stream address should be stored for this provider: `(url, stream_id, container)`.
+///
+/// For a provider whose addresses can be rebuilt -- an Xtream panel, whose base address
+/// is on the provider row and whose password is in Credential Manager -- the URL is
+/// *not* stored: the credentials are in its path. For anything else, and for a URL this
+/// does not recognise as a stream address, the URL is kept as it is.
+///
+/// Used at every write rather than only by `backfill_stream_ids`, because a pass that
+/// cleans up afterwards leaves a window: the episode sweep runs in the background after
+/// a refresh has finished, and on a real subscription it writes 42,493 rows -- every one
+/// of which held the password until the next launch when the only conversion was
+/// post-hoc (R-126).
+pub fn stored_stream(rebuild: bool, url: &str) -> (String, Option<String>, Option<String>) {
+    if !rebuild {
+        return (url.to_string(), None, None);
+    }
+    match aurora_core::catchup::split_xtream_stream_ref(url) {
+        Some((stream_id, container)) => (String::new(), Some(stream_id), container),
+        // Not a stream address at all. An Xtream provider can still carry one of these —
+        // a `get.php` playlist row, say — and it is kept rather than lost.
+        None => (url.to_string(), None, None),
+    }
+}
+
+/// Whether this provider's stream addresses are rebuilt rather than stored.
+pub fn provider_rebuilds_urls(conn: &Connection, provider_id: i64) -> Result<bool> {
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM providers WHERE id = ?1",
+            rusqlite::params![provider_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(kind.as_deref() == Some("xtream"))
+}
+
+/// Replace every stored Xtream stream URL with the id it can be rebuilt from.
+///
+/// An Xtream URL carries the credentials in its path, so storing it stored the viewer's
+/// password -- 6,699 channel sources, 27,494 films and one row per episode of 8,086
+/// series on the subscription this is measured against, several hundred thousand
+/// plaintext copies in one file. `docs/PRIVACY.md` promised the opposite about the very
+/// artefact somebody attaches to a bug report (R-126).
+///
+/// Run from `open` rather than as a migration because deciding whether a URL *is* an
+/// Xtream stream address means parsing it, and SQL is the wrong tool for that. It is
+/// idempotent by its own query: only rows that still hold a URL and have no `stream_id`
+/// are considered, so the pass after the first finds nothing and costs one indexless
+/// scan of three tables at startup.
+///
+/// Rows whose URL does not parse are left exactly as they are. That is an M3U provider,
+/// whose addresses are whatever the playlist said and cannot be rebuilt from an id --
+/// the honest half of this, and what the privacy note now says out loud.
+///
+/// Returns how many rows were rewritten, for the log line.
+pub fn backfill_stream_ids(conn: &Connection) -> Result<usize> {
+    // Only an Xtream provider's rows. An M3U provider's URLs are whatever the playlist
+    // said -- including, very often, Xtream stream URLs, since that is what a panel's
+    // `get.php` serves -- but there is no saved password to rebuild them from: an M3U
+    // provider has no `credential_ref`, because its URL carries its own credentials. So
+    // those rows keep theirs and `docs/PRIVACY.md` says so, which is the honest half of
+    // this (R-126).
+    let queries = [
+        (
+            "channel_sources",
+            "SELECT s.id, s.url FROM channel_sources s
+             JOIN channels c ON c.id = s.channel_id
+             JOIN providers p ON p.id = c.provider_id
+             WHERE s.stream_id IS NULL AND s.url <> '' AND p.kind = 'xtream'",
+        ),
+        (
+            "movies",
+            "SELECT m.id, m.url FROM movies m
+             JOIN providers p ON p.id = m.provider_id
+             WHERE m.stream_id IS NULL AND m.url <> '' AND p.kind = 'xtream'",
+        ),
+        (
+            "episodes",
+            "SELECT e.id, e.url FROM episodes e
+             JOIN series r ON r.id = e.series_id
+             JOIN providers p ON p.id = r.provider_id
+             WHERE e.stream_id IS NULL AND e.url <> '' AND p.kind = 'xtream'",
+        ),
+    ];
+
+    let mut rewritten = 0usize;
+    for (table, select) in queries {
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare(select)?;
+            let found = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            found.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let sql =
+            format!("UPDATE {table} SET stream_id = ?2, container = ?3, url = '' WHERE id = ?1");
+        let mut update = conn.prepare(&sql)?;
+        for (id, url) in rows {
+            let Some((stream_id, container)) = aurora_core::catchup::split_xtream_stream_ref(&url)
+            else {
+                continue;
+            };
+            update.execute(rusqlite::params![id, stream_id, container])?;
+            rewritten += 1;
+        }
+    }
+    Ok(rewritten)
+}
+
 /// Whether `ANALYZE` has ever run on this database.
 fn has_statistics(conn: &Connection) -> Result<bool> {
     let n: i64 = conn.query_row(
@@ -112,6 +273,27 @@ pub enum Opened {
     Replaced { corrupt_copy: std::path::PathBuf },
 }
 
+/// Whether a failure to open means "refuse" rather than "replace the library".
+///
+/// The two outcomes are not comparable: one shows a message, the other renames
+/// somebody's favourites, watch progress and recordings metadata and starts again. So
+/// the decision is made on the error's *variant*, which cannot drift.
+///
+/// * `SchemaTooNew` — a newer build wrote this. Replacing it would throw away a library
+///   this build simply cannot read yet.
+/// * `Migration` — our own SQL failed. The file is almost certainly fine; the bug is in
+///   the release, and a release that moves every viewer's library aside on first launch
+///   is a far worse outcome than one that will not start.
+///
+/// Everything else — a file that is not a database, a truncated one, a failed integrity
+/// check — is corruption, and is what the replace path exists for (R-46).
+fn should_refuse(error: &DbError) -> bool {
+    matches!(
+        error,
+        DbError::SchemaTooNew { .. } | DbError::Migration { .. }
+    )
+}
+
 /// Open the library, or start a new one if the file on disk cannot be used.
 ///
 /// `open` alone propagates a corrupt file out of `Services::new`, which Tauri turns
@@ -131,16 +313,33 @@ pub fn open_or_recover(path: impl AsRef<Path>) -> Result<(Connection, Opened)> {
             Ok(false) => "failed its integrity check".to_string(),
             Err(e) => format!("could not be checked: {e}"),
         },
+        // A database this build is too old for is a different problem, and replacing it
+        // would silently throw away a newer library. Refuse instead, so the message says
+        // to update rather than pretending nothing was there.
+        //
+        // Matched on the *variant*. This was
+        // `failure.contains("newer version of Aurora") || failure.contains("schema")`
+        // against the formatted message, and that was fragile in two ways. The first
+        // phrase occurs exactly once in the repository -- in the line that looked for
+        // it -- so it matched nothing. The second was doing all the work by coincidence
+        // of wording: `SchemaTooNew` reads "database is newer than this build (schema
+        // v9999, supported v11)", and it was the word `schema` in that parenthesis that
+        // saved the library. Reword the message -- drop the parenthetical, say "format"
+        // instead of "schema" -- and the next launch against a newer database renames
+        // the viewer's library and starts an empty one.
+        //
+        // A migration bug had the same shape: `DbError::Migration` carries a SQL error
+        // whose text contains "schema" only if it happens to, so a broken release could
+        // move every viewer's library aside and report it as corruption. Both are
+        // refusals now, which is the direction this function's own doc comment argues
+        // for -- destroying the one copy of somebody's favourites and watch history is
+        // "not a trade this should make on its own" (R-46).
+        Err(e) if should_refuse(&e) => {
+            tracing::error!("the library database could not be opened: {e}");
+            return Err(e);
+        }
         Err(e) => e.to_string(),
     };
-
-    // A database this build is too old for is a different problem, and replacing it
-    // would silently throw away a newer library. Refuse instead, so the message says
-    // to update rather than pretending nothing was there.
-    if failure.contains("newer version of Aurora") || failure.contains("schema") {
-        tracing::error!("the library database {failure}");
-        return open(path).map(|c| (c, Opened::Intact));
-    }
 
     tracing::error!("the library database {failure}; starting a new one");
     let corrupt_copy = aside(path);
@@ -232,6 +431,293 @@ mod tests {
             .query_row("SELECT count(*) FROM providers", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "an intact library must not be replaced");
+    }
+
+    /// The password is not in the library after an import, and the row still plays.
+    ///
+    /// An Xtream stream URL carries the credentials in its path, and those strings were
+    /// stored verbatim in three tables: 6,699 channel sources, 27,494 films and one row
+    /// per episode of 8,086 series on the subscription this is measured against, which
+    /// is several hundred thousand plaintext copies of a username and password in one
+    /// SQLite file. `docs/PRIVACY.md` promised the opposite about the one artefact
+    /// somebody attaches to a bug report (R-126).
+    #[test]
+    fn an_xtream_import_leaves_no_credentials_in_the_library() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                 VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (1,1,'c1','CNN','cnn',0);
+             INSERT INTO channel_sources (channel_id,url)
+                 VALUES (1,'http://panel.example:8080/live/bob/hunter2/1234.ts');
+             INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+                 VALUES (1,1,'m1','Heat','heat',
+                         'http://panel.example:8080/movie/bob/hunter2/555.mkv',0);
+             INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+                 VALUES (1,1,'s1','The Wire','the wire',0);
+             INSERT INTO episodes (id,series_id,season,episode,url)
+                 VALUES (1,1,1,1,'http://panel.example:8080/series/bob/hunter2/999.mp4');",
+        )
+        .unwrap();
+
+        let rewritten = backfill_stream_ids(&conn).unwrap();
+        assert_eq!(rewritten, 3, "every stored URL should have been rewritten");
+
+        // Nothing anywhere in the three tables mentions the password or the username.
+        for (table, column) in [
+            ("channel_sources", "url"),
+            ("movies", "url"),
+            ("episodes", "url"),
+        ] {
+            let leaked: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM {table}
+                          WHERE {column} LIKE '%hunter2%' OR {column} LIKE '%bob%'"
+                    ),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(leaked, 0, "{table}.{column} still carries the credentials");
+        }
+
+        // And what is kept is enough to rebuild the address: the id and the container.
+        let (id, container): (String, Option<String>) = conn
+            .query_row(
+                "SELECT stream_id, container FROM movies WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(id, "555");
+        assert_eq!(container.as_deref(), Some("mkv"));
+
+        let (live_id, live_container): (String, Option<String>) = conn
+            .query_row(
+                "SELECT stream_id, container FROM channel_sources WHERE channel_id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(live_id, "1234");
+        assert_eq!(live_container.as_deref(), Some("ts"));
+
+        // Twice changes nothing: the pass runs at every launch.
+        assert_eq!(backfill_stream_ids(&conn).unwrap(), 0);
+    }
+
+    /// Upgrading a library does not leave the password in the file.
+    ///
+    /// The half a column check cannot see. Blanking `url` does not remove the old row
+    /// from a SQLite database: it stays in a freed page, and a freed page keeps its
+    /// contents until something reuses it. Measured on the real 257 MB library after the
+    /// first version of this fix: all three columns clean, and **34,702 raw occurrences
+    /// of the password still in the file**. Since the whole point is that `library.db`
+    /// can be handed to somebody, that was a false pass (R-126).
+    ///
+    /// On a real file rather than in memory, because this is a question about bytes on
+    /// disk.
+    #[test]
+    fn upgrading_a_library_removes_the_password_from_the_file() {
+        let dir = scratch("vacuum");
+        let path = dir.join("library.db");
+
+        // A library as an older build left it: migration 11, URLs with the password in
+        // them, and no `stream_id` column at all.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            crate::configure(&conn).unwrap();
+            for m in crate::schema::MIGRATIONS.iter().filter(|m| m.version <= 11) {
+                conn.execute_batch(m.sql).unwrap();
+            }
+            conn.execute_batch("PRAGMA user_version = 11").unwrap();
+            conn.execute_batch(
+                "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                     VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+                 INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+                     VALUES (1,1,'s1','Show','show',0);",
+            )
+            .unwrap();
+            // Enough rows that the old ones cannot all sit in the same page as the new.
+            let tx = conn.unchecked_transaction().unwrap();
+            for i in 0..400 {
+                tx.execute(
+                    "INSERT INTO movies (provider_id,provider_key,title,match_key,url,last_seen_at)
+                     VALUES (1,?1,?2,'m',?3,0)",
+                    rusqlite::params![
+                        format!("k{i}"),
+                        format!("Film {i}"),
+                        format!("http://panel.example:8080/movie/bob/hunter2/{i}.mkv")
+                    ],
+                )
+                .unwrap();
+                tx.execute(
+                    "INSERT INTO episodes (series_id,season,episode,url)
+                     VALUES (1,1,?1,?2)",
+                    rusqlite::params![
+                        i + 1,
+                        format!("http://panel.example:8080/series/bob/hunter2/{i}.mp4")
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        let before = std::fs::read(&path).unwrap();
+        assert!(
+            count_bytes(&before, b"hunter2") > 100,
+            "the fixture did not write the password often enough to be a real check"
+        );
+
+        // What a viewer's first launch on the new build does.
+        let conn = open(&path).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM movies WHERE instr(url, 'hunter2') > 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "the columns should be clean");
+        drop(conn);
+
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(
+            count_bytes(&after, b"hunter2"),
+            0,
+            "the password survives in the file's unused pages — VACUUM is what removes it"
+        );
+        // The username stays: it is on the `providers` row, which the app has to show.
+        assert!(count_bytes(&after, b"bob") > 0);
+    }
+
+    fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    }
+
+    /// An M3U provider keeps its URLs, because nothing could rebuild them.
+    ///
+    /// Its addresses are whatever the playlist said — including, very often, Xtream
+    /// stream URLs, since that is what a panel's `get.php` serves — and there is no
+    /// saved password to rebuild them from: an M3U provider has no `credential_ref`,
+    /// because its URL carries its own credentials. `docs/PRIVACY.md` says so rather
+    /// than implying the library is clean for everybody (R-126).
+    #[test]
+    fn an_m3u_providers_urls_are_left_alone() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+                 VALUES (1,'List','m3u','http://host/get.php?username=bob',0);
+             INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+                 VALUES (1,1,'m1','Heat','heat','http://host/movie/bob/hunter2/555.mkv',0);",
+        )
+        .unwrap();
+
+        assert_eq!(backfill_stream_ids(&conn).unwrap(), 0);
+        let url: String = conn
+            .query_row("SELECT url FROM movies WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(url, "http://host/movie/bob/hunter2/555.mkv");
+    }
+
+    /// What decides between a message and renaming somebody's library.
+    ///
+    /// The old rule was a substring match on the formatted error:
+    /// `failure.contains("newer version of Aurora") || failure.contains("schema")`.
+    /// This test holds the two cases apart and shows where that rule got it wrong —
+    /// a migration bug produces a SQL error whose text need not mention a schema at
+    /// all, so a broken release would have renamed every viewer's library and reported
+    /// it as corruption (R-46).
+    #[test]
+    fn a_failed_migration_is_refused_where_the_old_text_rule_replaced() {
+        let migration = DbError::Migration {
+            version: 12,
+            source: rusqlite::Error::ExecuteReturnedResults,
+        };
+        assert!(should_refuse(&migration), "{migration}");
+
+        // The old rule, for comparison. If this ever becomes true the message has
+        // changed to mention a schema by chance, which is precisely the fragility.
+        let text = migration.to_string();
+        assert!(
+            !(text.contains("newer version of Aurora") || text.contains("schema")),
+            "the old text rule happened to catch this one: {text}"
+        );
+
+        // And corruption is still corruption: these are what the replace path is for.
+        assert!(!should_refuse(&DbError::Sqlite(
+            rusqlite::Error::ExecuteReturnedResults
+        )));
+    }
+
+    /// A library from a newer build is refused, not renamed.
+    ///
+    /// This branch had no test. It decided between *refusing* a database and *moving
+    /// the viewer's library aside* by substring-matching an error message:
+    /// `failure.contains("newer version of Aurora") || failure.contains("schema")`.
+    /// The first phrase occurs exactly once in the repository — in the line that looked
+    /// for it — so it matched nothing, and the second was doing all the work by
+    /// coincidence of wording: `SchemaTooNew` happens to say "(schema v9999, supported
+    /// v11)". Reword that message and the next launch renames somebody's favourites,
+    /// watch history and recordings metadata and starts an empty library (R-46).
+    #[test]
+    fn a_library_from_a_newer_build_is_refused_rather_than_replaced() {
+        let dir = scratch("too-new");
+        let path = dir.join("library.db");
+        {
+            let conn = open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO providers (name, kind, base_url, created_at)
+                 VALUES ('P','m3u','https://example.com',0)",
+                [],
+            )
+            .unwrap();
+            // What a newer build leaves behind.
+            conn.execute_batch("PRAGMA user_version = 9999").unwrap();
+        }
+
+        let err = open_or_recover(&path).unwrap_err();
+        assert!(
+            matches!(err, DbError::SchemaTooNew { .. }),
+            "expected a refusal, got {err:?}"
+        );
+
+        // And the library is still where the viewer left it, with their row in it.
+        assert!(path.exists(), "the library was moved aside");
+        let aside: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("corrupt"))
+            .collect();
+        assert!(aside.is_empty(), "something was renamed: {aside:?}");
+    }
+
+    /// The same, for the message this does *not* depend on any more.
+    ///
+    /// The point of the variant match is that the wording is free to change. This
+    /// asserts the two are independent by checking the refusal while the message says
+    /// nothing about a schema.
+    #[test]
+    fn the_refusal_does_not_depend_on_the_wording_of_the_message() {
+        let err = DbError::SchemaTooNew {
+            found: 9999,
+            supported: 11,
+        };
+        let text = err.to_string();
+        // If this assertion ever fails, the message has been reworded — which is
+        // allowed, and is exactly what used to break the guard.
+        assert!(
+            text.contains("schema"),
+            "the message has changed, which is fine: {text}"
+        );
+        assert!(matches!(err, DbError::SchemaTooNew { .. }));
     }
 
     /// The bug: a corrupt file propagated out of `Services::new`, Tauri turned that
