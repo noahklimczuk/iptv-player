@@ -7,6 +7,7 @@ import type { Channel } from '@shared/ipc';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { useUi } from '@/state/ui';
+import { stepIndex } from './zap';
 
 const DIGIT_TIMEOUT_MS = 1800;
 
@@ -61,9 +62,9 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
 
   const step = useCallback(
     (delta: 1 | -1) => {
-      if (channels.length === 0) return;
       const i = current ? channels.findIndex((c) => c.id === current.id) : -1;
-      const next = channels[(i + delta + channels.length) % channels.length];
+      const at = stepIndex(channels.length, i, delta);
+      const next = at == null ? undefined : channels[at];
       if (next) tune(next);
     },
     [channels, current, tune],

@@ -13,6 +13,15 @@ import { activeProfileId } from '@/state/profile';
 
 export interface EpisodeAids {
   aids: PlaybackAids | null;
+  /**
+   * Which episode these aids are about, or null when what is playing is not one.
+   *
+   * Exported so the screen can key per-episode state on it. `SkipButton` keeps a set of
+   * regions it has already auto-skipped -- so that seeking back into an intro does not
+   * yank the viewer forward again -- and that set is per episode, which nothing told it
+   * (R-149).
+   */
+  episodeId: number | null;
   /** The marker under the playhead right now, if any. */
   activeMarker: SkipMarker | null;
   /** Whether the current marker should be skipped without being asked. */
@@ -160,5 +169,7 @@ export function useEpisodeAids(
 
   const dismissUpNext = useCallback(() => setDismissed(episodeId), [episodeId]);
 
-  return { aids, activeMarker, autoSkip, upNextVisible, skip, playNext, dismissUpNext };
+  return {
+    aids, episodeId, activeMarker, autoSkip, upNextVisible, skip, playNext, dismissUpNext,
+  };
 }
