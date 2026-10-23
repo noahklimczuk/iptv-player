@@ -689,6 +689,6 @@ function emptyReason(
 
   // Channels exist and none are showing: something is filtering them out.
   return `Your library has ${imported} channels, but none are visible here. Check `
-    + 'the group filter above, and Settings → Filters for English-only and '
+    + 'the group filter above, and Settings → Filtering for English-only and '
     + 'hide-duplicates.';
 }

@@ -16,7 +16,27 @@ import { UpdatePanel } from '@/features/settings/UpdatePanel';
 import { useUi } from '@/state/ui';
 
 export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
-  const ui = useUi();
+  /**
+   * The eight fields this page reads, subscribed to one at a time (R-90).
+   *
+   * `useUi()` with no selector subscribes to the whole store, including `player`, which
+   * the host's heartbeat writes four times a second. Settings reads none of it -- theme,
+   * density and two toggles -- and re-rendered the entire page, every panel in it, at
+   * 4 Hz whenever something was playing in the background.
+   *
+   * Kept as an object so the reads below are unchanged, which is the shape `App` already
+   * uses: what matters is what is subscribed to, not how it is spelled at the call site.
+   */
+  const ui = {
+    theme: useUi((s) => s.theme),
+    density: useUi((s) => s.density),
+    animations: useUi((s) => s.animations),
+    hoverPreviews: useUi((s) => s.hoverPreviews),
+    setTheme: useUi((s) => s.setTheme),
+    setDensity: useUi((s) => s.setDensity),
+    toggleAnimations: useUi((s) => s.toggleAnimations),
+    toggleHoverPreviews: useUi((s) => s.toggleHoverPreviews),
+  };
   const { data: providers, reload: reloadProviders } = useCommand('providers.list', undefined, []);
   const [editing, setEditing] = useState<number | null>(null);
   const { data: stats } = useCommand('library.stats', undefined, []);

@@ -150,12 +150,39 @@ pub fn write(db: &Connection, data_dir: &Path, args: &SetArgs) -> Result<Setting
         settings::set(db, BYTES_KEY, &wanted.bytes)?;
         settings::set(db, SECS_KEY, &wanted.secs)?;
     }
-    if let Some(folder) = &args.folder {
-        let trimmed = folder.trim();
+    if let Some(requested) = &args.folder {
+        // Resolved before the key is rewritten, because every reader resolves it fresh.
+        //
+        // `read`, `cache_for` and `timeshift_clear` all call `folder`, so the instant
+        // this setting changes the old directory stops being reachable from anywhere in
+        // the app: Settings reports the size of the *new* folder, and "Empty it" empties
+        // the new folder. Whatever was in the old one -- up to `MAX_BYTES` of it -- would
+        // sit on that disk for ever with nothing in the UI able to name it, which is a
+        // gigabyte left behind by a viewer who moved the buffer to a faster drive and was
+        // told nothing (R-138).
+        //
+        // Emptied rather than announced, and without asking: the buffer is a cache of
+        // live television nobody chose to keep, so deleting it is always safe. `clear`
+        // leaves behind whatever mpv has open -- which is the programme being watched
+        // right now, because Windows refuses to delete a file in use -- and that refusal
+        // is the correct answer rather than a case to work around.
+        let previous = folder(db, data_dir)?;
+        let trimmed = requested.trim();
         if trimmed.is_empty() {
             settings::clear(db, settings::GLOBAL, FOLDER_KEY)?;
         } else {
             settings::set(db, FOLDER_KEY, &trimmed.to_string())?;
+        }
+        let moved_to = folder(db, data_dir)?;
+        if moved_to != previous {
+            let reclaimed = clear(&previous);
+            if reclaimed > 0 {
+                tracing::info!(
+                    "timeshift buffer moved to {}; reclaimed {reclaimed} bytes from {}",
+                    moved_to.display(),
+                    previous.display()
+                );
+            }
         }
     }
     read(db, data_dir)
@@ -284,6 +311,61 @@ mod tests {
         )
         .unwrap();
         assert!(back.folder.ends_with("timeshift"), "{}", back.folder);
+    }
+
+    /// Moving the buffer empties the folder it is leaving (R-138).
+    ///
+    /// The old directory is unreachable the moment the setting changes -- `bytes_on_disk`
+    /// and `clear` both resolve the folder from settings -- so anything left in it is
+    /// left for ever, reported by nothing and freed by no button in the app.
+    #[test]
+    fn moving_the_buffer_takes_the_old_folder_with_it() {
+        let db = aurora_db::open_memory().unwrap();
+        let data = tempdir("move-data");
+        let old = data.join("timeshift");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("live.ts"), vec![0u8; 4096]).unwrap();
+        fs::write(old.join("live-1.ts"), vec![0u8; 2048]).unwrap();
+        assert_eq!(bytes_on_disk(&old), 6144, "the buffer starts with something in it");
+
+        let new = tempdir("move-new");
+        let moved = write(
+            &db,
+            &data,
+            &SetArgs {
+                folder: Some(new.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(moved.folder, new.to_string_lossy());
+        assert_eq!(moved.bytes_on_disk, 0, "the new folder is empty");
+        assert_eq!(
+            bytes_on_disk(&old),
+            0,
+            "the folder being left behind was emptied, not orphaned"
+        );
+    }
+
+    /// Setting the folder to the one already in use is not a reason to delete anything.
+    #[test]
+    fn re_applying_the_same_folder_leaves_the_buffer_alone() {
+        let db = aurora_db::open_memory().unwrap();
+        let data = tempdir("same-data");
+        let dir = tempdir("same-dir");
+        fs::write(dir.join("live.ts"), vec![0u8; 1024]).unwrap();
+
+        let args = SetArgs {
+            folder: Some(dir.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        write(&db, &data, &args).unwrap();
+        // The same path a second time, which is what pressing Apply twice does.
+        let after = write(&db, &data, &args).unwrap();
+
+        assert_eq!(after.bytes_on_disk, 1024, "pressing Apply again kept the buffer");
+        assert_eq!(bytes_on_disk(&dir), 1024);
     }
 
     #[test]

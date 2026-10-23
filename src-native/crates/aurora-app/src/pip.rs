@@ -111,14 +111,22 @@ impl Pip {
         (size, geometry, inlay)
     }
 
-    pub fn state(&self) -> PipView {
-        let ((w, h), geometry, inlay) = self.snapshot();
+    /// The view to draw, with the inlay trimmed to the size it is measured against.
+    ///
+    /// `state` and `apply` both come through here, so the rectangle a page is told about
+    /// and the rectangle the backend is given cannot be two different rectangles.
+    fn view_of(&self, (w, h): (u32, u32), geometry: Geometry, inlay: Option<Rect>) -> PipView {
         PipView {
             enabled: self.is_enabled(),
             corner: geometry.corner,
             rect: geometry.rect(w, h),
-            inlay,
+            inlay: inlay.and_then(|r| clamp_to_window(r, w, h)),
         }
+    }
+
+    pub fn state(&self) -> PipView {
+        let (size, geometry, inlay) = self.snapshot();
+        self.view_of(size, geometry, inlay)
     }
 
     /// Put the surface where the current mode says it belongs.
@@ -129,13 +137,9 @@ impl Pip {
         // One snapshot rather than a size read and then `state`, so the rect handed to
         // the backend is from the same moment as the size it is measured against — and
         // so there stays exactly one place in this file that takes these two locks.
-        let ((w, h), geometry, inlay) = self.snapshot();
-        let view = PipView {
-            enabled: self.is_enabled(),
-            corner: geometry.corner,
-            rect: geometry.rect(w, h),
-            inlay,
-        };
+        let (size, geometry, inlay) = self.snapshot();
+        let (w, h) = size;
+        let view = self.view_of(size, geometry, inlay);
         let mut player = self.player.lock();
         // The precedence, in one place.
         //
@@ -145,7 +149,7 @@ impl Pip {
         // explainable; PiP silently moving because somebody opened the guide is not.
         if view.enabled {
             player.place(view.rect)?;
-        } else if let Some(rect) = inlay {
+        } else if let Some(rect) = view.inlay {
             player.place(rect)?;
         } else {
             player.resize(w, h)?;
@@ -200,10 +204,19 @@ impl Pip {
     /// re-measuring brings back. The clamped rectangle is returned so the page draws its
     /// frame where the picture actually went.
     ///
+    /// The clamp itself is in `apply`, against the size the surface is being placed
+    /// against *now*, and what is stored here is the rectangle the page asked for.
+    /// Clamping on the way in validated it once, against a window size that then stopped
+    /// being true: `relayout` re-applies this rectangle on every resize, so dragging the
+    /// window narrower re-placed a rectangle checked against a width that no longer
+    /// existed — which is the surface-outside-its-parent case the paragraph above calls
+    /// unrecoverable (R-137). Keeping the request and trimming it on the way out also
+    /// means a window made small and then large again gets the whole preview back,
+    /// rather than staying cut down to whatever the smallest size allowed.
+    ///
     /// `None` gives the window back, which is what leaving the page has to do.
     pub fn set_inlay(&self, rect: Option<Rect>) -> Result<PipView> {
-        let ((w, h), _, _) = self.snapshot();
-        *self.inlay.lock() = rect.and_then(|r| clamp_to_window(r, w, h));
+        *self.inlay.lock() = rect;
         self.apply()
     }
 
@@ -435,6 +448,72 @@ mod tests {
 
     fn placed(seen: &Arc<Mutex<Option<Rect>>>) -> Option<Rect> {
         *seen.lock()
+    }
+
+    /// A resize re-places the inlay, so the clamp has to run on the way out (R-137).
+    ///
+    /// `relayout` is called from the window's `Resized` handler for every resize, and it
+    /// goes to `apply`, which re-places whatever rectangle is stored. Validating that
+    /// rectangle when it arrived checked it against a window size that the next drag of
+    /// an edge made false -- so the surface was placed outside the client area, which is
+    /// the one failure the clamp exists to prevent and the one `set_inlay` documents as
+    /// unrecoverable.
+    #[test]
+    fn shrinking_the_window_re_trims_an_inlay_that_no_longer_fits() {
+        let (pip, seen) = pip();
+        pip.set_window(1280, 720);
+
+        // The right half of a 1280-wide window: entirely inside it.
+        let asked = Rect { x: 640, y: 0, width: 640, height: 720 };
+        let view = pip.set_inlay(Some(asked)).unwrap();
+        assert_eq!(view.inlay, Some(asked), "a rectangle that fits is not trimmed");
+        assert_eq!(placed(&seen), Some(asked));
+
+        // Drag the window narrower than the rectangle's right edge.
+        let view = pip.relayout(800, 720).unwrap();
+        let trimmed = view.inlay.expect("some of it is still on screen");
+        assert_eq!(trimmed, Rect { x: 640, y: 0, width: 160, height: 720 });
+        assert_eq!(placed(&seen), Some(trimmed), "the backend gets the trimmed one");
+        // The property that matters, stated as itself: inside the client area.
+        assert!(
+            trimmed.x >= 0 && trimmed.x as i64 + trimmed.width as i64 <= 800,
+            "{trimmed:?} is outside an 800-wide window"
+        );
+        // What the page is told and what the surface got are the same rectangle.
+        assert_eq!(pip.state().inlay, Some(trimmed));
+
+        // Narrower than its left edge: nothing of it is left, so the surface is given
+        // the window rather than a rectangle beyond the edge of it.
+        let view = pip.relayout(600, 720).unwrap();
+        assert_eq!(view.inlay, None);
+        assert_eq!(
+            placed(&seen),
+            Some(Rect { x: 0, y: 0, width: 600, height: 720 }),
+            "with no inlay left the surface fills the window"
+        );
+
+        // And back: the request was kept rather than overwritten, so the preview returns
+        // whole instead of staying at the width some earlier drag cut it to.
+        let view = pip.relayout(1280, 720).unwrap();
+        assert_eq!(view.inlay, Some(asked));
+        assert_eq!(placed(&seen), Some(asked));
+    }
+
+    /// PiP still beats an inlay, and the clamp did not change that order.
+    #[test]
+    fn a_corner_still_wins_over_an_inlay_after_a_resize() {
+        let (pip, seen) = pip();
+        pip.set_window(1280, 720);
+        pip.set_inlay(Some(Rect { x: 640, y: 0, width: 640, height: 720 }))
+            .unwrap();
+        pip.set_enabled(true).unwrap();
+        let corner = pip.state().rect;
+        assert_eq!(placed(&seen), Some(corner));
+        // A resize re-places the corner, not the inlay that is still stored under it.
+        let view = pip.relayout(800, 720).unwrap();
+        assert!(view.enabled);
+        assert_eq!(placed(&seen), Some(view.rect));
+        assert_ne!(placed(&seen), view.inlay);
     }
 
     /// Every entry point returns, on its own thread, within a deadline.

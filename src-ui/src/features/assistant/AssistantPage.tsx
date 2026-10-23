@@ -273,7 +273,7 @@ export function AssistantPage({
         <EmptyState
           icon="sparkle"
           title="The assistant needs a key"
-          body="Add a Gemini API key in Settings → Metadata and recommendations, and this becomes a conversation about your own library."
+          body="Add a Gemini API key in Settings → Recommendations, and this becomes a conversation about your own library."
         />
       </div>
     );

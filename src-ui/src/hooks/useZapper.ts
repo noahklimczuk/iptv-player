@@ -43,7 +43,26 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
   const [current, setCurrent] = useState<Channel | null>(null);
   const previous = useRef<Channel | null>(null);
   const digitTimer = useRef<number | undefined>(undefined);
-  const { digits, pushDigit, clearDigits, showBanner } = useUi();
+  /**
+   * Four fields, subscribed to one at a time (R-90).
+   *
+   * `useUi()` with no selector subscribes to every field in the store, and the host's
+   * player heartbeat writes `setPlayer` four times a second, so this hook re-rendered at
+   * 4 Hz for as long as anything was playing. It is called from `App` -- the shell around
+   * the whole route tree -- so that re-rendered `App`, `<Routes>` and the mounted page at
+   * the same rate, which is the exact cost R-134 removed twenty lines into `App` by
+   * subscribing to six named fields there. That fix could not hold while a hook `App`
+   * calls still took the whole store: the component was careful and its own hook put the
+   * heartbeat back.
+   *
+   * Three of these are store actions, which zustand keeps stable, so they subscribe to
+   * nothing that changes. Only `digits` re-renders anything, and only while somebody is
+   * typing a channel number.
+   */
+  const digits = useUi((s) => s.digits);
+  const pushDigit = useUi((s) => s.pushDigit);
+  const clearDigits = useUi((s) => s.clearDigits);
+  const showBanner = useUi((s) => s.showBanner);
 
   const tune = useCallback(
     (ch: Channel, { reveal = true }: TuneOptions = {}) => {

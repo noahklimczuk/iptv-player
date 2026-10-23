@@ -40,7 +40,10 @@ const GROUPS: { key: keyof SearchResults; label: string; icon: IconName }[] = [
   { key: 'series', label: 'Series', icon: 'stack' },
   { key: 'onNow', label: 'On Now', icon: 'clock' },
   { key: 'upcoming', label: 'Upcoming', icon: 'bell' },
-  { key: 'people', label: 'People', icon: 'heart' },
+  // Not a heart: that glyph means "favourite" on the channel rows, on the recordings
+  // list's Keep control and in Live TV's group sidebar, and a row of people under it read
+  // as a row of favourites (R-148).
+  { key: 'people', label: 'People', icon: 'person' },
 ];
 
 export function CommandPalette({
@@ -84,12 +87,32 @@ export function CommandPalette({
 
   useEffect(() => {
     if (!open) return;
+    /**
+     * Tracked, because clearing the timer does not reach a request already sent.
+     *
+     * Two searches can be outstanding at once whenever one is slower than the keystroke
+     * that followed it, and then the older answer lands last and wins: type "them" and
+     * see the results for "the". Search measured 19-45 ms against this 90 ms debounce,
+     * so the overlap is narrow today -- and R-49 pushes search past 100 ms by day three,
+     * which is where the two cross (R-148). The same guard `useSeriesResume` and
+     * `subscribe()` already use; this was the one async read in the UI without it.
+     */
+    let live = true;
     const t = window.setTimeout(() => {
       invoke('search.query', { text })
-        .then(setResults)
-        .catch(report('Search failed'));
+        .then((r) => {
+          if (live) setResults(r);
+        })
+        .catch((e: unknown) => {
+          // Reported only if it is still this query's failure, so a cancelled search
+          // cannot put a toast over the results that replaced it.
+          if (live) report('Search failed')(e);
+        });
     }, 90);
-    return () => window.clearTimeout(t);
+    return () => {
+      live = false;
+      window.clearTimeout(t);
+    };
   }, [text, open]);
 
   /** What each group is showing right now — the first few, or all of them. */
@@ -145,14 +168,25 @@ export function CommandPalette({
     row?.scrollIntoView({ block: 'nearest' });
   }, [cursor, open, flat.length]);
 
-  // After the early return below there are no more hooks, so this is the last one.
   useFocusTrap(dialogRef, open, inputRef);
 
-  if (!open) return null;
-
+  /**
+   * `AnimatePresence` sits outside the condition, which is the only place it works.
+   *
+   * It used to sit under an `if (!open) return null;`, so closing the palette unmounted
+   * the whole subtree -- the `AnimatePresence` with it -- in a single commit, and the
+   * `exit` on the backdrop never ran: the component that animates a child out cannot be
+   * part of the child. Harmless as bugs go, and worth not leaving for the next person to
+   * spend an afternoon on (R-148).
+   *
+   * There are no hooks past this point, and `open` is now a condition rather than an
+   * early return, so the hook order above is unconditional either way.
+   */
   return (
     <AnimatePresence>
+      {open && (
       <motion.div
+        key="palette"
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         transition={{ duration: 0.12 }}
         onClick={onClose}
@@ -331,6 +365,7 @@ export function CommandPalette({
           </div>
         </motion.div>
       </motion.div>
+      )}
     </AnimatePresence>
   );
 }
