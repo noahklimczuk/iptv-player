@@ -515,7 +515,27 @@ fn tagged_tokens(name: &str) -> Vec<String> {
     let mut inside = false;
     for ch in name.chars() {
         match ch {
-            '(' | '[' | '{' | '|' => {
+            // A pipe makes what comes *before* it a tag as well as what comes after.
+            //
+            // The scanner only kept a segment once it was already `inside` something, so
+            // in `ARABIC | MBC 1` the word `ARABIC` was never offered to `lookup` -- only
+            // `MBC 1` was. A two-to-four letter code in that position is still caught by
+            // `split_country_prefix` above, so the gap was the longer words: ARABIC,
+            // SPANISH, PORTUGUESE (R-11).
+            //
+            // Only the pipe does this. Text before a bracket is the title --
+            // `The German Doctor (2013)` -- and offering that to `lookup` is how a film
+            // gets filed by a word in its name, which the module header above is
+            // explicit about not doing. A pipe is the one delimiter playlists use to
+            // separate a tag from a name.
+            '|' => {
+                if !segment.trim().is_empty() {
+                    out.push(segment.trim().to_lowercase());
+                }
+                segment.clear();
+                inside = true;
+            }
+            '(' | '[' | '{' => {
                 if inside && !segment.trim().is_empty() {
                     out.push(segment.trim().to_lowercase());
                 }
@@ -529,8 +549,9 @@ fn tagged_tokens(name: &str) -> Vec<String> {
                 segment.clear();
                 inside = false;
             }
-            _ if inside => segment.push(ch),
-            _ => {}
+            // Accumulated whether or not a delimiter has been seen, because the pipe
+            // case above needs what came before it.
+            _ => segment.push(ch),
         }
     }
     if inside && !segment.trim().is_empty() {
@@ -901,6 +922,22 @@ mod tests {
         assert_eq!(d("4K - Sky Atlantic"), None);
         assert_eq!(d("24/7 | The Office"), None);
         assert_eq!(d("PPV: Boxing Night"), None);
+    }
+
+    /// `ARABIC | MBC 1` — the tag before the pipe counts too (R-11).
+    #[test]
+    fn a_language_word_before_the_first_pipe_is_a_tag() {
+        // The gap was the long words: a short code in this position was already caught
+        // by `split_country_prefix`.
+        assert_eq!(d("ARABIC | MBC 1"), Some("ar".into()));
+        assert_eq!(d("SPANISH | Antena 3"), Some("es".into()));
+        assert_eq!(d("PORTUGUESE | SIC"), Some("pt".into()));
+
+        // And the thing this must not become: a title's own words are not tags. Text
+        // before a *bracket* is the name, not a tag, which is the distinction the fix
+        // turns on.
+        assert_eq!(d("The German Doctor (2013)"), None);
+        assert_eq!(d("French Connection (1971)"), None);
     }
 
     #[test]

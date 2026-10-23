@@ -298,7 +298,7 @@ export function GuidePage({
               style={{ flex: 1, overflow: 'auto', position: 'relative' }}
             >
               <div style={{ width: CHANNEL_W + totalWidth, position: 'relative' }}>
-                <TimeHeader slots={timeSlots} from={from} />
+                <TimeHeader slots={timeSlots} />
 
                 {/* Moving "now" line. */}
                 {now >= from && now <= to && (
@@ -467,7 +467,16 @@ function GuideToolbar({
   );
 }
 
-function TimeHeader({ slots, from }: { slots: number[]; from: number }) {
+/**
+ * The hour labels above the grid.
+ *
+ * `from` used to be a prop, used by nothing, kept alive by a
+ * `<span style={{ display: 'none' }}>{from}</span>` on the last line — a Unix timestamp
+ * rendered into the sticky header on every guide paint so that the parameter counted as
+ * used. Invisible, harmless, and completely unguessable for anyone wondering why a
+ * timestamp is in the markup. The honest fix is to not take the prop (R-131).
+ */
+function TimeHeader({ slots }: { slots: number[] }) {
   // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
   const clockTime = useClockTime();
   return (
@@ -501,7 +510,6 @@ function TimeHeader({ slots, from }: { slots: number[]; from: number }) {
           {clockTime(t)}
         </div>
       ))}
-      <span style={{ display: 'none' }}>{from}</span>
     </div>
   );
 }

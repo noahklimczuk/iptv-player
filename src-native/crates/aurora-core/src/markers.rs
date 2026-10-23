@@ -179,9 +179,32 @@ pub struct Chapter {
 
 /// Whole-word keyword sets. Matching on substrings would classify "Introduction to
 /// the Case" — a real episode title — as an intro.
-const INTRO_WORDS: &[&str] = &["intro", "opening", "op", "titles", "theme", "maintitles"];
+const INTRO_WORDS: &[&str] = &["intro", "opening", "titles", "theme", "maintitles"];
 const RECAP_WORDS: &[&str] = &["recap", "previously", "previouslyon", "resume"];
-const CREDITS_WORDS: &[&str] = &["credits", "endcredits", "ending", "ed", "outro", "closing"];
+const CREDITS_WORDS: &[&str] = &["credits", "endcredits", "ending", "outro", "closing"];
+
+/// Keywords that are also ordinary words, so they only count as the *whole* title.
+///
+/// "OP" and "ED" are how anime labels its opening and ending, and they are also a
+/// preposition and a name. Matched word-wise, as they were, a chapter titled
+/// `Ed Loses the Farm` read as the credits and `position_is_sane` only caught it when
+/// the chapter happened to be in the wrong part of the file. The module header above is
+/// explicit that whole-word matching was chosen so `Introduction to the Case` is not an
+/// intro; these two came in through the same door (R-14).
+///
+/// A trailing number is allowed, because that is how they appear: `OP`, `ED`, `OP1`,
+/// `ED2`.
+const WHOLE_TITLE_INTRO: &[&str] = &["op"];
+const WHOLE_TITLE_CREDITS: &[&str] = &["ed"];
+
+/// Whether the whole title is one of `set`, optionally followed by a number.
+fn is_whole_title(joined: &str, set: &[&str]) -> bool {
+    set.iter().any(|w| {
+        joined
+            .strip_prefix(w)
+            .is_some_and(|rest| rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()))
+    })
+}
 
 fn normalize(title: &str) -> Vec<String> {
     title
@@ -206,9 +229,9 @@ fn classify_title(title: &str) -> Option<MarkerKind> {
     // Recap before intro: "Previously / Opening" style titles should read as a recap.
     if hit(RECAP_WORDS) {
         Some(MarkerKind::Recap)
-    } else if hit(INTRO_WORDS) {
+    } else if hit(INTRO_WORDS) || is_whole_title(&joined, WHOLE_TITLE_INTRO) {
         Some(MarkerKind::Intro)
-    } else if hit(CREDITS_WORDS) {
+    } else if hit(CREDITS_WORDS) || is_whole_title(&joined, WHOLE_TITLE_CREDITS) {
         Some(MarkerKind::Credits)
     } else {
         None
@@ -603,6 +626,32 @@ mod tests {
         assert_eq!(inside.len(), 1, "unexpected: {inside:?}");
         let outside = from_chapters(&[ch("Intro", 960.0), ch("Show", 1020.0)], 10800.0);
         assert!(outside.is_empty(), "unexpected markers: {outside:?}");
+    }
+
+    /// `OP` and `ED` only count as the whole title (R-14).
+    #[test]
+    fn a_name_that_happens_to_be_a_keyword_is_not_a_marker() {
+        // `Ed Loses the Farm` two thirds in used to read as the credits, and the
+        // positional check only catches that when the chapter is in the wrong place --
+        // so in the last quarter it was accepted.
+        let ed = from_chapters(
+            &[ch("Part 1", 0.0), ch("Ed Loses the Farm", 2200.0), ch("End", 2600.0)],
+            2700.0,
+        );
+        assert!(ed.is_empty(), "unexpected markers: {ed:?}");
+
+        // `Op` as an ordinary word near the front, which is where an intro would be.
+        let op = from_chapters(&[ch("Signed Op Orders", 0.0), ch("Show", 90.0)], 2700.0);
+        assert!(op.is_empty(), "unexpected markers: {op:?}");
+
+        // The anime convention still works, which is why the words were there at all.
+        let anime = from_chapters(&[ch("OP", 0.0), ch("Episode", 90.0)], 1400.0);
+        assert_eq!(anime.len(), 1, "unexpected: {anime:?}");
+        assert_eq!(anime[0].kind, MarkerKind::Intro);
+
+        let numbered = from_chapters(&[ch("Show", 0.0), ch("ED2", 1300.0)], 1400.0);
+        assert_eq!(numbered.len(), 1, "unexpected: {numbered:?}");
+        assert_eq!(numbered[0].kind, MarkerKind::Credits);
     }
 
     #[test]
