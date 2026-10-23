@@ -302,7 +302,9 @@ mod tests {
     #[test]
     fn a_null_category_does_not_empty_the_guide() {
         let conn = seeded();
-        let before = grid_slice(&conn, &["a".to_string()], 0, 7200).unwrap().len();
+        let before = grid_slice(&conn, &["a".to_string()], 0, 7200)
+            .unwrap()
+            .len();
         assert!(before > 0, "nothing to lose");
 
         conn.execute(
@@ -314,7 +316,11 @@ mod tests {
         .unwrap();
 
         let rows = grid_slice(&conn, &["a".to_string()], 0, 7200).unwrap();
-        assert_eq!(rows.len(), before + 1, "the NULL row took the query with it");
+        assert_eq!(
+            rows.len(),
+            before + 1,
+            "the NULL row took the query with it"
+        );
         let null_row = rows
             .iter()
             .find(|r| r.title == "No categories")

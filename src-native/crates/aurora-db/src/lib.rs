@@ -265,8 +265,8 @@ pub fn backfill_stream_ids(conn: &Connection) -> Result<usize> {
 pub fn rekey_credentialled_channels(conn: &Connection) -> Result<usize> {
     let rows: Vec<(i64, String)> = {
         // Only the ones that are a URL. A clean key is `live101` and matches nothing here.
-        let mut stmt = conn
-            .prepare("SELECT id, provider_key FROM channels WHERE provider_key LIKE '%://%'")?;
+        let mut stmt =
+            conn.prepare("SELECT id, provider_key FROM channels WHERE provider_key LIKE '%://%'")?;
         let found = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         found.collect::<rusqlite::Result<Vec<_>>>()?
     };
@@ -278,7 +278,8 @@ pub fn rekey_credentialled_channels(conn: &Connection) -> Result<usize> {
     // refresh from here on finds, and `channels::stale` retires the other in its own
     // time. Deleting a channel here, on a startup path, to resolve a duplicate nobody
     // has complained about would be the wrong trade.
-    let mut update = conn.prepare("UPDATE OR IGNORE channels SET provider_key = ?2 WHERE id = ?1")?;
+    let mut update =
+        conn.prepare("UPDATE OR IGNORE channels SET provider_key = ?2 WHERE id = ?1")?;
     let mut rekeyed = 0usize;
     for (id, key) in rows {
         let Some(derived) = aurora_core::catchup::live_channel_key(&key) else {
@@ -549,7 +550,10 @@ mod tests {
         let rows: i64 = conn
             .query_row("SELECT count(*) FROM channels", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(rows, 2, "a duplicate is for the refresh to retire, not this");
+        assert_eq!(
+            rows, 2,
+            "a duplicate is for the refresh to retire, not this"
+        );
     }
 
     /// The password is not in the library after an import, and the row still plays.

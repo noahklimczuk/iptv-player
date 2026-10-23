@@ -132,7 +132,10 @@ impl LoadOptions {
                 // named on the handle after the buffer that needed it is gone.
                 o.push(("demuxer-cache-dir".into(), String::new()));
                 o.push(("demuxer-max-back-bytes".into(), "0".into()));
-                o.push(("demuxer-max-bytes".into(), DEFAULT_FORWARD_CACHE_BYTES.to_string()));
+                o.push((
+                    "demuxer-max-bytes".into(),
+                    DEFAULT_FORWARD_CACHE_BYTES.to_string(),
+                ));
                 o.push(("force-seekable".into(), "no".into()));
             }
         }

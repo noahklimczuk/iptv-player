@@ -326,7 +326,11 @@ mod tests {
         fs::create_dir_all(&old).unwrap();
         fs::write(old.join("live.ts"), vec![0u8; 4096]).unwrap();
         fs::write(old.join("live-1.ts"), vec![0u8; 2048]).unwrap();
-        assert_eq!(bytes_on_disk(&old), 6144, "the buffer starts with something in it");
+        assert_eq!(
+            bytes_on_disk(&old),
+            6144,
+            "the buffer starts with something in it"
+        );
 
         let new = tempdir("move-new");
         let moved = write(
@@ -364,7 +368,10 @@ mod tests {
         // The same path a second time, which is what pressing Apply twice does.
         let after = write(&db, &data, &args).unwrap();
 
-        assert_eq!(after.bytes_on_disk, 1024, "pressing Apply again kept the buffer");
+        assert_eq!(
+            after.bytes_on_disk, 1024,
+            "pressing Apply again kept the buffer"
+        );
         assert_eq!(bytes_on_disk(&dir), 1024);
     }
 

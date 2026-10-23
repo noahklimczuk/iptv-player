@@ -1378,7 +1378,10 @@ mod tests {
                 },
                 "{layout:?}"
             );
-            assert!(!view.budget.is_refused(), "{layout:?} refused without a limit");
+            assert!(
+                !view.budget.is_refused(),
+                "{layout:?} refused without a limit"
+            );
             assert_eq!(
                 view.largest_fitting, None,
                 "{layout:?} suggested an arrangement nothing is known about"
@@ -1389,7 +1392,10 @@ mod tests {
         // switching the feature off.
         let (known, _db2) = mosaic(Some(4));
         assert_eq!(
-            known.check(Layout::Grid3x3).largest_fitting.map(Layout::tiles),
+            known
+                .check(Layout::Grid3x3)
+                .largest_fitting
+                .map(Layout::tiles),
             Some(4)
         );
     }

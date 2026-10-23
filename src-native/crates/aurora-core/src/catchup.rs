@@ -369,7 +369,10 @@ mod tests {
             Some("live95471".into())
         );
         let key = live_channel_key("http://h:8080/G22R37R4/47732430/95471").unwrap();
-        assert!(!key.contains("47732430"), "{key} still carries the password");
+        assert!(
+            !key.contains("47732430"),
+            "{key} still carries the password"
+        );
 
         // Everything that changes between refreshes, changing: the token, the
         // extension, and the credentials themselves.

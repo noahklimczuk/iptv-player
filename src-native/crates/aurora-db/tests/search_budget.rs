@@ -76,8 +76,8 @@ const KEYSTROKES: [&str; 5] = ["n", "ni", "nig", "nigh", "night"];
 /// that and read 90-130 ms, which says nothing about search and everything about the
 /// fixture.
 const WORDS: [&str; 16] = [
-    "Night", "Harbour", "Signal", "Winter", "Quiet", "Orbit", "Marsh", "Lantern",
-    "Current", "Ledger", "Northern", "Anchor", "Copper", "Thistle", "Verge", "Hollow",
+    "Night", "Harbour", "Signal", "Winter", "Quiet", "Orbit", "Marsh", "Lantern", "Current",
+    "Ledger", "Northern", "Anchor", "Copper", "Thistle", "Verge", "Hollow",
 ];
 
 /// A word for row `i`, spread so that each one names about a sixteenth of the library.
@@ -92,7 +92,7 @@ fn library() -> Connection {
     let dir = std::env::temp_dir().join("aurora-search-budget");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");
-    let conn = aurora_db::open(&dir.join("library.db")).expect("a fresh library");
+    let conn = aurora_db::open(dir.join("library.db")).expect("a fresh library");
 
     conn.execute(
         "INSERT INTO providers (id,name,kind,base_url,created_at)
@@ -186,7 +186,10 @@ fn worst_keystroke(conn: &Connection) -> u128 {
         let hits = out.channels.len() + out.movies.len() + out.series.len();
         // Or this is timing a query that found nothing, which every plan is fast at.
         assert!(hits > 0, "{text:?} matched nothing in the library");
-        println!("  {text:>6?} -> {ms:>4} ms, {hits} hits, {} on now", out.on_now.len());
+        println!(
+            "  {text:>6?} -> {ms:>4} ms, {hits} hits, {} on now",
+            out.on_now.len()
+        );
         worst = worst.max(ms);
     }
     worst

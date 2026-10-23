@@ -264,7 +264,11 @@ mod tests {
             ]);
             assert_eq!(groups.len(), 1, "{groups:?}");
             let season = &groups[0].seasons[0];
-            assert_eq!(season.episodes.len(), 1, "the duplicate was kept as a second row");
+            assert_eq!(
+                season.episodes.len(),
+                1,
+                "the duplicate was kept as a second row"
+            );
             assert_eq!(
                 season.episodes[0].url, wanted,
                 "from {first:?} then {second:?}"

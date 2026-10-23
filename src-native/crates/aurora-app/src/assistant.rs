@@ -1511,9 +1511,7 @@ mod tests {
             .iter()
             .rev()
             .find_map(|t| match t {
-                Turn::ToolResult { name, result } if name == "show_titles" => {
-                    Some(result.clone())
-                }
+                Turn::ToolResult { name, result } if name == "show_titles" => Some(result.clone()),
                 _ => None,
             })
             .expect("the show_titles result");

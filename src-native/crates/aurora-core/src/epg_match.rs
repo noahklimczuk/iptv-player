@@ -101,7 +101,10 @@ impl EpgIndex {
                     continue;
                 }
                 by_key.entry(k.clone()).or_insert_with(|| c.id.clone());
-                keys_by_len.entry(k.len()).or_default().push((k, c.id.clone()));
+                keys_by_len
+                    .entry(k.len())
+                    .or_default()
+                    .push((k, c.id.clone()));
             }
         }
         Self {
@@ -186,11 +189,15 @@ impl EpgIndex {
             // The three lengths a key one edit away can have. The length check this
             // replaces is gone from the loop body because it is now the lookup (R-23);
             // the set of keys considered is the same set it selected.
-            let candidates = [key.len().checked_sub(1), Some(key.len()), Some(key.len() + 1)]
-                .into_iter()
-                .flatten()
-                .filter_map(|n| self.keys_by_len.get(&n))
-                .flatten();
+            let candidates = [
+                key.len().checked_sub(1),
+                Some(key.len()),
+                Some(key.len() + 1),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|n| self.keys_by_len.get(&n))
+            .flatten();
             for (k, id) in candidates {
                 if edit_distance_at_most(&key, k, 1).is_none() {
                     continue;
@@ -318,10 +325,7 @@ mod tests {
     /// it differently, which is what this asserts on.
     #[test]
     fn a_duplicated_channel_id_keeps_its_first_spelling() {
-        let index = EpgIndex::build(&[
-            ch("BBC1.uk", &["BBC One"]),
-            ch("bbc1.uk", &["BBC 1"]),
-        ]);
+        let index = EpgIndex::build(&[ch("BBC1.uk", &["BBC One"]), ch("bbc1.uk", &["BBC 1"])]);
         // Both declarations key on the same lowercased id, so the index holds one entry.
         assert_eq!(index.len(), 1);
         let m = index

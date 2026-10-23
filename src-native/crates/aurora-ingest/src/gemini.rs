@@ -440,7 +440,11 @@ mod tests {
             .suggest(&watched(), &[])
             .expect_err("a 400 is not a list of suggestions");
 
-        assert_eq!(err.code, aurora_core::neterr::ErrorCode::Unauthorized, "{err:?}");
+        assert_eq!(
+            err.code,
+            aurora_core::neterr::ErrorCode::Unauthorized,
+            "{err:?}"
+        );
         assert!(
             err.message.contains("API key was refused"),
             "the rail still blames the request: {:?}",
@@ -461,7 +465,10 @@ mod tests {
             "{:?}",
             err.actions
         );
-        assert!(!err.retryable, "a wrong key does not improve by being retried");
+        assert!(
+            !err.retryable,
+            "a wrong key does not improve by being retried"
+        );
     }
 
     /// The key is a header, and the URL is clean.

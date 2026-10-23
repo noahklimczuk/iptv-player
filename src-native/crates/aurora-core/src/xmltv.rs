@@ -849,7 +849,11 @@ mod tests {
         assert_eq!(stats.skipped, 0);
         let p = &sink.programmes[0];
         assert_eq!(p.title, "Augusto Pinochet");
-        assert_eq!(p.stop - p.start, 1800, "the assumed length is the same 30 minutes");
+        assert_eq!(
+            p.stop - p.start,
+            1800,
+            "the assumed length is the same 30 minutes"
+        );
     }
 
     /// And a programme with no title is still dropped, because there is nothing to show.

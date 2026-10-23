@@ -697,7 +697,10 @@ mod tests {
         // More kanji than kana, which is the ordinary case and the one that was wrong.
         assert_eq!(super::script_language("君の名は"), Some("ja"));
         // Equal counts, which used to be decided by `HashMap` iteration order.
-        assert_eq!(super::script_language("トカレフ2010 運命の撃鉄"), Some("ja"));
+        assert_eq!(
+            super::script_language("トカレフ2010 運命の撃鉄"),
+            Some("ja")
+        );
         // Kana only, which was already right.
         assert_eq!(super::script_language("ドラえもん"), Some("ja"));
         // No kana anywhere: Han alone is Chinese, which is the whole point of the rule.

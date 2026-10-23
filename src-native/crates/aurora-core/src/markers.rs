@@ -611,13 +611,20 @@ mod tests {
         // Three hours, and a chapter titled "Intro" an hour in. A third of the runtime
         // is 3,600s, so the old rule accepted this as an intro and offered a button that
         // skips an hour of a film.
-        let long = from_chapters(&[ch("Part 1", 0.0), ch("Intro", 3600.0), ch("Rest", 3700.0)], 10800.0);
+        let long = from_chapters(
+            &[ch("Part 1", 0.0), ch("Intro", 3600.0), ch("Rest", 3700.0)],
+            10800.0,
+        );
         assert!(long.is_empty(), "unexpected markers: {long:?}");
 
         // The generosity it replaces is still there for the files it was for: a short
         // episode where ten minutes really is near the front.
         let short = from_chapters(&[ch("Intro", 540.0), ch("Show", 600.0)], 1200.0);
-        assert_eq!(short.len(), 1, "a 9min mark in a 20min episode is still an intro");
+        assert_eq!(
+            short.len(),
+            1,
+            "a 9min mark in a 20min episode is still an intro"
+        );
         assert_eq!(short[0].kind, MarkerKind::Intro);
 
         // And the ceiling is where it says it is: 15 minutes in is in, 16 is out,
@@ -635,7 +642,11 @@ mod tests {
         // positional check only catches that when the chapter is in the wrong place --
         // so in the last quarter it was accepted.
         let ed = from_chapters(
-            &[ch("Part 1", 0.0), ch("Ed Loses the Farm", 2200.0), ch("End", 2600.0)],
+            &[
+                ch("Part 1", 0.0),
+                ch("Ed Loses the Farm", 2200.0),
+                ch("End", 2600.0),
+            ],
             2700.0,
         );
         assert!(ed.is_empty(), "unexpected markers: {ed:?}");

@@ -21,7 +21,14 @@ import { describe, expect, it } from 'vitest';
 
 import { ICON_PATHS } from './Icon';
 
-const SOURCE = readFileSync(fileURLToPath(new URL('./Icon.tsx', import.meta.url)), 'utf8');
+// Normalized, because this file compares a whole line. The repository checks out CRLF on
+// Windows and LF on the Linux runner, so `split('\n')` leaves a trailing `\r` and the
+// comparison below failed locally while passing on every pull request — the assertion was
+// about the platform as much as the source.
+const SOURCE = readFileSync(fileURLToPath(new URL('./Icon.tsx', import.meta.url)), 'utf8').replace(
+  /\r\n/g,
+  '\n',
+);
 
 describe('IconName', () => {
   it('is the keys of the table and nothing wider', () => {

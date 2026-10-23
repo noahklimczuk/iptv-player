@@ -1595,7 +1595,10 @@ mod tests {
         );
 
         // The limit is a limit.
-        assert_eq!(series_needing_episodes(&conn, &strict, 1, 0).unwrap().len(), 1);
+        assert_eq!(
+            series_needing_episodes(&conn, &strict, 1, 0).unwrap().len(),
+            1
+        );
     }
 
     /// A show the provider will not list leaves the queue, and comes back later.

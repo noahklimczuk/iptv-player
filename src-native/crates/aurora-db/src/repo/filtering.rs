@@ -689,7 +689,14 @@ mod tests {
                                        country, quality_rank, lang_code, hidden,
                                        last_seen_at)
                  VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, 'en', 0, 0)",
-                params![id, format!("c{id}"), name, name.to_lowercase(), country, rank],
+                params![
+                    id,
+                    format!("c{id}"),
+                    name,
+                    name.to_lowercase(),
+                    country,
+                    rank
+                ],
             )
             .unwrap();
         }
@@ -703,7 +710,10 @@ mod tests {
         assert!(kept.contains(&1), "the US feed was hidden: {kept:?}");
         assert!(kept.contains(&2), "the CA feed was hidden: {kept:?}");
         // The lesser copy of the US feed is still a duplicate, which is the feature.
-        assert!(!kept.contains(&3), "a worse copy of the US feed survived: {kept:?}");
+        assert!(
+            !kept.contains(&3),
+            "a worse copy of the US feed survived: {kept:?}"
+        );
         // And two untagged copies of one channel still collapse to the better one.
         assert!(kept.contains(&4), "{kept:?}");
         assert!(!kept.contains(&5), "{kept:?}");

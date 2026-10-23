@@ -163,7 +163,9 @@ mod event_name_tests {
     /// does not drop it attributes the next string literal in the file to it.
     fn emitted_events() -> Vec<(String, String)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
@@ -178,7 +180,11 @@ mod event_name_tests {
         let mut files = Vec::new();
         walk(&src, &mut files);
         files.sort();
-        assert!(!files.is_empty(), "found no sources under {}", src.display());
+        assert!(
+            !files.is_empty(),
+            "found no sources under {}",
+            src.display()
+        );
 
         let mut found = Vec::new();
         for file in files {
@@ -200,8 +206,12 @@ mod event_name_tests {
             while let Some(at) = rest.find("emit(") {
                 rest = &rest[at + "emit(".len()..];
                 let window = &rest[..rest.len().min(200)];
-                let Some(open) = window.find('"') else { continue };
-                let Some(len) = window[open + 1..].find('"') else { continue };
+                let Some(open) = window.find('"') else {
+                    continue;
+                };
+                let Some(len) = window[open + 1..].find('"') else {
+                    continue;
+                };
                 let literal = &window[open + 1..open + 1 + len];
                 // An event name, not any other string that happens to be nearby: one
                 // dotted lowerCamel path and nothing else.
@@ -261,7 +271,9 @@ mod event_name_tests {
     #[test]
     fn no_call_site_emits_a_dotted_name_directly() {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
