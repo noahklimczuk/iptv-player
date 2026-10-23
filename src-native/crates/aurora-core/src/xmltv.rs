@@ -39,7 +39,15 @@ pub struct XmltvStats {
     pub channels: usize,
     pub programmes: usize,
     /// Programmes discarded for having no channel, no title, or an unparseable start time.
+    ///
+    /// Programmes only. A `<channel>` dropped for an empty id used to increment this one
+    /// too, which made the number mean neither thing: on the real guide it stood at
+    /// 2,235 before a single programme had been considered, so an import reporting
+    /// "2,489 skipped" was reporting mostly channels under a name that says programmes
+    /// (R-29).
     pub skipped: usize,
+    /// Channels discarded for having no id, which is the only thing that disqualifies one.
+    pub channels_skipped: usize,
 }
 
 #[derive(Default)]
@@ -274,7 +282,7 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                                 stats.channels += 1;
                                 sink.channel(c);
                             } else {
-                                stats.skipped += 1;
+                                stats.channels_skipped += 1;
                             }
                         }
                     }
@@ -435,16 +443,23 @@ fn finish(p: ProgBuilder) -> Option<Programme> {
 fn apply_episode_num(p: &mut ProgBuilder, system: &str, value: &str) {
     match system {
         // "0.1.0/1" — zero-based season.episode.part
+        //
+        // `checked_add`, because `xmltv_ns` is zero-based and the `+ 1` that corrects it
+        // was applied to a number already parsed as `u16`: a guide carrying `65535.0.0`
+        // wrapped to season 0 in a release build, where overflow checks are off, and
+        // panicked in a debug one. A number that cannot be incremented is not a season
+        // anybody can use, so it is dropped rather than guessed at -- which leaves
+        // `None`, the same answer as a guide that says nothing (R-28).
         "xmltv_ns" => {
             let mut parts = value.split('.');
             if let Some(s) = parts.next() {
                 if let Ok(n) = s.split('/').next().unwrap_or("").trim().parse::<u16>() {
-                    p.season = Some(n + 1);
+                    p.season = n.checked_add(1);
                 }
             }
             if let Some(e) = parts.next() {
                 if let Ok(n) = e.split('/').next().unwrap_or("").trim().parse::<u16>() {
-                    p.episode = Some(n + 1);
+                    p.episode = n.checked_add(1);
                 }
             }
         }
@@ -736,6 +751,51 @@ mod tests {
         );
         assert_eq!(sink.programmes[0].season, Some(3));
         assert_eq!(sink.programmes[0].episode, Some(7));
+    }
+
+    /// A number that cannot be incremented is not a season (R-28).
+    ///
+    /// `xmltv_ns` is zero-based, so the parser adds one -- to a value already parsed as
+    /// `u16`. `65535.0.0` wrapped to season 0 in a release build, where overflow checks
+    /// are off, and panicked in a debug one.
+    #[test]
+    fn an_episode_number_that_does_not_fit_is_dropped_rather_than_wrapped() {
+        let (_, sink) = collect(
+            r#"<tv><programme start="20240115120000" channel="a"><title>T</title>
+            <episode-num system="xmltv_ns">65535.65535.0</episode-num></programme></tv>"#,
+        );
+        assert_eq!(sink.programmes[0].season, None, "wrapped to a season");
+        assert_eq!(sink.programmes[0].episode, None, "wrapped to an episode");
+
+        // One below the ceiling still counts, so this is a bound and not a refusal.
+        let (_, ok) = collect(
+            r#"<tv><programme start="20240115120000" channel="a"><title>T</title>
+            <episode-num system="xmltv_ns">65534.1.0</episode-num></programme></tv>"#,
+        );
+        assert_eq!(ok.programmes[0].season, Some(65535));
+        assert_eq!(ok.programmes[0].episode, Some(2));
+    }
+
+    /// A dropped channel and a dropped programme are counted separately (R-29).
+    ///
+    /// Both used to increment `skipped`, which is documented as programmes. On the real
+    /// guide that counter stood at 2,235 before a single programme had been considered,
+    /// so the number an import reported was mostly channels under a name that says
+    /// otherwise.
+    #[test]
+    fn a_channel_with_no_id_is_not_counted_as_a_skipped_programme() {
+        let (stats, _) = collect(
+            r#"<tv>
+                <channel id=""><display-name>Nameless</display-name></channel>
+                <channel id="a"><display-name>Real</display-name></channel>
+                <programme start="20240115120000" channel="a"><title>T</title></programme>
+                <programme start="20240115130000" channel="a"></programme>
+            </tv>"#,
+        );
+        assert_eq!(stats.channels, 1);
+        assert_eq!(stats.channels_skipped, 1, "the id-less channel");
+        assert_eq!(stats.programmes, 1);
+        assert_eq!(stats.skipped, 1, "the title-less programme, and only that");
     }
 
     #[test]
