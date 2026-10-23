@@ -57,17 +57,38 @@ pub struct EpgIndex {
     by_id: HashMap<String, String>,
     by_key: HashMap<String, String>,
     /// Keys kept in a flat list for the fuzzy pass.
-    keys: Vec<(String, String)>,
+    /// Display-name keys bucketed by length, for the fuzzy pass.
+    ///
+    /// A `Vec` of all of them, walked in full for every channel, is 4,597 channels
+    /// against 6,798 keys — and the first thing the loop did was `continue` on any key
+    /// whose length differed by more than one, which left **4,475,192** distance
+    /// computations inside the import. The prefilter worked; it was just being applied
+    /// one key at a time. Bucketing moves it into the lookup: the pass now visits three
+    /// buckets instead of the whole list, and the candidate set it considers is
+    /// identical, because that is exactly the condition it was already testing (R-23).
+    keys_by_len: HashMap<usize, Vec<(String, String)>>,
 }
 
 impl EpgIndex {
     pub fn build(channels: &[EpgChannel]) -> Self {
         let mut by_id = HashMap::with_capacity(channels.len());
         let mut by_key = HashMap::with_capacity(channels.len() * 2);
-        let mut keys = Vec::with_capacity(channels.len());
+        let mut keys_by_len: HashMap<usize, Vec<(String, String)>> = HashMap::new();
 
         for c in channels {
-            by_id.insert(c.id.to_ascii_lowercase(), c.id.clone());
+            // First declaration wins, which is what `by_key` below does.
+            //
+            // This was `insert`, so the *last* won, six lines from two `or_insert_with`
+            // calls where the first does. The real guide declares 9,033 `<channel>`
+            // elements carrying 4,828 distinct ids, so 4,205 of them are duplicates and
+            // this tie-break is reached constantly — and nothing was wrong, because for
+            // a duplicated id the value stored is the same string either way. Two
+            // different tie-breaks in one function where only one of them was decided
+            // on, which is the kind of thing that stops being harmless the moment the
+            // value stops being the key (R-24).
+            by_id
+                .entry(c.id.to_ascii_lowercase())
+                .or_insert_with(|| c.id.clone());
 
             // The id itself is often a usable name ("cnn.us").
             let id_key = title::match_key(&c.id);
@@ -80,13 +101,13 @@ impl EpgIndex {
                     continue;
                 }
                 by_key.entry(k.clone()).or_insert_with(|| c.id.clone());
-                keys.push((k, c.id.clone()));
+                keys_by_len.entry(k.len()).or_default().push((k, c.id.clone()));
             }
         }
         Self {
             by_id,
             by_key,
-            keys,
+            keys_by_len,
         }
     }
 
@@ -162,10 +183,15 @@ impl EpgIndex {
         // plausible wrong programme is believed.
         if key.len() >= 5 {
             let mut matches: Vec<&str> = Vec::new();
-            for (k, id) in &self.keys {
-                if k.len().abs_diff(key.len()) > 1 {
-                    continue;
-                }
+            // The three lengths a key one edit away can have. The length check this
+            // replaces is gone from the loop body because it is now the lookup (R-23);
+            // the set of keys considered is the same set it selected.
+            let candidates = [key.len().checked_sub(1), Some(key.len()), Some(key.len() + 1)]
+                .into_iter()
+                .flatten()
+                .filter_map(|n| self.keys_by_len.get(&n))
+                .flatten();
+            for (k, id) in candidates {
                 if edit_distance_at_most(&key, k, 1).is_none() {
                     continue;
                 }
@@ -281,6 +307,62 @@ mod tests {
             ch("bbcone.uk", &["BBC One", "BBC 1"]),
             ch("discovery.uk", &["Discovery Channel"]),
         ])
+    }
+
+    /// The first declaration of a duplicated id wins, as it does in `by_key` (R-24).
+    ///
+    /// The real guide declares 9,033 `<channel>` elements with 4,828 distinct ids, so
+    /// this tie-break is reached 4,205 times per import. It was `insert` here and
+    /// `or_insert_with` six lines below, and it never showed because for a duplicated id
+    /// the stored value is the same string either way — unless the two declarations spell
+    /// it differently, which is what this asserts on.
+    #[test]
+    fn a_duplicated_channel_id_keeps_its_first_spelling() {
+        let index = EpgIndex::build(&[
+            ch("BBC1.uk", &["BBC One"]),
+            ch("bbc1.uk", &["BBC 1"]),
+        ]);
+        // Both declarations key on the same lowercased id, so the index holds one entry.
+        assert_eq!(index.len(), 1);
+        let m = index
+            .resolve(Some("BBC1.UK"), "Whatever", None)
+            .expect("the id should resolve however it is cased");
+        assert_eq!(m.method, MatchMethod::ExactId);
+        assert_eq!(
+            m.epg_channel_id, "BBC1.uk",
+            "the later declaration overwrote the earlier one"
+        );
+    }
+
+    /// The fuzzy pass considers keys within one character of the name, and no others.
+    ///
+    /// That was a `continue` inside a walk of every key — 4,475,192 distance
+    /// computations on the real guide, all but a fraction of them discarded by the first
+    /// line of the loop. It is the bucket lookup now, and this pins the boundary the
+    /// bucketing has to reproduce: ±1 is considered, ±2 is not (R-23).
+    #[test]
+    fn the_fuzzy_pass_only_looks_one_character_either_side() {
+        let index = EpgIndex::build(&[ch("sky.uk", &["Sky Atlantic"])]);
+
+        // One character longer than the stored key, one edit away: a match.
+        let longer = index.resolve(None, "Sky Atlanttic", None);
+        assert_eq!(
+            longer.as_ref().map(|m| m.method),
+            Some(MatchMethod::Fuzzy),
+            "one edit away was not considered: {longer:?}"
+        );
+
+        // Two characters longer is outside the window, whatever the distance.
+        assert!(
+            index.resolve(None, "Sky Atlanttick", None).is_none(),
+            "two characters away should not be a candidate at all"
+        );
+
+        // And an exact normalised match is still taken by the pass above this one.
+        assert_eq!(
+            index.resolve(None, "sky atlantic", None).map(|m| m.method),
+            Some(MatchMethod::NormalizedName)
+        );
     }
 
     #[test]
