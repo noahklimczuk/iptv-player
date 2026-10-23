@@ -117,13 +117,22 @@ export function useEpisodeAids(
    * `position` is deliberately not in it.
    */
   const fetchedFor = useRef<string | null>(null);
+  /** Where a skip we issued is heading, so it is not mistaken for the viewer's own. */
+  const ourSeek = useRef<number | null>(null);
+  /**
+   * Bumped when the host takes a seek as evidence, which is the one thing that can add
+   * a marker while an episode is already playing. In the stage key below, so the markers
+   * are re-read and the button appears for the rest of this episode too — not only from
+   * the next one onwards.
+   */
+  const [evidence, setEvidence] = useState(0);
   useEffect(() => {
     if (episodeId == null) {
       setAids(null);
       fetchedFor.current = null;
       return;
     }
-    const stage = `${episodeId}:${duration > 0 ? 'd' : '-'}:${loaded ? 'l' : '-'}`;
+    const stage = `${episodeId}:${duration > 0 ? 'd' : '-'}:${loaded ? 'l' : '-'}:${evidence}`;
     if (fetchedFor.current === stage) return;
     // Only when the episode itself changes: a refetch must not un-dismiss a card the
     // viewer has already waved away.
@@ -150,7 +159,7 @@ export function useEpisodeAids(
           // Not fatal: these drive Skip Intro and Up Next, and a show without them is
           // simply a show you scrub yourself.
           .catch(report('Could not load this episode\u2019s skip markers')));
-  }, [episodeId, duration, loaded, profileId]);
+  }, [episodeId, duration, loaded, profileId, evidence]);
 
   const activeMarker = useMemo(() => {
     if (!aids) return null;
@@ -187,6 +196,9 @@ export function useEpisodeAids(
 
   const skip = useCallback(
     (marker: SkipMarker, automatic: boolean) => {
+      // Where we are about to land, so the seek watcher below does not read our own
+      // jump back as the viewer making a fresh statement about this show's intro.
+      ourSeek.current = marker.endSecs;
       invoke('player.seek', { positionSecs: marker.endSecs })
         .catch(report('Could not skip'));
       // A press is a statement about where this show's intro really is, so remember
@@ -227,6 +239,64 @@ export function useEpisodeAids(
   }, [aids, onPlayEpisode]);
 
   const dismissUpNext = useCallback(() => setDismissed(episodeId), [episodeId]);
+
+  /**
+   * A forward jump the viewer made themselves, offered to the host as intro evidence.
+   *
+   * This is what closes the loop the comment above describes. `library.recordSkip` is
+   * reached from the Skip button, the button only exists where a marker already does,
+   * and the only thing that could create the first intro marker was a chapter list —
+   * which a provider's VOD stream almost never has. So on a real library Skip Intro
+   * could not appear and could not be taught. Dragging past the titles is the manual
+   * skip the design's second tier is about, and it was being thrown away.
+   *
+   * The host decides whether a jump is evidence; this only reports one. Guards here are
+   * about *whose* jump it was:
+   *
+   *   * `ourSeek` — a skip we issued is us replaying what we already knew, not a new
+   *     statement, exactly as `skip` already distinguishes automatic from pressed.
+   *   * the first sample after the file opens is never compared against anything, so
+   *     resuming part-way through cannot read as a jump from zero. Resume is passed
+   *     into the open call and the host starts there, so the playhead is already at the
+   *     resume point by the time the status says playing.
+   *
+   * A seek backwards, a nudge, a scrub across the episode and a jump outside the window
+   * an intro can occupy are all refused by the host, so none of that is duplicated here.
+   */
+  const lastPosition = useRef<number | null>(null);
+  useEffect(() => {
+    if (episodeId == null || !loaded) {
+      lastPosition.current = null;
+      return;
+    }
+    const previous = lastPosition.current;
+    lastPosition.current = position;
+    if (previous == null) return;
+
+    const jumped = position - previous;
+    if (jumped < 5) return;
+
+    // Ours rather than theirs: `skip` seeks to `marker.endSecs`, so a landing within a
+    // couple of seconds of where we aimed is the jump we asked for.
+    const aimed = ourSeek.current;
+    if (aimed != null && Math.abs(position - aimed) < 2) {
+      ourSeek.current = null;
+      return;
+    }
+
+    void invoke('library.observeSeek', {
+      episodeId,
+      fromSecs: previous,
+      toSecs: position,
+      durationSecs: duration,
+    })
+      // Refetch only when it was taken, so an ordinary scrub costs nothing.
+      .then((taken) => {
+        if (taken) setEvidence((n) => n + 1);
+      })
+      // Not fatal: the worst case is the library learns nothing from this jump.
+      .catch(() => {});
+  }, [position, episodeId, loaded, duration]);
 
   return {
     aids, episodeId, activeMarker, autoSkip, upNextVisible, skip, playNext, dismissUpNext,

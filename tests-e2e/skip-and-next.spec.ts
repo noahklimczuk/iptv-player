@@ -391,3 +391,86 @@ test('auto-skip still fires on the next episode', async ({ page }) => {
     .toBeGreaterThanOrEqual(92);
   await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
 });
+
+/**
+ * The bug a viewer actually reported: "the skip intro button still isn't showing up".
+ *
+ * Intro and recap are evidence-only by design — `markers::conventional` places neither,
+ * because a clock cannot find an intro and a button over a cold open removes the one
+ * part of an episode nobody can infer. The only thing that could *create* the first
+ * piece of intro evidence was a chapter list, and a provider's VOD stream almost never
+ * carries one. `library.recordSkip` is reached from the Skip button, so the evidence a
+ * viewer could supply was behind the button that evidence puts on screen: on a
+ * chapterless library Skip Intro could never appear, and could never be taught either.
+ *
+ * Dragging past the titles is the manual skip the design's second tier describes, and it
+ * was being discarded. `library.observeSeek` keeps it.
+ *
+ * Driven entirely through the scrubber, because "the viewer skipped the intro themselves"
+ * is the input — not a command, and not a fixture with the answer already in it.
+ */
+test('a drag past the titles teaches Skip Intro on a show with no chapters', async ({
+  page,
+}) => {
+  await playEpisodeWithoutChapters(page);
+
+  // Nothing knows where this show's intro is, so there is no button anywhere in it.
+  // Both of these steps are under `MIN_SEEK_EVIDENCE_SECS`, so the drag below is the
+  // only statement this episode makes — a learned marker is the *median* of the
+  // observations, and two of them would place it between the two rather than at either.
+  await seekTo(page, 10);
+  await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+  await seekTo(page, 18);
+  await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+
+  // The viewer drags past the titles. This is the statement.
+  await seekTo(page, 130);
+  await expect(page.getByRole('button', { name: 'Skip Intro' })).toBeHidden();
+
+  // Back into the region they just crossed: the library has learned it, so the button
+  // is offered for the rest of this episode rather than only from the next one on.
+  await seekTo(page, 60);
+  const skip = page.getByRole('button', { name: 'Skip Intro' });
+  await expect(skip).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/20-skip-intro-learned.png` });
+
+  // And it does what it says.
+  await skip.click();
+  await expect(skip).toBeHidden();
+  const position = await page
+    .getByRole('slider', { name: 'Seek' })
+    .evaluate((el) => Number((el as HTMLInputElement).value));
+  expect(position).toBeGreaterThanOrEqual(125);
+});
+
+/**
+ * The other half, so the test above cannot be passing because any seek at all produces a
+ * button (R-159). The overlay has its own ±10-second controls, and a nudge is navigation
+ * rather than an opinion about where the titles end — `MIN_SEEK_EVIDENCE_SECS` is why.
+ */
+test('a ten-second nudge teaches nothing, but a drag still does', async ({ page }) => {
+  await playEpisodeWithoutChapters(page);
+  const skip = page.getByRole('button', { name: 'Skip Intro' });
+
+  // Under the floor to begin with, then four nudges of ten seconds each, crossing
+  // forty seconds in total. None of them is a statement on its own.
+  await seekTo(page, 15);
+  await seekTo(page, 25);
+  await seekTo(page, 35);
+  await seekTo(page, 45);
+
+  // Nowhere in what they crossed is there a button. Each step here is ten seconds too,
+  // so the checking does not teach anything either.
+  for (const at of [20, 30, 40]) {
+    await seekTo(page, at);
+    await expect(skip).toBeHidden();
+  }
+
+  // And the mechanism was live the whole time: one real drag, from where the loop above
+  // left the playhead, does produce the button — so the nudges were refused rather than
+  // nothing listening. This is the only statement the episode makes, which is what keeps
+  // the learned marker at the drag's own bounds instead of a median of several.
+  await seekTo(page, 170);
+  await seekTo(page, 100);
+  await expect(skip).toBeVisible();
+});

@@ -1088,9 +1088,21 @@ pub fn assistant_status(
     services: State<'_, Services>,
     args: ProfileArgs,
 ) -> Result<AssistantStatus> {
+    // Asked *before* the database is locked, because it locks the database itself —
+    // `key_available` -> `resolve_key` -> `enabled` -> `services.db.lock()`.
+    //
+    // `services.db` is a `parking_lot::Mutex`, which is not reentrant: a second lock on
+    // the same thread does not fail and does not recurse, it blocks forever. This
+    // function is the first thing the assistant screen calls, so opening the assistant
+    // hung on this line and never came back — and because the guard was still held, the
+    // database stayed locked for every command issued afterwards. "The assistant does
+    // not work at all" was this, and so was anything db-backed a viewer touched next.
+    //
+    // `gemini_status` has always scoped its lock in a block for exactly this reason.
+    let has_key = crate::gemini::key_available(&services);
     let db = services.db.lock();
     Ok(AssistantStatus {
-        has_key: crate::gemini::key_available(&services),
+        has_key,
         model: aurora_ingest::gemini::MODEL.to_string(),
         messages: history(&db, args.profile_id).len(),
     })

@@ -437,6 +437,7 @@ fn main() {
             commands::library_episodes,
             commands::library_playback_aids,
             commands::library_record_skip,
+            commands::library_observe_seek,
             commands::window_fullscreen,
             commands::window_ready,
             commands::library_item,

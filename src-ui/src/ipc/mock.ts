@@ -1701,6 +1701,26 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     userSkips.set(key, [...list, [startSecs, endSecs]]);
   },
 
+  /**
+   * The host's `intro_from_seek`, to the extent the mock needs it: forward, 5 to 300
+   * seconds, and beginning inside the window an intro can occupy — ten minutes, or the
+   * first third of a short episode, capped at fifteen.
+   */
+  'library.observeSeek': ({ episodeId, fromSecs, toSecs, durationSecs }) => {
+    const ep = fx.episodes.find((e) => e.id === episodeId);
+    if (!ep) return false;
+    // `MIN_SEEK_EVIDENCE_SECS`, not a marker's five: the overlay's own 10-second skip
+    // must not teach the show where its intro is.
+    const length = toSecs - fromSecs;
+    if (length < 20 || length > 300) return false;
+    const window = Math.min(Math.max((durationSecs > 0 ? durationSecs : 0) / 3, 600), 900);
+    if (fromSecs > window) return false;
+    const key = `${ep.seriesId}:intro`;
+    const list = userSkips.get(key) ?? [];
+    userSkips.set(key, [...list, [fromSecs, toSecs]]);
+    return true;
+  },
+
   'library.seriesPrefs': ({ seriesId }) =>
     seriesPrefs.get(seriesId) ?? {
       alwaysSkipIntro: false,
