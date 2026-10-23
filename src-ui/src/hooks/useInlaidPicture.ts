@@ -100,19 +100,43 @@ export function useInlaidPicture(
 
     push();
 
+    /**
+     * One measure per frame at most.
+     *
+     * `push` calls `getBoundingClientRect`, which is a synchronous layout read, and the
+     * scroll listener below is a *capture* listener -- so it ran once for every scroll
+     * event anywhere in the document, the guide grid's own continuous scroll included.
+     * That is the hottest scrolling surface in the app, and it was forcing a layout on
+     * each event. No stutter was ever visible, because the preview `aside` sits outside
+     * the grid's scroll container so its rectangle does not actually move and `same()`
+     * stopped the duplicate `preview.place` from going out; the forced layout happened
+     * regardless (R-93).
+     *
+     * The capture listener itself has to stay, for the reason the comment below gives.
+     */
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        push();
+      });
+    };
+
     // `ResizeObserver` catches the element changing size; it does not fire when the
     // element *moves* without resizing, which is what a scroll or a reflow above it
     // does. So the window's own events are watched too.
-    const observer = new ResizeObserver(push);
+    const observer = new ResizeObserver(schedule);
     observer.observe(el);
-    window.addEventListener('resize', push);
-    window.addEventListener('scroll', push, true);
+    window.addEventListener('resize', schedule);
+    window.addEventListener('scroll', schedule, true);
 
     return () => {
       alive = false;
+      if (frame) window.cancelAnimationFrame(frame);
       observer.disconnect();
-      window.removeEventListener('resize', push);
-      window.removeEventListener('scroll', push, true);
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('scroll', schedule, true);
     };
   }, [active, ref]);
 

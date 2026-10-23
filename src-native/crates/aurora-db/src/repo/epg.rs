@@ -112,7 +112,19 @@ pub fn upsert_channels(
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProgrammeRow> {
     let flags: i64 = r.get(12)?;
-    let categories: String = r.get(7)?;
+    // `Option`, because the column is nullable and this read is not optional.
+    //
+    // `epg_programmes.categories` has no `NOT NULL` and no default, and reading a NULL
+    // into a `String` is `InvalidColumnType` -- which `grid_slice` turns into a failure
+    // of the *whole* query, because it collects into `Result<Vec<_>, _>`. One NULL row
+    // and the guide is blank rather than missing an entry. Not reachable from
+    // `insert_batch`, which always writes `serde_json::to_string`, so the value is at
+    // least `"[]"`; reachable from the next migration or second write path, and found
+    // when a probe inserted rows without the column and the guide query died exactly
+    // that way. The line below already does `unwrap_or_default` on an unparseable value,
+    // so tolerating a bad one is the function's stated intent and only NULL escaped it
+    // (R-79).
+    let categories: String = r.get::<_, Option<String>>(7)?.unwrap_or_default();
     Ok(ProgrammeRow {
         id: r.get(0)?,
         channel_id: r.get(1)?,
@@ -277,6 +289,40 @@ mod tests {
             is_premiere: false,
             credits: vec![],
         }
+    }
+
+    /// A NULL in a nullable column costs one row, not the whole guide (R-79).
+    ///
+    /// `epg_programmes.categories` has no `NOT NULL` and no default, and `map_row` read
+    /// it straight into a `String` -- so a NULL was `InvalidColumnType`, and because
+    /// `grid_slice` collects into `Result<Vec<_>, _>` that one row failed the entire
+    /// query. The guide would be blank rather than missing an entry. `insert_batch` never
+    /// writes one, so this inserts the row the way a migration or a second write path
+    /// would.
+    #[test]
+    fn a_null_category_does_not_empty_the_guide() {
+        let conn = seeded();
+        let before = grid_slice(&conn, &["a".to_string()], 0, 7200).unwrap().len();
+        assert!(before > 0, "nothing to lose");
+
+        conn.execute(
+            "INSERT INTO epg_programmes
+                 (channel_id, start, stop, title, categories, flags)
+             VALUES ('a', 4000, 5000, 'No categories', NULL, 0)",
+            [],
+        )
+        .unwrap();
+
+        let rows = grid_slice(&conn, &["a".to_string()], 0, 7200).unwrap();
+        assert_eq!(rows.len(), before + 1, "the NULL row took the query with it");
+        let null_row = rows
+            .iter()
+            .find(|r| r.title == "No categories")
+            .expect("the row with no categories is missing");
+        assert!(
+            null_row.categories.is_empty(),
+            "a NULL reads as no categories, not as a failure"
+        );
     }
 
     fn seeded() -> Connection {
