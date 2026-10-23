@@ -42,6 +42,13 @@ pub struct TimeshiftCache {
 /// feed, well past the eight seconds `cache_secs` asks to keep smooth.
 const FORWARD_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// mpv's own `demuxer-max-bytes`, restored when nothing is being buffered.
+///
+/// Named rather than inlined because it is the other half of `FORWARD_CACHE_BYTES`: a
+/// property raised for a timeshifted channel has to come back down for everything
+/// played after it.
+const DEFAULT_FORWARD_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+
 /// Options that must travel with a stream URL. IPTV providers routinely require a
 /// specific User-Agent or Referer, and live streams want a different cache profile
 /// from VOD (README §6.1).
@@ -67,21 +74,26 @@ impl LoadOptions {
     /// benefits from a deeper probe for correct track detection.
     pub fn mpv_options(&self) -> Vec<(String, String)> {
         let mut o: Vec<(String, String)> = Vec::new();
-        if let Some(ua) = &self.user_agent {
-            o.push(("user-agent".into(), ua.clone()));
-        }
-        if let Some(r) = &self.referrer {
-            o.push(("referrer".into(), r.clone()));
-        }
-        if !self.headers.is_empty() {
-            let joined = self
-                .headers
+        // Each of these is sent in both states, empty where there is nothing to say.
+        //
+        // They are `set_property` calls on a handle that outlives the file, so a key
+        // pushed only when it has a value leaves the *previous* file's value in force.
+        // That is one provider's User-Agent, Referer and auth headers being sent to
+        // another provider's host on the next thing played -- and the empty string is
+        // mpv's own default for all three, so saying it is how you take it back.
+        o.push((
+            "user-agent".into(),
+            self.user_agent.clone().unwrap_or_default(),
+        ));
+        o.push(("referrer".into(), self.referrer.clone().unwrap_or_default()));
+        o.push((
+            "http-header-fields".into(),
+            self.headers
                 .iter()
                 .map(|(k, v)| format!("{k}: {v}"))
                 .collect::<Vec<_>>()
-                .join(",");
-            o.push(("http-header-fields".into(), joined));
-        }
+                .join(","),
+        ));
         o.push(("cache-secs".into(), self.cache_secs.max(1).to_string()));
 
         // The timeshift buffer, in both states. Emitted even when off because these are
@@ -113,8 +125,14 @@ impl LoadOptions {
                 o.push(("force-seekable".into(), "yes".into()));
             }
             None => {
+                o.push(("cache".into(), "auto".into()));
                 o.push(("cache-on-disk".into(), "no".into()));
+                // Empty is mpv's own default location. Nothing is written there while
+                // `cache-on-disk` is off, but the viewer's chosen folder must not stay
+                // named on the handle after the buffer that needed it is gone.
+                o.push(("demuxer-cache-dir".into(), String::new()));
                 o.push(("demuxer-max-back-bytes".into(), "0".into()));
+                o.push(("demuxer-max-bytes".into(), DEFAULT_FORWARD_CACHE_BYTES.to_string()));
                 o.push(("force-seekable".into(), "no".into()));
             }
         }
@@ -123,11 +141,34 @@ impl LoadOptions {
             o.push(("demuxer-lavf-probesize".into(), "524288".into()));
             o.push(("demuxer-lavf-analyzeduration".into(), "0.6".into()));
             o.push(("cache-pause-initial".into(), "no".into()));
+            // Cleared rather than omitted, for the reason the timeshift block above
+            // gives: these are properties of a long-lived handle. A live tune after a
+            // resumed film would otherwise inherit that film's start position.
+            //
+            // `none` is the rel-time parser's own "unset", not a position, so this still
+            // forwards no start for live. If a libmpv build refuses it the warning is
+            // logged and the leftover stands, which is exactly today's behaviour.
+            o.push(("start".into(), "none".into()));
         } else {
             o.push(("demuxer-lavf-probesize".into(), "8000000".into()));
-            if let Some(start) = self.start_at_secs {
-                o.push(("start".into(), format!("{start}")));
-            }
+            // Back to mpv's own, which is what the deep probe above is for: 0.6s is the
+            // number live TV uses to zap quickly, and a VOD opened after a channel was
+            // tuned inherited it and gave up analysing early.
+            o.push(("demuxer-lavf-analyzeduration".into(), "0".into()));
+            // Always, not only when there is a resume point.
+            //
+            // `start` is set with `set_property` on a handle that outlives the file, so
+            // omitting it left the *previous* file's value in place. Resume an episode at
+            // 12:34, press Next Episode -- which plays from the beginning and so sends no
+            // position -- and mpv still had `start=754`: the next episode opened twelve
+            // minutes in. Every VOD load after a resumed one did it, autoplay included.
+            //
+            // The timeshift options four lines up carry the same note for the same
+            // reason, and `cache-on-disk` is reset in both states for exactly this.
+            o.push((
+                "start".into(),
+                format!("{}", self.start_at_secs.unwrap_or(0.0)),
+            ));
         }
         o
     }
@@ -524,11 +565,89 @@ mod tests {
             start_at_secs: Some(120.0),
             ..Default::default()
         };
-        assert!(vod.mpv_options().iter().any(|(k, _)| k == "start"));
+        assert_eq!(start_of(&vod), Some("120".to_string()));
 
+        // Still no position for live -- `none` is the parser's unset, not a seek.
         let mut l = live();
         l.start_at_secs = Some(120.0);
-        assert!(!l.mpv_options().iter().any(|(k, _)| k == "start"));
+        assert_eq!(start_of(&l), Some("none".to_string()));
+    }
+
+    /// The next episode begins at the beginning.
+    ///
+    /// `start` is set on a handle that outlives the file, and it used to be emitted only
+    /// when there was a resume point -- so a load without one inherited the last one's
+    /// value. Resuming an episode at 12:34 and pressing Next Episode, which deliberately
+    /// sends no position, opened the next episode twelve minutes in.
+    #[test]
+    fn a_vod_with_no_resume_point_starts_at_zero_rather_than_where_the_last_one_did() {
+        let resumed = LoadOptions {
+            start_at_secs: Some(754.0),
+            ..Default::default()
+        };
+        assert_eq!(start_of(&resumed), Some("754".to_string()));
+
+        // What `player.play` sends for "from the beginning": no position at all.
+        let fresh = LoadOptions::default();
+        assert_eq!(
+            start_of(&fresh),
+            Some("0".to_string()),
+            "a VOD load with no resume point must say so, not leave the last value in              place on a handle that outlives the file"
+        );
+
+        // And a live tune cannot carry a film's position either.
+        assert_eq!(start_of(&live()), Some("none".to_string()));
+    }
+
+    /// Nothing a load does not mention is left as the last load set it.
+    ///
+    /// `mpv_options` is applied with `set_property` on a handle that outlives the file,
+    /// so a key emitted only when it has a value is a value the *previous* file keeps.
+    /// Four did: `user-agent`, `referrer`, `http-header-fields` and `start` -- which is
+    /// one provider's credentials and Referer sent to another provider's host, and an
+    /// episode opening twelve minutes in because the one before it was resumed there.
+    ///
+    /// Asserted as the invariant rather than key by key, so a conditional push added
+    /// later fails here instead of in somebody's living room.
+    #[test]
+    fn every_option_is_sent_in_both_states_so_nothing_leaks_between_files() {
+        let keys = |o: &LoadOptions| {
+            let mut k: Vec<String> = o.mpv_options().into_iter().map(|(k, _)| k).collect();
+            k.sort();
+            k.dedup();
+            k
+        };
+
+        for is_live in [false, true] {
+            let bare = LoadOptions {
+                is_live,
+                ..Default::default()
+            };
+
+            let mut full = bare.clone();
+            full.user_agent = Some("AuroraTV/1.0".into());
+            full.referrer = Some("https://example.com/".into());
+            full.headers.insert("X-Token".into(), "abc".into());
+            full.start_at_secs = Some(754.0);
+            full.timeshift = Some(TimeshiftCache {
+                dir: PathBuf::from("C:/aurora-dev/ts"),
+                budget: Budget::default(),
+            });
+
+            assert_eq!(
+                keys(&bare),
+                keys(&full),
+                "is_live={is_live}: these keys are only sent when they have a value, so                  the last file's value stands until something else overwrites it"
+            );
+        }
+    }
+
+    /// What `start` this load would hand mpv, if any.
+    fn start_of(o: &LoadOptions) -> Option<String> {
+        o.mpv_options()
+            .into_iter()
+            .find(|(k, _)| k == "start")
+            .map(|(_, v)| v)
     }
 
     #[test]
