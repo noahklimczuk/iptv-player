@@ -961,6 +961,39 @@ pub fn library_record_skip(services: State<'_, Services>, args: RecordSkipArgs) 
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObserveSeekArgs {
+    pub episode_id: i64,
+    pub from_secs: f64,
+    pub to_secs: f64,
+    /// 0 when the stream has not told us, which is ordinary on a provider's VOD.
+    pub duration_secs: f64,
+}
+
+/// Learn an intro from a forward seek the viewer made by hand.
+///
+/// `library_record_skip` above is reached only from the Skip button, and that button is
+/// only on screen when an intro marker already exists — so on a library whose streams
+/// carry no chapters there was no way for an intro to come into being, and no way for a
+/// viewer to teach one. Tier 2 is "the user, when someone skips manually"; dragging past
+/// the titles is that, and this is where it gets recorded.
+///
+/// Returns whether the jump was taken as evidence, so the caller can refresh its markers
+/// rather than guess. `aurora_core::markers::intro_from_seek` owns the decision and puts
+/// a seek through the same gates a chapter goes through.
+#[tauri::command(async)]
+pub fn library_observe_seek(services: State<'_, Services>, args: ObserveSeekArgs) -> Result<bool> {
+    let Some(marker) =
+        aurora_core::markers::intro_from_seek(args.from_secs, args.to_secs, args.duration_secs)
+    else {
+        return Ok(false);
+    };
+    let db = services.db.lock();
+    markers::record(&db, args.episode_id, &marker, now_unix())?;
+    Ok(true)
+}
+
 /// Store the chapter-derived markers for the file the player just loaded.
 #[tauri::command(async)]
 pub fn library_sync_chapters(services: State<'_, Services>, args: AidsArgs) -> Result<usize> {

@@ -418,6 +418,56 @@ pub fn conventional(duration_secs: f64) -> Vec<SkipMarker> {
     }
 }
 
+/// The shortest forward jump that is a statement about where the intro is.
+///
+/// Longer than [`MIN_MARKER_SECS`] on purpose. A marker only has to be five seconds to be
+/// worth a button, but a *seek* that short is navigation rather than an opinion: the
+/// player's own overlay has ±10-second buttons, and a viewer nudging forward twice near
+/// the start of an episode would otherwise teach the show that its intro is the twenty
+/// seconds they happened to cross. An intro is "usually about a minute", so twenty
+/// seconds is comfortably below any real one and above every nudge the UI itself offers.
+pub const MIN_SEEK_EVIDENCE_SECS: f64 = 20.0;
+
+/// Intro evidence from a forward jump the viewer made by hand.
+///
+/// Tier 2 is "the user — when someone skips manually, where they skipped is recorded",
+/// and the only thing that ever recorded a skip was the Skip button. So the evidence for
+/// an intro was reachable only through a button that evidence for an intro is what puts
+/// on screen. A release with chapters got its buttons; a library whose streams carry
+/// none — the ordinary IPTV case, and chapters are rarer in a provider's VOD than a
+/// duration is — could never show Skip Intro, and a viewer had no way to teach it,
+/// because tier 4 places no intro and tier 3 has nothing to take a median of.
+///
+/// Dragging past the titles *is* the manual skip tier 2 describes. This turns it into
+/// the same evidence the button records, which is what closes the loop.
+///
+/// `None` unless the jump looks like an intro, through the same two gates a chapter goes
+/// through — long enough to be worth a button and short enough not to be a scrub across
+/// the episode, and beginning where an intro can be. Deliberately the same, so a seek
+/// cannot produce a marker a chapter could not have.
+pub fn intro_from_seek(from_secs: f64, to_secs: f64, duration_secs: f64) -> Option<SkipMarker> {
+    if !from_secs.is_finite() || !to_secs.is_finite() {
+        return None;
+    }
+    // A stream that reports no duration is the common case here, and `position_is_sane`
+    // reads 0 as "the first ten minutes", which is the right window when the runtime is
+    // unknown. Anything not a real number is treated the same way rather than silently
+    // rejecting every seek.
+    let duration = if duration_secs.is_finite() && duration_secs > 0.0 {
+        duration_secs
+    } else {
+        0.0
+    };
+    let marker = SkipMarker::new(MarkerKind::Intro, from_secs, to_secs, MarkerSource::User);
+    if marker.duration_secs() < MIN_SEEK_EVIDENCE_SECS {
+        return None;
+    }
+    if !marker.is_plausible() || !position_is_sane(MarkerKind::Intro, &marker, duration) {
+        return None;
+    }
+    Some(marker)
+}
+
 /// When the "Up Next" card should appear.
 ///
 /// Prefers the start of the credits; otherwise falls back to a fixed tail. README §9
@@ -434,6 +484,91 @@ pub fn up_next_at(
         return Some(credits.start_secs);
     }
     Some((duration_secs - fallback_tail_secs).max(duration_secs * 0.5))
+}
+
+#[cfg(test)]
+mod seek_tests {
+    use super::*;
+
+    /// The case the whole function exists for: a provider stream with no chapters, where
+    /// the viewer drags past the titles. Before this, that taught the library nothing and
+    /// Skip Intro could never appear on any episode of the show.
+    #[test]
+    fn dragging_past_the_titles_is_intro_evidence() {
+        let marker = intro_from_seek(8.0, 98.0, 45.0 * 60.0).expect("a 90-second jump at 8s");
+        assert_eq!(marker.kind, MarkerKind::Intro);
+        assert_eq!(marker.source, MarkerSource::User);
+        assert_eq!(marker.start_secs, 8.0);
+        assert_eq!(marker.end_secs, 98.0);
+        assert!(marker.is_plausible());
+    }
+
+    /// A stream that reports no duration at all, which is the ordinary case on a
+    /// provider's VOD and the thing that broke the chapter path in the first place.
+    #[test]
+    fn an_unknown_duration_still_allows_the_first_ten_minutes() {
+        assert!(intro_from_seek(30.0, 120.0, 0.0).is_some());
+        assert!(intro_from_seek(30.0, 120.0, f64::NAN).is_some());
+        // Still bounded: 11 minutes in is not an intro even with no runtime to go on.
+        assert!(intro_from_seek(660.0, 720.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn a_backward_or_stationary_seek_is_not_a_skip() {
+        assert!(intro_from_seek(120.0, 30.0, 45.0 * 60.0).is_none());
+        assert!(intro_from_seek(120.0, 120.0, 45.0 * 60.0).is_none());
+    }
+
+    /// The same length gates a chapter goes through. A nudge is not a statement about
+    /// where the intro is, and a scrub across the episode is not one either.
+    /// The overlay's own ±10-second buttons must not teach anything, which is the whole
+    /// reason seek evidence has a higher floor than a marker does.
+    #[test]
+    fn a_nudge_and_a_scrub_are_both_refused() {
+        assert!(
+            intro_from_seek(10.0, 13.0, 45.0 * 60.0).is_none(),
+            "3s nudge"
+        );
+        assert!(
+            intro_from_seek(30.0, 40.0, 45.0 * 60.0).is_none(),
+            "the overlay's own 10-second skip"
+        );
+        assert!(
+            intro_from_seek(30.0, 49.0, 45.0 * 60.0).is_none(),
+            "two nudges, still not an opinion"
+        );
+        assert!(
+            intro_from_seek(10.0, 10.0 + MAX_MARKER_SECS + 1.0, 45.0 * 60.0).is_none(),
+            "a scrub past the window"
+        );
+        // The boundaries themselves are accepted, so the gate is the documented one.
+        assert!(intro_from_seek(10.0, 10.0 + MIN_SEEK_EVIDENCE_SECS, 45.0 * 60.0).is_some());
+        assert!(intro_from_seek(10.0, 10.0 + MAX_MARKER_SECS, 45.0 * 60.0).is_some());
+        // And a marker's own floor is lower than this one, so the two are not confused.
+        // Checked at compile time, because both sides are constants.
+        const { assert!(MIN_SEEK_EVIDENCE_SECS > MIN_MARKER_SECS) };
+    }
+
+    /// A jump in the middle of an episode is somebody skipping a dull scene, and calling
+    /// it an intro would put a button over content on every other episode of the show.
+    #[test]
+    fn a_jump_in_the_middle_is_not_an_intro() {
+        let hour = 60.0 * 60.0;
+        assert!(intro_from_seek(hour, hour + 60.0, 2.0 * hour).is_none());
+    }
+
+    /// The window is the one `position_is_sane` already defines, including R-15's
+    /// ceiling: a three-hour film does not get a one-hour intro window.
+    #[test]
+    fn the_window_matches_the_rule_chapters_go_through() {
+        let three_hours = 3.0 * 60.0 * 60.0;
+        // 15 minutes is the ceiling, so 14:30 is in and 15:30 is out.
+        assert!(intro_from_seek(870.0, 930.0, three_hours).is_some());
+        assert!(intro_from_seek(930.0, 990.0, three_hours).is_none());
+        // And a short episode gets the first third rather than a flat ten minutes.
+        let twenty_two = 22.0 * 60.0;
+        assert!(intro_from_seek(400.0, 460.0, twenty_two).is_some());
+    }
 }
 
 #[cfg(test)]

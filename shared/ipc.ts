@@ -1154,6 +1154,25 @@ export interface Commands {
     startSecs: number;
     endSecs: number;
   }) => void;
+  /**
+   * A forward seek the viewer made by hand, offered as intro evidence.
+   *
+   * `recordSkip` is only reachable from the Skip button, and that button needs a marker
+   * to already exist — so on a library whose streams carry no chapters, an intro had no
+   * way to come into being and a viewer had no way to teach one. Dragging past the
+   * titles is the manual skip the design's second tier describes.
+   *
+   * The host decides: a jump is evidence only if it is forward, between 5 and 300
+   * seconds, and begins where an intro can be — the same gates a chapter goes through.
+   * Returns whether it was taken, so the caller refreshes its markers instead of
+   * assuming. `durationSecs` is 0 when the stream has not said.
+   */
+  'library.observeSeek': (args: {
+    episodeId: number;
+    fromSecs: number;
+    toSecs: number;
+    durationSecs: number;
+  }) => boolean;
   'library.seriesPrefs': (args: { profileId: number; seriesId: number }) => SeriesPrefs;
   'library.setSeriesPrefs': (args: {
     profileId: number;
