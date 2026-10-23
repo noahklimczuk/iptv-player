@@ -225,14 +225,23 @@ impl Budget {
     ///
     /// `None` when even the smallest does not — which is the single-connection case,
     /// and saying "none of them" is more use than offering a 2×2 that will also fail.
-    pub fn largest_fitting(recordings: usize, limit: Option<usize>) -> Option<Layout> {
+    ///
+    /// Takes a known limit rather than an `Option`, so the question cannot be asked when
+    /// there is no answer. It used to take `Option<usize>`, and with `None` every layout
+    /// "fit": `Budget::check` returns `Unknown`, `is_refused()` is false, and the loop
+    /// came out at `Grid3x3`. So an accessor documented as "the largest layout that
+    /// fits" quietly converted "the provider declared no limit" into "yes, nine" -- for
+    /// an M3U provider, which this module's own comments call the ordinary case. The rest
+    /// of the file handles `Unknown` honestly and the UI says so in words; this was the
+    /// one place that did not, and a type is a better guard than a comment (R-42).
+    pub fn largest_fitting(recordings: usize, limit: usize) -> Option<Layout> {
         let mut best: Option<Layout> = None;
         for layout in Layout::ALL {
             let demand = Demand {
                 tiles: layout.tiles(),
                 recordings,
             };
-            if Budget::check(demand, limit).is_refused() {
+            if Budget::check(demand, Some(limit)).is_refused() {
                 continue;
             }
             if best.is_none_or(|b| layout.tiles() > b.tiles()) {
@@ -349,7 +358,7 @@ mod tests {
                 "{layout:?} was allowed on one connection"
             );
         }
-        assert_eq!(Budget::largest_fitting(0, Some(1)), None);
+        assert_eq!(Budget::largest_fitting(0, 1), None);
     }
 
     #[test]
@@ -405,23 +414,27 @@ mod tests {
 
     #[test]
     fn the_largest_fitting_layout_is_the_one_with_the_most_tiles() {
-        assert_eq!(Budget::largest_fitting(0, Some(9)), Some(Layout::Grid3x3));
+        assert_eq!(Budget::largest_fitting(0, 9), Some(Layout::Grid3x3));
         assert_eq!(
-            Budget::largest_fitting(0, Some(6)),
+            Budget::largest_fitting(0, 6),
             Some(Layout::OnePlusFive)
         );
         // Five connections: 1+5 needs six, so the best is a four-tile layout.
         assert_eq!(
-            Budget::largest_fitting(0, Some(5)).map(Layout::tiles),
+            Budget::largest_fitting(0, 5).map(Layout::tiles),
             Some(4)
         );
-        assert_eq!(Budget::largest_fitting(0, Some(3)), None);
+        assert_eq!(Budget::largest_fitting(0, 3), None);
         // A recording takes one of the nine.
         assert_eq!(
-            Budget::largest_fitting(1, Some(9)),
+            Budget::largest_fitting(1, 9),
             Some(Layout::OnePlusFive)
         );
-        // Nothing declared: every layout is worth offering.
-        assert_eq!(Budget::largest_fitting(0, None), Some(Layout::Grid3x3));
+        // "Nothing declared: every layout is worth offering" used to be asserted here,
+        // as `largest_fitting(0, None) == Some(Grid3x3)`. That was the finding written
+        // down as a test: with no declared limit nothing is known about what fits, and
+        // answering `Grid3x3` is a guess wearing a certainty. The question now needs a
+        // limit to be asked at all, so there is no call to make -- and what the caller
+        // does without one is asserted in `aurora-app`, where it is observable (R-42).
     }
 }

@@ -263,9 +263,15 @@ pub fn from_chapters(chapters: &[Chapter], duration_secs: f64) -> Vec<SkipMarker
 fn position_is_sane(kind: MarkerKind, marker: &SkipMarker, duration_secs: f64) -> bool {
     match kind {
         // Intros and recaps live near the front: first 10 minutes, or first third of
-        // a short episode, whichever is more generous.
+        // a short episode, whichever is more generous -- and never more than 15, which
+        // is the half the sentence above did not have.
+        //
+        // `max(600.0)` alone grows the window with the runtime, so on a three-hour film
+        // the first third is an hour and a mis-titled chapter that far in was accepted
+        // as an intro. The generosity exists for files too short for ten minutes to be
+        // near the front; it has no reason to keep widening once they are long (R-15).
         MarkerKind::Intro | MarkerKind::Recap => {
-            marker.start_secs <= (duration_secs / 3.0).max(600.0)
+            marker.start_secs <= (duration_secs / 3.0).clamp(600.0, 900.0)
         }
         // Credits live in the last quarter.
         MarkerKind::Credits => marker.start_secs >= duration_secs * 0.75,
@@ -574,6 +580,29 @@ mod tests {
         // An "Opening" two thirds in is a mis-titled chapter, not an intro.
         let markers = from_chapters(&[ch("Part 1", 0.0), ch("Opening", 1800.0)], 2700.0);
         assert!(markers.is_empty(), "unexpected markers: {markers:?}");
+    }
+
+    /// The window for an intro stops widening once the file is long (R-15).
+    #[test]
+    fn an_intro_an_hour_into_a_long_film_is_rejected() {
+        // Three hours, and a chapter titled "Intro" an hour in. A third of the runtime
+        // is 3,600s, so the old rule accepted this as an intro and offered a button that
+        // skips an hour of a film.
+        let long = from_chapters(&[ch("Part 1", 0.0), ch("Intro", 3600.0), ch("Rest", 3700.0)], 10800.0);
+        assert!(long.is_empty(), "unexpected markers: {long:?}");
+
+        // The generosity it replaces is still there for the files it was for: a short
+        // episode where ten minutes really is near the front.
+        let short = from_chapters(&[ch("Intro", 540.0), ch("Show", 600.0)], 1200.0);
+        assert_eq!(short.len(), 1, "a 9min mark in a 20min episode is still an intro");
+        assert_eq!(short[0].kind, MarkerKind::Intro);
+
+        // And the ceiling is where it says it is: 15 minutes in is in, 16 is out,
+        // whatever the runtime.
+        let inside = from_chapters(&[ch("Intro", 890.0), ch("Show", 950.0)], 10800.0);
+        assert_eq!(inside.len(), 1, "unexpected: {inside:?}");
+        let outside = from_chapters(&[ch("Intro", 960.0), ch("Show", 1020.0)], 10800.0);
+        assert!(outside.is_empty(), "unexpected markers: {outside:?}");
     }
 
     #[test]

@@ -255,7 +255,10 @@ impl Mosaic {
                 },
                 limit,
             ),
-            largest_fitting: Budget::largest_fitting(recordings, limit),
+            // Only asked when the provider declared a limit: with none there is
+            // nothing to promise, and `null` is what the UI already reads as "no
+            // suggestion" (R-42).
+            largest_fitting: limit.and_then(|l| Budget::largest_fitting(recordings, l)),
             recordings,
         }
     }
@@ -1354,6 +1357,41 @@ mod tests {
         let nine = m.check(Layout::Grid3x3);
         assert!(nine.budget.is_refused());
         assert_eq!(nine.recordings, 0);
+    }
+
+    /// A provider that declares no limit suggests nothing, rather than suggesting nine.
+    ///
+    /// `Budget::check` answers `Unknown` and the UI says so in words. `largest_fitting`
+    /// used to answer `Grid3x3` regardless, because with no limit no layout is refused
+    /// and the loop ran to the end -- an accessor documented as "the largest layout that
+    /// fits" turning "we have no idea" into "yes, nine", for an M3U provider, which this
+    /// module calls the ordinary case (R-42).
+    #[test]
+    fn a_line_with_no_declared_limit_promises_nothing_about_what_fits() {
+        let (m, _db) = mosaic(None);
+        for layout in [Layout::Grid2x2, Layout::Grid3x3, Layout::OnePlusFive] {
+            let view = m.check(layout);
+            assert_eq!(
+                view.budget,
+                Budget::Unknown {
+                    needed: layout.tiles()
+                },
+                "{layout:?}"
+            );
+            assert!(!view.budget.is_refused(), "{layout:?} refused without a limit");
+            assert_eq!(
+                view.largest_fitting, None,
+                "{layout:?} suggested an arrangement nothing is known about"
+            );
+        }
+
+        // And with a limit the suggestion comes back, so the guard above is not just
+        // switching the feature off.
+        let (known, _db2) = mosaic(Some(4));
+        assert_eq!(
+            known.check(Layout::Grid3x3).largest_fitting.map(Layout::tiles),
+            Some(4)
+        );
     }
 
     /// An M3U playlist declares nothing, which is the common case. It must open.

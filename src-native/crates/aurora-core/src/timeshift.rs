@@ -75,7 +75,14 @@ impl Budget {
         if bitrate_bps == 0 {
             return None;
         }
-        Some((self.bytes * 8) as f64 / bitrate_bps as f64)
+        // `saturating_mul`, because `bytes` is a public `u64` on a `Deserialize` struct
+        // and nothing guarantees it came from `Budget::clamped`. A settings row written
+        // by a different build can exceed `u64::MAX / 8`, and release builds have
+        // overflow checks off -- so it wrapped quietly and reported a rewind window that
+        // was wrong rather than one that was impossible. Saturating gives an absurdly
+        // large window for an absurdly large cap, which is the honest reading of the
+        // stored value and costs nothing (R-27).
+        Some(self.bytes.saturating_mul(8) as f64 / bitrate_bps as f64)
     }
 
     /// What the viewer can reach, from what the player can actually report.
@@ -192,6 +199,37 @@ impl Window {
 
 #[cfg(test)]
 mod tests {
+    /// A byte cap no `clamped` would produce does not wrap (R-27).
+    ///
+    /// `bytes` is a public `u64` on a `Deserialize` struct, so a settings row written by
+    /// a different build can exceed `u64::MAX / 8`. Release builds have overflow checks
+    /// off, so `bytes * 8` wrapped and the rewind window came out wrong rather than
+    /// loudly.
+    #[test]
+    fn an_absurd_byte_cap_saturates_instead_of_wrapping() {
+        let budget = super::Budget {
+            bytes: u64::MAX,
+            secs: 1800,
+        };
+        let secs = budget.bytes_as_secs(8_000_000).expect("a bitrate was given");
+        assert!(
+            secs > 1.0e12,
+            "{secs} is what a wrapped multiply looks like, not a saturated one"
+        );
+
+        // And an ordinary cap is unchanged: 4 GiB at 8 Mbit/s is about an hour.
+        let ordinary = super::Budget {
+            bytes: 4 * 1024 * 1024 * 1024,
+            secs: 1800,
+        };
+        let hour = ordinary.bytes_as_secs(8_000_000).unwrap();
+        assert!((hour - 4295.0).abs() < 1.0, "{hour}");
+
+        // An unknown bitrate is still not zero seconds.
+        assert_eq!(ordinary.bytes_as_secs(0), None);
+    }
+
+
     use super::*;
 
     /// A window that cannot be a window does not take the process with it.
