@@ -282,6 +282,27 @@ pub fn from_chapters(chapters: &[Chapter], duration_secs: f64) -> Vec<SkipMarker
     out
 }
 
+/// Whether a marker's position agrees with what it claims to be.
+///
+/// The same rule chapters are held to, exposed because a marker arriving from the UI is
+/// held to it now as well. It was not: `library_record_skip` checked only a region's
+/// *length*, so an intro could be recorded an hour into a film while a chapter saying
+/// the same thing was refused — two paths to one table disagreeing about what an intro
+/// is. Unreachable from the button, which can only pass bounds that came from a marker
+/// that had already passed this, and a command is reachable by more than its caller.
+///
+/// `duration_secs` of 0 means the runtime is unknown, which is ordinary on a provider's
+/// stream: intros and recaps then get the first ten minutes, and credits cannot be
+/// placed at all, so they are let through rather than guessed at.
+pub fn position_fits_kind(marker: &SkipMarker, duration_secs: f64) -> bool {
+    let duration = if duration_secs.is_finite() && duration_secs > 0.0 {
+        duration_secs
+    } else {
+        0.0
+    };
+    position_is_sane(marker.kind, marker, duration)
+}
+
 /// Reject markers whose position contradicts their label.
 fn position_is_sane(kind: MarkerKind, marker: &SkipMarker, duration_secs: f64) -> bool {
     match kind {
@@ -555,6 +576,37 @@ mod seek_tests {
     fn a_jump_in_the_middle_is_not_an_intro() {
         let hour = 60.0 * 60.0;
         assert!(intro_from_seek(hour, hour + 60.0, 2.0 * hour).is_none());
+    }
+
+    /// `position_fits_kind` is the same rule, reachable by the command that records what
+    /// the Skip button was pressed on. That command checked length alone, so these are
+    /// the cases it used to accept.
+    #[test]
+    fn a_recorded_region_has_to_sit_where_its_kind_belongs() {
+        let film = 2.0 * 60.0 * 60.0;
+        let hour_in = SkipMarker::new(MarkerKind::Intro, 3600.0, 3690.0, MarkerSource::User);
+        assert!(
+            hour_in.is_plausible(),
+            "length alone was all that was checked"
+        );
+        assert!(
+            !position_fits_kind(&hour_in, film),
+            "an intro an hour into a film is not an intro"
+        );
+
+        let titles = SkipMarker::new(MarkerKind::Intro, 20.0, 110.0, MarkerSource::User);
+        assert!(position_fits_kind(&titles, film));
+
+        // Credits belong in the last quarter, and cannot be placed without a runtime —
+        // so an unknown duration lets them through rather than guessing.
+        let tail = SkipMarker::new(MarkerKind::Credits, film - 60.0, film, MarkerSource::User);
+        assert!(position_fits_kind(&tail, film));
+        let too_early = SkipMarker::new(MarkerKind::Credits, 600.0, 660.0, MarkerSource::User);
+        assert!(!position_fits_kind(&too_early, film));
+        assert!(
+            position_fits_kind(&too_early, 0.0),
+            "no runtime, no placing it"
+        );
     }
 
     /// The window is the one `position_is_sane` already defines, including R-15's

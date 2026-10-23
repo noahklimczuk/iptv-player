@@ -939,6 +939,9 @@ pub struct RecordSkipArgs {
     pub kind: String,
     pub start_secs: f64,
     pub end_secs: f64,
+    /// 0 when the stream has not told us, which is ordinary on a provider's VOD.
+    #[serde(default)]
+    pub duration_secs: f64,
 }
 
 /// Remember that the viewer skipped a region, so later episodes of the show can offer
@@ -954,6 +957,13 @@ pub fn library_record_skip(services: State<'_, Services>, args: RecordSkipArgs) 
     let marker = SkipMarker::new(kind, args.start_secs, args.end_secs, MarkerSource::User);
     if !marker.is_plausible() {
         // An accidental one-second drag must not teach the series anything.
+        return Ok(());
+    }
+    // And a region has to sit where what it claims to be sits. Only the length was
+    // checked here, so an intro could be recorded an hour in while a chapter saying the
+    // same thing was refused — the same table, reached two ways, with two ideas of what
+    // an intro is. `library_observe_seek` has always gone through this.
+    if !aurora_core::markers::position_fits_kind(&marker, args.duration_secs) {
         return Ok(());
     }
     let db = services.db.lock();
