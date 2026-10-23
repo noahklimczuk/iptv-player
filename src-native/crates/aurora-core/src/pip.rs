@@ -101,12 +101,22 @@ impl Geometry {
     /// clamped up to `MIN_WIDTH` regardless.
     pub fn rect(&self, width: u32, height: u32) -> Rect {
         let margin = self.margin;
-        // Two margins on each axis: one against the window edge, one against the
-        // content the tile is floating over.
-        let Some(room_w) = width.checked_sub(margin * 2) else {
+        // Checked, because the guards below only cover the subtraction. `margin` comes
+        // from stored settings, and `margin * 2` on a large one wraps to a small number
+        // in release and panics in debug -- so a nonsense margin produced a tile placed
+        // as though there were no margin at all, which is the one outcome the arithmetic
+        // here exists to prevent (R-43).
+        // A margin that cannot be doubled is a margin no window has room for, which is
+        // the same answer as a window too small: a zero-sized rect the caller can see.
+        let Some(margins) = margin.checked_mul(2) else {
             return ZERO;
         };
-        let Some(room_h) = height.checked_sub(margin * 2) else {
+        // Two margins on each axis: one against the window edge, one against the
+        // content the tile is floating over.
+        let Some(room_w) = width.checked_sub(margins) else {
+            return ZERO;
+        };
+        let Some(room_h) = height.checked_sub(margins) else {
             return ZERO;
         };
         if room_w == 0 || room_h == 0 {
@@ -160,6 +170,27 @@ const ZERO: Rect = Rect {
 
 #[cfg(test)]
 mod tests {
+    /// A margin too large to double is a window with no room, not an arithmetic fault.
+    ///
+    /// The guards used `checked_sub(margin * 2)`, so the subtraction was safe and the
+    /// multiplication was not: `margin` comes from stored settings, and a large one
+    /// wrapped to a small number in release -- placing the tile as though there were no
+    /// margin at all, which is exactly what the arithmetic here exists to prevent. In
+    /// debug it panicked, and a panic in a geometry function called from the window's
+    /// resize handler takes the app with it (R-43).
+    #[test]
+    fn an_absurd_margin_is_a_zero_rect_rather_than_an_overflow() {
+        for margin in [u32::MAX, u32::MAX / 2 + 1, u32::MAX - 7] {
+            let geometry = super::Geometry { margin, ..Default::default() };
+            let rect = geometry.rect(1920, 1080);
+            assert_eq!(rect.width, 0, "margin {margin} produced a tile");
+            assert_eq!(rect.height, 0, "margin {margin} produced a tile");
+        }
+        // The largest margin that can still be doubled: no overflow, no room either.
+        let geometry = super::Geometry { margin: u32::MAX / 2, ..Default::default() };
+        assert_eq!(geometry.rect(1920, 1080).width, 0);
+    }
+
     use super::*;
 
     const SIZES: [(u32, u32); 5] = [

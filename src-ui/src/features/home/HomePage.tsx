@@ -59,6 +59,14 @@ export function HomePage({
     }
   }
 
+  /**
+   * What was on My List, half-watched or up next when Home opened.
+   *
+   * A ref rather than state: it is read while the hero set is being built and must not
+   * cause a second build, which is also why `heroSeed` above is one.
+   */
+  const decidedOnOpen = useRef<Set<string> | null>(null);
+
   const heroItems = useMemo(() => {
     if (!rails) return [];
 
@@ -69,13 +77,45 @@ export function HomePage({
     // offering them something they did not finish. `myList` is excluded for the
     // opposite reason — they have already decided about those.
     const skip = new Set(['continueWatching', 'upNext', 'myList']);
+
+    /**
+     * The titles those three rails hold, rather than the rails themselves.
+     *
+     * `skip` filters by rail *kind*, which is not the same thing: a film on My List is
+     * also in `recentlyAdded` and in its genre rail, so it entered the pool through one
+     * of those and could headline the billboard. Same for something half-watched. The
+     * paragraph above says why neither belongs there -- they have already decided, or
+     * they did not finish -- and the code was only doing it for titles that appear
+     * nowhere else.
+     *
+     * Found as a flaky journey rather than by reading: `lists.spec.ts` opens the first
+     * billboard item and asserts liking it does not add it to My List, and failed
+     * whenever the shuffle happened to put an already-listed title first.
+     *
+     * Taken once, and then kept, for the same reason the seed is: this memo re-runs
+     * whenever `rails` changes, and adding something to My List changes them. Filtering
+     * live meant pressing "Add to My List" on the billboard deleted the thing the viewer
+     * was looking at -- the next item sliding into its place as a reward for using the
+     * button. So the question is "had they decided about this when the screen opened",
+     * which is the one the paragraph above is really asking.
+     */
+    if (decidedOnOpen.current === null) {
+      const decided = new Set<string>();
+      for (const rail of rails) {
+        if (!skip.has(rail.kind)) continue;
+        for (const item of rail.items) decided.add(`${item.kind}:${item.id}`);
+      }
+      decidedOnOpen.current = decided;
+    }
+    const decided = decidedOnOpen.current;
+
     const seen = new Set<string>();
     const pool: CatalogItem[] = [];
     for (const rail of rails) {
       if (skip.has(rail.kind)) continue;
       for (const item of rail.items) {
         const key = `${item.kind}:${item.id}`;
-        if (seen.has(key)) continue;
+        if (seen.has(key) || decided.has(key)) continue;
         seen.add(key);
         pool.push(item);
       }
