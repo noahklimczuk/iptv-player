@@ -250,9 +250,22 @@ pub fn groups(
     filter: &crate::repo::filtering::LibraryFilter,
 ) -> Result<Vec<(String, i64)>> {
     let visible = filter.where_sql(crate::repo::filtering::Kind::Live);
+    // `is_radio = 0`, because that is what `list` beside this counts.
+    //
+    // This filtered on `hidden` and on the library filter and not on radio, while `list`
+    // appends `AND channels.is_radio = 0` for every filter that is not `radio_only` --
+    // so the sidebar counted radio stations and the grid next to it did not, and a group
+    // made only of radio would have shown a count and opened onto nothing. Exactly the
+    // disagreement this function's own doc comment above says it exists to prevent.
+    //
+    // Hardcoded rather than taken as an argument because there is one caller,
+    // `channels_groups`, and the `channels_list` it is the sidebar for always passes
+    // `radio_only: false`: no screen in the app lists radio on its own today. If one is
+    // added, both queries have to learn it together -- which is the whole lesson of this
+    // finding, and why the clause is spelled out here rather than left implied (R-88).
     let mut stmt = conn.prepare(&format!(
         "SELECT COALESCE(custom_group, group_title) AS g, count(*)
-         FROM channels WHERE hidden = 0 AND g IS NOT NULL{visible}
+         FROM channels WHERE hidden = 0 AND is_radio = 0 AND g IS NOT NULL{visible}
          GROUP BY g ORDER BY g"
     ))?;
     let rows = stmt
@@ -775,6 +788,59 @@ mod tests {
             "the sidebar promised {counted:?} and the list has {} in it",
             listed.len()
         );
+    }
+
+    /// The sidebar's counts do not include channels the grid beside it hides (R-88).
+    #[test]
+    fn a_group_does_not_count_radio_the_list_will_not_show() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+
+        // One group holding a TV channel and a radio station, and one holding only radio.
+        let mut tv = entry("BBC One", Some(101));
+        tv.group = Some("Mixed".into());
+        let mut radio = entry("Radio 1", Some(700));
+        radio.is_radio = true;
+        radio.group = Some("Mixed".into());
+        let mut radio_only = entry("Radio 2", Some(701));
+        radio_only.is_radio = true;
+        radio_only.group = Some("Stations".into());
+        upsert_batch(
+            &mut conn,
+            p,
+            &[
+                ("t".into(), &tv),
+                ("r1".into(), &radio),
+                ("r2".into(), &radio_only),
+            ],
+            0,
+        )
+        .unwrap();
+
+        let counted = groups(&conn, &Default::default()).unwrap();
+        assert_eq!(
+            counted,
+            vec![("Mixed".to_string(), 1)],
+            "a group of only radio must not be offered at all"
+        );
+
+        // And the promise holds against the list it is the sidebar for, which is the
+        // property rather than the number.
+        for (name, count) in counted {
+            let listed = list(
+                &conn,
+                &ChannelFilter {
+                    group: Some(name.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                listed.len() as i64, count,
+                "{name} promised {count} and lists {}",
+                listed.len()
+            );
+        }
     }
 
     #[test]

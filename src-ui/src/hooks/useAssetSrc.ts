@@ -23,6 +23,35 @@ import { invoke, isNativeHost, onArtworkProgress } from '@/ipc';
 const answered = new Map<string, string | null>();
 
 /**
+ * How many answers either table keeps.
+ *
+ * Both of these were unbounded and module-level, and `watchWarms` deletes only the
+ * *absences* -- so every URL that resolved to a local copy was held until the window
+ * closed, as was every refusal. One entry per distinct artwork URL, up to two per title
+ * with posters and backdrops, so a long session browsing a six-figure library
+ * accumulated tens of thousands of string pairs. A few megabytes rather than a leak that
+ * matters today, which is why this is a ceiling rather than a rewrite: what it removes is
+ * a `Map` with no limit, which is fine until the library is ten times bigger (R-92).
+ *
+ * Evicted oldest-first, which is insertion order rather than least-recently-used: a
+ * `Map` gives that for nothing and an LRU would mean touching the table on every read.
+ * The cost of evicting something still on screen is one extra command to re-ask for it,
+ * and the answer is the same, so the cache heals itself. 4,096 is about two thousand
+ * titles' worth of artwork -- far more than any screenful, and small enough to bound.
+ */
+const CEILING = 4096;
+
+/** Remember an answer, forgetting the oldest once the table is full. */
+function remember(url: string, local: string | null) {
+  answered.set(url, local);
+  while (answered.size > CEILING) {
+    const oldest = answered.keys().next().value;
+    if (oldest === undefined) break;
+    answered.delete(oldest);
+  }
+}
+
+/**
  * Images whose local copy would not decode, and which must never be offered again.
  *
  * Without this, `fallBackToRemote` and the warm below argue: the fallback forgets the
@@ -43,7 +72,7 @@ function flush() {
   waiting.clear();
 
   const settle = (url: string, local: string | null) => {
-    answered.set(url, local);
+    remember(url, local);
     askers.get(url)?.forEach((notify) => notify(local));
   };
 
@@ -158,7 +187,12 @@ export function fallBackToRemote(
   const img = event.currentTarget;
   if (remote && img.src !== remote) {
     refused.add(remote);
-    answered.set(remote, null);
+    while (refused.size > CEILING) {
+      const oldest = refused.values().next().value;
+      if (oldest === undefined) break;
+      refused.delete(oldest);
+    }
+    remember(remote, null);
     img.src = remote;
   }
 }

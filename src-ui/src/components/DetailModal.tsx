@@ -672,6 +672,22 @@ function useSeriesProgress(seriesId: number) {
   const [version, setVersion] = useState(0);
 
   const load = useCallback(async () => {
+    // A film has no episodes, and series 0 does not exist.
+    //
+    // `DetailModal` calls this hook unconditionally with a sentinel id, because hooks
+    // cannot be called conditionally -- so the guard belongs here rather than at the
+    // call site. Without it every film opened cost one round trip asking which episodes
+    // of series `0` had been watched, which on a library browsed with the keyboard is a
+    // steady trickle of commands with an empty answer. The same shape `useCommand`'s
+    // `enabled` argument exists for, and that `useEpisodes` below already uses (R-107).
+    //
+    // The version still moves, so anything derived from this is told the answer is in
+    // and reaches its own early return for a non-series exactly as before.
+    if (seriesId <= 0) {
+      setSeen(new Map());
+      setVersion((v) => v + 1);
+      return;
+    }
     try {
       const rows = await invoke('progress.forSeries', { profileId, seriesId });
       setSeen(new Map(rows.map((r) => [r.episodeId, r])));
