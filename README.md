@@ -12,14 +12,14 @@ This repository holds two things:
 
 | | |
 |---|---|
-| Core domain logic (parsers, matching, rules, skip markers, parental, DVR, metadata matching, timeshift window) | ✅ built, 288 tests |
-| Persistence (SQLite, migrations, FTS5 search, profiles, recordings, credits) | ✅ built, 224 tests |
-| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 213 tests |
-| Playback state machine + error taxonomy | ✅ built, 21 tests |
+| Core domain logic (parsers, matching, rules, skip markers, parental, DVR, metadata matching, timeshift window) | ✅ built, 420 tests |
+| Persistence (SQLite, migrations, FTS5 search, profiles, recordings, credits) | ✅ built, 317 tests |
+| Ingestion (HTTP, Xtream, M3U, XMLTV, credentials, refresh, recorder, TMDB, artwork cache) | ✅ built, 264 tests |
+| Playback state machine + error taxonomy | ✅ built, 41 tests |
 | libmpv / Win32 compositing backend | ✅ **run on Windows 11**: 1920x1080 H.264 at 60fps with `d3d11va-copy`, composited behind the transparent WebView2, surface following the window on resize. `AUDIT/test-report.md` §11 |
-| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 114 E2E journeys |
+| React UI (home, guide, live, browse, player, search, settings, recordings, playlist editor, first-run wizard) | ✅ built, 261 E2E journeys |
 | Skip Intro/Recap/Credits + Next Episode + Up Next autoplay | ✅ built and tested |
-| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, and on Windows, 116 tests |
+| Tauri host + DVR scheduler | ✅ compiles and tests on Linux with GTK dev packages, and on Windows, 221 tests |
 | Profiles, PINs, parental controls | ✅ built and tested |
 | DVR: scheduling, series rules, conflicts, reminders, recordings library | ✅ built and tested; never pointed at a real provider |
 | TMDB enrichment: matching, artwork, cast and crew | ✅ built and tested, and run against the real API with a real key: 39 of 80 titles matched from a live panel's catalogue, and the posters they returned were downloaded and displayed |
@@ -34,6 +34,15 @@ This repository holds two things:
 | Windows installer + portable build from CI | ✅ built on every merge to main, and the app has now been run — the installer, upgrade and uninstall are still unverified (`AUDIT/release-checklist.md` item 5) |
 | Versioned releases: patch for a fix, minor for a feature (§23) | ✅ derived from the commit subjects at build time; never seen a real release yet |
 | Update check and install from GitHub releases (§23) | ✅ built and tested; downloads the installer and verifies it against the SHA-256 GitHub publishes, then runs it. Not signature-verified — §18 wants a signing key that does not exist yet (D17) |
+
+<sub>**How the counts above were taken**, because every one of them used to be low and the
+two documents disagreed with each other as well as with the code — 114 journeys claimed
+here against 154 in `docs/ROADMAP.md`, for one suite (R-160). The Rust figures are
+`cargo test -p <crate> -- --list`, counting what the runner enumerates: 420 + 317 + 264 +
+41 + 221 + 16 (`aurora-contract`) = 1,279. A `cargo test --workspace` run executes 1,219 of
+them, the difference being `#[ignore]`d and platform-gated tests, so the enumerated number
+is an upper bound on any single run. The journeys are `playwright test --list`: 261 in 52
+files, each run in both the `default` and `reduced-motion` projects, for 518 runs.</sub>
 
 **Read `docs/ROADMAP.md` before trusting any of this.** It separates what is verified
 from what merely compiles. The Phase 0 compositing spike — video behind a transparent

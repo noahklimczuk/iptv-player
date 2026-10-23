@@ -217,7 +217,22 @@ fn provider_failure(request: &str, detail: &str) -> NetFailure {
             cause: "That usually means the credentials were rejected, or the panel is \
                     down for maintenance."
                 .into(),
-            actions: vec![ErrorAction::Retry, ErrorAction::OpenSettings],
+            // No `Retry`, because `retryable: false` is the right answer here and the
+            // two were disagreeing. `actions` and `retryable` are set independently and
+            // nothing makes them agree, so this offered a button meaning "try again"
+            // beside a flag meaning "trying again will not help" -- the same shape as
+            // R-13, where the fix was to narrow the actions rather than loosen the flag
+            // (R-65).
+            //
+            // Narrowed the same way, and for R-13's own reason: the code here is
+            // `Unauthorized`, and refused credentials are refused identically on the
+            // next attempt. The honest action is the one that can change the outcome,
+            // which is opening Settings. A panel that was merely down for maintenance --
+            // the other reading of an HTML page, and the one `cause` names -- is
+            // refreshed from that same screen.
+            //
+            // The sibling below is the pattern: `Retry` with `retryable: true`.
+            actions: vec![ErrorAction::OpenSettings],
             retryable: false,
         };
     }
@@ -248,6 +263,39 @@ fn urlencode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// `actions` and `retryable` are one answer, not two (R-65).
+    ///
+    /// They are set independently and nothing makes them agree, so the HTML branch
+    /// offered a button meaning "try again" beside a flag meaning "trying again will not
+    /// help". Asserted as the invariant rather than as the one case, because the next
+    /// branch added here will have the same two fields to keep in step.
+    #[test]
+    fn a_retry_button_is_only_offered_where_retrying_could_help() {
+        use aurora_core::neterr::ErrorAction;
+
+        for detail in [
+            "<html><body>Access denied</body></html>",
+            "expected value at line 1 column 1",
+            "trailing characters at line 2 column 9",
+            "",
+        ] {
+            let f = super::provider_failure("get_live_streams", detail);
+            assert_eq!(
+                f.actions.contains(&ErrorAction::Retry),
+                f.retryable,
+                "{detail:?} offers {:?} with retryable = {}",
+                f.actions,
+                f.retryable
+            );
+        }
+
+        // And the pair the finding is about. An HTML page is the credentials being
+        // refused, so the action that can change the outcome is the one that is offered.
+        let html = super::provider_failure("get_live_streams", "<html>Login</html>");
+        assert!(!html.retryable);
+        assert_eq!(html.actions, vec![ErrorAction::OpenSettings]);
+    }
+
     #[test]
     fn an_empty_categories_response_does_not_stop_the_import() {
         // A real panel did this: the account check answered, and one of the category

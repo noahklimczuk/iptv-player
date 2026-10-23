@@ -15,10 +15,18 @@
  *
  * **The z-index is the whole design.** These sit *behind* the page's content, so the
  * page is drawn over them normally and only the hole is see-through. Putting them in
- * front would cover the page — which is a real mistake and not a hypothetical one: it is
- * what `PipTile` does, and it is why the small picture has never shown anything. That is
- * a separate problem from this one, because a picture-in-picture tile floats *over* the
- * content it is meant to let you read, so it cannot be solved by painting behind it.
+ * front would cover the page — which is a real mistake and not a hypothetical one:
+ * `PipTile` used to do exactly that, with four opaque bands at `z-index: 58`, and it is
+ * why the small picture showed nothing for as long as it lasted. That is a different
+ * problem from this one, because a picture-in-picture tile floats *over* the content it
+ * is meant to let you read, so it cannot be solved by painting behind it — it is solved
+ * by clipping the shell instead, which is what `holeClipPath` below is for and what
+ * `App.tsx` applies. `PipTile`'s own header records that it no longer tries.
+ *
+ * This paragraph described that as current for as long as it was false, which is the
+ * cost of comments carrying the design record: they have to be deleted when the design
+ * they describe is (R-150).
+ *
  * Here the rectangle is a region of the layout that nothing else is in, which is exactly
  * the case four bands behind the content do solve.
  */
