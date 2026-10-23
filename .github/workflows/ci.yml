@@ -14,6 +14,22 @@ name: CI
 # compiles, not that it links, and linking against libmpv is where the awkward parts
 # live. A break there now surfaces on main instead of on the PR. A red merge leaves the
 # previous release in place, so the cost is a stale installer rather than a broken one.
+#
+# **The test jobs run on `main` as well, not only on a pull request** (R-156). Two things
+# the PR-only gate could not cover:
+#
+#   * A commit that reaches `main` without a pull request. Only the installer job ran on
+#     `push`, and it runs no `cargo test`, no `tsc`, no `vitest` and no Playwright — so a
+#     direct commit was published as a release having had nothing but a successful link.
+#     This repository's history has web-UI commits in it, so that is not hypothetical.
+#   * Two pull requests that are each green and are not green together. That happened
+#     here: one branch added a 24-hour switch reading `ui.use24h`, another converted the
+#     same component to a named list of store fields, the hunks did not overlap, git
+#     merged them without a conflict, and `main` stopped type-checking. Neither PR could
+#     have caught it, and nothing on `main` was looking.
+#
+# The cost is the three-and-a-half-minute job running again on each merge, against a tree
+# nothing has checked in that exact combination before.
 on:
   push:
     branches: [main]
@@ -29,9 +45,6 @@ jobs:
   core:
     name: Core tests + UI
     runs-on: ubuntu-latest
-    # PR-only. This is the bulk of "does it compile and does it work"; a merge commit's
-    # contents have already been through it on the PR head.
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
@@ -151,10 +164,11 @@ jobs:
   windows:
     name: Windows checks
     runs-on: windows-latest
-    # PR-only, and the reason a PR needs a Windows runner at all: the mpv/Win32 backend
-    # is behind `#[cfg(windows)]`, so the Linux job above does not compile a line of it.
-    # Without this, a syntax or type error in that code would reach main unchallenged.
-    if: github.event_name == 'pull_request'
+    # The reason a PR needs a Windows runner at all: the mpv/Win32 backend is behind
+    # `#[cfg(windows)]`, so the Linux job above does not compile a line of it. Without
+    # this, a syntax or type error in that code would reach main unchallenged.
+    #
+    # Runs on `main` too, for the two reasons in the header (R-156).
     steps:
       - uses: actions/checkout@v4
 
