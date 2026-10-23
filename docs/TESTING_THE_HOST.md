@@ -237,21 +237,25 @@ inside an async runtime — and it exists only in a debug build. **So a release 
 not panic**: the same scenario against `target/release` imports the fixture and reaches
 "Your library is ready". The guard is compiled out; the misuse it was detecting is not.
 
-What is left in release is a Tauri async worker parked for the whole length of the
-request. Every command in this app is `#[tauri::command(async)]`, which runs it on the
-shared Tokio runtime, and four of them do blocking HTTP on that thread:
+**This has since been closed, and the paragraph is kept because the shape of it is worth
+knowing.** What used to be left in release was a Tauri async worker parked for the whole
+length of the request. Every command in this app is `#[tauri::command(async)]`, which runs
+it on the shared Tokio runtime, and four of them do blocking HTTP:
 
-| Command | How long it parks a worker |
+| Command | How long it parked a worker |
 | --- | --- |
 | `providers_validate` | one fetch, up to 12s connect + 120s read, ×3 attempts |
 | `providers_refresh` | a whole sync — 23.7s measured on a real subscription |
 | `updates_download` | the length of a release download |
 | `artwork_prefetch` | one TMDB fetch per poster |
 
-The runtime has one worker per core, so this is contention rather than a freeze — the
-WebView is on the main thread and keeps drawing. But it is the wrong pool, it is
-`artwork_prefetch` away from exhausting itself, and in development it is simply a
-crash.
+All four are still `#[tauri::command(async)]` and the client is still
+`reqwest::blocking`, so the description above still reads as current — which is why this
+note exists. The worker is no longer parked: `aurora-ingest/src/http.rs` wraps every
+blocking call in `block_in_place` when it finds itself on a multi-threaded runtime, which
+hands the work to a blocking thread and lets the worker go. The runtime has one worker per
+core, so what remained would have been contention rather than a freeze, and what remains
+now is neither (R-163).
 
 ### The harness turns that detector on
 
