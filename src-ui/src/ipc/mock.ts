@@ -1692,10 +1692,15 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     };
   },
 
-  'library.recordSkip': ({ episodeId, kind, startSecs, endSecs }) => {
+  'library.recordSkip': ({ episodeId, kind, startSecs, endSecs, durationSecs }) => {
     const ep = fx.episodes.find((e) => e.id === episodeId);
     if (!ep) return;
     if (endSecs - startSecs < 5 || endSecs - startSecs > 300) return;
+    // The host checks the region sits where its kind belongs, not only that it is the
+    // right length — `markers::position_fits_kind`.
+    const d = durationSecs > 0 ? durationSecs : 0;
+    const front = Math.min(Math.max(d / 3, 600), 900);
+    if (kind === 'credits' ? startSecs < d * 0.75 : startSecs > front) return;
     const key = `${ep.seriesId}:${kind}`;
     const list = userSkips.get(key) ?? [];
     userSkips.set(key, [...list, [startSecs, endSecs]]);

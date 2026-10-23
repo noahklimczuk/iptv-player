@@ -1153,6 +1153,13 @@ export interface Commands {
     kind: MarkerKind;
     startSecs: number;
     endSecs: number;
+    /**
+     * So the host can check the region sits where its kind belongs, not merely that it
+     * is the right length — the same gate a chapter goes through. 0 when the stream has
+     * not said, which lets an intro have the first ten minutes and a credits marker
+     * through unplaced.
+     */
+    durationSecs: number;
   }) => void;
   /**
    * A forward seek the viewer made by hand, offered as intro evidence.

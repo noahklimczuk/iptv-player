@@ -209,10 +209,11 @@ export function useEpisodeAids(
           kind: marker.kind,
           startSecs: marker.startSecs,
           endSecs: marker.endSecs,
+          durationSecs: duration,
         }).catch(report('Could not remember that skip'));
       }
     },
-    [episodeId],
+    [episodeId, duration],
   );
 
   /**
