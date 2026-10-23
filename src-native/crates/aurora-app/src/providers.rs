@@ -936,6 +936,15 @@ pub fn refresh_provider(
         options.import_live = aurora_db::repo::settings::get_or(&db, IMPORT_LIVE_KEY, true)?;
         options.import_vod = aurora_db::repo::settings::get_or(&db, IMPORT_VOD_KEY, true)?;
         options.import_series = aurora_db::repo::settings::get_or(&db, IMPORT_SERIES_KEY, true)?;
+        // XMLTV allows one `<title>` per language and ranks them not at all, so picking
+        // between them needs a preference from outside the document. The only statement
+        // this app has about language is the English-only filter, so that is the one
+        // honoured: with it on, an `en` title beats a `pt` one. With it off nothing is
+        // reordered and the document's first title stands, which is what every guide
+        // with one title per programme means (R-30).
+        if aurora_db::repo::filtering::LibraryFilter::load(&db)?.english_only {
+            options.epg_title_langs = vec!["en".into()];
+        }
     }
     if !(options.import_live && options.import_vod && options.import_series) {
         tracing::info!(

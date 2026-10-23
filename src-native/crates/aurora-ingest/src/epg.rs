@@ -7,7 +7,7 @@ use std::io::BufReader;
 
 use aurora_core::model::{EpgChannel, Programme};
 use aurora_core::neterr::NetFailure;
-use aurora_core::xmltv::{self, XmltvSink, XmltvStats};
+use aurora_core::xmltv::{self, XmltvOptions, XmltvSink, XmltvStats};
 
 use crate::http::HttpClient;
 
@@ -85,14 +85,26 @@ where
     }
 }
 
-/// Fetch an XMLTV document and stream it into `sink`.
+/// Fetch an XMLTV document and stream it into `sink`, keeping the first of several
+/// titles for a programme.
 pub fn fetch_into<S: XmltvSink>(
     http: &HttpClient,
     url: &str,
     sink: &mut S,
 ) -> Result<XmltvStats, NetFailure> {
+    fetch_into_with(http, url, sink, &XmltvOptions::default())
+}
+
+/// Fetch an XMLTV document and stream it into `sink`, resolving multi-language titles
+/// against `options`.
+pub fn fetch_into_with<S: XmltvSink>(
+    http: &HttpClient,
+    url: &str,
+    sink: &mut S,
+    options: &XmltvOptions,
+) -> Result<XmltvStats, NetFailure> {
     let reader = http.fetch_reader(url)?;
-    xmltv::parse(BufReader::new(reader), sink).map_err(|e| {
+    xmltv::parse_with(BufReader::new(reader), sink, options).map_err(|e| {
         let mut failure = NetFailure::classify("malformed");
         failure.message = "Your EPG source is not valid XMLTV".into();
         failure.cause = e.to_string();
