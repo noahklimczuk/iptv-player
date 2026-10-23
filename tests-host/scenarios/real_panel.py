@@ -5,9 +5,13 @@ Everything else in this suite runs against a five-line fixture. This one runs ag
 the panel a person actually pays for, which is the only place several of this project's
 open questions live:
 
-  * 22,305 live channels, 122,418 films and 28,715 series is 78 MB of JSON. Nothing
-    smaller has ever exercised the deserializers, the batch inserts or the memory the
-    import holds while it works.
+  * A catalogue of tens of thousands of entries is tens of MB of JSON. Nothing smaller
+    has ever exercised the deserializers, the batch inserts or the memory the import
+    holds while it works. The size is whatever the line is serving on the day: it was
+    22,305 channels, 122,418 films and 28,715 series when this file was written, and
+    6,698 / 24,724 / 8,081 on 2026-10-23. Both are far past anything a fixture reaches,
+    which is the point — so nothing here asserts a count, and any figure quoted in a
+    comment is a note of one run rather than a property of the subscription.
   * "Live TV says No channels on a real panel" has been open since the first bug
     report and has never been reproducible from a fixture.
   * A real panel answers in shapes a fixture does not: numbers as strings, nulls where

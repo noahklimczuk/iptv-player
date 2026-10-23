@@ -116,18 +116,50 @@ export default function App() {
    * actions are stable zustand functions, so selecting them subscribes to nothing that
    * ever changes.
    */
-  const ui = {
-    player: useUi((s) => s.player),
-    banner: useUi((s) => s.banner),
-    detail: useUi((s) => s.detail),
-    paletteOpen: useUi((s) => s.paletteOpen),
-    paletteQuery: useUi((s) => s.paletteQuery),
-    digits: useUi((s) => s.digits),
-    openDetail: useUi((s) => s.openDetail),
-    setPalette: useUi((s) => s.setPalette),
-    showBanner: useUi((s) => s.showBanner),
-    pushDigit: useUi((s) => s.pushDigit),
-  };
+  const player = useUi((s) => s.player);
+  const banner = useUi((s) => s.banner);
+  const detail = useUi((s) => s.detail);
+  const paletteOpen = useUi((s) => s.paletteOpen);
+  const paletteQuery = useUi((s) => s.paletteQuery);
+  const digits = useUi((s) => s.digits);
+  const openDetail = useUi((s) => s.openDetail);
+  const setPalette = useUi((s) => s.setPalette);
+  const showBanner = useUi((s) => s.showBanner);
+  const pushDigit = useUi((s) => s.pushDigit);
+  /**
+   * The same ten fields, frozen into one object.
+   *
+   * Written as a bare literal it was a *new object every render*, so every
+   * `useCallback` listing it as a dependency was rebuilt every render too — which is
+   * most of what narrowing the subscription above was meant to stop. The identity now
+   * changes only when one of the ten does.
+   */
+  const ui = useMemo(
+    () => ({
+      player,
+      banner,
+      detail,
+      paletteOpen,
+      paletteQuery,
+      digits,
+      openDetail,
+      setPalette,
+      showBanner,
+      pushDigit,
+    }),
+    [
+      player,
+      banner,
+      detail,
+      paletteOpen,
+      paletteQuery,
+      digits,
+      openDetail,
+      setPalette,
+      showBanner,
+      pushDigit,
+    ],
+  );
   const [playerOpen, setPlayerOpen] = useState(false);
   // Shown until a provider exists. `?setup` forces it for demos and tests.
   const [setupDone, setSetupDone] = useState(
@@ -212,7 +244,12 @@ export default function App() {
   }, []);
 
   const profile = useProfile();
-  useEffect(() => { void profile.load(); }, [profile.load]);
+  // `load` on its own, not `profile.load`: the rule cannot tell that only the function
+  // is read, so it asked for the whole `profile` in the dependencies — and that would
+  // re-run the fetch every time anything about the profile changed, including what the
+  // fetch itself writes.
+  const { load: loadProfiles } = profile;
+  useEffect(() => { void loadProfiles(); }, [loadProfiles]);
 
   // Where the viewer got to. Nothing in the app wrote this before, so Continue
   // Watching had nothing to continue from — the mock saved progress, the host never

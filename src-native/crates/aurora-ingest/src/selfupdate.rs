@@ -127,9 +127,18 @@ pub fn stage_zip(archive: &Path, stage_dir: &Path) -> Result<Staged, NetFailure>
             // Keep the executable bit the archive recorded, so a staged copy on a
             // non-Windows host is still runnable. Windows has no equivalent and needs
             // none.
+            //
+            // Masked to the ordinary permission bits, which is all "the executable bit"
+            // ever meant. The mode in a zip entry is whatever the archive says, and the
+            // set-user-id, set-group-id and sticky bits live in the same field: applying
+            // it whole would let an archive stage a setuid root binary, which is the
+            // hazard RUSTSEC-2026-0367 describes in `ZipArchive::extract` and which this
+            // function would otherwise have reproduced by hand. The digest check says
+            // the file is the one GitHub published, not that its recorded modes are sane.
             use std::os::unix::fs::PermissionsExt;
             if let Some(mode) = entry.unix_mode() {
-                let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode));
+                let safe = mode & 0o777;
+                let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(safe));
             }
         }
 

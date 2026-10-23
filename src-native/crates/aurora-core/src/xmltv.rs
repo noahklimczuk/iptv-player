@@ -56,6 +56,9 @@ struct ProgBuilder {
     start: Option<i64>,
     stop: Option<i64>,
     title: String,
+    /// `title_rank` of the title currently held. Only meaningful once `title` is set,
+    /// and written every time `title` is.
+    title_rank: usize,
     sub_title: Option<String>,
     description: Option<String>,
     categories: Vec<String>,
@@ -105,8 +108,49 @@ fn resolve_entity(r: &quick_xml::events::BytesRef<'_>) -> Option<String> {
     }
 }
 
+/// What the caller knows that the document does not.
+#[derive(Debug, Clone, Default)]
+pub struct XmltvOptions {
+    /// Language codes for `<title lang=...>`, best first, matched as a prefix so `en`
+    /// accepts `en-GB`. Empty keeps the first title the document offers.
+    pub title_langs: Vec<String>,
+}
+
+/// How well a `<title>`'s `lang` matches the preference. Lower is better.
+///
+/// XMLTV allows one `<title>` per language and defines no precedence between them, so
+/// there is no answer here that comes from the document alone — which is why this takes
+/// the preference rather than guessing one. A listed language wins, in the order it is
+/// listed. An untagged title comes next, because a feed that labels nothing is the
+/// ordinary case and its single title is the title. A title tagged as some other
+/// language comes last, so `lang="es"` cannot displace an untagged one.
+fn title_rank(lang: Option<&str>, preferred: &[String]) -> usize {
+    match lang {
+        Some(l) => {
+            let l = l.to_ascii_lowercase();
+            preferred
+                .iter()
+                .position(|p| l.starts_with(&p.to_ascii_lowercase()))
+                .unwrap_or(usize::MAX)
+        }
+        None => usize::MAX - 1,
+    }
+}
+
 /// Parse an XMLTV document, pushing items into `sink` as they complete.
+///
+/// Keeps the first `<title>`, which is what a document with one title per programme
+/// means and what every caller wanted before there was a preference to express.
 pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvStats> {
+    parse_with(reader, sink, &XmltvOptions::default())
+}
+
+/// Parse an XMLTV document, resolving multi-language titles against `options`.
+pub fn parse_with<R: BufRead, S: XmltvSink>(
+    reader: R,
+    sink: &mut S,
+    options: &XmltvOptions,
+) -> Result<XmltvStats> {
     let mut xml = Reader::from_reader(reader);
     // `trim_text` is deliberately off, where it used to be on. quick-xml 0.42 ends a
     // text run at every entity and reports the entity separately, so `Tom &amp; Jerry`
@@ -127,6 +171,9 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
     // `<rating>` and `<star-rating>` both wrap a `<value>`; remember which we are inside.
     let mut rating_scope: Option<&'static str> = None;
     let mut episode_system = String::new();
+    // The `lang` of the `<title>` being read: on the opening tag, wanted at the closing
+    // one where the text has finished arriving.
+    let mut title_lang: Option<String> = None;
 
     loop {
         match xml.read_event_into(&mut buf) {
@@ -168,6 +215,18 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                             }
                         }
                         in_prog = Some(p);
+                    }
+                    "title" => {
+                        title_lang = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| a.key.as_ref() == "lang")
+                            .and_then(|a| {
+                                a.normalized_value(XmlVersion::Implicit1_0)
+                                    .ok()
+                                    .map(|v| v.into_owned())
+                            })
+                            .filter(|l| !l.is_empty());
                     }
                     "credits" => in_credits = true,
                     "rating" => rating_scope = Some("rating"),
@@ -306,9 +365,18 @@ pub fn parse<R: BufRead, S: XmltvSink>(reader: R, sink: &mut S) -> Result<XmltvS
                         }
                     }
                     "title" => {
+                        let lang = title_lang.take();
                         if let Some(p) = in_prog.as_mut() {
-                            if p.title.is_empty() {
+                            let rank = title_rank(lang.as_deref(), &options.title_langs);
+                            // With no preference the first title wins, exactly as it
+                            // always has: ranking only decides between titles when the
+                            // viewer has said which language they want.
+                            let better = !options.title_langs.is_empty() && rank < p.title_rank;
+                            // An empty `<title/>` never displaces a real one, however
+                            // well its `lang` scores.
+                            if (p.title.is_empty() || better) && !value.is_empty() {
                                 p.title = value;
+                                p.title_rank = rank;
                             }
                         }
                     }
@@ -576,6 +644,81 @@ mod tests {
     }
 
     /// Wrap a title in just enough XMLTV to be parsed.
+    /// A programme carrying several titles, each with the `lang` given (or none).
+    fn multi_title(titles: &[(Option<&str>, &str)], preferred: &[&str]) -> String {
+        let body: String = titles
+            .iter()
+            .map(|(lang, text)| match lang {
+                Some(l) => format!("<title lang=\"{l}\">{text}</title>"),
+                None => format!("<title>{text}</title>"),
+            })
+            .collect();
+        let xml = format!(
+            "<tv><programme channel=\"a\" start=\"20240115120000 +0000\">{body}</programme></tv>"
+        );
+        let mut sink = CollectSink::default();
+        let options = XmltvOptions {
+            title_langs: preferred.iter().map(|s| (*s).to_string()).collect(),
+        };
+        parse_with(std::io::Cursor::new(xml.into_bytes()), &mut sink, &options).unwrap();
+        sink.programmes
+            .first()
+            .map(|p| p.title.clone())
+            .unwrap_or_default()
+    }
+
+    /// XMLTV allows one `<title>` per language and gives no precedence, so the parser
+    /// cannot choose without being told. It used to keep the first and never read `lang`,
+    /// which is right for the common one-title guide and arbitrary for any other (R-30).
+    ///
+    /// The default still keeps the first, so a guide that was imported one way yesterday
+    /// imports the same way today. Only a stated preference reorders anything.
+    #[test]
+    fn with_no_preference_the_documents_first_title_is_kept() {
+        let both = [(Some("en"), "The Simpsons"), (Some("es"), "Los Simpson")];
+        assert_eq!(multi_title(&both, &[]), "The Simpsons");
+        // The same document the other way round: still the first, not the English one,
+        // because nothing has asked for English.
+        let reversed = [(Some("es"), "Los Simpson"), (Some("en"), "The Simpsons")];
+        assert_eq!(multi_title(&reversed, &[]), "Los Simpson");
+    }
+
+    #[test]
+    fn a_preference_finds_its_language_wherever_it_sits() {
+        let reversed = [(Some("es"), "Los Simpson"), (Some("en"), "The Simpsons")];
+        assert_eq!(multi_title(&reversed, &["en"]), "The Simpsons");
+        // And honours which preference was listed first, not which title came first.
+        assert_eq!(multi_title(&reversed, &["es", "en"]), "Los Simpson");
+    }
+
+    #[test]
+    fn a_region_tag_matches_the_language_it_belongs_to() {
+        let regional = [(Some("pt"), "Os Simpsons"), (Some("en-GB"), "The Simpsons")];
+        assert_eq!(multi_title(&regional, &["en"]), "The Simpsons");
+    }
+
+    /// An untagged title outranks a language nobody asked for. A feed that labels one
+    /// title and leaves another bare is saying the bare one is the default.
+    #[test]
+    fn an_untagged_title_beats_an_unwanted_language() {
+        let mixed = [(Some("pt"), "Os Simpsons"), (None, "The Simpsons")];
+        assert_eq!(multi_title(&mixed, &["en"]), "The Simpsons");
+    }
+
+    #[test]
+    fn the_first_of_two_equally_good_titles_wins() {
+        let twice = [(Some("en"), "The Simpsons"), (Some("en"), "Simpsons, The")];
+        assert_eq!(multi_title(&twice, &["en"]), "The Simpsons");
+    }
+
+    /// The preference must not be able to empty a title that was there. A `<title/>` in
+    /// the wanted language ranks best and carries nothing.
+    #[test]
+    fn an_empty_title_never_displaces_a_real_one() {
+        let hollow = [(Some("pt"), "Os Simpsons"), (Some("en"), "")];
+        assert_eq!(multi_title(&hollow, &["en"]), "Os Simpsons");
+    }
+
     fn title_of(title: &str) -> String {
         let mut sink = CollectSink::default();
         let xml = format!(

@@ -113,6 +113,10 @@ pub struct SyncOptions {
     pub import_live: bool,
     pub import_vod: bool,
     pub import_series: bool,
+    /// Which `<title lang=...>` to keep when a guide carries a programme's title in
+    /// several languages, best first. Empty keeps the first one the document offers,
+    /// which is what a guide with one title per programme means anyway.
+    pub epg_title_langs: Vec<String>,
     pub now_unix: i64,
 }
 
@@ -126,6 +130,7 @@ impl SyncOptions {
             import_live: true,
             import_vod: true,
             import_series: true,
+            epg_title_langs: Vec::new(),
             now_unix,
         }
     }
@@ -299,7 +304,7 @@ pub fn fetch(
             done: 0,
             total: 0,
         });
-        match fetch_epg(http, url) {
+        match fetch_epg(http, url, &options.epg_title_langs) {
             Ok(epg) => out.epg.push(epg),
             // A missing guide must not fail the whole refresh — the library is still
             // usable without it.
@@ -819,7 +824,11 @@ fn year_from(release_date: Option<&str>) -> Option<i32> {
 }
 
 /// Download and parse one guide source. Writes nothing.
-fn fetch_epg(http: &HttpClient, url: &str) -> Result<FetchedEpg, NetFailure> {
+fn fetch_epg(
+    http: &HttpClient,
+    url: &str,
+    title_langs: &[String],
+) -> Result<FetchedEpg, NetFailure> {
     // Two passes would mean two downloads, so channels are collected in memory -- a few
     // thousand small rows -- while programmes go to a file as they are parsed.
     //
@@ -846,7 +855,14 @@ fn fetch_epg(http: &HttpClient, url: &str) -> Result<FetchedEpg, NetFailure> {
         BATCH_SIZE,
     );
 
-    let stats = epg::fetch_into(http, url, &mut sink)?;
+    let stats = epg::fetch_into_with(
+        http,
+        url,
+        &mut sink,
+        &aurora_core::xmltv::XmltvOptions {
+            title_langs: title_langs.to_vec(),
+        },
+    )?;
     sink.finish();
     if let Some(e) = sink.error.clone() {
         return Err(NetFailure::classify(&e));

@@ -1,0 +1,35 @@
+# Line endings, declared rather than left to each machine's `core.autocrlf`.
+#
+# Without this file the repository checked out CRLF on Windows and LF on the Linux CI
+# runner. That is invisible until something reads source as text: three tests assert
+# properties of the source they are checking, and one of them compared a whole line, so
+# it passed on every pull request and failed on the machine it was written on, printing
+# expected and received values that looked identical. The tests normalize on read, and
+# this says what the files are so the next one does not have to.
+#
+# `eol=lf` rather than `text=auto` alone: the latter normalizes the repository but still
+# hands Windows a CRLF working tree, which is the half that caused the problem.
+* text=auto eol=lf
+
+# Binary, never touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.gz binary
+*.exe binary
+*.dll binary
+*.lib binary
+*.snap text
+
+# Windows-only scripts that genuinely want CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
