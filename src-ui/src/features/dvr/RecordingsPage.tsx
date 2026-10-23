@@ -180,7 +180,9 @@ function StorageMeter({
         {bytes(usedBytes)}
         {quotaBytes > 0 && <> of {bytes(quotaBytes)}</>}
       </div>
-      {quotaBytes > 0 && <ProgressBar percent={pct} height={4} />}
+      {quotaBytes > 0 && (
+        <ProgressBar percent={pct} height={4} label="Recording storage used" />
+      )}
       <div
         style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', marginTop: 4 }}
         title={folder}
@@ -424,7 +426,9 @@ function ScheduledRow({
               <Icon name="record" size={11} filled /> Recording
             </Badge>
             <div style={{ width: 120 }}>
-              <ProgressBar percent={pct} />
+              {/* The only thing on the row that says how far through it is: the text
+                  beside it is a byte count, not a proportion. */}
+              <ProgressBar percent={pct} label={`Recording ${rec.title}`} />
             </div>
             <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
               {bytes(rec.liveBytes ?? rec.bytes)}

@@ -18,6 +18,19 @@ const SHOTS = 'screenshots';
 /** Must match `PAGE` in `BrowsePage.tsx`: the size of one request. */
 const PAGE = 120;
 
+/**
+ * How many rows the page has loaded, which is not how many cards are in the DOM.
+ *
+ * The grid is virtualized (R-75), so only the visible rows are mounted and counting
+ * `catalog-card` answers "how tall is the viewport" rather than "how much has been
+ * fetched" — which is what these assertions are about. `browse-grid` carries the loaded
+ * count for exactly this reason.
+ */
+async function loaded(page: import('@playwright/test').Page): Promise<number> {
+  const value = await page.getByTestId('browse-grid').getAttribute('data-loaded');
+  return Number(value ?? 0);
+}
+
 test('the count is the library, not the page size', async ({ page }) => {
   await page.goto('/#/movies');
   await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
@@ -30,12 +43,19 @@ test('the count is the library, not the page size', async ({ page }) => {
   expect(total, 'the fixture library is larger than one page').toBeGreaterThan(PAGE);
 
   // The first request really is a page of it.
-  expect(await page.getByTestId('catalog-card').count()).toBe(PAGE);
+  expect(await loaded(page)).toBe(PAGE);
+
+  // And only a screenful of that page is in the DOM, which is the point of virtualizing
+  // it: a library of 27,494 films would otherwise be about 550,000 elements by the time
+  // somebody reached the end.
+  const mounted = await page.getByTestId('catalog-card').count();
+  expect(mounted, 'every loaded card is mounted, so nothing is virtualized').toBeLessThan(PAGE);
+  expect(mounted, 'nothing is drawn at all').toBeGreaterThan(0);
 
   // Scrolling brings the rest in, and the count does not move because it was right.
   await page.getByTestId('browse-sentinel').scrollIntoViewIfNeeded();
   await expect(page.getByTestId('browse-sentinel')).toHaveCount(0, { timeout: 10_000 });
-  expect(await page.getByTestId('catalog-card').count()).toBe(total);
+  expect(await loaded(page)).toBe(total);
   expect(Number((await count.innerText()).replace(/[^0-9]/g, ''))).toBe(total);
 
   await page.screenshot({ path: `${SHOTS}/45-browse-paged.png` });
@@ -66,7 +86,7 @@ test('a category narrows the list, and clears again', async ({ page }) => {
   // A filtered list is a different list: pages from the old one must not survive into
   // it, which is the race the generation counter in `usePages` exists for.
   await expect
-    .poll(async () => page.getByTestId('catalog-card').count())
+    .poll(async () => loaded(page))
     .toBeLessThanOrEqual(Math.min(narrowed, PAGE));
 
   await sidebar.getByRole('button', { name: /^All/ }).click();

@@ -1,14 +1,58 @@
 @import './tokens.css';
-@import 'tailwindcss';
 
-@theme {
-  --color-bg: var(--bg);
-  --color-surface: var(--surface);
-  --color-accent: var(--accent);
-  --color-text: var(--text);
-}
+/*
+ * The reset, which used to arrive as Tailwind's Preflight.
+ *
+ * `@import 'tailwindcss'` was pulling in the whole framework to generate nothing: every
+ * `className` in the UI was one of eight hand-authored classes in this file, and there
+ * were no utility classes at all, so the `@theme` bridge exposing four tokens to
+ * `bg-bg` and `text-accent` had no reader. The runtime theming D5 justifies it with is
+ * `tokens.css` and its `[data-theme]` blocks, which is plain CSS and unaffected.
+ *
+ * What the framework *was* still doing is this: Preflight is a reset, and measuring the
+ * computed styles of both builds across six screens says exactly which parts of it the
+ * app had come to depend on. These four rules are those parts and nothing else -- adding
+ * the rest of Preflight back would be reintroducing a reset nobody asked for (R-158).
+ */
 
 * { box-sizing: border-box; }
+
+/*
+ * A border-width with no border-style draws nothing, so this is what makes
+ * `borderWidth: 1` on its own visible. Several inline styles set a width and leave the
+ * style to the reset.
+ */
+*, ::before, ::after { border-width: 0; border-style: solid; }
+
+/*
+ * Media is block-level and middle-aligned.
+ *
+ * Without it a poster is an inline image sitting on the text baseline, which puts a
+ * few pixels of descender space under every card in the grid and under every icon in a
+ * button.
+ */
+img, svg, video, canvas, audio, iframe, embed, object {
+  display: block;
+  vertical-align: middle;
+}
+
+/*
+ * Controls inherit the typeface rather than falling back to the UA's.
+ *
+ * This is the one that would have been noticed immediately: without it every `<button>`
+ * and `<input>` in the app renders in Arial at the UA's own size, which measured 32px
+ * tall against the 37px the layout is built around.
+ */
+button, input, optgroup, select, textarea {
+  font: inherit;
+  color: inherit;
+  background-color: transparent;
+  background-image: none;
+}
+
+button, [type='button'], [type='reset'], [type='submit'] {
+  -webkit-appearance: button;
+}
 
 html, body, #root { height: 100%; margin: 0; }
 

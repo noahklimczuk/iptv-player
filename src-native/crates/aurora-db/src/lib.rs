@@ -26,7 +26,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     // Takes the credentials out of the three URL columns, once. In `open` rather than in
     // a migration because it has to parse a URL, which SQL does badly; it is guarded on
     // its own result, so the second launch does nothing. See `backfill_stream_ids`.
-    let rewritten = backfill_stream_ids(&conn)?;
+    let rewritten = backfill_stream_ids(&conn)? + rekey_credentialled_channels(&conn)?;
     if rewritten > 0 {
         tracing::info!(rows = rewritten, "rewrote stored stream URLs as stream ids");
         // **And then rewrite the file.** Blanking a column does not remove the bytes
@@ -247,6 +247,50 @@ pub fn backfill_stream_ids(conn: &Connection) -> Result<usize> {
     Ok(rewritten)
 }
 
+/// Replace a `provider_key` that is a whole URL with the stream id it can be derived from.
+///
+/// `provider_key` is half of `UNIQUE (provider_id, provider_key)`, and for a live channel
+/// whose address carries no `/live/` marker the importer used to fall through to the whole
+/// URL -- credentials included, because that is where this panel puts them. 6,698 of the
+/// 237,170 entries on the real subscription. Two consequences, and the second is the worse
+/// one: the password was in a column of `library.db`, and channel identity depended on it,
+/// so rotating the password made every one of those channels a new row and orphaned the
+/// favourites, EPG mappings, mosaic layouts and recording rules pointing at the old ones
+/// (R-69).
+///
+/// Run from `open` beside `backfill_stream_ids` rather than as a migration, for the same
+/// reason: it has to parse a URL, which SQL does badly. It is guarded on the shape of the
+/// value, so the second launch finds nothing to do. The row keeps its `id`, which is what
+/// everything else references -- this repairs identity rather than reassigning it.
+pub fn rekey_credentialled_channels(conn: &Connection) -> Result<usize> {
+    let rows: Vec<(i64, String)> = {
+        // Only the ones that are a URL. A clean key is `live101` and matches nothing here.
+        let mut stmt = conn
+            .prepare("SELECT id, provider_key FROM channels WHERE provider_key LIKE '%://%'")?;
+        let found = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        found.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    // `OR IGNORE` because the derived key can already be taken: a provider that serves a
+    // channel in both the marked and the unmarked form has two rows that are the same
+    // channel, and this is the moment that becomes visible. Leaving the loser alone is
+    // the conservative answer -- the row it would have collided with is the one every
+    // refresh from here on finds, and `channels::stale` retires the other in its own
+    // time. Deleting a channel here, on a startup path, to resolve a duplicate nobody
+    // has complained about would be the wrong trade.
+    let mut update = conn.prepare("UPDATE OR IGNORE channels SET provider_key = ?2 WHERE id = ?1")?;
+    let mut rekeyed = 0usize;
+    for (id, key) in rows {
+        let Some(derived) = aurora_core::catchup::live_channel_key(&key) else {
+            continue;
+        };
+        if update.execute(rusqlite::params![id, derived])? > 0 {
+            rekeyed += 1;
+        }
+    }
+    Ok(rekeyed)
+}
+
 /// Whether `ANALYZE` has ever run on this database.
 fn has_statistics(conn: &Connection) -> Result<bool> {
     let n: i64 = conn.query_row(
@@ -431,6 +475,81 @@ mod tests {
             .query_row("SELECT count(*) FROM providers", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "an intact library must not be replaced");
+    }
+
+    /// A key that is a whole URL is repaired, and the channel keeps its identity (R-69).
+    #[test]
+    fn a_leaked_provider_key_is_rewritten_without_moving_the_channel() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                 VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+             -- The markerless form, keyed by an older build on the whole URL.
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (1,1,'http://panel.example:8080/bob/hunter2/95471','Sky One','sky one',0);
+             -- Already clean, and must be left exactly as it is.
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (2,1,'live101','CNN','cnn',0);
+             -- Not a stream address at all: nothing better to key on than the URL.
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (3,1,'http://panel.example:8080/stream/abc.m3u8','Radio','radio',0);",
+        )
+        .unwrap();
+
+        assert_eq!(rekey_credentialled_channels(&conn).unwrap(), 1);
+
+        let keys: Vec<(i64, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, provider_key FROM channels ORDER BY id")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            keys,
+            vec![
+                (1, "live95471".to_string()),
+                (2, "live101".to_string()),
+                (3, "http://panel.example:8080/stream/abc.m3u8".to_string()),
+            ]
+        );
+
+        // The id is what favourites, EPG mappings, mosaic layouts and recording rules
+        // reference, so repairing the key must not move the row.
+        let name: String = conn
+            .query_row("SELECT name FROM channels WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "Sky One");
+
+        // Twice changes nothing: this runs at every launch.
+        assert_eq!(rekey_credentialled_channels(&conn).unwrap(), 0);
+    }
+
+    /// The same channel in both forms is a duplicate, and the repair must not fail on it.
+    #[test]
+    fn a_derived_key_that_is_already_taken_leaves_the_row_alone() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                 VALUES (1,'Panel','xtream','http://panel.example:8080','bob','ref',0);
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (1,1,'live95471','Sky One','sky one',0);
+             INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                 VALUES (2,1,'http://panel.example:8080/bob/hunter2/95471','Sky One HD','sky one hd',0);",
+        )
+        .unwrap();
+
+        // Nothing rewritten, nothing deleted, and no error: `UNIQUE (provider_id,
+        // provider_key)` already holds the derived key.
+        assert_eq!(rekey_credentialled_channels(&conn).unwrap(), 0);
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM channels", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2, "a duplicate is for the refresh to retire, not this");
     }
 
     /// The password is not in the library after an import, and the row still plays.

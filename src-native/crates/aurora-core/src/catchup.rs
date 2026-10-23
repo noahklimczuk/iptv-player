@@ -281,6 +281,50 @@ pub fn split_xtream_stream_ref(url: &str) -> Option<(String, Option<String>)> {
     Some((id.to_string(), container))
 }
 
+/// The stable per-provider key for a live channel, derived from the address it arrived at.
+///
+/// A refresh has to recognise a channel the library already holds, and almost nothing on
+/// a playlist row survives one: the name is edited, the token on the end of the URL is
+/// reissued every time, and the credentials in its path change whenever the viewer
+/// rotates them. The stream id is the one part that does not move.
+///
+/// `None` when the address is not a stream address at all -- a `get.php` row, or an M3U
+/// pointing at something else entirely -- which tells the caller it has nothing better
+/// than the URL to key on.
+///
+/// Here rather than in the importer because the pass that repairs keys already written
+/// has to derive exactly the same value from the same URL. Two copies of this rule would
+/// re-key the whole library the first time they disagreed, and a changed key is a new
+/// channel (R-69).
+pub fn live_channel_key(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    // A marked address names its own kind, and the name goes in the key, so the three
+    // forms cannot collide with one another.
+    for marker in ["/live/", "/movie/", "/series/"] {
+        if let Some(idx) = path.find(marker) {
+            if let Some(last) = path[idx..].rsplit('/').next() {
+                let id = last.split('.').next().unwrap_or(last);
+                if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+                    return Some(format!("{}{id}", marker.trim_matches('/')));
+                }
+            }
+        }
+    }
+    // No marker: `http://host/<user>/<pass>/<id>`, which is how the panel this app is
+    // measured against addresses every one of its live channels.
+    //
+    // Keyed as `live` because the only caller passes the playlist's live section --
+    // films and episodes are keyed from their own tables -- so there is no other kind
+    // for the id to be confused with.
+    //
+    // Without this the key fell through to the whole URL, password included: 6,698 of
+    // 237,170 entries on the real subscription. That put the password in a column of
+    // `library.db`, and it made identity depend on it: the day the password was rotated,
+    // every one of those channels was a new row, and favourites, EPG mappings, mosaic
+    // layouts and recording rules all pointed at rows nobody would ever see again.
+    split_xtream_stream_ref(path).map(|(id, _)| format!("live{id}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +343,50 @@ mod tests {
             stop: STOP,
             now: NOW,
         }
+    }
+
+    /// The key survives everything about the URL that moves (R-69).
+    #[test]
+    fn a_live_channel_is_keyed_on_its_stream_id() {
+        // The marked forms, which were already right and must not change: a library
+        // keyed one way and re-keyed another is a library of new channels.
+        assert_eq!(
+            live_channel_key("http://h:8080/live/bob/hunter2/101.ts"),
+            Some("live101".into())
+        );
+        assert_eq!(
+            live_channel_key("http://h:8080/movie/bob/hunter2/900.mkv"),
+            Some("movie900".into())
+        );
+        assert_eq!(
+            live_channel_key("http://h:8080/series/bob/hunter2/77.mp4"),
+            Some("series77".into())
+        );
+
+        // The markerless form, which is what this panel serves and what leaked.
+        assert_eq!(
+            live_channel_key("http://h:8080/G22R37R4/47732430/95471"),
+            Some("live95471".into())
+        );
+        let key = live_channel_key("http://h:8080/G22R37R4/47732430/95471").unwrap();
+        assert!(!key.contains("47732430"), "{key} still carries the password");
+
+        // Everything that changes between refreshes, changing: the token, the
+        // extension, and the credentials themselves.
+        for url in [
+            "http://h:8080/G22R37R4/47732430/95471.ts",
+            "http://h:8080/G22R37R4/47732430/95471?token=abc",
+            "http://h:8080/G22R37R4/99887766/95471",
+            "http://h:8080/newuser/99887766/95471",
+        ] {
+            assert_eq!(live_channel_key(url), Some("live95471".into()), "{url}");
+        }
+
+        // Not a stream address, so there is nothing to key on but the URL itself and
+        // the caller is told so rather than handed a guess.
+        assert_eq!(live_channel_key("http://h:8080/stream/abc.m3u8"), None);
+        assert_eq!(live_channel_key("http://h:8080/get.php?username=bob"), None);
+        assert_eq!(live_channel_key("http://h:8080/95471.ts"), None);
     }
 
     #[test]

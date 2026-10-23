@@ -780,6 +780,10 @@ export default function App() {
       </nav>
 
       <main
+        // The element that scrolls, named so a virtualized page can measure against it.
+        // `BrowsePage` needs the scroller rather than the window, and reaching it by
+        // `closest` keeps the knowledge of which element that is in one place (R-75).
+        data-scroll-root
         style={{
           flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative',
           display: videoBehind ? 'none' : undefined,

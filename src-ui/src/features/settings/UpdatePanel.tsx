@@ -281,7 +281,7 @@ function InstallControls({
             {formatBytes(received)}{total > 0 && ` of ${formatBytes(total)}`}
           </span>
         </div>
-        <ProgressBar percent={pct} height={6} />
+        <ProgressBar percent={pct} height={6} label="Download progress" />
       </div>
     );
   }

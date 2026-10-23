@@ -1,7 +1,8 @@
 import clsx from 'clsx';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode,
+  ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes,
+  KeyboardEvent as ReactKeyboardEvent, ReactNode,
 } from 'react';
 import { fallBackToRemote, useAssetSrc } from '@/hooks/useAssetSrc';
 
@@ -82,7 +83,13 @@ export function IconButton({
           ? 'var(--text)'
           : 'color-mix(in srgb, var(--surface) 70%, transparent)',
         color: active ? 'var(--text-invert)' : 'var(--text)',
-        cursor: 'pointer', backdropFilter: 'blur(12px)',
+        // The same treatment `Button` above gives it. This hardcoded `pointer` and full
+        // opacity, so a disabled icon button looked and felt enabled while doing
+        // nothing. No caller passes `disabled` today, which is why it was never seen --
+        // and why the next one to need it would not have thought to check (R-116).
+        cursor: rest.disabled ? 'not-allowed' : 'pointer',
+        opacity: rest.disabled ? 0.45 : 1,
+        backdropFilter: 'blur(12px)',
         transition: 'all var(--t-fast) var(--ease)',
         ...rest.style,
       }}
@@ -128,17 +135,41 @@ export function Badge({
 
 /* ── Progress bar ─────────────────────────────────────────────────────────── */
 
-export function ProgressBar({ percent, height = 3 }: { percent: number; height?: number }) {
+/**
+ * A bar, named if it is telling the viewer something nothing else on screen is.
+ *
+ * It used to declare `role="progressbar"` with `aria-valuenow` and no accessible name at
+ * all, so a screen reader announced "44 percent" of nothing. Both answers are here
+ * because both are needed: beside a line of text that already reads "128 of 512" the bar
+ * is decoration and `aria-hidden` is the honest markup, and where it is the only
+ * indication it needs a name (R-116).
+ *
+ * So `label` being absent is a statement that something adjacent already says this,
+ * rather than an oversight.
+ */
+export function ProgressBar({
+  percent, height = 3, label,
+}: {
+  percent: number;
+  height?: number;
+  /** What is progressing. Omit only when adjacent text already says it. */
+  label?: string;
+}) {
   return (
     <div
       style={{
         height, width: '100%', background: 'color-mix(in srgb, var(--text) 22%, transparent)',
         borderRadius: 'var(--r-full)', overflow: 'hidden',
       }}
-      role="progressbar"
-      aria-valuenow={Math.round(percent)}
-      aria-valuemin={0}
-      aria-valuemax={100}
+      {...(label
+        ? {
+            role: 'progressbar',
+            'aria-label': label,
+            'aria-valuenow': Math.round(percent),
+            'aria-valuemin': 0,
+            'aria-valuemax': 100,
+          }
+        : { 'aria-hidden': true })}
     >
       <div
         style={{
@@ -348,7 +379,14 @@ export function Select({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
+  /** Which row the keyboard is on. `aria-activedescendant` points at it. */
+  const [cursor, setCursor] = useState(0);
   const box = useRef<HTMLDivElement | null>(null);
+  const list = useRef<HTMLDivElement | null>(null);
+  /** Whether this has ever been open, so the first render does not grab the focus. */
+  const wasOpen = useRef(false);
+  const slug = label.toLowerCase().replace(/\s+/g, '-');
+  const optionId = (index: number) => `select-${slug}-option-${index}`;
 
   // Click anywhere else and it closes, which is the one thing every popover must do
   // and the one thing hand-rolled ones forget.
@@ -381,6 +419,130 @@ export function Select({
   }, [options, filter]);
 
   const current = options.find((o) => o.value === value);
+  /** Whether the filter box is drawn, which decides where the focus goes on open. */
+  const filtering = options.length >= searchAfter;
+
+  /**
+   * The rows the keyboard can land on, in the order they are drawn.
+   *
+   * The placeholder is one of them: it is a real choice -- "no filter", "any language" --
+   * and a list whose first row the arrow keys skipped would be one where clearing the
+   * selection is mouse-only.
+   */
+  const rows = useMemo<{ value: string | undefined }[]>(
+    () =>
+      placeholder !== undefined
+        ? [{ value: undefined }, ...shown.map((o) => ({ value: o.value }))]
+        : shown.map((o) => ({ value: o.value })),
+    [placeholder, shown],
+  );
+  // Clamped at render rather than tracked: `rows` shrinks as the filter narrows, and a
+  // cursor left past the end would point `aria-activedescendant` at an id nothing has.
+  const at = Math.min(cursor, Math.max(0, rows.length - 1));
+
+  /**
+   * Where the keyboard starts when the list opens: on the current choice.
+   *
+   * Computed from `options` rather than from `rows`, and set from the two event handlers
+   * rather than from an effect. An effect is what this was, keyed on `[open, rows,
+   * value]` -- and every caller passes `options` as a fresh array literal, so `shown`
+   * and `rows` were new objects on every render, the effect ran after every arrow press,
+   * and it put the cursor straight back on the selected row. The arrow keys moved
+   * nothing, which is the bug they were added to fix.
+   */
+  const startAt = () => {
+    if (value === undefined) return 0;
+    const found = options.findIndex((o) => o.value === value);
+    if (found === -1) return 0;
+    return placeholder !== undefined ? found + 1 : found;
+  };
+
+  /**
+   * Focus into the popover on open, and back to the trigger on close.
+   *
+   * The same omission as R-102, in the control that replaced every native `<select>` in
+   * the app, so it was on four screens at once. Opening left the focus on the trigger,
+   * which is why the arrow keys below would have had nowhere to arrive; closing left it
+   * nowhere at all, so Tab from a closed Select started again at the top of the page.
+   *
+   * The filter box takes it when there is one, because typing is the first thing to do in
+   * a list long enough to need filtering. The listbox itself takes it otherwise, so
+   * `aria-activedescendant` is on an element that actually has the focus.
+   */
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      if (!filtering) list.current?.focus();
+      return;
+    }
+    if (!wasOpen.current) return;
+    wasOpen.current = false;
+    // Only when the focus has nowhere better to be: closing because the viewer clicked
+    // another control must not drag it back here.
+    const active = document.activeElement;
+    // The trigger is the first button inside the wrapper. Found that way rather than
+    // held in a ref because `Button` is a plain function component, so a `ref` on it
+    // would not reach the element -- and giving the shared primitive a `forwardRef` so
+    // that one Select can restore focus would be shaping it around this call site.
+    if (active == null || active === document.body) {
+      box.current?.querySelector('button')?.focus();
+    }
+  }, [open, filtering]);
+
+  const move = (to: number) => {
+    if (rows.length === 0) return;
+    const next = Math.max(0, Math.min(rows.length - 1, to));
+    setCursor(next);
+    // Kept on screen, which `maxHeight: 340` makes necessary -- the same thing R-147
+    // found missing in the palette.
+    document.getElementById(optionId(next))?.scrollIntoView({ block: 'nearest' });
+  };
+
+  /**
+   * Up, Down, Home, End and Enter.
+   *
+   * Owed the moment this declared `listbox` and `option`: a screen-reader user told it is
+   * a listbox presses Down, and nothing happened. Tab did work, because the rows are real
+   * `<button>`s -- a legitimate pattern on its own, but not the one the roles announce,
+   * and the roles are what gets believed (R-116).
+   *
+   * On the popover rather than on each row, so the keys work while the focus is in the
+   * filter box: arrowing straight out of a half-typed filter is the point of having one.
+   */
+  const onKeys = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        move(at + 1);
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        move(at - 1);
+        break;
+      case 'Home':
+        e.preventDefault();
+        move(0);
+        break;
+      case 'End':
+        e.preventDefault();
+        move(rows.length - 1);
+        break;
+      case 'Enter':
+      case ' ': {
+        // Space is a character in the filter box and a choice on the list. Only the
+        // second is ours to take.
+        if (e.key === ' ' && e.target !== list.current) return;
+        const row = rows[at];
+        if (!row) return;
+        e.preventDefault();
+        onChange(row.value);
+        setOpen(false);
+        break;
+      }
+      default:
+        break;
+    }
+  };
 
   return (
     <div ref={box} style={{ position: 'relative', ...style }}>
@@ -391,8 +553,8 @@ export function Select({
         aria-label={label}
         aria-expanded={open}
         aria-haspopup="listbox"
-        data-testid={`select-${label.toLowerCase().replace(/\s+/g, '-')}`}
-        onClick={() => { setOpen((o) => !o); setFilter(''); }}
+        data-testid={`select-${slug}`}
+        onClick={() => { setOpen((o) => !o); setFilter(''); setCursor(startAt()); }}
       >
         <span
           style={{
@@ -406,9 +568,16 @@ export function Select({
 
       {open && (
         <div
+          ref={list}
           role="listbox"
           aria-label={label}
+          tabIndex={-1}
+          aria-activedescendant={rows.length > 0 ? optionId(at) : undefined}
+          onKeyDown={onKeys}
           style={{
+            // No ring on the box itself: the highlighted row answers "where am I", and
+            // an outline around the whole popover would compete with it.
+            outline: 'none',
             position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 60,
             width, maxHeight: 340, overflowY: 'auto',
             background: 'var(--bg-elevated)',
@@ -421,7 +590,7 @@ export function Select({
             <TextField
               autoFocus
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(e) => { setFilter(e.target.value); setCursor(0); }}
               placeholder={`Filter ${label.toLowerCase()}…`}
               aria-label={`Filter ${label.toLowerCase()}`}
               style={{ marginBottom: 'var(--sp-2)', width: '100%' }}
@@ -429,7 +598,9 @@ export function Select({
           )}
           {placeholder !== undefined && (
             <SelectRow
+              id={optionId(0)}
               active={value === undefined}
+              cursored={at === 0}
               onClick={() => { onChange(undefined); setOpen(false); }}
             >
               {placeholder}
@@ -440,6 +611,10 @@ export function Select({
               {o.group && o.group !== shown[i - 1]?.group && (
                 <div
                   data-testid="select-group"
+                  // A listbox's children are options or groups, so a bare `div` in here
+                  // is a stray node to anything reading the roles. It is a label drawn
+                  // between rows, and this says so (R-116).
+                  role="presentation"
                   // Sticky, because the whole point is knowing where you are in a list
                   // long enough to need scrolling.
                   style={{
@@ -459,7 +634,9 @@ export function Select({
                 </div>
               )}
             <SelectRow
+              id={optionId(placeholder !== undefined ? i + 1 : i)}
               active={o.value === value}
+              cursored={at === (placeholder !== undefined ? i + 1 : i)}
               onClick={() => { onChange(o.value); setOpen(false); }}
             >
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.label}</span>
@@ -493,18 +670,28 @@ export function Select({
 }
 
 function SelectRow({
-  active, onClick, children,
+  active, cursored, id, onClick, children,
 }: {
-  active: boolean; onClick: () => void; children: ReactNode;
+  active: boolean;
+  /** Where the keyboard is, which is not the same thing as what is chosen. */
+  cursored: boolean;
+  id: string;
+  onClick: () => void;
+  children: ReactNode;
 }) {
   return (
     <button
       type="button"
       role="option"
+      id={id}
       aria-selected={active}
       onClick={onClick}
       data-testid="select-row"
+      data-cursored={cursored || undefined}
       style={{
+        // A ring rather than a background, so "the keyboard is here" and "this is the
+        // current choice" can be true of different rows and both stay visible.
+        boxShadow: cursored ? 'inset 0 0 0 2px var(--accent)' : 'none',
         display: 'flex', alignItems: 'center', width: '100%', textAlign: 'left',
         padding: '7px 9px', borderRadius: 'var(--r-sm)', border: 'none',
         cursor: 'pointer', fontSize: 'var(--fs-sm)', whiteSpace: 'nowrap',
