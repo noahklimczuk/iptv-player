@@ -49,6 +49,8 @@ export function PlaylistPage() {
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
+  /** Whether "Hide all N matching" is waiting for a second press (R-125). */
+  const [confirmingBulk, setConfirmingBulk] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const query = useMemo(
@@ -228,16 +230,48 @@ export function PlaylistPage() {
               </Button>
             </>
           )}
+          {/*
+            * Asks first, because its condition is the state the screen is in on arrival.
+            *
+            * "Nothing selected, and more matches than are on screen" is true the moment
+            * the Movies tab opens, so this was a one-click offer to hide all 27,494
+            * films before touching anything. It is recoverable -- `show: 'hidden'` lists
+            * them and `playlist.reset` takes ids -- but the recovery is per selection in
+            * pages of 300, which is ninety-two pages of select-all-and-reset (R-125).
+            */}
           {ids.length === 0 && total > rows.length && (
+            confirmingBulk ? (
+              <>
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)' }}>
+                  Hide all {total}? Undoing this is {Math.ceil(total / 300)} pages of
+                  {' '}select-and-reset.
+                </span>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={busy}
+                  data-testid="playlist-hide-all-confirm"
+                  onClick={() => {
+                    setConfirmingBulk(false);
+                    void act(() => invoke('playlist.hideMatching', { ...query, hidden: true }));
+                  }}
+                >
+                  Hide them
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setConfirmingBulk(false)}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
             <Button
               size="sm"
               variant="secondary"
               disabled={busy}
-              onClick={() => void act(() =>
-                invoke('playlist.hideMatching', { ...query, hidden: true }))}
+              onClick={() => setConfirmingBulk(true)}
             >
               Hide all {total} matching
             </Button>
+            )
           )}
         </div>
 

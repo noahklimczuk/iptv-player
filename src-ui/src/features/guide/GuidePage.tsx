@@ -42,7 +42,8 @@ import { useGuideSlice } from './useGuideSlice';
 import { Badge, Button, EmptyState, Select, Skeleton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
-import { clockTime, dayLabel, duration } from '@/lib/format';
+import { dayLabel, duration } from '@/lib/format';
+import { useClockTime } from '@/hooks/useClockTime';
 import { SurfaceHole } from '@/components/SurfaceHole';
 import { useInlaidPicture } from '@/hooks/useInlaidPicture';
 
@@ -467,6 +468,8 @@ function GuideToolbar({
 }
 
 function TimeHeader({ slots, from }: { slots: number[]; from: number }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   return (
     <div
       style={{
@@ -634,6 +637,8 @@ function ProgrammeRow({
   onSelect: (p: Programme) => void;
   onTune: () => void;
 }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   // Only render what overlaps the window — the horizontal half of the virtualization.
   const visible = programmes.filter((p) => p.start < to && p.stop > from);
 
@@ -887,6 +892,8 @@ function InfoPane({
   onSearch: (query: string) => void;
   dvr: ReturnType<typeof useDvrMarks>;
 }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   const [catchupError, setCatchupError] = useState<string | null>(null);
   if (!selected) {
     return (

@@ -153,6 +153,7 @@ def run(d, ctx):
         if page == "Live TV":
             _logos_render(d, ctx)
 
+    _the_bulk_hide_asks_first(d, ctx)
     _records_a_real_stream(d, ctx)
     # Last. It leaves its overlay up -- the screen learns a mosaic has closed from its own
     # click or the next `mosaic.state`, and neither has happened by the time the next step
@@ -553,3 +554,58 @@ def _records_a_real_stream(d, ctx):
 
 class Skipped(Exception):
     """Raised when this scenario has nothing to run against."""
+
+
+def _the_bulk_hide_asks_first(d, ctx):
+    """
+    "Hide all N matching" is a confirmation, not a button.
+
+    Only reachable here. The control appears when nothing is selected and the filter
+    matches more rows than are on screen -- which is true the moment the Movies tab
+    opens on a real library, and false on every fixture in this repository, because the
+    mock carries 160 films and the first page is 300. So the one-click offer to hide a
+    hundred thousand films could not be exercised anywhere but a real panel (R-125).
+
+    Recoverable in principle -- `show: 'hidden'` lists them and `playlist.reset` takes
+    ids -- but in pages of 300, which on this library is four hundred rounds of
+    select-all-and-reset. Hence an ask.
+
+    One press only. The second press is the behaviour that always worked; this asserts
+    the first one no longer acts, so the step leaves the library as it found it.
+    """
+    d.click(d.by_text("nav a", "Playlist", timeout=30))
+    assert d.wait_body(lambda b: "Playlist" in b, timeout=60), "the playlist never drew"
+    d.click(d.by_text("[role=tab]", "Movies", timeout=30))
+    time.sleep(3)
+
+    hidden_before = ctx.rows("SELECT count(*) FROM movies WHERE hidden = 1")[0][0]
+
+    offer = d.by_text("button", "Hide all", timeout=30)
+    label = d.text(offer)
+    print(f"   the offer reads {label!r}")
+    d.click(offer)
+    time.sleep(1)
+    d.shot(ctx.shot("bulk-hide-asked"))
+    ctx.assert_no_panic()
+
+    body = d.body()
+    assert "select-and-reset" in body, (
+        "one press on the bulk hide produced no confirmation; the screen says "
+        f"{body[:400]!r}"
+    )
+    assert d.find_all("[data-testid=playlist-hide-all-confirm]"), (
+        "the confirmation has no button to confirm with"
+    )
+
+    hidden_after = ctx.rows("SELECT count(*) FROM movies WHERE hidden = 1")[0][0]
+    assert hidden_after == hidden_before, (
+        f"one press hid {hidden_after - hidden_before} films before anybody confirmed"
+    )
+
+    # And it can be backed out of, which is the other half of asking.
+    d.click(d.by_text("button", "Cancel", timeout=15))
+    time.sleep(1)
+    assert d.by_text("button", "Hide all", timeout=15), (
+        "cancelling the confirmation did not put the offer back"
+    )
+    print(f"   asked first, hid nothing, {hidden_before} films hidden before and after")

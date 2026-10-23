@@ -11,7 +11,8 @@ import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { hasVideoSurface, invoke } from '@/ipc';
 import { notify, report } from '@/lib/errors';
-import { clockTime, duration } from '@/lib/format';
+import { duration } from '@/lib/format';
+import { useClockTime } from '@/hooks/useClockTime';
 import { isTyping } from '@/hooks/useHotkeys';
 
 const HIDE_AFTER_MS = 3200;
@@ -550,6 +551,8 @@ const SEEK_SETTLED_SECS = 2;
 const SEEK_SETTLE_TIMEOUT_MS = 4000;
 
 function Scrubber({ player }: { player: PlayerState }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   // A buffered live stream has a real span to scrub through; an unbuffered one has
   // nothing behind the live edge, and a bar that cannot move is not offered.
   if (player.isLive && player.timeshift) {

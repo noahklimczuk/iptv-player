@@ -7,7 +7,43 @@
  * the repository to test, and three live defects deep (R-161).
  */
 import { describe, expect, it } from 'vitest';
-import { bytes, duration, progressPct, remaining, runtime, untilLabel } from './format';
+import {
+  bytes, clockTime, duration, progressPct, remaining, runtime, untilLabel,
+} from './format';
+
+/**
+ * The branch that was unreachable.
+ *
+ * `use24h` was declared in the store, honoured here if anyone passed it, and passed by
+ * none of the twenty-odd call sites -- so the AM/PM half of this function had never run
+ * in a build, and there was no control to ask for it (R-136).
+ *
+ * Built from a local `Date` rather than a fixed epoch: `clockTime` renders in the
+ * viewer's zone (README 4.4), so a hardcoded unix time asserts the test runner's
+ * timezone instead of the formatting.
+ */
+describe('clockTime', () => {
+  const at = (h: number, m: number) => {
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  };
+
+  it('renders 24-hour times, zero-padded, by default', () => {
+    expect(clockTime(at(21, 30))).toBe('21:30');
+    expect(clockTime(at(9, 5))).toBe('09:05');
+    expect(clockTime(at(0, 0))).toBe('00:00');
+  });
+
+  it('renders the same times as AM/PM when that is what was asked for', () => {
+    expect(clockTime(at(21, 30), false)).toBe('9:30 PM');
+    expect(clockTime(at(9, 5), false)).toBe('9:05 AM');
+    // Noon and midnight are the two the `% 12` has to get right: both are 12, and they
+    // are not the same half of the day.
+    expect(clockTime(at(12, 0), false)).toBe('12:00 PM');
+    expect(clockTime(at(0, 0), false)).toBe('12:00 AM');
+  });
+});
 
 describe('untilLabel', () => {
   /**
@@ -42,6 +78,25 @@ describe('untilLabel', () => {
     // Under a minute still reads as a minute rather than as "in 0 min".
     expect(untilLabel(20, 0)).toBe('in 1 min');
     expect(untilLabel(240, 0)).toBe('in 4 min');
+  });
+
+  /**
+   * Its day-out branch renders a clock time, and it took the default.
+   *
+   * `untilLabel` is a function rather than a component, so the hook that binds the
+   * preference everywhere else could not reach it -- which left one time on the
+   * scheduled recordings list in 24-hour notation while every other time in the app had
+   * switched (R-136).
+   */
+  it('renders its clock time in the notation it was given', () => {
+    const noon = new Date();
+    noon.setHours(12, 0, 0, 0);
+    const unix = Math.floor(noon.getTime() / 1000) + 86400 * 2;
+
+    expect(untilLabel(unix, 0, true)).toMatch(/ at 12:00$/);
+    expect(untilLabel(unix, 0, false)).toMatch(/ at 12:00 PM$/);
+    // And the default is unchanged, which is what every other caller relies on.
+    expect(untilLabel(unix, 0)).toMatch(/ at 12:00$/);
   });
 
   it('hands anything a day out to the day label', () => {

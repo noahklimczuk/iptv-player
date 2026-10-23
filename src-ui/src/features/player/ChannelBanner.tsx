@@ -6,7 +6,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import type { Channel } from '@shared/ipc';
 import { Badge } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
-import { clockTime, progressPct } from '@/lib/format';
+import { progressPct } from '@/lib/format';
+import { useClockTime } from '@/hooks/useClockTime';
 
 export function ChannelBanner({
   channel, liftForOsd = false,
@@ -15,6 +16,8 @@ export function ChannelBanner({
   /** Raise the banner clear of the player's transport bar when the OSD is showing. */
   liftForOsd?: boolean;
 }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   const { data } = useCommand('epg.nowNext', { channelId: channel?.id ?? 0 }, [channel?.id]);
   const now = Math.floor(Date.now() / 1000);
   const pct = data?.now

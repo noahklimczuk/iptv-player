@@ -12,7 +12,8 @@ import { Badge, Button, EmptyState, IconButton, ProgressBar, Skeleton } from '@/
 import { useCommand } from '@/hooks/useCommand';
 import { invoke, onDvrTick } from '@/ipc';
 import { report } from '@/lib/errors';
-import { bytes, clockTime, dayLabel, duration, untilLabel } from '@/lib/format';
+import { bytes, dayLabel, duration } from '@/lib/format';
+import { useClockTime, useUntilLabel } from '@/hooks/useClockTime';
 
 type Tab = 'recorded' | 'scheduled' | 'rules';
 
@@ -198,6 +199,8 @@ function ConflictNotice({
   conflicts: RecordingConflict[];
   recordings: Recording[];
 }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   const titleOf = (id: number) => recordings.find((r) => r.id === id)?.title ?? `#${id}`;
   return (
     <div role="status" style={noticeStyle}>
@@ -276,6 +279,8 @@ function RowShell({
  * without reading it.
  */
 function TitleBlock({ rec }: { rec: Recording }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   const ep = rec.season != null && rec.episode != null
     ? `S${String(rec.season).padStart(2, '0')}E${String(rec.episode).padStart(2, '0')}`
     : null;
@@ -402,6 +407,8 @@ function ScheduledRow({
   rec: Recording;
   onChanged: () => void;
 }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const untilLabel = useUntilLabel();
   const live = rec.state === 'recording';
   const elapsed = live ? Math.max(0, Math.floor(Date.now() / 1000) - rec.start) : 0;
   const pct = live ? (elapsed / Math.max(1, rec.stop - rec.start)) * 100 : 0;

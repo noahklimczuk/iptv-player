@@ -40,6 +40,8 @@ interface UiState {
   setDensity: (d: Density) => void;
   toggleAnimations: () => void;
   toggleHoverPreviews: () => void;
+  /** 24-hour or AM/PM, which `clockTime` reads and nothing used to set (R-136). */
+  toggle24h: () => void;
   openDetail: (i: CatalogItem | null) => void;
   setPalette: (open: boolean, query?: string) => void;
   setPlayer: (p: PlayerState) => void;
@@ -85,6 +87,7 @@ interface SavedAppearance {
   density: Density;
   animations: boolean;
   hoverPreviews: boolean;
+  use24h: boolean;
 }
 
 const THEMES: Theme[] = ['dark', 'oled', 'light', 'contrast'];
@@ -110,6 +113,7 @@ function loadAppearance(): Partial<SavedAppearance> {
     if (DENSITIES.includes(v.density as Density)) out.density = v.density as Density;
     if (typeof v.animations === 'boolean') out.animations = v.animations;
     if (typeof v.hoverPreviews === 'boolean') out.hoverPreviews = v.hoverPreviews;
+    if (typeof v.use24h === 'boolean') out.use24h = v.use24h;
     return out;
   } catch {
     return {};
@@ -134,6 +138,7 @@ const initialAppearance: SavedAppearance = {
   animations:
     saved.animations ?? !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
   hoverPreviews: saved.hoverPreviews ?? true,
+  use24h: saved.use24h ?? true,
 };
 
 export const useUi = create<UiState>((set, get) => ({
@@ -141,8 +146,7 @@ export const useUi = create<UiState>((set, get) => ({
   density: initialAppearance.density,
   animations: initialAppearance.animations,
   hoverPreviews: initialAppearance.hoverPreviews,
-  // No control offers the other one yet, so there is nothing to remember.
-  use24h: true,
+  use24h: initialAppearance.use24h,
 
   detail: null,
   paletteOpen: false,
@@ -172,6 +176,10 @@ export const useUi = create<UiState>((set, get) => ({
     set((s) => ({ hoverPreviews: !s.hoverPreviews }));
     remember(get());
   },
+  toggle24h: () => {
+    set((s) => ({ use24h: !s.use24h }));
+    remember(get());
+  },
   openDetail: (detail) => set({ detail }),
   setPalette: (paletteOpen, paletteQuery = '') => set({ paletteOpen, paletteQuery }),
   setPlayer: (player) => set({ player }),
@@ -183,13 +191,14 @@ export const useUi = create<UiState>((set, get) => ({
   clearDigits: () => set({ digits: '' }),
 }));
 
-/** Keep the four Appearance choices, whatever the setter just changed. */
+/** Keep the five Appearance choices, whatever the setter just changed. */
 function remember(s: UiState) {
   saveAppearance({
     theme: s.theme,
     density: s.density,
     animations: s.animations,
     hoverPreviews: s.hoverPreviews,
+    use24h: s.use24h,
   });
 }
 

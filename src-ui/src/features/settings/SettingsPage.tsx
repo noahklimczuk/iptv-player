@@ -147,6 +147,14 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             onToggle={ui.toggleHoverPreviews}
           />
         </Field>
+        {/*
+          * The control the preference never had. `use24h` was in the store and honoured
+          * by `clockTime`, and nothing set it or read it -- so the AM/PM branch was
+          * unreachable code behind a setting with no switch (R-136).
+          */}
+        <Field label="24-hour clock" hint="Off shows times as 9:30 PM rather than 21:30.">
+          <Toggle label="24-hour clock" on={ui.use24h} onToggle={ui.toggle24h} />
+        </Field>
       </Section>
 
       <Section title="Artwork and metadata">

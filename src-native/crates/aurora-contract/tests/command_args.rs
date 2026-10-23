@@ -127,7 +127,25 @@ fn every_command_names_its_argument_parameter_args() {
 
 /// Byte offsets of every `#[tauri::command…]` attribute, whichever spelling it uses.
 fn command_offsets(source: &str) -> Vec<(usize, &str)> {
-    source.match_indices("#[tauri::command").collect()
+    source
+        .match_indices("#[tauri::command")
+        .filter(|(at, _)| {
+            // An attribute begins its line; a comment that quotes one does not.
+            //
+            // Without this, a doc comment explaining that some function *is* a
+            // `#[tauri::command(async)]` -- which is worth writing, because it is why
+            // two callers can be in flight at once -- was read as an attribute, and the
+            // next `fn` in the file was blamed for a parameter it never had. The scan
+            // then reported a private method taking `&self` as a command the UI cannot
+            // reach, which is true of every private method and says nothing.
+            source[..*at]
+                .rsplit_once('\n')
+                .map(|(_, line)| line)
+                .unwrap_or(&source[..*at])
+                .trim()
+                .is_empty()
+        })
+        .collect()
 }
 
 /// Every source file under `src/`, so a new module cannot quietly opt out.
