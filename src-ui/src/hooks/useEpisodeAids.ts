@@ -61,6 +61,16 @@ export function useEpisodeAids(
     player?.itemKind === 'episode' && player.itemId != null ? player.itemId : null;
   const duration = player?.durationSecs ?? 0;
   const position = player?.positionSecs ?? 0;
+  /**
+   * Whether the file itself is open, which is when mpv knows its chapters.
+   *
+   * `player.play` returns as soon as `loadfile` is accepted, so the episode id arrives
+   * in the mirrored state while the demuxer is still working: `chapter-list/count` is 0
+   * and `library.syncChapters` stores nothing. mpv sets this status from its own
+   * `file-loaded` event -- the same place it refreshes the track list -- so it is the
+   * first moment there is a chapter list to read.
+   */
+  const loaded = player?.status === 'playing' || player?.status === 'paused';
 
   // Fetch as soon as there is an episode, with whatever duration the player has — which
   // is routinely none.
@@ -81,19 +91,44 @@ export function useEpisodeAids(
   // marker is placed off the end of the file and the player's own number is the better
   // one. Tracked as a pair so that is a single extra call and not a loop: the second
   // fetch is only ever from "asked without a duration" to "asked with one".
-  const fetchedFor = useRef<{ episodeId: number; withDuration: boolean } | null>(null);
+  /**
+   * What has been asked, as the state the answer depended on.
+   *
+   * Three things unlock evidence that was not there a moment ago, and asking before any
+   * of them lands gets an honest but empty answer:
+   *
+   *   * the episode (a different one has different everything),
+   *   * a real duration (it places a conventional credits marker),
+   *   * the file being open (mpv has no chapter list until then -- and that is the one
+   *     that kept Skip Intro off the screen entirely).
+   *
+   * The chapter sync used to be tied to the duration alone, which is only a proxy for
+   * "the file is open" and the wrong one: a provider's VOD stream frequently reports no
+   * duration at all, sometimes never. On those -- and `durationSecs: 0` is the ordinary
+   * case here -- the only `syncChapters` call ever made was the one issued before the
+   * demuxer had read the file, so a file whose chapters named its intro had them stored
+   * from nowhere and `skip_markers` stayed empty. Intro and recap are evidence-only by
+   * design (`markers::conventional` places neither), so with the chapter path dead there
+   * was nothing left to put Skip Intro on screen -- and nothing a viewer could press to
+   * teach it either, because `library.recordSkip` is reached from that button.
+   *
+   * Still bounded, which is what the pair it replaces was for: the key is one id and two
+   * booleans, so it is at most four calls for an episode and in practice two.
+   * `position` is deliberately not in it.
+   */
+  const fetchedFor = useRef<string | null>(null);
   useEffect(() => {
     if (episodeId == null) {
       setAids(null);
       fetchedFor.current = null;
       return;
     }
-    const done = fetchedFor.current;
-    if (done?.episodeId === episodeId && (done.withDuration || duration <= 0)) return;
-    // Only when the episode itself changes: the refetch must not un-dismiss a card the
+    const stage = `${episodeId}:${duration > 0 ? 'd' : '-'}:${loaded ? 'l' : '-'}`;
+    if (fetchedFor.current === stage) return;
+    // Only when the episode itself changes: a refetch must not un-dismiss a card the
     // viewer has already waved away.
-    if (done?.episodeId !== episodeId) setDismissed(null);
-    fetchedFor.current = { episodeId, withDuration: duration > 0 };
+    if (!fetchedFor.current?.startsWith(`${episodeId}:`)) setDismissed(null);
+    fetchedFor.current = stage;
     const args = { profileId, episodeId, durationSecs: duration };
     // Chapters first, then ask what there is.
     //
@@ -115,7 +150,7 @@ export function useEpisodeAids(
           // Not fatal: these drive Skip Intro and Up Next, and a show without them is
           // simply a show you scrub yourself.
           .catch(report('Could not load this episode\u2019s skip markers')));
-  }, [episodeId, duration, profileId]);
+  }, [episodeId, duration, loaded, profileId]);
 
   const activeMarker = useMemo(() => {
     if (!aids) return null;
