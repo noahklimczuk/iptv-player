@@ -32,10 +32,18 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
     density: useUi((s) => s.density),
     animations: useUi((s) => s.animations),
     hoverPreviews: useUi((s) => s.hoverPreviews),
+    // `use24h` and `toggle24h` arrived on a different branch from the conversion above,
+    // and git merged both without a conflict because they are different hunks of the
+    // same file: the 24-hour switch below reads fields this list did not name, and the
+    // page stopped compiling the moment the two were in one tree. Named here, which is
+    // the whole point of the list -- the previous `useUi()` would have carried them
+    // silently and re-rendered this page on every player heartbeat to do it.
+    use24h: useUi((s) => s.use24h),
     setTheme: useUi((s) => s.setTheme),
     setDensity: useUi((s) => s.setDensity),
     toggleAnimations: useUi((s) => s.toggleAnimations),
     toggleHoverPreviews: useUi((s) => s.toggleHoverPreviews),
+    toggle24h: useUi((s) => s.toggle24h),
   };
   const { data: providers, reload: reloadProviders } = useCommand('providers.list', undefined, []);
   const [editing, setEditing] = useState<number | null>(null);

@@ -31,32 +31,42 @@ pub fn min_age(certification: &str) -> Option<u8> {
     let c = c.replace(['_', '-'], "").replace("  ", " ");
     let c = c.trim();
 
-    // A bare number, or a number with a suffix like "16+".
-    let digits: String = c.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+    // A bare number, a number with a suffix like "16+", or the "AGE 12" form.
+    //
+    // `AGE {digits}` was in this condition and could never match it: `digits` is taken
+    // from the *start* of the string, so on "AGE 12" it is empty and the whole branch is
+    // skipped -- then "AGE 12" matches no arm below either and the answer was `None`,
+    // which the caller is required to read as *unknown*. The prefix comes off first now.
+    // Found by writing the test for the dead arms below, which is the same defect one
+    // line further up (R-16).
+    let numeric = c.strip_prefix("AGE ").unwrap_or(c).trim();
+    let digits: String = numeric.chars().take_while(|ch| ch.is_ascii_digit()).collect();
     if !digits.is_empty() && digits.len() <= 2 {
         // Guard against matching the "13" in "PG13" here; that is handled below.
-        if c == digits || c == format!("{digits}+") || c == format!("AGE {digits}") {
+        if numeric == digits || numeric == format!("{digits}+") {
             return digits.parse().ok();
         }
     }
 
+    // Only the named systems below this line.
+    //
+    // Every bare number and every `n+` form has already returned above, so the arms
+    // listing "0", "6", "12", "15", "16+", "18" and the rest were unreachable -- and so
+    // was the `if c == "15"` inside the 15-or-16 arm, which was the one piece of this
+    // function a reader had to stop and work out. Dead code that looks like a decision
+    // is worse than no code: it is the first place somebody would go to change how "15"
+    // is treated, and editing it would do nothing at all (R-16).
     Some(match c {
         // Universally suitable.
-        "U" | "G" | "TVY" | "TVG" | "ALL" | "AL" | "E" | "0" | "0+" | "EVERYONE" => 0,
+        "U" | "G" | "TVY" | "TVG" | "ALL" | "AL" | "E" | "EVERYONE" => 0,
         // Parental guidance.
-        "PG" | "TVPG" | "TVY7" | "6" | "6+" | "7" | "7+" | "FSK6" => 6,
-        "PG13" | "12A" | "12" | "TV14" | "FSK12" | "M" => 12,
-        "13" | "13+" | "TEEN" => 13,
-        "14" | "14+" => 14,
-        "15" | "MA15" | "FSK16" | "16" | "16+" => {
-            if c == "15" {
-                15
-            } else {
-                16
-            }
-        }
-        "R" | "TVMA" | "MA" | "17" | "17+" | "NC17" => 17,
-        "18" | "18+" | "X" | "XXX" | "FSK18" | "R18" | "ADULT" | "AO" => 18,
+        "PG" | "TVPG" | "TVY7" | "FSK6" => 6,
+        "PG13" | "12A" | "TV14" | "FSK12" | "M" => 12,
+        "TEEN" => 13,
+        "MA15" => 15,
+        "FSK16" => 16,
+        "R" | "TVMA" | "MA" | "NC17" => 17,
+        "X" | "XXX" | "FSK18" | "R18" | "ADULT" | "AO" => 18,
         "NR" | "UNRATED" | "UNKNOWN" | "" => return None,
         _ => return None,
     })
@@ -90,16 +100,54 @@ pub fn is_allowed(
 pub fn looks_adult(group: Option<&str>) -> bool {
     let Some(group) = group else { return false };
     let g = group.to_ascii_lowercase();
-    const MARKERS: &[&str] = &["adult", "xxx", "porn", "erotic", "18+", "for adults"];
+    // `+18` as well as `18+`: a playlist naming the category either way means the same
+    // thing, and only one of them was listed (R-16).
+    const MARKERS: &[&str] = &[
+        "adult", "xxx", "porn", "erotic", "18+", "+18", "for adults",
+    ];
     if MARKERS.iter().any(|m| g.contains(m)) {
         return true;
     }
     let tight: String = g.chars().filter(|c| !c.is_whitespace()).collect();
-    tight.contains("18+")
+    tight.contains("18+") || tight.contains("+18")
 }
 
 #[cfg(test)]
 mod tests {
+    /// The numeric forms the dead arms claimed to handle, now that they are gone (R-16).
+    ///
+    /// Removing unreachable arms must not remove behaviour: each of these was listed in
+    /// an arm that could never run, and is answered by the digit branch above it.
+    #[test]
+    fn the_bare_and_suffixed_numbers_still_map_to_themselves() {
+        for (given, want) in [
+            ("0", 0u8), ("0+", 0), ("6", 6), ("6+", 6), ("7", 7), ("12", 12),
+            ("13", 13), ("13+", 13), ("14", 14), ("15", 15), ("16", 16), ("16+", 16),
+            ("17", 17), ("17+", 17), ("18", 18), ("18+", 18), ("AGE 12", 12),
+        ] {
+            assert_eq!(super::min_age(given), Some(want), "{given:?}");
+        }
+        // The named systems, including the two that are not a bare number in disguise.
+        assert_eq!(super::min_age("MA15"), Some(15));
+        assert_eq!(super::min_age("FSK16"), Some(16));
+        assert_eq!(super::min_age("PG13"), Some(12));
+        assert_eq!(super::min_age("TVMA"), Some(17));
+        assert_eq!(super::min_age("ADULT"), Some(18));
+        // And unknown is still unknown rather than safe.
+        assert_eq!(super::min_age("NR"), None);
+        assert_eq!(super::min_age("wat"), None);
+    }
+
+    /// `+18` is the same category as `18+` (R-16).
+    #[test]
+    fn an_adult_group_is_recognised_whichever_side_the_plus_is_on() {
+        for group in ["+18", "+18 Channels", "+ 18 VOD", "CANALES +18"] {
+            assert!(super::looks_adult(Some(group)), "{group:?} was not recognised");
+        }
+        // Still not matching something that merely contains the digits.
+        assert!(!super::looks_adult(Some("Studio 18")));
+    }
+
     use super::*;
 
     /// The spaced form, which `rules::presets::hide_adult` matches (R-18).

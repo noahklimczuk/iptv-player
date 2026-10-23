@@ -121,7 +121,6 @@ const TOKENS: &[(&str, &str)] = &[
     ("vf", "fr"),
     ("vostfr", "fr"),
     ("vfq", "fr"),
-    ("quebec", "fr"),
     // Spanish
     ("es", "es"),
     ("esp", "es"),
@@ -250,7 +249,6 @@ const TOKENS: &[(&str, &str)] = &[
     ("ba", "bs"),
     ("bih", "bs"),
     ("bosnian", "bs"),
-    ("exyu", "sr"),
     ("si", "sl"),
     ("svn", "sl"),
     ("slovenian", "sl"),
@@ -349,7 +347,6 @@ const TOKENS: &[(&str, &str)] = &[
     ("cantonese", "zh"),
     ("hk", "zh"),
     ("tw", "zh"),
-    ("taiwan", "zh"),
     ("jp", "ja"),
     ("jpn", "ja"),
     ("japanese", "ja"),
@@ -366,8 +363,6 @@ const TOKENS: &[(&str, &str)] = &[
     ("vie", "vi"),
     ("vietnamese", "vi"),
     ("vietnam", "vi"),
-    ("indonesian", "id"),
-    ("indonesia", "id"),
     ("bahasa", "id"),
     ("malay", "ms"),
     ("malaysia", "ms"),
@@ -403,6 +398,8 @@ fn table() -> &'static HashMap<&'static str, &'static str> {
 /// agree, so `"MBC مصر"` and `"Al Jazeera"` both land where they should.
 fn script_language(text: &str) -> Option<&'static str> {
     let mut latin = 0usize;
+    // Kana seen anywhere in the text, which is what separates Japanese from Chinese.
+    let mut kana = 0usize;
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
     for ch in text.chars() {
         if !ch.is_alphabetic() {
@@ -420,7 +417,10 @@ fn script_language(text: &str) -> Option<&'static str> {
             0x0B80..=0x0BFF => "ta",
             0x0E00..=0x0E7F => "th",
             0x1200..=0x137F => "am",
-            0x3040..=0x30FF => "ja",
+            0x3040..=0x30FF => {
+                kana += 1;
+                "ja"
+            }
             0xAC00..=0xD7AF | 0x1100..=0x11FF => "ko",
             0x4E00..=0x9FFF | 0x3400..=0x4DBF => "zh",
             _ => {
@@ -431,12 +431,20 @@ fn script_language(text: &str) -> Option<&'static str> {
         *counts.entry(script).or_default() += 1;
     }
     let (script, n) = counts.into_iter().max_by_key(|&(_, n)| n)?;
-    // Japanese writes Han alongside kana; a stray kana character is the giveaway.
-    if n * 2 > latin {
-        Some(script)
-    } else {
-        None
+    if n * 2 <= latin {
+        return None;
     }
+    // Japanese writes Han alongside kana, so a stray kana character is the giveaway.
+    //
+    // The comment above this said exactly that and the code did not do it: the winner
+    // was whichever script had the most characters, and kanji outnumbers kana in most
+    // real titles. `トカレフ2010 運命の撃鉄` is 4 and 4, decided by the iteration order of a
+    // `HashMap`; `君の名は` has more kanji than kana and was Chinese as far as the filter
+    // was concerned. Any kana at all settles it, which is the rule as written (R-10).
+    if script == "zh" && kana > 0 {
+        return Some("ja");
+    }
+    Some(script)
 }
 
 /// Pull language tokens out of a name: the leading country/language prefix, and any
@@ -641,6 +649,42 @@ pub fn detect(name: &str, group: Option<&str>, reported: Option<&str>) -> Option
 
 #[cfg(test)]
 mod tests {
+    /// No token is listed twice (R-09).
+    ///
+    /// `quebec`, `exyu`, `taiwan`, `indonesian` and `indonesia` each appeared twice.
+    /// Every pair agreed, so the `HashMap` was unaffected and nothing misbehaved -- but a
+    /// table collected into a map gives no warning when a duplicate *disagrees*: the
+    /// later row silently wins and a language is quietly reassigned. This is the warning.
+    #[test]
+    fn every_language_token_appears_once() {
+        let mut seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        let mut repeated: Vec<String> = Vec::new();
+        for &(token, code) in super::TOKENS {
+            match seen.insert(token, code) {
+                None => {}
+                Some(first) if first == code => repeated.push(format!("{token} -> {code}")),
+                Some(first) => repeated.push(format!("{token} -> {first} and {code}")),
+            }
+        }
+        assert_eq!(repeated, Vec::<String>::new(), "duplicated rows in TOKENS");
+        assert_eq!(seen.len(), super::TOKENS.len());
+    }
+
+    /// Kanji outnumbering kana does not make a Japanese title Chinese (R-10).
+    #[test]
+    fn japanese_written_mostly_in_kanji_is_still_japanese() {
+        // More kanji than kana, which is the ordinary case and the one that was wrong.
+        assert_eq!(super::script_language("君の名は"), Some("ja"));
+        // Equal counts, which used to be decided by `HashMap` iteration order.
+        assert_eq!(super::script_language("トカレフ2010 運命の撃鉄"), Some("ja"));
+        // Kana only, which was already right.
+        assert_eq!(super::script_language("ドラえもん"), Some("ja"));
+        // No kana anywhere: Han alone is Chinese, which is the whole point of the rule.
+        assert_eq!(super::script_language("中央电视台"), Some("zh"));
+        // And a mostly-Latin name is still nobody's script.
+        assert_eq!(super::script_language("Al Jazeera"), None);
+    }
+
     use super::*;
 
     fn d(name: &str) -> Option<String> {
