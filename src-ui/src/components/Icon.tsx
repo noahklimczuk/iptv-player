@@ -42,6 +42,9 @@ export const ICON_PATHS: Record<string, string> = {
   layers: 'M12 4.5l9 5-9 5-9-5zM3 14.5l9 5 9-5',
   sparkle: 'M12 5l1.8 5.2L19 12l-5.2 1.8L12 19l-1.8-5.2L5 12l5.2-1.8z',
   heart: 'M12 18.5s-7-4.4-7-9a4 4 0 017-2.6A4 4 0 0119 9.5c0 4.6-7 9-7 9z',
+  // Head and shoulders. The search palette's People group had no glyph of its own and
+  // borrowed `heart`, which already means "favourite" everywhere else (R-148).
+  person: 'M12 11a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0',
   keyboard: 'M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10',
   alert: 'M12 9v5M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
 };
