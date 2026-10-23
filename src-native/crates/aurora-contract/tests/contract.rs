@@ -404,8 +404,7 @@ fn the_field_scan_reads_names_and_not_the_prose_around_them() {
 #[test]
 fn the_csp_allows_the_image_schemes_providers_actually_use() {
     let config =
-        std::fs::read_to_string(app_crate().join("tauri.conf.json"))
-            .expect("tauri.conf.json");
+        std::fs::read_to_string(app_crate().join("tauri.conf.json")).expect("tauri.conf.json");
     let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
     let csp = parsed["app"]["security"]["csp"]
         .as_str()
@@ -578,8 +577,7 @@ fn the_refresh_sweep_runs_more_often_than_the_staleness_it_looks_for() {
 #[test]
 fn the_window_is_transparent_so_video_can_show_through() {
     let config =
-        std::fs::read_to_string(app_crate().join("tauri.conf.json"))
-            .expect("tauri.conf.json");
+        std::fs::read_to_string(app_crate().join("tauri.conf.json")).expect("tauri.conf.json");
     let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
     let window = &parsed["app"]["windows"][0];
 
@@ -605,16 +603,15 @@ fn the_window_is_transparent_so_video_can_show_through() {
 #[test]
 fn the_updaters_bundle_identifier_matches_the_manifest() {
     let conf: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(app_crate().join("tauri.conf.json"))
-            .expect("tauri.conf.json"),
+        &std::fs::read_to_string(app_crate().join("tauri.conf.json")).expect("tauri.conf.json"),
     )
     .expect("tauri.conf.json");
 
     // Read out of the source rather than linked, for the reason on `app_crate`: the
     // constant exists precisely because it is needed before Tauri does, and this test
     // should not need Tauri either.
-    let updates = std::fs::read_to_string(app_crate().join("src").join("updates.rs"))
-        .expect("updates.rs");
+    let updates =
+        std::fs::read_to_string(app_crate().join("src").join("updates.rs")).expect("updates.rs");
     let declared = updates
         .lines()
         .find_map(|l| {
@@ -688,8 +685,7 @@ fn the_release_profile_still_unwinds_so_the_supervisor_can_work() {
 #[test]
 fn the_bundle_installs_per_user_so_a_copy_can_update_itself() {
     let config =
-        std::fs::read_to_string(app_crate().join("tauri.conf.json"))
-            .expect("tauri.conf.json");
+        std::fs::read_to_string(app_crate().join("tauri.conf.json")).expect("tauri.conf.json");
     let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
 
     let mode = parsed["bundle"]["windows"]["nsis"]["installMode"]

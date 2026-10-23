@@ -59,7 +59,10 @@ fn has_year(s: &str) -> bool {
 /// year and is not part of what TMDB calls the film.
 fn ends_with_year(s: &str) -> bool {
     let tail = s.trim_end_matches(|c: char| !c.is_alphanumeric());
-    let last = tail.rsplit(|c: char| !c.is_alphanumeric()).next().unwrap_or("");
+    let last = tail
+        .rsplit(|c: char| !c.is_alphanumeric())
+        .next()
+        .unwrap_or("");
     last.len() == 4 && has_year(last)
 }
 
@@ -104,7 +107,10 @@ fn no_film_reaches_tmdb_with_the_year_still_in_its_name() {
             embedded.push((stored.clone(), cleaned.title));
         }
     }
-    println!("searched with a release year on the end: {}", trailing.len());
+    println!(
+        "searched with a release year on the end: {}",
+        trailing.len()
+    );
     for (stored, asked) in trailing.iter().take(10) {
         println!("   {stored:?} -> {asked:?}");
     }

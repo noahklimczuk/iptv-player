@@ -40,7 +40,10 @@ pub fn min_age(certification: &str) -> Option<u8> {
     // Found by writing the test for the dead arms below, which is the same defect one
     // line further up (R-16).
     let numeric = c.strip_prefix("AGE ").unwrap_or(c).trim();
-    let digits: String = numeric.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+    let digits: String = numeric
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
     if !digits.is_empty() && digits.len() <= 2 {
         // Guard against matching the "13" in "PG13" here; that is handled below.
         if numeric == digits || numeric == format!("{digits}+") {
@@ -102,9 +105,7 @@ pub fn looks_adult(group: Option<&str>) -> bool {
     let g = group.to_ascii_lowercase();
     // `+18` as well as `18+`: a playlist naming the category either way means the same
     // thing, and only one of them was listed (R-16).
-    const MARKERS: &[&str] = &[
-        "adult", "xxx", "porn", "erotic", "18+", "+18", "for adults",
-    ];
+    const MARKERS: &[&str] = &["adult", "xxx", "porn", "erotic", "18+", "+18", "for adults"];
     if MARKERS.iter().any(|m| g.contains(m)) {
         return true;
     }
@@ -121,9 +122,23 @@ mod tests {
     #[test]
     fn the_bare_and_suffixed_numbers_still_map_to_themselves() {
         for (given, want) in [
-            ("0", 0u8), ("0+", 0), ("6", 6), ("6+", 6), ("7", 7), ("12", 12),
-            ("13", 13), ("13+", 13), ("14", 14), ("15", 15), ("16", 16), ("16+", 16),
-            ("17", 17), ("17+", 17), ("18", 18), ("18+", 18), ("AGE 12", 12),
+            ("0", 0u8),
+            ("0+", 0),
+            ("6", 6),
+            ("6+", 6),
+            ("7", 7),
+            ("12", 12),
+            ("13", 13),
+            ("13+", 13),
+            ("14", 14),
+            ("15", 15),
+            ("16", 16),
+            ("16+", 16),
+            ("17", 17),
+            ("17+", 17),
+            ("18", 18),
+            ("18+", 18),
+            ("AGE 12", 12),
         ] {
             assert_eq!(super::min_age(given), Some(want), "{given:?}");
         }
@@ -142,7 +157,10 @@ mod tests {
     #[test]
     fn an_adult_group_is_recognised_whichever_side_the_plus_is_on() {
         for group in ["+18", "+18 Channels", "+ 18 VOD", "CANALES +18"] {
-            assert!(super::looks_adult(Some(group)), "{group:?} was not recognised");
+            assert!(
+                super::looks_adult(Some(group)),
+                "{group:?} was not recognised"
+            );
         }
         // Still not matching something that merely contains the digits.
         assert!(!super::looks_adult(Some("Studio 18")));
@@ -153,7 +171,13 @@ mod tests {
     /// The spaced form, which `rules::presets::hide_adult` matches (R-18).
     #[test]
     fn an_adult_group_is_recognised_however_it_spaces_its_age() {
-        for group in ["18+", "18+ Channels", "18 + VOD", "18  +  MOVIES", "FOR ADULTS"] {
+        for group in [
+            "18+",
+            "18+ Channels",
+            "18 + VOD",
+            "18  +  MOVIES",
+            "FOR ADULTS",
+        ] {
             assert!(looks_adult(Some(group)), "{group:?} was not recognised");
         }
         for group in ["Channel 18", "Documentaries", "Kids", "18"] {

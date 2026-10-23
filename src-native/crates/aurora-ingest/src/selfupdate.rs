@@ -94,10 +94,18 @@ pub fn stage_zip(archive: &Path, stage_dir: &Path) -> Result<Staged, NetFailure>
             .by_index(i)
             .map_err(|e| failure("The downloaded update is damaged", e.to_string()))?;
 
-        let Some(relative) = safe_entry_path(entry.name()) else {
+        // zip 9 hands back the name as a `Result`: a name that is not valid UTF-8 is an
+        // error rather than something quietly lossy. Owned, because `entry` is read from
+        // below and the borrow would outlive its welcome.
+        let name = entry
+            .name()
+            .map(|n| n.into_owned())
+            .map_err(|e| failure("The downloaded update is damaged", e.to_string()))?;
+
+        let Some(relative) = safe_entry_path(&name) else {
             return Err(failure(
                 "The downloaded update contains an unsafe path",
-                format!("{:?} does not stay inside the update folder", entry.name()),
+                format!("{name:?} does not stay inside the update folder"),
             ));
         };
         if entry.is_dir() || relative.as_os_str().is_empty() {
@@ -346,7 +354,7 @@ mod tests {
     fn portable_zip(path: &Path, entries: &[(&str, &[u8])]) {
         let file = std::fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options: zip::write::FileOptions<'_, ()> =
+        let options: zip::write::FileOptions<'_, '_, ()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for (name, body) in entries {
             zip.start_file(format!("Aurora TV/{name}"), options)
@@ -403,7 +411,7 @@ mod tests {
             let archive = dir.join("hostile.zip");
             let file = std::fs::File::create(&archive).unwrap();
             let mut zip = zip::ZipWriter::new(file);
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
             zip.start_file(hostile, options).unwrap();
             zip.write_all(b"owned").unwrap();
             zip.finish().unwrap();

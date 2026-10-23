@@ -680,8 +680,14 @@ mod tests {
         let rows = list(&conn, &ChannelFilter::default()).unwrap();
         let keep = rows.iter().find(|r| r.name == "Keep").expect("Keep");
         let drop = rows.iter().find(|r| r.name == "Drop").expect("Drop");
-        assert!(!keep.stale, "a channel the refresh listed is marked dropped");
-        assert!(drop.stale, "a channel the refresh did not list is not marked");
+        assert!(
+            !keep.stale,
+            "a channel the refresh listed is marked dropped"
+        );
+        assert!(
+            drop.stale,
+            "a channel the refresh did not list is not marked"
+        );
 
         // `get` answers the same way, which is what keeps the two from drifting.
         assert!(get(&conn, drop.id).unwrap().expect("the row").stale);
@@ -836,7 +842,8 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                listed.len() as i64, count,
+                listed.len() as i64,
+                count,
                 "{name} promised {count} and lists {}",
                 listed.len()
             );

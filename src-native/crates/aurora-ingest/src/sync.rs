@@ -16,10 +16,10 @@ use aurora_db::rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::epg::{self, BatchingSink, BATCH_SIZE};
-use crate::spill::{Spill, SpillWriter};
 use crate::http::HttpClient;
 use crate::playlist;
 use crate::source::SourceKind;
+use crate::spill::{Spill, SpillWriter};
 use crate::xtream::{AccountStatus, XtreamClient};
 
 /// Progress, so a 40,000-entry import is not a frozen spinner (README §C8).
@@ -2498,7 +2498,10 @@ http://example.com/a.ts
     fn a_markerless_stream_is_keyed_on_its_id_rather_than_its_url() {
         let before = PlaylistEntry::new("Sky One", "http://host:8080/G22R37R4/47732430/95471");
         assert_eq!(provider_key(&before), "live95471");
-        assert!(!provider_key(&before).contains("47732430"), "the password is in the key");
+        assert!(
+            !provider_key(&before).contains("47732430"),
+            "the password is in the key"
+        );
 
         // The viewer rotates the password. Same channel, same key.
         let after = PlaylistEntry::new("Sky One", "http://host:8080/G22R37R4/99887766/95471");

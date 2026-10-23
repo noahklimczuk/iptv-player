@@ -99,8 +99,19 @@ const RELEASE_TAGS: &[&str] = &[
 /// A release tag is only a release tag in the places one appears. See
 /// [`strip_release_tags`] for where that is.
 const AMBIGUOUS_TAGS: &[&str] = &[
-    "cam", "cut", "directors", "dual", "extended", "internal", "limited", "multi",
-    "proper", "sub", "ts", "uncut", "web",
+    "cam",
+    "cut",
+    "directors",
+    "dual",
+    "extended",
+    "internal",
+    "limited",
+    "multi",
+    "proper",
+    "sub",
+    "ts",
+    "uncut",
+    "web",
 ];
 
 /// What one word of a VOD title is, before anything decides whether it is noise *here*.
@@ -168,7 +179,10 @@ fn strip_release_tags(s: &str) -> (Vec<&str>, Vec<String>) {
             i += 1;
         }
         let run = start..i;
-        let tags = run.clone().filter(|&j| kinds[j] != Word::Punctuation).count();
+        let tags = run
+            .clone()
+            .filter(|&j| kinds[j] != Word::Punctuation)
+            .count();
         let certain = run.clone().any(|j| kinds[j] == Word::Tag);
         let at_end = i == words.len();
         let all = certain || (at_end && tags >= 2);
@@ -599,7 +613,11 @@ mod tests {
             ("Inception 2010[1080p]", "Inception", 2010),
             ("Arrival 2016(FHD)", "Arrival", 2016),
             // The trailing star this panel writes on a new release.
-            ("Spider-Man Across the Spider-Verse 2023*", "Spider-Man Across the Spider-Verse", 2023),
+            (
+                "Spider-Man Across the Spider-Verse 2023*",
+                "Spider-Man Across the Spider-Verse",
+                2023,
+            ),
             // And the forms that already worked, which must not move.
             ("The Matrix (1999) [4K] REMUX", "The Matrix", 1999),
             ("Inception.2010.1080p", "Inception", 2010),

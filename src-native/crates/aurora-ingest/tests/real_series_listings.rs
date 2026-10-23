@@ -211,8 +211,9 @@ fn a_sweep_asks_about_each_show_once_however_the_panel_answers() {
     );
 
     // And the queue is empty rather than holding the same shows back.
-    let left = library::series_needing_episodes(&conn, &filter, 200, NOW - LISTING_RETRY_AFTER_SECS)
-        .unwrap();
+    let left =
+        library::series_needing_episodes(&conn, &filter, 200, NOW - LISTING_RETRY_AFTER_SECS)
+            .unwrap();
     assert!(left.is_empty(), "{left:?} would be asked about again");
 
     // Once the cooldown passes they are worth one more request each -- which is the

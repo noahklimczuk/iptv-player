@@ -415,21 +415,12 @@ mod tests {
     #[test]
     fn the_largest_fitting_layout_is_the_one_with_the_most_tiles() {
         assert_eq!(Budget::largest_fitting(0, 9), Some(Layout::Grid3x3));
-        assert_eq!(
-            Budget::largest_fitting(0, 6),
-            Some(Layout::OnePlusFive)
-        );
+        assert_eq!(Budget::largest_fitting(0, 6), Some(Layout::OnePlusFive));
         // Five connections: 1+5 needs six, so the best is a four-tile layout.
-        assert_eq!(
-            Budget::largest_fitting(0, 5).map(Layout::tiles),
-            Some(4)
-        );
+        assert_eq!(Budget::largest_fitting(0, 5).map(Layout::tiles), Some(4));
         assert_eq!(Budget::largest_fitting(0, 3), None);
         // A recording takes one of the nine.
-        assert_eq!(
-            Budget::largest_fitting(1, 9),
-            Some(Layout::OnePlusFive)
-        );
+        assert_eq!(Budget::largest_fitting(1, 9), Some(Layout::OnePlusFive));
         // "Nothing declared: every layout is worth offering" used to be asserted here,
         // as `largest_fitting(0, None) == Some(Grid3x3)`. That was the finding written
         // down as a test: with no declared limit nothing is known about what fits, and

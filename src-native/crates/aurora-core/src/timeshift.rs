@@ -211,7 +211,9 @@ mod tests {
             bytes: u64::MAX,
             secs: 1800,
         };
-        let secs = budget.bytes_as_secs(8_000_000).expect("a bitrate was given");
+        let secs = budget
+            .bytes_as_secs(8_000_000)
+            .expect("a bitrate was given");
         assert!(
             secs > 1.0e12,
             "{secs} is what a wrapped multiply looks like, not a saturated one"
@@ -229,7 +231,6 @@ mod tests {
         assert_eq!(ordinary.bytes_as_secs(0), None);
     }
 
-
     use super::*;
 
     /// A window that cannot be a window does not take the process with it.
@@ -242,13 +243,33 @@ mod tests {
     fn clamping_against_a_nonsense_window_does_not_panic() {
         let nonsense = [
             // Inverted.
-            Window { start_secs: 100.0, position_secs: 50.0, live_secs: 10.0 },
+            Window {
+                start_secs: 100.0,
+                position_secs: 50.0,
+                live_secs: 10.0,
+            },
             // NaN in each position.
-            Window { start_secs: f64::NAN, position_secs: 0.0, live_secs: 10.0 },
-            Window { start_secs: 0.0, position_secs: 0.0, live_secs: f64::NAN },
+            Window {
+                start_secs: f64::NAN,
+                position_secs: 0.0,
+                live_secs: 10.0,
+            },
+            Window {
+                start_secs: 0.0,
+                position_secs: 0.0,
+                live_secs: f64::NAN,
+            },
             // And the infinities, which `clamp` accepts but which cannot be a buffer.
-            Window { start_secs: f64::NEG_INFINITY, position_secs: 0.0, live_secs: 10.0 },
-            Window { start_secs: 0.0, position_secs: 0.0, live_secs: f64::INFINITY },
+            Window {
+                start_secs: f64::NEG_INFINITY,
+                position_secs: 0.0,
+                live_secs: 10.0,
+            },
+            Window {
+                start_secs: 0.0,
+                position_secs: 0.0,
+                live_secs: f64::INFINITY,
+            },
         ];
         for w in nonsense {
             // The target comes back untouched: there is no buffer to hold it inside.
@@ -259,7 +280,11 @@ mod tests {
         }
 
         // A real window still clamps.
-        let real = Window { start_secs: 10.0, position_secs: 50.0, live_secs: 100.0 };
+        let real = Window {
+            start_secs: 10.0,
+            position_secs: 50.0,
+            live_secs: 100.0,
+        };
         assert_eq!(real.clamp(5.0), 10.0);
         assert_eq!(real.clamp(500.0), 100.0);
         assert_eq!(real.clamp(50.0), 50.0);

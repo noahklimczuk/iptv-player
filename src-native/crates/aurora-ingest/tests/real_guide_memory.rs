@@ -141,7 +141,10 @@ fn the_real_guide_is_not_held_in_memory_while_it_is_parsed() {
         touched.len()
     );
 
-    assert!(stats.programmes > 1000, "this guide is too small to measure");
+    assert!(
+        stats.programmes > 1000,
+        "this guide is too small to measure"
+    );
     assert!(
         matches!(spilled, Spill::Disk { .. }),
         "the guide was held in memory, which is the thing this is about"

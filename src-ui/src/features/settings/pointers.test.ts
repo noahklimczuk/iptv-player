@@ -33,6 +33,11 @@ function withoutComments(source: string): string {
     .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
 }
 
+/** CRLF on Windows, LF in CI. Also in `state/subscriptions.test.ts`, which says why. */
+function read(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+}
+
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name);
@@ -44,7 +49,7 @@ function sources(dir: string, out: string[] = []): string[] {
 
 /** The headings `SettingsPage` renders, in the order it renders them. */
 function sections(): string[] {
-  const source = readFileSync(SETTINGS, 'utf8');
+  const source = read(SETTINGS);
   return [...source.matchAll(/<Section title="([^"]+)"/g)].map((m) => m[1]!);
 }
 
@@ -61,7 +66,7 @@ describe('Settings pointers', () => {
     const titles = sections();
     const wrong: string[] = [];
     for (const path of sources(SRC)) {
-      const lines = withoutComments(readFileSync(path, 'utf8')).split('\n');
+      const lines = withoutComments(read(path)).split('\n');
       lines.forEach((line, i) => {
         let at = line.indexOf(POINTER);
         while (at !== -1) {

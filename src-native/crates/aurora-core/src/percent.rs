@@ -156,10 +156,26 @@ mod tests {
     #[test]
     fn what_is_encoded_decodes_back_to_itself() {
         for s in [
-            "hunter2", "p/w", "p#w", "p?w", "p&w=x", "p+w", "p w", "100%", "caf\u{e9}",
-            "p\u{e4}ss", "\u{20ac}5", "\u{1f600}", "a:b@c", "[]{}",
+            "hunter2",
+            "p/w",
+            "p#w",
+            "p?w",
+            "p&w=x",
+            "p+w",
+            "p w",
+            "100%",
+            "caf\u{e9}",
+            "p\u{e4}ss",
+            "\u{20ac}5",
+            "\u{1f600}",
+            "a:b@c",
+            "[]{}",
         ] {
-            assert_eq!(decode(&encode(s)), s, "{s:?} did not survive the round trip");
+            assert_eq!(
+                decode(&encode(s)),
+                s,
+                "{s:?} did not survive the round trip"
+            );
         }
     }
 

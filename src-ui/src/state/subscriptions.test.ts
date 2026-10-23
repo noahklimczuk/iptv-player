@@ -52,11 +52,23 @@ function withoutComments(source: string): string {
     .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
 }
 
+/**
+ * Read a source file with its line endings normalized.
+ *
+ * The repository checks out CRLF on Windows and LF on the Linux runner, so splitting on
+ * `\n` leaves a trailing `\r` on every line. A test that compares a whole line then
+ * passes in CI and fails on a developer's machine, which is how `components/icons.test.ts`
+ * came to be red locally while green on every pull request.
+ */
+function read(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+}
+
 describe('UI store subscriptions', () => {
   it('always names the fields it wants', () => {
     const offenders: string[] = [];
     for (const path of sources(SRC)) {
-      const lines = withoutComments(readFileSync(path, 'utf8')).split('\n');
+      const lines = withoutComments(read(path)).split('\n');
       lines.forEach((line, i) => {
         // `useUi()` or `useUi( )` — a call with no selector argument.
         if (/\buseUi\(\s*\)/.test(line)) {
@@ -74,7 +86,7 @@ describe('UI store subscriptions', () => {
    */
   it('is not passing because nothing subscribes at all', () => {
     const selectors = sources(SRC)
-      .flatMap((path) => withoutComments(readFileSync(path, 'utf8')).split('\n'))
+      .flatMap((path) => withoutComments(read(path)).split('\n'))
       .filter((line) => /\buseUi\(\s*\(/.test(line)).length;
     expect(selectors).toBeGreaterThan(10);
   });

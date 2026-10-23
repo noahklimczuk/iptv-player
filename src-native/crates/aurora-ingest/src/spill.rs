@@ -199,9 +199,8 @@ impl Spill {
                 Ok(())
             }
             Spill::Disk { path, .. } => {
-                let file = File::open(path).map_err(|e| {
-                    SpillError::Read(format!("could not reopen the guide: {e}"))
-                })?;
+                let file = File::open(path)
+                    .map_err(|e| SpillError::Read(format!("could not reopen the guide: {e}")))?;
                 let mut reader = BufReader::new(file);
                 let mut line = String::new();
                 loop {

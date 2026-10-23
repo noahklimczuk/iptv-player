@@ -181,13 +181,19 @@ mod tests {
     #[test]
     fn an_absurd_margin_is_a_zero_rect_rather_than_an_overflow() {
         for margin in [u32::MAX, u32::MAX / 2 + 1, u32::MAX - 7] {
-            let geometry = super::Geometry { margin, ..Default::default() };
+            let geometry = super::Geometry {
+                margin,
+                ..Default::default()
+            };
             let rect = geometry.rect(1920, 1080);
             assert_eq!(rect.width, 0, "margin {margin} produced a tile");
             assert_eq!(rect.height, 0, "margin {margin} produced a tile");
         }
         // The largest margin that can still be doubled: no overflow, no room either.
-        let geometry = super::Geometry { margin: u32::MAX / 2, ..Default::default() };
+        let geometry = super::Geometry {
+            margin: u32::MAX / 2,
+            ..Default::default()
+        };
         assert_eq!(geometry.rect(1920, 1080).width, 0);
     }
 

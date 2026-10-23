@@ -393,14 +393,20 @@ mod tests {
         };
 
         // A channel that would not play: another URL for it is exactly the answer.
-        assert!(has("HTTP 404"), "a missing stream should offer another source");
+        assert!(
+            has("HTTP 404"),
+            "a missing stream should offer another source"
+        );
         assert!(has("connection refused"));
         assert!(has("connection timed out"));
         assert!(has("dns"));
 
         // And the three where it is noise.
         assert!(!has("HTTP 400"), "a rejected request has no other source");
-        assert!(!has("HTTP 401"), "refused credentials are the same everywhere");
+        assert!(
+            !has("HTTP 401"),
+            "refused credentials are the same everywhere"
+        );
         assert!(
             !has("HTTP 555"),
             "a connection limit is the line, not the address"
@@ -408,7 +414,10 @@ mod tests {
 
         // The ones that are left still carry something to do.
         let rejected = NetFailure::classify("HTTP 400");
-        assert!(rejected.actions.contains(&ErrorAction::OpenSettings), "{rejected:?}");
+        assert!(
+            rejected.actions.contains(&ErrorAction::OpenSettings),
+            "{rejected:?}"
+        );
         let unauthorized = NetFailure::classify("HTTP 401");
         assert!(unauthorized.actions.contains(&ErrorAction::OpenSettings));
     }

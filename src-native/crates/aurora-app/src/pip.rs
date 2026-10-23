@@ -464,16 +464,37 @@ mod tests {
         pip.set_window(1280, 720);
 
         // The right half of a 1280-wide window: entirely inside it.
-        let asked = Rect { x: 640, y: 0, width: 640, height: 720 };
+        let asked = Rect {
+            x: 640,
+            y: 0,
+            width: 640,
+            height: 720,
+        };
         let view = pip.set_inlay(Some(asked)).unwrap();
-        assert_eq!(view.inlay, Some(asked), "a rectangle that fits is not trimmed");
+        assert_eq!(
+            view.inlay,
+            Some(asked),
+            "a rectangle that fits is not trimmed"
+        );
         assert_eq!(placed(&seen), Some(asked));
 
         // Drag the window narrower than the rectangle's right edge.
         let view = pip.relayout(800, 720).unwrap();
         let trimmed = view.inlay.expect("some of it is still on screen");
-        assert_eq!(trimmed, Rect { x: 640, y: 0, width: 160, height: 720 });
-        assert_eq!(placed(&seen), Some(trimmed), "the backend gets the trimmed one");
+        assert_eq!(
+            trimmed,
+            Rect {
+                x: 640,
+                y: 0,
+                width: 160,
+                height: 720
+            }
+        );
+        assert_eq!(
+            placed(&seen),
+            Some(trimmed),
+            "the backend gets the trimmed one"
+        );
         // The property that matters, stated as itself: inside the client area.
         assert!(
             trimmed.x >= 0 && trimmed.x as i64 + trimmed.width as i64 <= 800,
@@ -488,7 +509,12 @@ mod tests {
         assert_eq!(view.inlay, None);
         assert_eq!(
             placed(&seen),
-            Some(Rect { x: 0, y: 0, width: 600, height: 720 }),
+            Some(Rect {
+                x: 0,
+                y: 0,
+                width: 600,
+                height: 720
+            }),
             "with no inlay left the surface fills the window"
         );
 
@@ -504,8 +530,13 @@ mod tests {
     fn a_corner_still_wins_over_an_inlay_after_a_resize() {
         let (pip, seen) = pip();
         pip.set_window(1280, 720);
-        pip.set_inlay(Some(Rect { x: 640, y: 0, width: 640, height: 720 }))
-            .unwrap();
+        pip.set_inlay(Some(Rect {
+            x: 640,
+            y: 0,
+            width: 640,
+            height: 720,
+        }))
+        .unwrap();
         pip.set_enabled(true).unwrap();
         let corner = pip.state().rect;
         assert_eq!(placed(&seen), Some(corner));

@@ -233,7 +233,9 @@ fn every_command_runs_off_the_main_thread() {
 #[test]
 fn no_command_reads_one_channel_by_listing_them_all() {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {

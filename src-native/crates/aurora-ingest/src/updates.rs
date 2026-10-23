@@ -326,10 +326,7 @@ pub fn is_loopback_url(url: &str) -> bool {
         return false;
     };
     // The authority ends at the first `/`, `?` or `#`; everything after is the path.
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     // Userinfo at all is a refusal. `127.0.0.1:@evil`, `evil@127.0.0.1` and
     // `127.0.0.1#@evil` are all either an attack or a mistake.
     if authority.contains('@') || authority.is_empty() {
