@@ -274,8 +274,14 @@ fn build_client(request: &RecordRequest) -> Result<reqwest::blocking::Client, Ne
         builder = builder.user_agent(ua.clone());
     }
     builder
+        // The shared classifier here too, which is the rest of R-36: `e.to_string()` is
+        // the top-level `Display` only, and a client that will not build fails for a
+        // reason that is usually in the cause chain -- a TLS backend that did not
+        // initialise says nothing useful at the outermost level. None of
+        // `classify_reqwest`'s typed predicates match a build error, so this reaches its
+        // `cause_chain` fallback, which is the point.
         .build()
-        .map_err(|e| NetFailure::classify(&e.to_string()))
+        .map_err(|e| crate::http::classify_reqwest(&e))
 }
 
 fn copy_to_disk(

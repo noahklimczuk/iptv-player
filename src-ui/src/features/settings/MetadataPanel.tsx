@@ -164,7 +164,11 @@ export function MetadataPanel() {
 
       {progress && progress.total > 0 && (
         <div>
-          <ProgressBar percent={(progress.done / progress.total) * 100} height={4} />
+          <ProgressBar
+            percent={(progress.done / progress.total) * 100}
+            height={4}
+            label="Metadata fetch progress"
+          />
           <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', marginTop: 4 }}>
             {progress.done} of {progress.total}
           </div>
@@ -268,7 +272,11 @@ function ArtworkCachePanel() {
 
       {progress && progress.total > 0 && (
         <div>
-          <ProgressBar percent={(progress.done / progress.total) * 100} height={4} />
+          <ProgressBar
+            percent={(progress.done / progress.total) * 100}
+            height={4}
+            label="Artwork cache progress"
+          />
           <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', marginTop: 4 }}>
             {progress.done} of {progress.total}
           </div>
@@ -391,7 +399,7 @@ function CoverageRow({ label, coverage }: { label: string; coverage: EnrichmentC
         {noMatch > 0 && <Badge tone="outline">{noMatch} not found</Badge>}
         {failed > 0 && <Badge tone="outline">{failed} to retry</Badge>}
       </div>
-      <ProgressBar percent={pct} height={4} />
+      <ProgressBar percent={pct} height={4} label={`${label} coverage`} />
     </div>
   );
 }

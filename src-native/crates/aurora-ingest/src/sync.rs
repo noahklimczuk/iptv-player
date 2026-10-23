@@ -987,19 +987,14 @@ fn reindex(db: &mut Connection, _provider_id: i64) -> aurora_db::Result<()> {
 
 /// A stable identity for an entry across refreshes. Xtream stream ids are embedded in
 /// the URL; for plain playlists the URL itself is the only stable thing there is.
+/// What identifies this channel to this provider, across refreshes.
+///
+/// The rule is `aurora_core::catchup::live_channel_key`, shared with the pass that
+/// repairs keys written by earlier builds; a URL it does not recognise as a stream
+/// address keeps the URL, which is all a plain playlist offers (R-69).
 fn provider_key(entry: &PlaylistEntry) -> String {
     let path = entry.url.split(['?', '#']).next().unwrap_or(&entry.url);
-    for marker in ["/live/", "/movie/", "/series/"] {
-        if let Some(idx) = path.find(marker) {
-            if let Some(last) = path[idx..].rsplit('/').next() {
-                let id = last.split('.').next().unwrap_or(last);
-                if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-                    return format!("{}{id}", marker.trim_matches('/'));
-                }
-            }
-        }
-    }
-    path.to_string()
+    aurora_core::catchup::live_channel_key(&entry.url).unwrap_or_else(|| path.to_string())
 }
 
 fn db_failure(e: aurora_db::DbError) -> NetFailure {
@@ -2492,5 +2487,25 @@ http://example.com/a.ts
         // A plain playlist has nothing else stable to key on.
         let plain = PlaylistEntry::new("X", "http://example.com/stream/abc.m3u8");
         assert_eq!(provider_key(&plain), "http://example.com/stream/abc.m3u8");
+    }
+
+    /// The form this subscription actually serves: no `/live/` marker (R-69).
+    ///
+    /// 6,698 of its 237,170 entries look like this, and the key used to be the whole
+    /// URL -- so it held the password, and rotating the password made every one of them
+    /// a channel the library had never seen.
+    #[test]
+    fn a_markerless_stream_is_keyed_on_its_id_rather_than_its_url() {
+        let before = PlaylistEntry::new("Sky One", "http://host:8080/G22R37R4/47732430/95471");
+        assert_eq!(provider_key(&before), "live95471");
+        assert!(!provider_key(&before).contains("47732430"), "the password is in the key");
+
+        // The viewer rotates the password. Same channel, same key.
+        let after = PlaylistEntry::new("Sky One", "http://host:8080/G22R37R4/99887766/95471");
+        assert_eq!(provider_key(&after), provider_key(&before));
+
+        // And the extension-carrying variant of the same shape.
+        let with_ext = PlaylistEntry::new("Sky One", "http://host:8080/G22R37R4/47732430/95471.ts");
+        assert_eq!(provider_key(&with_ext), "live95471");
     }
 }

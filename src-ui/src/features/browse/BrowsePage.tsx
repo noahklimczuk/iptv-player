@@ -27,6 +27,7 @@
  * posters you have scrolled. The A–Z bar beside the grid is the other half of the same
  * problem: a category of four thousand films is still four thousand films.
  */
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowseSort, CatalogItem } from '@shared/ipc';
 import { CatalogCard } from '@/components/CatalogCard';
@@ -134,6 +135,56 @@ export function BrowsePage({
     io.observe(el);
     return () => io.disconnect();
   }, [done, loadMore, items.length]);
+
+  /**
+   * The grid is virtualized, which README §16 asks of "every list and the guide grid"
+   * under "techniques that are required, not optional".
+   *
+   * It was the one list in the app that was not, and nothing unmounted: `usePages`
+   * appends, `PAGE` is 120, and a `CatalogCard` is about 20 elements, so each page added
+   * roughly 2,400 nodes and never gave any back. Twenty pages of scrolling is ~48,000;
+   * the 27,494 films on the subscription this is measured against would be ~550,000 if
+   * somebody scrolled to the end. The posters are `loading="lazy"`, so the artwork was
+   * never the problem -- the DOM was (R-75).
+   *
+   * A grid rather than a list, so the virtualizer counts *rows* and the row has to know
+   * how many columns there are. `auto-fill` decides that from the container width, so it
+   * is measured here and recomputed on resize rather than assumed.
+   */
+  const grid = useRef<HTMLDivElement | null>(null);
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const [columns, setColumns] = useState(1);
+  /** The grid's offset inside the scroller, which the virtualizer needs to place rows. */
+  const [offsetTop, setOffsetTop] = useState(0);
+
+  useEffect(() => {
+    const el = grid.current;
+    if (!el) return undefined;
+    // The app shell is what scrolls, not the window: `<main>` carries `overflow-y`.
+    setScroller(el.closest('[data-scroll-root]') as HTMLElement | null);
+
+    const measure = () => {
+      // The arithmetic `repeat(auto-fill, minmax(MIN_CARD_W, 1fr))` does, done where the
+      // row renderer can use the answer.
+      const width = el.clientWidth;
+      setColumns(Math.max(1, Math.floor((width + COL_GAP) / (MIN_CARD_W + COL_GAP))));
+      setOffsetTop(el.offsetTop);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const rowCount = Math.ceil(items.length / columns);
+  const rows = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scroller,
+    estimateSize: () => CARD_H + ROW_GAP,
+    overscan: 3,
+    // The grid starts below the heading and the filter bar, inside the same scroller.
+    scrollMargin: offsetTop,
+  });
 
   const shelves = useMemo(() => facets?.categories ?? [], [facets]);
   const filtered = Boolean(genre || category || query || letter);
@@ -269,14 +320,51 @@ export function BrowsePage({
             />
           )}
 
-          <div style={gridStyle}>
-            {items.map((item, i) => (
-              // Fixed height, so a two-line title does not push the row below it out of
-              // alignment — which is what made a grid of a hundred posters look broken.
-              <div key={`${item.kind}-${item.id}`} style={{ height: CARD_H }}>
-                <CatalogCard item={item} index={i} onOpen={onOpen} onPlay={onPlay} showTitle />
-              </div>
-            ))}
+          <div
+            ref={grid}
+            data-testid="browse-grid"
+            // How many rows are loaded, which is what a journey used to count cards to
+            // find out. With only the visible rows mounted, the number of cards in the
+            // DOM answers a different question (R-75).
+            data-loaded={items.length}
+            style={{ position: 'relative', height: rows.getTotalSize() }}
+          >
+            {rows.getVirtualItems().map((row) => {
+              const from = row.index * columns;
+              return (
+                <div
+                  key={row.key}
+                  data-testid="browse-row"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${row.start - rows.options.scrollMargin}px)`,
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                    columnGap: 'var(--sp-3)',
+                    // Fixed height, so a two-line title does not push the row below it
+                    // out of alignment — which is what made a grid of a hundred posters
+                    // look broken.
+                    height: CARD_H,
+                    alignItems: 'start',
+                  }}
+                >
+                  {items.slice(from, from + columns).map((item, i) => (
+                    <div key={`${item.kind}-${item.id}`} style={{ height: CARD_H }}>
+                      <CatalogCard
+                        item={item}
+                        index={from + i}
+                        onOpen={onOpen}
+                        onPlay={onPlay}
+                        showTitle
+                      />
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
           </div>
 
           {items.length > 0 && !done && (
@@ -308,9 +396,21 @@ export function BrowsePage({
  */
 const CARD_H = 300;
 
+/**
+ * The two halves of `gap: var(--sp-5) var(--sp-3)` and the `minmax` floor, as numbers.
+ *
+ * The virtualizer works in pixels, and the column count is the same arithmetic the CSS
+ * does -- so these have to agree with `gridStyle` below. Kept adjacent for that reason;
+ * `--sp-5` is 24px and `--sp-3` is 12px in `tokens.css`.
+ */
+const ROW_GAP = 24;
+const COL_GAP = 12;
+const MIN_CARD_W = 158;
+
+/** Still used for the first-page skeletons, which are a fixed two dozen. */
 const gridStyle = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(158px, 1fr))',
-  gap: 'var(--sp-5) var(--sp-3)',
+  gridTemplateColumns: `repeat(auto-fill, minmax(${MIN_CARD_W}px, 1fr))`,
+  gap: `${ROW_GAP}px ${COL_GAP}px`,
   alignItems: 'start',
 } as const;
