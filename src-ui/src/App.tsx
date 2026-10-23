@@ -43,6 +43,7 @@ import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/Pla
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { ProfilePicker } from '@/features/profiles/ProfilePicker';
 import { SetupWizard } from '@/features/setup/SetupWizard';
+import { useClockTime } from '@/hooks/useClockTime';
 import { useCommand } from '@/hooks/useCommand';
 import { useEpisodeAids } from '@/hooks/useEpisodeAids';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -1009,6 +1010,10 @@ function TopBar({
   profileName: string;
   onSwitchProfile: () => void;
 }) {
+  // The one clock in the app that formatted itself: two `padStart` calls inline, which
+  // is `clockTime`'s 24-hour branch copied out, so the preference could not reach the
+  // time the viewer looks at most (R-136).
+  const clockTime = useClockTime();
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const t = window.setInterval(() => setClock(new Date()), 15_000);
@@ -1055,12 +1060,13 @@ function TopBar({
           <kbd style={{ fontSize: 10, opacity: 0.7 }}>Ctrl K</kbd>
         </button>
         <span
+          data-testid="topbar-clock"
           style={{
             fontSize: 'var(--fs-sm)', color: 'var(--text-muted)',
             fontVariantNumeric: 'tabular-nums',
           }}
         >
-          {String(clock.getHours()).padStart(2, '0')}:{String(clock.getMinutes()).padStart(2, '0')}
+          {clockTime(Math.floor(clock.getTime() / 1000))}
         </span>
         <button
           onClick={onSwitchProfile}

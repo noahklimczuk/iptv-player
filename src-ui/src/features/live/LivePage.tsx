@@ -26,7 +26,8 @@ import { LetterBar } from '@/components/LetterBar';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
-import { clockTime, progressPct } from '@/lib/format';
+import { progressPct } from '@/lib/format';
+import { useClockTime } from '@/hooks/useClockTime';
 import { activeProfileId } from '@/state/profile';
 import { type NowNext, useNowNext } from './useNowNext';
 
@@ -414,6 +415,8 @@ function ChannelRow({
   onTune: (c: Channel) => void;
   onToggleFavorite: (c: Channel) => void;
 }) {
+  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
+  const clockTime = useClockTime();
   const data = guide;
   const now = Math.floor(Date.now() / 1000);
   const pct = data?.now

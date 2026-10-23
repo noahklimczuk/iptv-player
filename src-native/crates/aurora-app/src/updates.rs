@@ -164,9 +164,10 @@ fn test_api_base() -> Option<String> {
     if value.is_empty() {
         return None;
     }
-    let loopback = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
-        .iter()
-        .any(|prefix| value.starts_with(prefix));
+    // The same rule the asset check uses, rather than a second copy of the prefix list
+    // that was wrong in the same way: `http://127.0.0.1:@example.invalid/` starts with a
+    // loopback address and is not one (R-128).
+    let loopback = aurora_ingest::updates::is_loopback_url(&value);
     if !loopback {
         tracing::warn!(
             "AURORA_UPDATE_API is set to something that is not loopback and has been \

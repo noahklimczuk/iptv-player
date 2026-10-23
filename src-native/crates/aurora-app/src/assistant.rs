@@ -311,6 +311,7 @@ fn run_tool(
     profile_id: i64,
     call: &ToolCall,
     now: i64,
+    offered: &std::collections::HashSet<(String, i64)>,
 ) -> std::result::Result<Ran, String> {
     let Some(tool) = Tool::parse(&call.name) else {
         return Err(format!("There is no tool called {}.", call.name));
@@ -612,9 +613,29 @@ fn run_tool(
                     .filter(|n| !n.is_empty())
                     .map(str::to_string);
 
-                // Resolved here, not trusted: an id the model invented, or one from a
-                // row that has since been removed by a refresh, must not reach the UI as
-                // a card with a play button that cannot work.
+                // Handed out by a tool in this conversation, not merely present in the
+                // library.
+                //
+                // The module header says the ids this takes are "ids this module handed
+                // out in a previous tool result", and what was enforced was one step
+                // weaker: `resolve_item` checks that the row *exists*. So
+                // `show_titles` with `{"kind":"movie","id":1}` produced a card for
+                // whatever film holds rowid 1 -- a title the model never looked up and
+                // may never have been told about, presented with the same play button
+                // as a real recommendation. On a library of 24,746 films, guessing a
+                // valid id is not guessing (R-127).
+                if !offered.contains(&(kind.to_string(), id)) {
+                    refused.push(json!({
+                        "kind": kind,
+                        "id": id,
+                        "why": "not one of the titles a lookup in this conversation \
+                                returned; search or browse for it first",
+                    }));
+                    continue;
+                }
+                // Resolved here, not trusted: an id from a row that has since been
+                // removed by a refresh must not reach the UI as a card with a play
+                // button that cannot work.
                 match resolve_item(db, kind, id, note) {
                     Some(item) => items.push(item),
                     None => refused.push(json!({ "kind": kind, "id": id })),
@@ -757,6 +778,34 @@ pub fn clear(db: &Connection, profile_id: i64) {
 }
 
 /// The readable conversation, as turns the model is given.
+/// Every `(kind, id)` pair a tool result names, however deeply it is nested.
+///
+/// A generic walk rather than each tool reporting its own: the rule is "an id the model
+/// was told about", and a tool added later would otherwise have to remember to
+/// participate in it. Anything with both a string `kind` and an integer `id` is an item
+/// the model has seen (R-127).
+fn harvest_ids(value: &serde_json::Value, out: &mut std::collections::HashSet<(String, i64)>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let (Some(kind), Some(id)) = (
+                map.get("kind").and_then(|k| k.as_str()),
+                map.get("id").and_then(|i| i.as_i64()),
+            ) {
+                out.insert((kind.to_string(), id));
+            }
+            for v in map.values() {
+                harvest_ids(v, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                harvest_ids(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn turns_of(messages: &[ChatMessage]) -> Vec<Turn> {
     messages
         .iter()
@@ -864,6 +913,15 @@ pub fn send(
 
     let mut steps: Vec<String> = Vec::new();
     let mut items: Vec<ChatItem> = Vec::new();
+    // What the model has been told about, and may therefore ask to show.
+    //
+    // Seeded from the cards earlier turns already produced -- those were handed out,
+    // and "show me that one again" has to keep working across a reload (R-127).
+    let mut offered: std::collections::HashSet<(String, i64)> = stored
+        .messages
+        .iter()
+        .flat_map(|m| m.items.iter().map(|i| (i.kind.clone(), i.id)))
+        .collect();
     let mut said: Vec<String> = Vec::new();
     let mut calls_made = 0usize;
 
@@ -930,11 +988,22 @@ pub fn send(
                 thought_signature: call.thought_signature.clone(),
             });
 
-            match run_tool(db, profile_id, call, now) {
+            match run_tool(db, profile_id, call, now, &offered) {
                 Ok(ran) => {
                     on_step(&ran.step);
                     steps.push(ran.step);
                     items.extend(ran.items);
+                    // Everything this lookup named is now something the model has been
+                    // told about, and may ask to show. Harvested from the result rather
+                    // than reported by each tool, so a tool added later cannot forget to
+                    // (R-127).
+                    //
+                    // Not from `show_titles` itself: its result lists the ids it
+                    // *refused*, and treating those as offered would let a second call
+                    // succeed with the id the first one rejected.
+                    if !matches!(Tool::parse(&call.name), Some(Tool::ShowTitles)) {
+                        harvest_ids(&ran.result, &mut offered);
+                    }
                     working.push(Turn::ToolResult {
                         name: call.name.clone(),
                         result: ran.result,
@@ -1215,10 +1284,13 @@ mod tests {
             left: RefCell::new(0),
             // Not retryable, so the second round fails once and immediately.
             retryable: false,
-            then: RefCell::new(vec![Script::call(
-                "show_titles",
-                json!({ "items": [{ "kind": "movie", "id": id, "note": "Tense." }] }),
-            )]),
+            then: RefCell::new(vec![
+                Script::call("search_library", json!({ "query": "Arrival" })),
+                Script::call(
+                    "show_titles",
+                    json!({ "items": [{ "kind": "movie", "id": id, "note": "Tense." }] }),
+                ),
+            ]),
         };
 
         let out = send(&db, &chatter, 1, "something tense", NOW, |_| {}).unwrap();
@@ -1385,6 +1457,9 @@ mod tests {
         let mut db = db();
         let id = seed_movie(&mut db, "Heat", 1995, r#"["Crime"]"#);
         let script = Script::new(vec![
+            // Looked up first, because `show_titles` only takes ids a lookup in this
+            // conversation returned (R-127) -- which is what a real turn does anyway.
+            Script::call("search_library", json!({ "query": "Heat" })),
             Script::call(
                 "show_titles",
                 json!({ "items": [{ "kind": "movie", "id": id }] }),
@@ -1397,6 +1472,60 @@ mod tests {
         ]);
         let out = send(&db, &script, 1, "crime", NOW, |_| {}).unwrap();
         assert_eq!(out.message.items.len(), 1);
+    }
+
+    /// An id the model was never given does not become a card, even when it exists.
+    ///
+    /// The module header says `show_titles` takes "ids this module handed out in a
+    /// previous tool result"; what was enforced was that the row exists, which on a
+    /// library of 24,746 films is not a meaningful barrier. So `{"kind":"movie","id":1}`
+    /// produced a card for whatever film holds rowid 1 -- with a play button, beside
+    /// titles the model had actually looked up (R-127).
+    #[test]
+    fn a_title_no_lookup_returned_does_not_become_a_card() {
+        let mut db = db();
+        let shown = seed_movie(&mut db, "Heat", 1995, r#"["Crime"]"#);
+        let unasked = seed_movie(&mut db, "Submarine", 2010, r#"["Comedy"]"#);
+
+        let script = Script::new(vec![
+            // One lookup, which returns Heat and not Submarine.
+            Script::call("search_library", json!({ "query": "Heat" })),
+            Script::call(
+                "show_titles",
+                json!({ "items": [
+                    { "kind": "movie", "id": shown },
+                    { "kind": "movie", "id": unasked },
+                ] }),
+            ),
+            Script::text("Here."),
+        ]);
+        let out = send(&db, &script, 1, "crime", NOW, |_| {}).unwrap();
+
+        assert_eq!(out.message.items.len(), 1, "{:?}", out.message.items);
+        assert_eq!(out.message.items[0].title, "Heat");
+
+        // And the model is told why, so it can look the other one up rather than
+        // assuming the card appeared.
+        let last = script.seen.borrow().last().cloned().unwrap();
+        let result = last
+            .iter()
+            .rev()
+            .find_map(|t| match t {
+                Turn::ToolResult { name, result } if name == "show_titles" => {
+                    Some(result.clone())
+                }
+                _ => None,
+            })
+            .expect("the show_titles result");
+        assert_eq!(result["shown"], 1);
+        assert_eq!(result["not_in_library"][0]["id"], unasked);
+        assert!(
+            result["not_in_library"][0]["why"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("lookup"),
+            "{result}"
+        );
     }
 
     /// A model that will not stop asking has to be stopped, and told why.
@@ -1551,6 +1680,7 @@ mod tests {
         let id = seed_movie(&mut db, "Heat", 1995, r#"["Crime"]"#);
 
         let first = Script::new(vec![
+            Script::call("search_library", json!({ "query": "Heat" })),
             Script::call(
                 "show_titles",
                 json!({ "items": [{ "kind": "movie", "id": id }] }),

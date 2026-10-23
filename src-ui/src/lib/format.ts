@@ -2,6 +2,19 @@
 
 export const pad2 = (n: number) => String(n).padStart(2, '0');
 
+/**
+ * A time of day, in the notation asked for.
+ *
+ * The preference existed in three halves and was joined up by none of them: `use24h` was
+ * declared and initialised in the store, honoured here *if anyone passed it*, and
+ * nothing read it -- none of the twenty-odd call sites passed a second argument, and
+ * there was no action to set it beside `setTheme` and `setDensity`. So the AM/PM branch
+ * below was unreachable and the setting was a field nobody could change (R-136).
+ *
+ * This stays a pure function -- it is in the module every screen imports for
+ * formatting, and importing the store here pulled `window` into a node-environment unit
+ * test. `useClockTime` in `hooks/` is the bound form, and is what a component uses.
+ */
 export function clockTime(unix: number, use24h = true): string {
   const d = new Date(unix * 1000);
   if (use24h) return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -88,13 +101,22 @@ export function bytes(n: number): string {
  * the worst case. That is 11.5 minutes in every 24 hours of lead time, on the scheduled
  * recordings list. `runtime()` has the same job three functions above and floors both
  * (R-94).
+ *
+ * Its day-out branch renders a clock time, so it carries the notation too -- it was the
+ * one `clockTime` caller the preference could not reach, because it is a function rather
+ * than a component and so took the parameter default (R-136). `useUntilLabel` is the
+ * bound form.
  */
-export function untilLabel(unix: number, now = Math.floor(Date.now() / 1000)): string {
+export function untilLabel(
+  unix: number,
+  now = Math.floor(Date.now() / 1000),
+  use24h = true,
+): string {
   const secs = unix - now;
   if (secs <= 0) return 'now';
   if (secs < 3600) return `in ${Math.max(1, Math.round(secs / 60))} min`;
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   if (secs < 86400) return m ? `in ${h}h ${m}m` : `in ${h}h`;
-  return `${dayLabel(unix)} at ${clockTime(unix)}`;
+  return `${dayLabel(unix)} at ${clockTime(unix, use24h)}`;
 }

@@ -114,6 +114,17 @@ struct Session {
     layout: Layout,
     tiles: Vec<Tile>,
     focused: usize,
+    /// Tiles whose stream is being opened right now.
+    ///
+    /// `set_tile` is `#[tauri::command(async)]`, so two clicks on different empty tiles
+    /// can be in flight at once. Both used to read "n tiles filled", both computed
+    /// `n + 1 <= limit`, and both proceeded -- landing at `n + 2`. On a line with
+    /// exactly enough connections for the layout that is one stream over, which is the
+    /// single thing this module exists to prevent (R-129).
+    ///
+    /// Counted into the demand alongside the filled tiles, and incremented under the
+    /// same lock that reads them, so the second caller sees the first one's claim.
+    pending: usize,
 }
 
 pub struct Mosaic {
@@ -314,6 +325,7 @@ impl Mosaic {
         self.sink_main_surface();
 
         let mut session = Session {
+            pending: 0,
             layout,
             tiles,
             focused: 0,
@@ -502,54 +514,63 @@ impl Mosaic {
         let parent = self.parent.load(Ordering::SeqCst);
         let size = *self.size.lock();
 
-        let (layout, was_empty) = {
-            let guard = self.session.lock();
-            let session = guard.as_ref().ok_or_else(not_open)?;
+        // One lock for the check *and* the claim.
+        //
+        // These were three separate `session.lock()` scopes -- one to read the layout,
+        // one to count the filled tiles inside the budget check, one to stop the
+        // outgoing instance -- so the decision and the act were not under the same lock.
+        // Two concurrent `mosaic.setTile` calls could each pass a budget the other
+        // invalidated (R-129).
+        let (layout, claimed) = {
+            let mut guard = self.session.lock();
+            let session = guard.as_mut().ok_or_else(not_open)?;
             if index >= session.tiles.len() {
                 return Err(AppError::Other(format!(
                     "There is no tile {} in this layout.",
                     index + 1
                 )));
             }
-            (session.layout, session.tiles[index].player.is_none())
-        };
+            let was_empty = session.tiles[index].player.is_none();
 
-        if was_empty && channel_id.is_some() {
-            let recordings = self.recordings();
-            let filled = {
-                let guard = self.session.lock();
-                let session = guard.as_ref().ok_or_else(not_open)?;
-                session.tiles.iter().filter(|t| t.player.is_some()).count()
-            };
-            if let Budget::Exceeds {
-                needed,
-                limit,
-                over,
-                recordings,
-            } = Budget::check(
-                Demand {
-                    tiles: filled + 1,
+            if was_empty && channel_id.is_some() {
+                let recordings = self.recordings();
+                let filled = session.tiles.iter().filter(|t| t.player.is_some()).count();
+                if let Budget::Exceeds {
+                    needed,
+                    limit,
+                    over,
                     recordings,
-                },
-                self.limit(),
-            ) {
-                return Err(AppError::Other(refusal(needed, limit, over, recordings)));
+                } = Budget::check(
+                    Demand {
+                        // The tiles already open, the ones being opened by another call
+                        // in flight, and this one.
+                        tiles: filled + session.pending + 1,
+                        recordings,
+                    },
+                    self.limit(),
+                ) {
+                    return Err(AppError::Other(refusal(needed, limit, over, recordings)));
+                }
             }
-        }
 
-        let rects = layout.rects_now(size);
-
-        // The old instance goes before the new one is built, so the two never hold a
-        // connection at the same time — on a line with exactly enough for the layout,
-        // building first would be one over the limit for as long as the load takes.
-        {
-            let mut guard = self.session.lock();
-            let session = guard.as_mut().ok_or_else(not_open)?;
+            // The old instance goes before the new one is built, so the two never hold a
+            // connection at the same time — on a line with exactly enough for the
+            // layout, building first would be one over the limit for as long as the
+            // load takes.
             if let Some(player) = session.tiles[index].player.as_mut() {
                 let _ = player.stop();
             }
             session.tiles[index].player = None;
-        }
+
+            // Claimed while the lock is held, so the next caller counts it.
+            let claimed = channel_id.is_some();
+            if claimed {
+                session.pending += 1;
+            }
+            (session.layout, claimed)
+        };
+
+        let rects = layout.rects_now(size);
 
         let tile = self.build_tile(index, channel_id, rects[index], parent, now);
         // The replacement tile went to the bottom like every other, so the main surface
@@ -558,6 +579,9 @@ impl Mosaic {
 
         let mut guard = self.session.lock();
         let session = guard.as_mut().ok_or_else(not_open)?;
+        if claimed {
+            session.pending = session.pending.saturating_sub(1);
+        }
         session.tiles[index] = tile;
         if session.tiles[session.focused].player.is_none() {
             session.focused = session
@@ -956,11 +980,13 @@ mod tests {
         let main: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(Box::new(Spy {
             who: "main",
             placed: Arc::clone(&placed),
+            gate: None,
         })));
         let factory: TileFactory = Arc::new(move || {
             Box::new(Spy {
                 who: "tile",
                 placed: Arc::clone(&log),
+                gate: None,
             })
         });
         (Mosaic { main, factory, ..m }, placed, db)
@@ -970,6 +996,19 @@ mod tests {
     struct Spy {
         who: &'static str,
         placed: Placements,
+        /// Set on a tile whose `load` should block, which is how the race in R-129 is
+        /// held open long enough to drive a second call into it.
+        gate: Option<Gate>,
+    }
+
+    /// Says when `load` has started, and waits to be let finish.
+    ///
+    /// Armed by the test after `open`: the tiles `open` builds go through the same
+    /// factory, and parking one of those would hang the setup rather than the race.
+    struct Gate {
+        entered: std::sync::mpsc::Sender<()>,
+        release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+        armed: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl PlayerBackend for Spy {
@@ -978,6 +1017,14 @@ mod tests {
             _: &str,
             _: &aurora_player::backend::LoadOptions,
         ) -> std::result::Result<(), aurora_player::PlayerError> {
+            // `build_tile` runs outside the session lock, which is the whole point of
+            // the finding: a tile loading is a tile not yet counted.
+            if let Some(gate) = &self.gate {
+                if gate.armed.load(Ordering::SeqCst) {
+                    let _ = gate.entered.send(());
+                    let _ = gate.release.lock().recv();
+                }
+            }
             Ok(())
         }
         fn stop(&mut self) -> std::result::Result<(), aurora_player::PlayerError> {
@@ -1414,6 +1461,93 @@ mod tests {
             .set_tile(1, Some(3), NOW)
             .expect("a swap is not an increase");
         assert_eq!(view.tiles[1].channel_id, Some(3));
+    }
+
+    /// Two tiles filled at the same moment cannot both claim the last connection.
+    ///
+    /// `set_tile` is `#[tauri::command(async)]`, so two clicks on two empty tiles run at
+    /// once. The check read "how many tiles are filled" and the fill happened after
+    /// `build_tile` returned, in a *different* lock scope -- so both calls saw one tile
+    /// filled, both computed one more, and both proceeded, landing on three streams
+    /// against a line that allows two. That is the single thing this module exists to
+    /// prevent (R-129).
+    ///
+    /// Held open deterministically rather than by timing: the first fill's `load` parks
+    /// inside the window and is released once the second call has had its answer. The
+    /// gate is armed only after `open`, whose own tile would otherwise park in it.
+    #[test]
+    fn two_tiles_filled_at_once_cannot_both_claim_the_last_connection() {
+        let (m, db) = mosaic(Some(2));
+        for id in 1..=4 {
+            seed_channel(&db, id, &format!("Channel {id}"), true);
+        }
+
+        let (entered, started) = std::sync::mpsc::channel::<()>();
+        let (finish, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Arc::new(Mutex::new(wait));
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let placed: Placements = Arc::new(Mutex::new(Vec::new()));
+        let gate_armed = Arc::clone(&armed);
+        let factory: TileFactory = Arc::new(move || {
+            Box::new(Spy {
+                who: "tile",
+                placed: Arc::clone(&placed),
+                gate: Some(Gate {
+                    entered: entered.clone(),
+                    release: Arc::clone(&wait),
+                    armed: Arc::clone(&gate_armed),
+                }),
+            })
+        });
+        let m = Arc::new(Mosaic { factory, ..m });
+
+        // One tile filled, three empty: empty tiles cost nothing, so this is one stream
+        // against a limit of two, with room for exactly one more.
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        armed.store(true, Ordering::SeqCst);
+
+        let first = {
+            let m = Arc::clone(&m);
+            std::thread::spawn(move || m.set_tile(1, Some(2), NOW))
+        };
+        started
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the first fill reached load");
+
+        // The window. Before the fix this returned `Ok` and the line held three streams.
+        let err = m.set_tile(2, Some(3), NOW).unwrap_err().to_string();
+        assert!(err.contains("3 streams"), "{err}");
+        assert!(err.contains("allows 2"), "{err}");
+
+        let _ = finish.send(());
+        let view = first
+            .join()
+            .expect("the first call panicked")
+            .expect("the first call was refused");
+
+        assert_eq!(view.tiles[1].channel_id, Some(2));
+        assert_eq!(
+            view.tiles.iter().filter(|t| t.channel_id.is_some()).count(),
+            2,
+            "{:?}",
+            view.tiles
+        );
+
+        // And the claim is given back, so the next fill is judged on the tiles that
+        // actually hold a connection rather than on a counter that only grows. A swap
+        // is not an increase, so it is allowed at the limit.
+        armed.store(false, Ordering::SeqCst);
+        let swap = m
+            .set_tile(0, Some(4), NOW)
+            .expect("a swap is not an increase");
+        assert_eq!(swap.tiles[0].channel_id, Some(4));
+        assert_eq!(
+            swap.tiles.iter().filter(|t| t.channel_id.is_some()).count(),
+            2,
+            "{:?}",
+            swap.tiles
+        );
     }
 
     #[test]

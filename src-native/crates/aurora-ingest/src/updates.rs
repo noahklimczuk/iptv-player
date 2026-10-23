@@ -304,12 +304,55 @@ pub fn is_allowed_asset_url(url: &str, repo: &str, origin: AssetOrigin) -> bool 
         AssetOrigin::Releases => {
             url.starts_with(&format!("https://github.com/{repo}/releases/download/"))
         }
-        // Loopback only, and with the port separator, so `http://127.0.0.1.evil/` and
-        // `http://localhost.evil/` are still refused.
-        AssetOrigin::Loopback => ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
-            .iter()
-            .any(|prefix| url.starts_with(prefix)),
+        AssetOrigin::Loopback => is_loopback_url(url),
     }
+}
+
+/// Whether this URL's **host** is loopback, rather than its text beginning with one.
+///
+/// The prefix list it replaces -- `http://127.0.0.1:`, `http://localhost:`,
+/// `http://[::1]:` -- was defeated by the thing the `Releases` branch four lines above
+/// names precisely in its own comment: userinfo. `http://127.0.0.1:@example.invalid/`
+/// starts with `http://127.0.0.1:` and its host is `example.invalid`, because everything
+/// before the `@` in an authority is a username and password. The trailing slash that
+/// saves the `Releases` branch is not available here, since a loopback URL has a port
+/// after the host rather than a path.
+///
+/// So the authority is taken apart instead: anything with an `@` in it is refused
+/// outright -- an update endpoint has no business carrying credentials -- and what is
+/// left has to *be* a loopback host rather than start with one (R-128).
+pub fn is_loopback_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    // The authority ends at the first `/`, `?` or `#`; everything after is the path.
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    // Userinfo at all is a refusal. `127.0.0.1:@evil`, `evil@127.0.0.1` and
+    // `127.0.0.1#@evil` are all either an attack or a mistake.
+    if authority.contains('@') || authority.is_empty() {
+        return false;
+    }
+    // An IPv6 host is bracketed and its own colons are inside the brackets.
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(after) => match after.split_once(']') {
+            Some((inside, tail)) => (format!("[{inside}]"), tail.strip_prefix(':')),
+            None => return false,
+        },
+        None => match authority.split_once(':') {
+            Some((host, port)) => (host.to_string(), Some(port)),
+            None => (authority.to_string(), None),
+        },
+    };
+    // A port is required -- a test server is always on one -- and has to be a number, so
+    // `http://127.0.0.1:evil` is not a host with a path.
+    let Some(port) = port else { return false };
+    if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]")
 }
 
 /// Whether a URL is an asset of this repository's own releases.
@@ -509,6 +552,45 @@ fn reword(failure: NetFailure) -> NetFailure {
 
 #[cfg(test)]
 mod tests {
+
+    /// A URL that only *begins* with a loopback address is not loopback.
+    ///
+    /// The prefix list was defeated by userinfo, which the `Releases` branch four lines
+    /// above names in its own comment: everything before an `@` in an authority is a
+    /// username, so `http://127.0.0.1:@example.invalid/` starts with
+    /// `http://127.0.0.1:` and points at `example.invalid` (R-128).
+    #[test]
+    fn a_loopback_url_has_to_have_a_loopback_host() {
+        for ok in [
+            "http://127.0.0.1:4000/updates",
+            "http://localhost:8080/",
+            "http://[::1]:9999/releases/latest",
+            "http://127.0.0.1:1",
+        ] {
+            assert!(is_loopback_url(ok), "{ok} was refused");
+        }
+
+        for bad in [
+            // The attack: userinfo that looks like the host.
+            "http://127.0.0.1:@example.invalid/",
+            "http://127.0.0.1:1234@example.invalid/",
+            "http://localhost:@example.invalid/",
+            "http://[::1]:@example.invalid/",
+            // The ones the prefix list already caught, which must stay caught.
+            "http://127.0.0.1.example.invalid/",
+            "http://localhost.example.invalid/",
+            "https://127.0.0.1:4000/",
+            // And a few the prefix list would have let through or mangled.
+            "http://127.0.0.1:notaport/path",
+            "http://127.0.0.1",
+            "http://[::1]",
+            "http://[::1/",
+            "",
+            "http://",
+        ] {
+            assert!(!is_loopback_url(bad), "{bad} was allowed");
+        }
+    }
     use super::*;
     use crate::http::{HttpClient, HttpConfig};
     use crate::testserver::{Reply, TestServer};
