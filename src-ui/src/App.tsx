@@ -327,13 +327,15 @@ export default function App() {
   /**
    * Play a past programme from its start.
    *
-   * Not routed through the zapper: the zapper tunes a channel to its live edge, and
-   * this is the opposite request. The error is surfaced rather than swallowed because
-   * the three ways catch-up can refuse — no catch-up, outside the window, provider did
-   * not say how — are things the viewer can act on.
-   */
-  /**
-   * Play a past programme from its start.
+   * Not routed through the zapper: the zapper tunes a channel to its live edge, and this
+   * is the opposite request.
+   *
+   * There were two stacked doc blocks here saying opposite things about the one decision
+   * that matters — the first that "the error is surfaced rather than swallowed", the
+   * second that the refusal is deliberately not surfaced here. The code does the second,
+   * and the first was a superseded draft that was never deleted. Both read as
+   * deliberate, so anyone touching catch-up error handling had to work out which one the
+   * code actually followed (R-135).
    *
    * The refusal is deliberately *not* turned into a toast here: the Guide catches it
    * and prints it beside the programme it is about, which is where somebody can act

@@ -49,7 +49,24 @@ export const ICON_PATHS: Record<string, string> = {
   alert: 'M12 9v5M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
 };
 
-export type IconName = keyof typeof ICON_PATHS | string;
+/**
+ * The icons that exist, as a closed union.
+ *
+ * This was `keyof typeof ICON_PATHS | string`, which TypeScript widens to `string` — so
+ * the `keyof` contributed nothing and every `<Icon name="…" />` and `icon:` prop in the
+ * app was unchecked. `<Icon name="plya" />` compiled, on a type whose name and shape both
+ * promised otherwise (R-146).
+ *
+ * Nothing was broken: swept across the UI, 38 icons are defined, 32 are referenced by
+ * literal, and none is referenced that is not defined. The lookup below also degrades on
+ * purpose, drawing the info glyph for an unknown name rather than an empty `<svg>` —
+ * wrong but visible, which is the better of the two failures. Closing the union is what
+ * makes the next misspelling a compile error instead.
+ *
+ * The two computed call sites are ternaries over literals (`playing ? 'pause' : 'play'`
+ * and `muted ? 'volumeOff' : 'volume'`), which a closed union accepts.
+ */
+export type IconName = keyof typeof ICON_PATHS;
 
 export function Icon({
   name, size = 20, strokeWidth = 1.8, filled = false, style, className,
