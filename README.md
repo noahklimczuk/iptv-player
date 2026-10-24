@@ -808,6 +808,7 @@ These are what separate a tech demo from software people actually keep installed
 | Player | `←/→` | ±10 s · `Shift+←/→` ±30 s · `Ctrl+←/→` ±5 min |
 | Player | `J` / `L` | ±10 s (video-site muscle memory) |
 | Player | `↑/↓` | Volume · `M` mute |
+| Player | Mouse wheel | Volume, over the picture. Aimed at the OSD's own controls it does nothing — a wheel that fires wherever you point it is not a shortcut |
 | Player | `,` / `.` | Frame step back/forward |
 | Player | `[` / `]` | Speed down/up · `\` reset speed |
 | Player | `S` | Cycle subtitle track · `Shift+S` subtitle settings |
