@@ -986,6 +986,26 @@ pub fn refresh_provider(
     let report = sync::apply(&mut db, fetched, &options, emit)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
 
+    // `options.now_unix`, **not** `now_unix()`.
+    //
+    // This is the instant every row this refresh touched was stamped with:
+    // `channels::upsert_batch`, `library::upsert_movies` and the rest are all handed
+    // `options.now_unix`, which was taken before the download started. Calling the clock
+    // again here records the moment the refresh *finished* instead, and the two are a
+    // whole import apart -- minutes, on a panel with 22,121 channels and a guide.
+    //
+    // A channel is shown as "Dropped" when `last_seen_at < last_refresh_at`
+    // (`channels::list`). With the end time stored, that comparison is "stamped at the
+    // start < finished at the end", which is true of **every row in the library**. So
+    // every channel wore the Dropped badge after every refresh, meaning "your provider
+    // no longer lists this channel" about a channel the provider had just listed.
+    //
+    // `channels::stale` -- the count in the refresh report -- never had the bug, because
+    // it is passed `options.now_unix` directly. The comment on it claims `list` and `get`
+    // "compute the same way this does"; they could not, while the column they compare
+    // against held a different instant. Storing the stamp is what makes that comment
+    // true.
+    //
     // `COALESCE`, so an M3U refresh — which has no account to ask — leaves a number a
     // previous Xtream refresh established rather than wiping it back to NULL.
     db.execute(
@@ -993,7 +1013,7 @@ pub fn refresh_provider(
             SET last_refresh_at = ?2,
                 max_connections = COALESCE(?3, max_connections)
           WHERE id = ?1",
-        params![provider_id, now_unix(), max_connections],
+        params![provider_id, options.now_unix, max_connections],
     )
     .map_err(aurora_db::DbError::from)?;
 

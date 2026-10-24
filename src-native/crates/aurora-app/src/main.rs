@@ -201,6 +201,7 @@ fn main() {
             let scheduler = std::sync::Arc::clone(&services.dvr);
             let playback_handle = std::sync::Arc::clone(&services.playback);
             let mosaic_handle = std::sync::Arc::clone(&services.mosaic);
+            let sleep_handle = std::sync::Arc::clone(&services.sleep);
             let player_backend = std::sync::Arc::clone(&services.player);
 
             // The Phase 0 spike, finally connected (docs/ROADMAP.md). `attach` creates
@@ -306,6 +307,7 @@ fn main() {
 
             let playback = std::sync::Arc::clone(&playback_handle);
             let mosaic = std::sync::Arc::clone(&mosaic_handle);
+            let sleep_at = std::sync::Arc::clone(&sleep_handle);
             let player_handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("aurora-player".into())
@@ -323,6 +325,73 @@ fn main() {
                     supervised("mosaic", || {
                         if let Some(view) = mosaic.tick() {
                             aurora_app::emit(&player_handle, "mosaic.state", &view);
+                        }
+                    });
+                    // The sleep timer rides this heartbeat rather than owning a thread.
+                    //
+                    // It has to be the host that keeps this time. A `setTimeout` in the
+                    // front end is the short way to write it and the wrong place to keep
+                    // it: the timer exists to act on somebody who has fallen asleep,
+                    // which is exactly when nothing is touching the window -- and a
+                    // renderer that has been backgrounded, throttled or reloaded has lost
+                    // its timer while the stream plays on all night.
+                    //
+                    // The state is emitted every tick there is a timer, so the countdown
+                    // and the sixty-second warning are drawn from the same clock the
+                    // deadline was set against rather than from the viewer's own.
+                    supervised("sleep", || {
+                        let now = aurora_app::now_unix();
+                        let armed = *sleep_at.lock();
+                        let Some(deadline) = armed else { return };
+                        if !deadline.due(now) {
+                            aurora_app::emit(
+                                &player_handle,
+                                "sleep.state",
+                                &aurora_app::sleep::SleepState::of(Some(deadline), now),
+                            );
+                            return;
+                        }
+                        // Disarmed before acting, so a slow stop cannot be fired twice by
+                        // the next tick arriving first.
+                        *sleep_at.lock() = None;
+                        tracing::info!(
+                            action = deadline.action.as_str(),
+                            "the sleep timer came due"
+                        );
+                        if let Err(e) = playback.stop() {
+                            tracing::warn!("the sleep timer could not stop playback: {e}");
+                        }
+                        aurora_app::emit(
+                            &player_handle,
+                            "sleep.state",
+                            &aurora_app::sleep::SleepState::of(None, now),
+                        );
+                        aurora_app::emit(&player_handle, "sleep.fired", &deadline);
+                        match deadline.action {
+                            aurora_app::sleep::SleepAction::StopPlayback => {}
+                            aurora_app::sleep::SleepAction::QuitApp => {
+                                player_handle.exit(0);
+                            }
+                            aurora_app::sleep::SleepAction::ShutDownPc => {
+                                // The viewer chose this by name -- it is its own variant
+                                // precisely so nothing can reach it by accident -- and
+                                // the sixty-second warning has already been on screen
+                                // with a cancel on it.
+                                //
+                                // `/t 20` rather than `/t 0`: this is a command nobody can
+                                // take back, and twenty seconds leaves a person who woke
+                                // up at the wrong moment time to run `shutdown /a`. The
+                                // app quits either way, so a refused shutdown does not
+                                // leave Aurora playing to an empty room.
+                                let spawned = std::process::Command::new("shutdown")
+                                    .args(["/s", "/t", "20"])
+                                    .spawn();
+                                match spawned {
+                                    Ok(_) => tracing::info!("shutdown requested in 20s"),
+                                    Err(e) => tracing::error!("could not shut down: {e}"),
+                                }
+                                player_handle.exit(0);
+                            }
                         }
                     });
                 })
@@ -552,6 +621,10 @@ fn main() {
             gemini::gemini_status,
             gemini::gemini_set_key,
             gemini::gemini_set_enabled,
+            commands::sleep_state,
+            commands::sleep_set,
+            commands::sleep_cancel,
+            commands::sleep_extend,
             timeshift::timeshift_settings,
             timeshift::timeshift_set_settings,
             timeshift::timeshift_clear,

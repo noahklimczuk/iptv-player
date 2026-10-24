@@ -120,12 +120,31 @@ export function TimeshiftPanel() {
         </div>
       </Row>
 
-      <Row label="On disk now" hint="Emptying it loses the rewind, not the channel.">
+      {/* Two numbers, because they answer two questions, and collapsing them is what
+          made one of them a lie.
+
+          "On disk now" is what mpv's cache file is holding for the stream playing. It
+          used to be the size of the files in the folder, which was always 0 -- and the
+          **Empty** button was `disabled={settings.bytesOnDisk === 0}`, so it could never
+          be pressed. Not sometimes: never.
+
+          What Empty can free is the other number. mpv's live cache file is its own and
+          cannot be deleted while it is open; Windows refuses, and the file in use is the
+          programme being watched. So the button acts on the leftovers -- from a previous
+          run, or a crash -- and is gated on those. */}
+      <Row label="Held now" hint="What this channel can be rewound into.">
+        <Badge tone="outline">{bytes(settings.bytesOnDisk)}</Badge>
+      </Row>
+
+      <Row
+        label="Reclaimable"
+        hint="Left behind by earlier viewing. Emptying it loses nothing you are watching."
+      >
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Badge tone="outline">{bytes(settings.bytesOnDisk)}</Badge>
+          <Badge tone="outline">{bytes(settings.reclaimableBytes)}</Badge>
           <Button
             size="sm"
-            disabled={settings.bytesOnDisk === 0}
+            disabled={settings.reclaimableBytes === 0}
             onClick={async () => {
               const freed = await invoke('timeshift.clear');
               setMessage(freed > 0 ? `Freed ${bytes(freed)}.` : 'Nothing to empty.');

@@ -128,3 +128,40 @@ test('turning the buffer off takes the scrub bar away and leaves a live badge', 
   await expect(timeshiftBar(page)).toBeHidden();
   await expect(page.getByText(/^Live · \d{2}:\d{2}/)).toBeVisible();
 });
+
+/**
+ * The Empty button, which could never be pressed.
+ *
+ * It was `disabled={settings.bytesOnDisk === 0}` against a field that could only ever be
+ * zero: `bytesOnDisk` was the size of the files in the buffer folder, and mpv's cache
+ * file is not visible to a directory listing. Not "disabled sometimes" — disabled
+ * always, on every install, for the life of the feature.
+ *
+ * Two numbers now, because they answer two questions. What is *held* comes from mpv and
+ * is what the channel can be rewound into; what is *reclaimable* is the leftovers, and
+ * is the only thing Empty can actually free — the live cache file is open, and Windows
+ * will not delete a file in use.
+ */
+test('the Empty button can be pressed, and frees what it says it will', async ({ page }) => {
+  await page.goto('/#/settings');
+  const empty = page.getByRole('button', { name: 'Empty buffer' });
+  await empty.scrollIntoViewIfNeeded();
+  await expect(empty).toBeVisible();
+  await expect(empty).toBeEnabled();
+
+  await empty.click();
+
+  // It says what it freed, and the figure it was gating on has gone to zero.
+  await expect(page.getByText(/^ Freed /)).toBeVisible();
+  await expect(empty).toBeDisabled();
+});
+
+test('held and reclaimable are reported as separate numbers', async ({ page }) => {
+  await page.goto('/#/settings');
+  const held = page.getByText('Held now', { exact: true });
+  await held.scrollIntoViewIfNeeded();
+  await expect(held).toBeVisible();
+  await expect(page.getByText('Reclaimable', { exact: true })).toBeVisible();
+  // The old single row claimed to be both and was neither.
+  await expect(page.getByText('On disk now', { exact: true })).toHaveCount(0);
+});

@@ -12,7 +12,8 @@ import type {
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
-  ProviderCredentials, TimeshiftSettings, TimeshiftWindow, UpdateDownload,
+  ProviderCredentials, SleepDeadline, SleepState,
+  TimeshiftSettings, TimeshiftWindow, UpdateDownload,
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
@@ -306,6 +307,31 @@ let player: PlayerState = {
   },
 };
 
+/**
+ * The sleep timer's deadline, in this mock's own clock (README §13).
+ *
+ * `atUnix` is a real wall-clock instant because that is what the host sends, and the
+ * screen subtracts nothing from it — `remainingSecs` is computed here, as the host
+ * computes it there, so a journey can arm a timer and assert the countdown without
+ * waiting for one.
+ */
+let mockSleep: SleepDeadline | null = null;
+
+/** The same sixty seconds `aurora_app::sleep::WARNING_SECS` uses. */
+const SLEEP_WARNING_SECS = 60;
+const SLEEP_MIN_MINUTES = 2;
+const SLEEP_MAX_MINUTES = 6 * 60;
+
+function sleepState(): SleepState {
+  if (!mockSleep) return { armed: null, remainingSecs: null, warning: false };
+  const left = Math.max(0, mockSleep.atUnix - Math.floor(Date.now() / 1000));
+  return {
+    armed: mockSleep,
+    remainingSecs: left,
+    warning: left > 0 && left <= SLEEP_WARNING_SECS,
+  };
+}
+
 const DEFAULT_TIMESHIFT_FOLDER = 'C:\\Users\\Me\\AppData\\Local\\Aurora TV\\timeshift';
 
 /** The timeshift buffer, with the host's own defaults (README §7.6). */
@@ -315,6 +341,7 @@ const mockTimeshift: TimeshiftSettings = {
   secs: 30 * 60,
   folder: DEFAULT_TIMESHIFT_FOLDER,
   bytesOnDisk: 0,
+  reclaimableBytes: 0,
 };
 
 /**
@@ -323,13 +350,26 @@ const mockTimeshift: TimeshiftSettings = {
  */
 function mockTimeshiftSettings(): TimeshiftSettings {
   const held = Math.max(0, liveEdgeSecs - tunedAtSecs);
+  const onDisk = mockTimeshift.enabled
+    ? Math.min(mockTimeshift.bytes, Math.round(held * MOCK_BYTES_PER_SEC))
+    : 0;
   return {
     ...mockTimeshift,
-    bytesOnDisk: mockTimeshift.enabled
-      ? Math.min(mockTimeshift.bytes, Math.round(held * MOCK_BYTES_PER_SEC))
-      : 0,
+    bytesOnDisk: onDisk,
+    // What Empty could free: the leftovers, which the host counts by scanning the
+    // folder. The live cache file is mpv's and is not one of them, so this is modelled
+    // as whatever `timeshift.clear` has not already taken.
+    reclaimableBytes: mockReclaimable,
   };
 }
+
+/**
+ * Leftovers a previous run left behind, which is the only thing Empty can actually free.
+ *
+ * Non-zero at rest on purpose: the button is gated on this, and a mock that started at
+ * zero would show it disabled — which is the bug it used to have for real.
+ */
+let mockReclaimable = 220 * 1024 * 1024;
 
 /** Roughly what an HD stream costs per second, for a plausible buffer size on screen. */
 const MOCK_BYTES_PER_SEC = 1024 * 1024;
@@ -390,6 +430,21 @@ function setPlayer(patch: Partial<PlayerState>) {
 export function onPlayerState(fn: (s: PlayerState) => void) {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+/**
+ * The sleep timer's countdown.
+ *
+ * Polled here, where the host pushes it: the real one rides the player heartbeat, and
+ * this mock has no heartbeat to ride. A second is the right interval because the thing
+ * being drawn is a number of seconds -- faster would redraw the same value, slower would
+ * skip some.
+ *
+ * Returned as an unsubscribe so the caller's shape is identical either way.
+ */
+export function onSleepState(fn: (s: SleepState) => void) {
+  const timer = setInterval(() => fn(sleepState()), 1000);
+  return () => clearInterval(timer);
 }
 
 const ingestListeners = new Set<(p: IngestProgress) => void>();
@@ -2375,6 +2430,52 @@ const handlers: { [K in CommandName]: Handler<K> } = {
 
   /* ── Metadata enrichment ────────────────────────────────────────────────── */
 
+  /* ── Sleep timer ────────────────────────────────────────────────────────── */
+
+  'sleep.state': (): SleepState => sleepState(),
+  'sleep.set': ({ after, action }): SleepState => {
+    const now = Math.floor(Date.now() / 1000);
+    let atUnix: number;
+    if (typeof after === 'object' && 'minutes' in after) {
+      const minutes = Math.max(SLEEP_MIN_MINUTES, Math.min(SLEEP_MAX_MINUTES, after.minutes));
+      atUnix = now + minutes * 60;
+    } else if (after === 'endOfProgramme') {
+      // The mock's live channel has a guide, so this one resolves. The *failing* case is
+      // worth having too: a channel with no programme on now throws, exactly as the host
+      // does, so a journey can assert the sentence rather than a silent default.
+      const channel = fx.channels.find((c) => c.id === player.channelId);
+      const programme = player.isLive && channel ? nowNext(channel, now).now : null;
+      if (!programme) {
+        throw new Error(
+          'This channel has no guide data, so Aurora cannot tell when the programme ends. '
+          + 'Pick a length instead.',
+        );
+      }
+      atUnix = programme.stop;
+    } else {
+      const left = player.durationSecs - player.positionSecs;
+      if (player.isLive || !(left > 0)) {
+        throw new Error(
+          'This stream has not said how long it is, so Aurora cannot tell when the '
+          + 'episode ends. Pick a length instead.',
+        );
+      }
+      atUnix = now + Math.round(left);
+    }
+    mockSleep = { atUnix, action, after };
+    return sleepState();
+  },
+  'sleep.cancel': (): SleepState => {
+    mockSleep = null;
+    return sleepState();
+  },
+  'sleep.extend': ({ minutes }): SleepState => {
+    if (!mockSleep) return sleepState();
+    const by = Math.max(SLEEP_MIN_MINUTES, Math.min(SLEEP_MAX_MINUTES, minutes));
+    mockSleep = { ...mockSleep, atUnix: mockSleep.atUnix + by * 60, after: { minutes: by } };
+    return sleepState();
+  },
+
   'timeshift.settings': (): TimeshiftSettings => mockTimeshiftSettings(),
   'timeshift.setSettings': ({ enabled, bytes, secs, folder }): TimeshiftSettings => {
     if (enabled !== undefined) mockTimeshift.enabled = enabled;
@@ -2393,9 +2494,11 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
   /** Nothing real is deleted; forgetting the tune is what empties a modelled buffer. */
   'timeshift.clear': (): number => {
-    const freed = Math.round((liveEdgeSecs - tunedAtSecs) * MOCK_BYTES_PER_SEC);
-    tunedAtSecs = liveEdgeSecs;
-    setPlayer({ timeshift: player.isLive ? windowFor(player.positionSecs) : null });
+    // Only the leftovers. mpv's live cache file is open, and Windows will not delete a
+    // file in use — which is the right answer, because the file in use is the programme
+    // being watched.
+    const freed = mockReclaimable;
+    mockReclaimable = 0;
     return freed;
   },
 

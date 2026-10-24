@@ -1019,6 +1019,123 @@ pub fn library_playback_aids(
 /// How long before the end the Up Next card appears when there is no credits marker.
 const UP_NEXT_TAIL_SECS: f64 = 45.0;
 
+// ── Sleep timer (README §13) ────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleepSetArgs {
+    pub after: crate::sleep::SleepAfter,
+    pub action: crate::sleep::SleepAction,
+}
+
+/// What the timer is doing.
+#[tauri::command(async)]
+pub fn sleep_state(services: State<'_, Services>) -> Result<crate::sleep::SleepState> {
+    let armed = *services.sleep.lock();
+    Ok(crate::sleep::SleepState::of(armed, now_unix()))
+}
+
+/// Arm the timer, or answer why it cannot be.
+///
+/// "End of programme" and "end of episode" need a fact about what is playing, and
+/// neither is always knowable: a channel with no guide data cannot say when its
+/// programme ends, and a live stream reporting no duration cannot say when the episode
+/// does. `Deadline::resolve` returns `None` for those, and this turns it into a sentence
+/// rather than quietly arming an hour the viewer never asked for.
+#[tauri::command(async)]
+pub fn sleep_set(
+    services: State<'_, Services>,
+    args: SleepSetArgs,
+) -> Result<crate::sleep::SleepState> {
+    let now = now_unix();
+    let state = services.playback.state();
+    // Seconds left of the file. Live streams have no meaningful duration, so this is
+    // `None` for them and "end of episode" declines rather than guesses.
+    let remaining_secs = (!state.is_live && state.duration_secs > 0.0)
+        .then_some(state.duration_secs - state.position_secs)
+        .filter(|left| *left > 0.0);
+
+    // When the programme now on air ends, asked of the guide only when a channel is
+    // actually tuned. One lock, released before anything else happens.
+    let programme_ends_unix = match state.channel_id.filter(|_| state.is_live) {
+        Some(channel_id) => {
+            let db = services.db.lock();
+            // The guide is keyed on the channel's *EPG* id, not its library row, and a
+            // channel can have neither. Both absences mean the same thing here -- the
+            // guide cannot say when this programme ends -- so both fall through to
+            // `None` and `resolve` declines rather than inventing a deadline.
+            match channels::get(&db, channel_id)?.and_then(|c| c.epg_channel_id) {
+                Some(epg_id) => epg::now_next(&db, &epg_id, now)?.0.map(|p| p.stop),
+                None => None,
+            }
+        }
+        None => None,
+    };
+
+    let playing = crate::sleep::Playing {
+        programme_ends_unix,
+        remaining_secs,
+    };
+    let Some(deadline) = crate::sleep::Deadline::resolve(args.after, args.action, now, &playing)
+    else {
+        return Err(crate::AppError::Other(
+            match args.after {
+                crate::sleep::SleepAfter::EndOfProgramme => {
+                    "This channel has no guide data, so Aurora cannot tell when the \
+                     programme ends. Pick a length instead."
+                }
+                crate::sleep::SleepAfter::EndOfEpisode => {
+                    "This stream has not said how long it is, so Aurora cannot tell when \
+                     the episode ends. Pick a length instead."
+                }
+                // Unreachable: a flat duration needs nothing from the player. Answered
+                // rather than `unreachable!`, because this is a command and a panic here
+                // takes the process with it.
+                crate::sleep::SleepAfter::Minutes(_) => "That sleep timer could not be set.",
+            }
+            .into(),
+        ));
+    };
+    *services.sleep.lock() = Some(deadline);
+    tracing::info!(
+        action = deadline.action.as_str(),
+        in_secs = deadline.remaining(now),
+        "sleep timer armed"
+    );
+    Ok(crate::sleep::SleepState::of(Some(deadline), now))
+}
+
+/// Turn it off.
+#[tauri::command(async)]
+pub fn sleep_cancel(services: State<'_, Services>) -> Result<crate::sleep::SleepState> {
+    *services.sleep.lock() = None;
+    Ok(crate::sleep::SleepState::of(None, now_unix()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleepExtendArgs {
+    pub minutes: u32,
+}
+
+/// "Keep watching" — push the deadline back without having to set it again.
+#[tauri::command(async)]
+pub fn sleep_extend(
+    services: State<'_, Services>,
+    args: SleepExtendArgs,
+) -> Result<crate::sleep::SleepState> {
+    let now = now_unix();
+    let mut armed = services.sleep.lock();
+    let Some(deadline) = *armed else {
+        // Nothing to extend is not an error: the warning has a button on it and the
+        // timer may have fired between the viewer seeing it and reaching it.
+        return Ok(crate::sleep::SleepState::of(None, now));
+    };
+    let later = deadline.extended(args.minutes);
+    *armed = Some(later);
+    Ok(crate::sleep::SleepState::of(Some(later), now))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordSkipArgs {

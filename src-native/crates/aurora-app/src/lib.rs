@@ -20,6 +20,7 @@ pub mod providers;
 pub mod recommend;
 pub mod series;
 pub mod services;
+pub mod sleep;
 pub mod streams;
 pub mod supervise;
 pub mod timeshift;
@@ -154,6 +155,9 @@ mod event_name_tests {
         "library.refreshed",
         "series.listings",
         "series.listingsDone",
+        // The sleep timer's countdown, and the moment it acts (README §13).
+        "sleep.state",
+        "sleep.fired",
     ];
 
     /// Every event name this crate passes to an emit, read out of its own source.

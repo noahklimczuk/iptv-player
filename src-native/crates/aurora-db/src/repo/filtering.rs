@@ -303,6 +303,19 @@ pub fn counts(conn: &Connection, kind: Kind) -> Result<FilterCounts> {
 
 /// The other copies of one title, best first — the source picker behind a collapsed
 /// entry (README §13, "one card with a source picker").
+///
+/// Country is honoured here as it is in `same_title_sql`, and for the same reason. The
+/// key is built from the name *after* `split_country_prefix` has removed the prefix, so
+/// `US * TNT` and `CA * TNT` both key to `tnt` — and this listed each as an alternate
+/// source for the other. They are not two feeds of one channel; they are two channels
+/// whose names happen to survive normalisation identically, and a viewer picking "a
+/// better copy" of their local TNT was handed another country's. `IS` rather than `=`,
+/// so two untagged channels compare equal instead of both being excluded (R-08).
+///
+/// Language is deliberately *not* honoured, which is where this parts company with
+/// `same_title_sql`: a viewer who has opened the source picker wants the whole choice,
+/// including the Spanish copy that "English only" keeps out of the grid. That filter is
+/// about what the library offers unasked, and this is the asking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Alternate {
@@ -324,12 +337,17 @@ pub fn alternates(conn: &Connection, kind: Kind, id: i64) -> Result<Vec<Alternat
     } else {
         ""
     };
+    let region = if matches!(kind, Kind::Live) {
+        " AND a.country IS me.country"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT a.id, {name_col}, a.quality, p.name
          FROM {t} a
          JOIN {t} me ON me.id = ?1
          LEFT JOIN providers p ON p.id = a.provider_id
-         WHERE a.match_key = me.match_key{year} AND a.hidden = 0
+         WHERE a.match_key = me.match_key{year}{region} AND a.hidden = 0
          ORDER BY a.quality_rank DESC, a.id"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -1100,6 +1118,55 @@ mod tests {
             ]
         );
         assert_eq!(alts[0].provider.as_deref(), Some("Provider One"));
+    }
+
+    /// Another country's feed is not another copy of this channel.
+    ///
+    /// `match_key` is built after the country prefix is stripped, so `US * TNT` and
+    /// `CA * TNT` both key to `tnt`. The collapser has always known the difference --
+    /// `same_title_sql` compares `country` -- and the source picker did not, so it
+    /// offered a viewer another country's TNT as a better copy of their own (R-08's
+    /// shape, in the one place it was not applied).
+    #[test]
+    fn a_feed_from_another_country_is_not_an_alternate_source() {
+        let conn = crate::open_memory().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        // `country` is written by `channels::upsert_batch` at ingest, from the same
+        // `split_country_prefix` that takes the prefix out of the key -- not by
+        // `reclassify`, which only touches `lang_code` and `quality_rank`. Set here for
+        // the same reason the sibling test above sets it: without it every row has a
+        // NULL country, `IS` makes NULLs equal, and the fixture cannot tell the cases
+        // apart whatever the query does.
+        for (id, name, country, rank) in [
+            (1, "US | TNT", "US", 2),
+            (2, "US | TNT FHD", "US", 3),
+            (3, "CA | TNT", "CA", 2),
+        ] {
+            conn.execute(
+                "INSERT INTO channels (id, provider_id, provider_key, name, match_key,
+                                       country, quality_rank, lang_code, hidden,
+                                       last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, 'tnt', ?4, ?5, 'en', 0, 0)",
+                params![id, format!("c{id}"), name, country, rank],
+            )
+            .unwrap();
+        }
+
+        let alts = alternates(&conn, Kind::Live, 1).unwrap();
+        let ids: Vec<i64> = alts.iter().map(|a| a.id).collect();
+        assert!(
+            ids.contains(&2),
+            "the other US feed is a real alternate: {alts:?}"
+        );
+        assert!(
+            !ids.contains(&3),
+            "a Canadian feed was offered as a copy of the US one: {alts:?}"
+        );
     }
 
     #[test]
