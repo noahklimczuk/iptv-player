@@ -29,8 +29,20 @@ use crate::http::HttpClient;
 ///
 /// Flash rather than Pro: this is a list of film titles, it runs in the background while
 /// somebody is browsing, and the cost difference is real on a library that asks again
-/// whenever the taste profile moves.
-pub const MODEL: &str = "gemini-flash-latest";
+/// whenever the taste profile moves. Flash Lite rather than Flash for the same reason
+/// again, one step further.
+///
+/// Pinned to a version rather than left on `gemini-flash-latest`, on the owner's
+/// instruction. The alias moves when Google ships a new Flash — as of 2026-10-24 the
+/// catalogue offers up to `gemini-3.8-flash`, so `-latest` was several generations ahead
+/// of this and would move again without anyone choosing it. A pin means the assistant
+/// answers the same way tomorrow as today, and changing it is a commit somebody reviews.
+///
+/// Both callers share this: `recommend`'s rail here, and `chat.rs` for the assistant.
+/// The assistant sends `functionDeclarations`, so a model chosen here has to support
+/// tool calling — `supportedGenerationMethods` does not say whether it does, so that is
+/// a question for a real call rather than for the model listing.
+pub const MODEL: &str = "gemini-3.5-flash-lite";
 
 /// Where the API lives. Overridable so the tests can point it at a local server.
 pub const DEFAULT_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta";

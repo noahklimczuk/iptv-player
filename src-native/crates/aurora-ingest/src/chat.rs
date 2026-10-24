@@ -33,6 +33,13 @@ use serde_json::json;
 use crate::http::HttpClient;
 use aurora_core::neterr::{ErrorAction, ErrorCode, NetFailure};
 
+/// The ceiling on one reply, in tokens.
+///
+/// Three sentences and a few cards is a couple of hundred; this is several times that,
+/// so it bounds a runaway rather than trimming an ordinary answer. Named because the
+/// number is a judgement and belongs where somebody can find it.
+pub const MAX_REPLY_TOKENS: u32 = 768;
+
 /// One exchange in the conversation, in the order it happened.
 ///
 /// `ToolCall` and `ToolResult` are kept in the history rather than collapsed away,
@@ -226,6 +233,18 @@ impl Chatter for ChatClient<'_> {
                 // held at near-zero answers the same way to "what else?" as it did to
                 // the question before it.
                 "temperature": 0.7,
+                // The system prompt asks for "two or three sentences around the cards,
+                // not an essay", and nothing made that true. Output tokens are the
+                // expensive half, and a model that decides to be thorough was charged
+                // for in full — the cap is what turns the instruction into a limit.
+                // Generous against three sentences and a handful of cards; a reply that
+                // needs more than this has misunderstood the question.
+                "maxOutputTokens": MAX_REPLY_TOKENS,
+                // Picking titles out of a list that has already been fetched does not
+                // need deliberation, and on a 3.x model thinking is billed like any
+                // other output. `thinkingBudget: 0` is refused by Flash Lite; `low` is
+                // accepted, which is the floor this model offers.
+                "thinkingConfig": { "thinkingLevel": "low" },
             },
         });
         if !declarations.is_empty() {

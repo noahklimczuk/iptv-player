@@ -47,6 +47,20 @@ use crate::services::Services;
 /// enough that a model stuck in a loop costs seconds rather than a bill.
 pub const MAX_ROUNDS: usize = 6;
 
+/// How much of the conversation goes back to the model.
+///
+/// The *record* keeps everything: the screen shows it, and "show me that one again"
+/// resolves against the cards every past turn handed out (R-127). What is **sent** is
+/// only the tail, and the difference matters because `contents` is resent on every round
+/// of every turn — with [`MAX_ROUNDS`] that is up to six copies of the whole
+/// conversation for one question. Unbounded, an afternoon's chat made each new question
+/// dearer than the last while adding nothing: the model does not need this morning's
+/// exchange to answer "something lighter than that".
+///
+/// Twelve messages is about six exchanges, which is further back than any "not those"
+/// has ever referred to.
+const SENT_MESSAGES: usize = 12;
+
 /// How many lookups one message may run in total, across all rounds.
 pub const MAX_CALLS: usize = 14;
 
@@ -806,6 +820,27 @@ fn harvest_ids(value: &serde_json::Value, out: &mut std::collections::HashSet<(S
     }
 }
 
+/// The tail of the conversation that is worth paying to resend.
+///
+/// Starts at something the viewer said, so the window never opens on an answer with no
+/// question in front of it — which reads to the model as a reply it is expected to
+/// continue rather than an exchange it can see both halves of.
+///
+/// Safe to cut anywhere here because the stored messages are only the viewer's words and
+/// the assistant's: a lookup and its result live in `working` for the length of one
+/// `send` and are never persisted, so there is no function call here that could be
+/// separated from its response.
+fn recent(messages: &[ChatMessage]) -> &[ChatMessage] {
+    if messages.len() <= SENT_MESSAGES {
+        return messages;
+    }
+    let mut start = messages.len() - SENT_MESSAGES;
+    while start < messages.len() && messages[start].role != "user" {
+        start += 1;
+    }
+    &messages[start..]
+}
+
 fn turns_of(messages: &[ChatMessage]) -> Vec<Turn> {
     messages
         .iter()
@@ -909,7 +944,7 @@ pub fn send(
 
     let system = system_prompt(&digest_line(db));
     let tools = declarations();
-    let mut working = turns_of(&stored.messages);
+    let mut working = turns_of(recent(&stored.messages));
 
     let mut steps: Vec<String> = Vec::new();
     let mut items: Vec<ChatItem> = Vec::new();
@@ -1164,6 +1199,73 @@ pub fn assistant_send(
             crate::emit(&app, "assistant.step", &json!({ "step": step }));
         },
     )
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    fn msg(role: &str, text: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            text: text.to_string(),
+            items: Vec::new(),
+            at: 0,
+        }
+    }
+
+    /// A conversation shorter than the window goes back whole.
+    #[test]
+    fn a_short_conversation_is_sent_in_full() {
+        let msgs = vec![
+            msg("user", "hello"),
+            msg("assistant", "hi"),
+            msg("user", "more"),
+        ];
+        assert_eq!(recent(&msgs).len(), 3);
+    }
+
+    /// A long one is cut, and what survives still ends with the question just asked —
+    /// losing that would answer the wrong thing to save a few tokens.
+    #[test]
+    fn a_long_conversation_keeps_the_tail_and_the_new_question() {
+        let mut msgs = Vec::new();
+        for i in 0..40 {
+            msgs.push(msg("user", &format!("q{i}")));
+            msgs.push(msg("assistant", &format!("a{i}")));
+        }
+        msgs.push(msg("user", "the one just asked"));
+
+        let sent = recent(&msgs);
+        assert!(
+            sent.len() <= SENT_MESSAGES + 1,
+            "sent {} messages",
+            sent.len()
+        );
+        assert_eq!(sent.last().unwrap().text, "the one just asked");
+        assert!(sent.len() < msgs.len(), "nothing was trimmed");
+    }
+
+    /// The window opens on the viewer, never on a reply with no question before it.
+    #[test]
+    fn the_window_always_starts_with_something_the_viewer_said() {
+        for extra in 0..6 {
+            let mut msgs = Vec::new();
+            for i in 0..20 {
+                msgs.push(msg("user", &format!("q{i}")));
+                msgs.push(msg("assistant", &format!("a{i}")));
+            }
+            for i in 0..extra {
+                msgs.push(msg("user", &format!("x{i}")));
+            }
+            let sent = recent(&msgs);
+            assert_eq!(
+                sent.first().unwrap().role,
+                "user",
+                "window opened on an assistant turn with extra={extra}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
