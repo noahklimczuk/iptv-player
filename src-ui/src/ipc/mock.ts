@@ -1554,7 +1554,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
 
   'assistant.status': ({ profileId }) => ({
     hasKey: geminiKey().length > 0,
-    model: 'gemini-flash-latest',
+    model: 'gemini-3.5-flash-lite',
     messages: (assistantHistory.get(profileId) ?? []).length,
   }),
   'assistant.history': ({ profileId }) => [...(assistantHistory.get(profileId) ?? [])],
