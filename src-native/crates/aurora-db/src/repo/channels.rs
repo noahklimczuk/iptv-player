@@ -656,6 +656,129 @@ mod tests {
         assert_eq!(list(&conn, &ChannelFilter::default()).unwrap().len(), 2);
     }
 
+    /// The shape that put the badge on every channel in the library.
+    ///
+    /// `last_refresh_at` used to be written from a second call to the clock, after the
+    /// import had finished, while the rows carry the stamp taken before it started. On a
+    /// real panel those are minutes apart, so `last_seen_at < last_refresh_at` was true
+    /// of *everything* and the whole channel list read "your provider no longer lists
+    /// this channel" -- about channels the provider had just listed.
+    ///
+    /// The caller is what was wrong, and `aurora-app`'s `refresh_stamp.rs` is what holds
+    /// it to the fix. This is the rule that makes the fix the right one: a refresh whose
+    /// recorded instant is the one its rows carry drops nothing it saw.
+    #[test]
+    fn a_refresh_that_records_its_own_stamp_drops_nothing_it_saw() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = entry("One", Some(1));
+        let b = entry("Two", Some(2));
+
+        // A refresh that saw both, stamping them with the instant it began.
+        let began = 1_000;
+        upsert_batch(&mut conn, p, &[("k1".into(), &a), ("k2".into(), &b)], began).unwrap();
+
+        // Recorded as the instant it *finished*, two minutes later. This is the bug.
+        conn.execute(
+            "UPDATE providers SET last_refresh_at = ?2 WHERE id = ?1",
+            params![p, began + 120],
+        )
+        .unwrap();
+        assert!(
+            list(&conn, &ChannelFilter::default())
+                .unwrap()
+                .iter()
+                .all(|r| r.stale),
+            "the end-of-refresh stamp should mark the whole library dropped -- if this \
+             fails the comparison has changed and this test is no longer about anything"
+        );
+
+        // Recorded as the instant it began, which is what the rows carry.
+        conn.execute(
+            "UPDATE providers SET last_refresh_at = ?2 WHERE id = ?1",
+            params![p, began],
+        )
+        .unwrap();
+        for row in list(&conn, &ChannelFilter::default()).unwrap() {
+            assert!(
+                !row.stale,
+                "{} was dropped by the refresh that had just listed it",
+                row.name
+            );
+        }
+    }
+
+    /// Migration 16 repairs a library that already has the wrong number stored.
+    ///
+    /// The code change fixes the next refresh. Without this, an install that has already
+    /// refreshed goes on showing the badge on everything until somebody refreshes again.
+    #[test]
+    fn the_migration_repairs_a_library_already_in_the_bad_state() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = entry("One", Some(1));
+        let b = entry("Two", Some(2));
+        upsert_batch(&mut conn, p, &[("k1".into(), &a), ("k2".into(), &b)], 1_000).unwrap();
+        conn.execute(
+            "UPDATE providers SET last_refresh_at = 1_120 WHERE id = ?1",
+            params![p],
+        )
+        .unwrap();
+        assert!(
+            list(&conn, &ChannelFilter::default())
+                .unwrap()
+                .iter()
+                .all(|r| r.stale),
+            "the fixture is not in the bad state"
+        );
+
+        // The migration's own statement, run against this library.
+        let sql = crate::schema::MIGRATIONS
+            .iter()
+            .find(|m| m.version == 16)
+            .expect("migration 16")
+            .sql;
+        conn.execute_batch(sql).unwrap();
+
+        for row in list(&conn, &ChannelFilter::default()).unwrap() {
+            assert!(!row.stale, "{} is still marked dropped", row.name);
+        }
+    }
+
+    /// And it leaves a genuinely dropped channel dropped.
+    ///
+    /// The repair takes the newest stamp the provider's rows carry, so a channel the
+    /// last refresh really did not see is still behind it.
+    #[test]
+    fn the_migration_keeps_a_real_drop_dropped() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let a = entry("Kept", Some(1));
+        let b = entry("Gone", Some(2));
+        // Both seen once...
+        upsert_batch(&mut conn, p, &[("k1".into(), &a), ("k2".into(), &b)], 1_000).unwrap();
+        // ...then a refresh that saw only one of them, recorded wrongly as its end.
+        upsert_batch(&mut conn, p, &[("k1".into(), &a)], 2_000).unwrap();
+        conn.execute(
+            "UPDATE providers SET last_refresh_at = 2_120 WHERE id = ?1",
+            params![p],
+        )
+        .unwrap();
+
+        let sql = crate::schema::MIGRATIONS
+            .iter()
+            .find(|m| m.version == 16)
+            .expect("migration 16")
+            .sql;
+        conn.execute_batch(sql).unwrap();
+
+        let rows = list(&conn, &ChannelFilter::default()).unwrap();
+        let kept = rows.iter().find(|r| r.name == "Kept").expect("Kept");
+        let gone = rows.iter().find(|r| r.name == "Gone").expect("Gone");
+        assert!(!kept.stale, "the channel the refresh saw is marked dropped");
+        assert!(gone.stale, "the channel it did not see is no longer marked");
+    }
+
     /// And the row says which one it is, which is the half that was missing.
     ///
     /// `stale` counted them for the refresh report and nothing marked the rows, while
