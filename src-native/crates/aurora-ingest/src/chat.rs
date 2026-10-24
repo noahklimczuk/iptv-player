@@ -232,11 +232,17 @@ impl Chatter for ChatClient<'_> {
             body["tools"] = json!([{ "functionDeclarations": declarations }]);
         }
 
-        let (status, raw) = self.http.post_json_with_status(
-            &self.url(),
-            &body.to_string(),
-            &[(super::gemini::API_KEY_HEADER, self.api_key.as_str())],
-        )?;
+        let (status, raw) = self
+            .http
+            .post_json_with_status(
+                &self.url(),
+                &body.to_string(),
+                &[(super::gemini::API_KEY_HEADER, self.api_key.as_str())],
+            )
+            // A transport failure here is the assistant's, not a provider's. Without
+            // this it arrived as "Your provider didn't respond in time", with advice
+            // about an Xtream port.
+            .map_err(|e| super::gemini::unreachable(e, "The assistant"))?;
         if status >= 400 {
             return Err(super::gemini::rejected(status, &raw, "The assistant"));
         }

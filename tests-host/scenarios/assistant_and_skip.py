@@ -25,11 +25,20 @@ the panel, the real database and a real catalogue.
 
 One import serves both, because a real one is a quarter of an hour.
 
+Skip Intro runs first, and that ordering is deliberate. The assistant's round trip
+depends on somebody else's capacity: a free-tier key has a daily request limit and
+`gemini-flash-latest` answers 503 when it is busy, both of which were seen on a real
+run — and when that step came first it aborted the scenario before the half that is
+entirely ours had been checked at all. The deadlock assertions stay hard, because those
+are about this code; only the model's answer is allowed to be missing.
+
 Skipped unless the panel credentials are in the environment. The Gemini half is skipped
 on its own if no key is available, so the Skip Intro half still runs without one.
 """
 import os
 import time
+
+from driver import HostRefused
 
 URL = os.environ.get("AURORA_PANEL_URL")
 USER = os.environ.get("AURORA_PANEL_USER")
@@ -87,44 +96,6 @@ def run(d, ctx):
     _import_the_library(d)
     profile_id = d.invoke("profiles_list")[0]["id"]
 
-    # ---- The assistant -------------------------------------------------------------
-    #
-    # This single call is the whole deadlock. Before the fix it never returned, so the
-    # failure here is a timeout rather than a wrong answer.
-    started = time.time()
-    status = d.invoke("assistant_status", {"profileId": profile_id})
-    took = time.time() - started
-    ctx.assert_no_panic()
-    assert took < 20, f"assistant_status took {took:.1f}s, which is the deadlock"
-    print(f"   assistant_status answered in {took:.2f}s, model={status['model']}")
-
-    # And the lock really was released, rather than held for less time than the call
-    # above would notice. Anything db-backed will do; this one is cheap and unrelated.
-    d.invoke("profiles_list")
-    aids_after_status = d.invoke(
-        "library_playback_aids",
-        {"profileId": profile_id, "episodeId": 0, "durationSecs": 0},
-    )
-    ctx.assert_no_panic()
-    assert "markers" in aids_after_status, "the database was still locked afterwards"
-    print("   the database still answers after it, so no guard was left held")
-
-    if not status["hasKey"]:
-        print("   no Gemini key available, so the conversation itself is not exercised")
-    else:
-        reply = d.invoke(
-            "assistant_send",
-            {"profileId": profile_id, "text": "Name one film in my library and why."},
-        )
-        ctx.assert_no_panic()
-        text = (reply.get("message") or {}).get("text") or ""
-        assert text.strip(), f"the model replied with nothing: {reply!r}"
-        print(f"   the assistant answered {len(text)} characters")
-        # And it was remembered, which is the other half of the screen working.
-        history = d.invoke("assistant_history", {"profileId": profile_id})
-        assert len(history) >= 2, f"the exchange was not kept: {len(history)} messages"
-        print(f"   {len(history)} messages kept")
-
     # ---- Skip Intro ----------------------------------------------------------------
     series, episodes = _an_episode_without_chapters(d)
     first, sibling = episodes[0]["id"], episodes[1]["id"]
@@ -169,3 +140,63 @@ def run(d, ctx):
         f"from source {inherited['source']!r}"
     )
     ctx.assert_no_panic()
+
+    # ---- The assistant -------------------------------------------------------------
+    #
+    # This single call is the whole deadlock. Before the fix it never returned, so the
+    # failure here is a timeout rather than a wrong answer.
+    started = time.time()
+    status = d.invoke("assistant_status", {"profileId": profile_id})
+    took = time.time() - started
+    ctx.assert_no_panic()
+    assert took < 20, f"assistant_status took {took:.1f}s, which is the deadlock"
+    print(f"   assistant_status answered in {took:.2f}s, model={status['model']}")
+
+    # And the lock really was released, rather than held for less time than the call
+    # above would notice. Anything db-backed will do; this one is cheap and unrelated.
+    d.invoke("profiles_list")
+    stats = d.invoke("library_stats")
+    ctx.assert_no_panic()
+    assert stats, "the database was still locked afterwards"
+    print("   the database still answers after it, so no guard was left held")
+
+    if not status["hasKey"]:
+        print("   no Gemini key available, so the conversation itself is not exercised")
+    else:
+        # A real turn is seconds, and the model may look through the library several
+        # times before answering. WebDriver's default script timeout is thirty, which is
+        # shorter than the ninety the host allows the model — the first run of this
+        # scenario failed on exactly that and reported it as a timeout.
+        d.script_timeout(150)
+        try:
+            reply = d.invoke(
+                "assistant_send",
+                {"profileId": profile_id, "text": "Name one film in my library and why."},
+            )
+        except HostRefused as e:
+            # Google's capacity and the key's quota are not this app's behaviour. A
+            # free-tier key has a daily request limit, and `gemini-flash-latest` answers
+            # 503 when it is busy — both were seen on a real run. Reported and stepped
+            # over, because the deadlock assertions above are the ones that are ours and
+            # they have already passed. Anything else still fails the scenario.
+            said = str(e).lower()
+            upstream = any(
+                w in said
+                for w in ("rate limited", "is busy", "having trouble", "quota", "took too long")
+            )
+            if not upstream:
+                raise
+            print(f"   the model did not answer, upstream: {e}")
+            reply = None
+        finally:
+            d.script_timeout(30)
+        ctx.assert_no_panic()
+        if reply is None:
+            return
+        text = (reply.get("message") or {}).get("text") or ""
+        assert text.strip(), f"the model replied with nothing: {reply!r}"
+        print(f"   the assistant answered {len(text)} characters")
+        # And it was remembered, which is the other half of the screen working.
+        history = d.invoke("assistant_history", {"profileId": profile_id})
+        assert len(history) >= 2, f"the exchange was not kept: {len(history)} messages"
+        print(f"   {len(history)} messages kept")

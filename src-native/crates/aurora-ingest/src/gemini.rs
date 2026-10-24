@@ -212,11 +212,15 @@ impl Recommender for GeminiClient<'_> {
         // With the status, so a refusal can say what Google said about it. `post_json`
         // turns a non-2xx into a `NetFailure` before the body is read, which is how the
         // rail came to report an invalid key as "that request was rejected" (R-68).
-        let (status, raw) = self.http.post_json_with_status(
-            &self.url(),
-            &body.to_string(),
-            &[(API_KEY_HEADER, self.api_key.as_str())],
-        )?;
+        let (status, raw) = self
+            .http
+            .post_json_with_status(
+                &self.url(),
+                &body.to_string(),
+                &[(API_KEY_HEADER, self.api_key.as_str())],
+            )
+            // And a transport failure is the rail's own, for the same reason.
+            .map_err(|e| unreachable(e, "Recommendations"))?;
         if status >= 400 {
             return Err(rejected(status, &raw, "Recommendations"));
         }
@@ -243,6 +247,56 @@ impl Recommender for GeminiClient<'_> {
 /// mistyped key was told by the assistant that the key was invalid and, on the home
 /// screen, that "that request was rejected", with a "Try another source" button for a
 /// thing that has no other source (R-68).
+/// A call that never got a status — a timeout, a refused connection, no network —
+/// reported as the subject's own failure rather than the panel's.
+///
+/// The other half of what `rejected` below fixes, and it survived because the two halves
+/// fail through different doors. `NetFailure::classify` works from the *text* of a
+/// transport error and cannot know who was being called, so every timeout it sees gets
+/// the sentence the setup wizard needs: "Your provider didn't respond in time — the
+/// address may be missing a port. Panels usually publish one, like :8080 or :2082."
+/// Perfect advice for an Xtream URL, and what a viewer was shown when the *model* was
+/// slow — sending them to check a port on a server that had nothing to do with it.
+///
+/// Seen for real: with the model overloaded (Google answering 503, and 429 once the free
+/// tier's quota was spent), `assistant_send` failed with the panel's port advice.
+///
+/// The code is kept, because the classifier was right about *what* happened and only
+/// wrong about *whose* it was, and `Retry` is the only action that fits either way —
+/// there is no other source to try and nothing in Settings to fix.
+pub(crate) fn unreachable(failure: NetFailure, subject: &str) -> NetFailure {
+    // The cause is rewritten as well, and that is not a detail: the classifier's cause
+    // is where the port advice actually lives ("Panels usually publish one, like :8080
+    // or :2082"), and the UI shows it under the message. Replacing only the headline
+    // left the panel's advice on screen — which the test below caught.
+    let (message, cause) = match failure.code {
+        ErrorCode::Timeout => (
+            format!("{subject} took too long to answer"),
+            "The model's API did not answer within the time allowed.".to_string(),
+        ),
+        ErrorCode::RateLimited => (
+            format!("{subject} is rate limited"),
+            "The model's API is refusing further requests for now. A free-tier key has a \
+             daily request limit."
+                .to_string(),
+        ),
+        ErrorCode::ServerError => (
+            format!("{subject} is having trouble"),
+            "The model's API reported a problem of its own.".to_string(),
+        ),
+        _ => (
+            format!("{subject} could not be reached"),
+            "The model's API could not be reached from this machine.".to_string(),
+        ),
+    };
+    NetFailure {
+        message,
+        cause,
+        actions: vec![ErrorAction::Retry],
+        ..failure
+    }
+}
+
 pub(crate) fn rejected(status: u16, raw: &str, subject: &str) -> NetFailure {
     let said = serde_json::from_str::<serde_json::Value>(raw)
         .ok()
@@ -468,6 +522,44 @@ mod tests {
         assert!(
             !err.retryable,
             "a wrong key does not improve by being retried"
+        );
+    }
+
+    /// A model call that times out must not send the reader to their panel's port.
+    ///
+    /// `NetFailure::classify` writes for the setup wizard, which is the right default
+    /// and the wrong one here. Seen on a real run: the model overloaded, Google
+    /// answering 503 and then 429 once the free tier's quota was spent, and
+    /// `assistant_send` reporting "Your provider didn't respond in time — the address
+    /// may be missing a port. Panels usually publish one, like :8080 or :2082."
+    #[test]
+    fn a_transport_failure_is_the_callers_own_and_not_a_panels() {
+        let timed_out = NetFailure::classify("operation timed out");
+        assert_eq!(timed_out.code, ErrorCode::Timeout);
+        assert!(
+            timed_out.message.to_lowercase().contains("provider"),
+            "the generic classifier is supposed to be about a provider: {:?}",
+            timed_out.message
+        );
+
+        let theirs = unreachable(timed_out.clone(), "The assistant");
+        assert_eq!(theirs.message, "The assistant took too long to answer");
+        assert!(
+            !theirs.message.contains("provider") && !theirs.cause.contains(":8080"),
+            "still talking about a panel: {theirs:?}"
+        );
+        // The classifier was right about *what* happened, so that is kept.
+        assert_eq!(theirs.code, ErrorCode::Timeout);
+        assert_eq!(theirs.actions, vec![ErrorAction::Retry]);
+
+        // And the rail says so as itself.
+        assert_eq!(
+            unreachable(
+                NetFailure::classify("operation timed out"),
+                "Recommendations"
+            )
+            .message,
+            "Recommendations took too long to answer"
         );
     }
 

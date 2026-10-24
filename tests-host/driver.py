@@ -73,6 +73,21 @@ class WD:
     def r(self, method, path, body=None):
         return self._rq(method, f"/session/{self.sid}{path}", body)
 
+    def script_timeout(self, seconds):
+        """Raise the WebDriver *script* timeout, for a command that honestly takes a while.
+
+        Not the HTTP timeout above: this is a session setting, and WebDriver's default is
+        thirty seconds. One host command can legitimately run longer — `assistant_send`
+        allows the model ninety — and asking for one got `script timeout` back from the
+        driver, which reads like a hang and is in fact a cap.
+
+        Deliberately not raised for everything. Thirty seconds is a useful guard: a
+        command that stops answering should fail the run rather than sit there, which is
+        the distinction `hangs` in the mock exists to make. Raise it around the call that
+        needs it and put it back.
+        """
+        self.r("POST", "/timeouts", {"script": int(seconds * 1000)})
+
     def find_all(self, css):
         out = self.r("POST", "/elements", {"using": "css selector", "value": css})["value"]
         return [list(v.values())[0] for v in out]
