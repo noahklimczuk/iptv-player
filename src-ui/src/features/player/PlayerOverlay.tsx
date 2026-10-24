@@ -6,10 +6,12 @@
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Episode, PlayerState, TimeshiftWindow } from '@shared/ipc';
+import type {
+  Episode, PlayerState, SleepAfter, SleepState, TimeshiftWindow,
+} from '@shared/ipc';
 import { Badge, IconButton } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
-import { hasVideoSurface, invoke } from '@/ipc';
+import { hasVideoSurface, invoke, onSleepState } from '@/ipc';
 import { notify, report } from '@/lib/errors';
 import { duration } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
@@ -106,6 +108,12 @@ const PART_GONE_SECS = 60;
 
 /** Speeds the transport offers. Beyond this, pitch correction stops being convincing. */
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
+/** README §13's sleep-timer durations, in minutes. */
+const SLEEP_MINUTES = [15, 30, 45, 60, 90] as const;
+
+/** How long "Keep watching" adds when the warning is up. */
+const SLEEP_EXTEND_MINUTES = 30;
 
 /** README §6.2's aspect choices, in the order a person tries them. */
 const ASPECTS: { value: PlayerState['aspect']; label: string; detail?: string }[] = [
@@ -305,6 +313,8 @@ export function PlayerOverlay({
     return () => el.removeEventListener('wheel', onWheel);
   }, [bump]);
 
+  const sleep = useSleepTimer();
+
   const playing = player.status === 'playing';
   const behind = behindLive(player);
   // Whether there is a real video surface behind this overlay.
@@ -375,6 +385,41 @@ export function PlayerOverlay({
       )}
 
       {player.error && <ErrorPanel error={player.error} player={player} onSettings={onSettings} />}
+
+      {/* The warning, outside the `visible` gate on purpose.
+
+          Everything else here hides after 3.2 seconds of no input, and the sleep timer's
+          whole premise is that there has been no input -- so a warning inside that gate
+          would be invisible at exactly the moment it matters. README §13 asks for sixty
+          seconds' notice, and notice nobody can see is not notice. */}
+      <AnimatePresence>
+        {sleep.state.warning && (
+          <motion.div
+            data-osd-chrome=""
+            data-testid="sleep-warning"
+            role="alert"
+            initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.18 }}
+            style={{
+              position: 'absolute', top: 'var(--sp-5)', left: '50%', translate: '-50% 0',
+              display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)',
+              borderRadius: 'var(--r-lg)', padding: 'var(--sp-3) var(--sp-4)',
+              boxShadow: 'var(--shadow-3)', zIndex: 2,
+            }}
+          >
+            <span style={{ fontWeight: 600 }}>
+              {sleepEnding(sleep.state)} in {sleep.state.remainingSecs ?? 0}s
+            </span>
+            <IconButton
+              label={`Keep watching for another ${SLEEP_EXTEND_MINUTES} minutes`}
+              icon="play"
+              onClick={() => sleep.extend(SLEEP_EXTEND_MINUTES)}
+            />
+            <IconButton label="Cancel the sleep timer" icon="close" onClick={sleep.cancel} />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {visible && (
@@ -527,7 +572,7 @@ export function PlayerOverlay({
               </div>
 
               <AnimatePresence>
-                {panel === 'playback' && <PlaybackPanel player={player} />}
+                {panel === 'playback' && <PlaybackPanel player={player} sleep={sleep} />}
               </AnimatePresence>
 
               <AnimatePresence>
@@ -858,7 +903,9 @@ function TrackPanel({
  * precisely for this — and no screen had ever called either. The button that should have
  * opened them had no handler.
  */
-function PlaybackPanel({ player }: { player: PlayerState }) {
+function PlaybackPanel({
+  player, sleep,
+}: { player: PlayerState; sleep: ReturnType<typeof useSleepTimer> }) {
   return (
     <motion.div
       data-testid="playback-panel"
@@ -912,8 +959,139 @@ function PlaybackPanel({ player }: { player: PlayerState }) {
           }}
         />
       ))}
+
+      <div style={{ marginTop: 'var(--sp-3)' }}>
+        <PanelHeading>Sleep timer</PanelHeading>
+        {sleep.state.armed ? (
+          <div style={{ display: 'grid', gap: 6 }}>
+            <div data-testid="sleep-armed" style={{ fontSize: 'var(--fs-sm)' }}>
+              {sleepEnding(sleep.state)} in {sleepLeft(sleep.state)}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={() => sleep.extend(SLEEP_EXTEND_MINUTES)}
+                style={sleepChip(false)}
+              >
+                +{SLEEP_EXTEND_MINUTES} min
+              </button>
+              <button onClick={sleep.cancel} style={sleepChip(false)}>Off</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {SLEEP_MINUTES.map((m) => (
+                <button
+                  key={m}
+                  onClick={() => sleep.set({ minutes: m })}
+                  style={sleepChip(false)}
+                >
+                  {m} min
+                </button>
+              ))}
+            </div>
+            {/* The two that depend on what is playing. Offered only where they can be
+                answered -- the host refuses them otherwise, with a sentence, and a
+                button that exists to produce an error message is worse than no button.
+                Live TV has a programme; a film or episode has a runtime. */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+              {player.isLive ? (
+                <button onClick={() => sleep.set('endOfProgramme')} style={sleepChip(false)}>
+                  End of programme
+                </button>
+              ) : (
+                player.durationSecs > 0 && (
+                  <button onClick={() => sleep.set('endOfEpisode')} style={sleepChip(false)}>
+                    End of {player.itemKind === 'episode' ? 'episode' : 'film'}
+                  </button>
+                )
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </motion.div>
   );
+}
+
+/** A chip in the sleep section, matching the speed buttons above it. */
+function sleepChip(active: boolean): React.CSSProperties {
+  return {
+    padding: '5px 11px', borderRadius: 'var(--r-full)', cursor: 'pointer',
+    fontSize: 'var(--fs-xs)', fontWeight: 700,
+    border: `1px solid ${active ? 'transparent' : 'var(--border-strong)'}`,
+    background: active ? 'var(--accent)' : 'transparent',
+    color: active ? 'var(--accent-text)' : 'var(--text-muted)',
+  };
+}
+
+/** "Sleeping", "Quitting", "Shutting down" — what is about to happen, as a verb. */
+function sleepEnding(state: SleepState): string {
+  switch (state.armed?.action) {
+    case 'quitApp':
+      return 'Closing Aurora';
+    case 'shutDownPc':
+      return 'Shutting down';
+    default:
+      return 'Stopping';
+  }
+}
+
+/** The countdown, in the largest unit that is still honest. */
+function sleepLeft(state: SleepState): string {
+  const left = state.remainingSecs ?? 0;
+  if (left >= 120) return `${Math.round(left / 60)} min`;
+  return `${left}s`;
+}
+
+/**
+ * The sleep timer, read from the host rather than counted here (README §13).
+ *
+ * Every number comes off `sleep.state`, which the player heartbeat pushes while a timer
+ * is armed. Counting down in the renderer would be the obvious thing and would drift:
+ * the deadline was set against the *host's* clock, a backgrounded tab's timers are
+ * throttled, and the whole premise of this feature is that nobody is interacting with
+ * the window. The host is the one thing still keeping time.
+ */
+function useSleepTimer() {
+  const [state, setState] = useState<SleepState>({
+    armed: null, remainingSecs: null, warning: false,
+  });
+
+  useEffect(() => {
+    let live = true;
+    invoke('sleep.state')
+      .then((s) => { if (live) setState(s); })
+      // Not fatal: no sleep timer is the state this starts in anyway.
+      .catch(() => {});
+    // `sleep.fired` is deliberately not subscribed to here. The host disarms the timer
+    // before acting and emits the empty state in the same tick, so this is already told
+    // that nothing is armed -- and a second listener for the same fact is a second place
+    // for the two to disagree.
+    const off = onSleepState(setState);
+    return () => { live = false; off(); };
+  }, []);
+
+  const set = useCallback((after: SleepAfter) => {
+    invoke('sleep.set', { after, action: 'stopPlayback' })
+      .then(setState)
+      // The host refuses "end of programme" on a channel with no guide and "end of
+      // episode" on a stream with no duration, and it says which in a sentence. Shown
+      // rather than swallowed: the alternative is a button that silently does nothing.
+      .catch(report('Could not set the sleep timer'));
+  }, []);
+
+  const cancel = useCallback(() => {
+    invoke('sleep.cancel').then(setState).catch(report('Could not cancel the sleep timer'));
+  }, []);
+
+  const extend = useCallback((minutes: number) => {
+    invoke('sleep.extend', { minutes })
+      .then(setState)
+      .catch(report('Could not extend the sleep timer'));
+  }, []);
+
+  return { state, set, cancel, extend };
 }
 
 function PanelHeading({ children }: { children: React.ReactNode }) {

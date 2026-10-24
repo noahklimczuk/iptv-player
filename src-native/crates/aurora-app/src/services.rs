@@ -37,6 +37,13 @@ pub struct Services {
     pub warming: Arc<Mutex<std::collections::HashSet<String>>>,
     /// The update installer being fetched, if any (docs/DECISIONS.md D17).
     pub updates: Arc<crate::updates::Downloads>,
+    /// The sleep timer's deadline, or `None` when nothing is armed (README §13).
+    ///
+    /// A `Mutex<Option<..>>` on the services rather than a service of its own: there is
+    /// no behaviour to own, only one value that the command layer sets and the player
+    /// heartbeat reads. `aurora_app::sleep` holds everything that decides anything, and
+    /// it does it without a clock or a lock so it can be tested as arithmetic.
+    pub sleep: Arc<Mutex<Option<crate::sleep::Deadline>>>,
     pub data_dir: PathBuf,
     /// What opening the library took. `Replaced` means the viewer's favourites, watch
     /// progress and recordings metadata are gone and a refresh is needed, which is
@@ -126,6 +133,7 @@ impl Services {
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             updates: Arc::new(crate::updates::Downloads::default()),
+            sleep: Arc::new(Mutex::new(None)),
             dvr,
             db,
             player,

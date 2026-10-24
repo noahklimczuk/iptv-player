@@ -15,6 +15,7 @@ import {
   onMetadataProgress as onMockMetadataProgress,
   onIngestProgress as onMockIngestProgress,
   onMosaicState as onMockMosaicState,
+  onSleepState as onMockSleepState,
   onAssistantStep as onMockAssistantStep,
   onPlayerState as onMockPlayerState,
 } from './mock';
@@ -90,6 +91,19 @@ export function onAssistantStep(fn: (p: Events['assistant.step']) => void): () =
 export function onPlayerState(fn: (s: PlayerState) => void): () => void {
   if (!isNativeHost()) return onMockPlayerState(fn);
   return subscribe<PlayerState>('player.state', fn);
+}
+
+/**
+ * The sleep timer's countdown (README §13).
+ *
+ * Pushed by the host on the player's heartbeat, because the host is the one thing still
+ * keeping time when nobody is interacting with the window -- which is the situation this
+ * feature exists for. A renderer counting down its own seconds would drift from the
+ * deadline and stop entirely once the tab was throttled.
+ */
+export function onSleepState(fn: (s: Events['sleep.state']) => void): () => void {
+  if (!isNativeHost()) return onMockSleepState(fn);
+  return subscribe<Events['sleep.state']>('sleep.state', fn);
 }
 
 /** How far the update installer has got (docs/DECISIONS.md D17). */

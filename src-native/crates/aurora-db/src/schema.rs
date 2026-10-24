@@ -758,6 +758,60 @@ ALTER TABLE skip_markers_new RENAME TO skip_markers;
 CREATE INDEX idx_markers_episode ON skip_markers(episode_id, kind);
 "#,
     },
+    Migration {
+        version: 16,
+        name: "refresh_stamp_matches_the_rows",
+        sql: r#"
+-- Every channel was wearing the "Dropped" badge.
+--
+-- `channels::list` shows it when `last_seen_at < providers.last_refresh_at`, meaning
+-- "your provider no longer lists this channel". Every row a refresh touches is stamped
+-- with `options.now_unix`, taken before the download begins -- but `last_refresh_at` was
+-- written from a *second* call to the clock, after the import had finished. On a panel
+-- with 22,121 channels and a guide that is minutes later, so the comparison read
+-- "stamped at the start < finished at the end" for the entire library.
+--
+-- The code now stores the stamp, so the next refresh is correct by itself. This is for
+-- the libraries that already have the wrong number in the column: without it they go on
+-- showing the badge on everything until somebody refreshes.
+--
+-- The repair is the largest `last_seen_at` the provider's own rows carry, which *is* the
+-- stamp the last refresh used -- the rows are the record of it. Channels first, because
+-- they are what the badge is about, and `MAX` over movies and series too so a provider
+-- whose channels were all genuinely dropped is not given a stamp from before them.
+--
+-- `WHERE last_refresh_at IS NOT NULL` so a provider that has never been refreshed keeps
+-- its NULL, which is what makes "a library nobody has refreshed has not lost anything"
+-- true. And the value is only lowered, never raised: `MIN(last_refresh_at, ...)` would
+-- be wrong for a provider whose rows legitimately predate a refresh that found nothing
+-- new, so the repair applies only where the stamp is *ahead* of every row it wrote.
+UPDATE providers
+   SET last_refresh_at = (
+         SELECT MAX(seen) FROM (
+           SELECT MAX(last_seen_at) AS seen FROM channels WHERE provider_id = providers.id
+           UNION ALL
+           SELECT MAX(last_seen_at) FROM movies WHERE provider_id = providers.id
+           UNION ALL
+           SELECT MAX(last_seen_at) FROM series WHERE provider_id = providers.id
+         )
+       )
+ WHERE last_refresh_at IS NOT NULL
+   AND EXISTS (
+         SELECT 1 FROM channels
+          WHERE provider_id = providers.id
+            AND last_seen_at < providers.last_refresh_at
+       )
+   AND (
+         SELECT MAX(seen) FROM (
+           SELECT MAX(last_seen_at) AS seen FROM channels WHERE provider_id = providers.id
+           UNION ALL
+           SELECT MAX(last_seen_at) FROM movies WHERE provider_id = providers.id
+           UNION ALL
+           SELECT MAX(last_seen_at) FROM series WHERE provider_id = providers.id
+         )
+       ) IS NOT NULL;
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 15;
+pub const LATEST_VERSION: u32 = 16;

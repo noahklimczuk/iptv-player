@@ -37,8 +37,30 @@ pub struct Settings {
     pub bytes: u64,
     pub secs: u32,
     pub folder: String,
-    /// What the buffer is using on disk at this moment.
+    /// What the buffer is holding on disk at this moment, as mpv reports it.
+    ///
+    /// **Measured rather than scanned**, and that is the whole of this field's history.
+    /// It used to be the size of the files in `folder`, which was always 0 — and from
+    /// that zero two wrong conclusions were drawn in turn: first that the buffer was not
+    /// being written at all, then (docs/ROADMAP.md, and a PR title) that it was
+    /// memory-resident. Neither survived asking mpv. `demuxer-cache-state` carries
+    /// `file-cache-bytes`, present only when a cache file exists, and on a real provider
+    /// it reads 10.4 MB, 18.3, 24.1, 28.5 over the first minute while the process's
+    /// working set stays flat at 379 MB. The buffer is on disk and growing; a directory
+    /// listing simply cannot see mpv's cache file.
     pub bytes_on_disk: u64,
+    /// What "Empty buffer" could actually free, which is not the same number.
+    ///
+    /// `clear` deletes files in `folder`, and the live cache file is not one it can
+    /// touch: Windows refuses to delete a file in use, and the file in use is the
+    /// programme being watched. So this counts what is reclaimable — leftovers from a
+    /// previous run, or from a crash — and the button is gated on it.
+    ///
+    /// Gated on the wrong number, the button was *permanently disabled*:
+    /// `disabled={settings.bytesOnDisk === 0}` against a field that could only ever be
+    /// zero. Two separate numbers because they answer two separate questions, and
+    /// collapsing them is what made one of them a lie.
+    pub reclaimable_bytes: u64,
 }
 
 /// Where the buffer lives. Beside the library by default, so a portable install stays
@@ -57,14 +79,25 @@ pub fn budget(db: &Connection) -> Result<Budget> {
     Ok(Budget::clamped(bytes, secs))
 }
 
-pub fn read(db: &Connection, data_dir: &Path) -> Result<Settings> {
+/// The settings, and what the buffer is costing.
+///
+/// `held_bytes` is what the player says its cache file holds, or `None` when nothing is
+/// playing or the stream has no cache file. It is passed in rather than read here so this
+/// stays a function of the database and a number: the player lives behind its own mutex,
+/// and `aurora_db`'s is not reentrant.
+///
+/// With `None` the reported figure falls back to the folder scan, which is the right
+/// answer when nothing is playing — then the folder really is all there is.
+pub fn read(db: &Connection, data_dir: &Path, held_bytes: Option<u64>) -> Result<Settings> {
     let dir = folder(db, data_dir)?;
     let budget = budget(db)?;
+    let reclaimable_bytes = bytes_on_disk(&dir);
     Ok(Settings {
         enabled: settings::get_or(db, ENABLED_KEY, DEFAULT_ENABLED)?,
         bytes: budget.bytes,
         secs: budget.secs,
-        bytes_on_disk: bytes_on_disk(&dir),
+        bytes_on_disk: held_bytes.unwrap_or(reclaimable_bytes),
+        reclaimable_bytes,
         folder: dir.to_string_lossy().into_owned(),
     })
 }
@@ -137,7 +170,12 @@ pub struct SetArgs {
 /// Returns the stored values rather than the requested ones, because they are not always
 /// the same: a budget outside the documented range is clamped into it, and a panel that
 /// showed the request back would be lying about what will happen.
-pub fn write(db: &Connection, data_dir: &Path, args: &SetArgs) -> Result<Settings> {
+pub fn write(
+    db: &Connection,
+    data_dir: &Path,
+    args: &SetArgs,
+    held_bytes: Option<u64>,
+) -> Result<Settings> {
     if let Some(enabled) = args.enabled {
         settings::set(db, ENABLED_KEY, &enabled)?;
     }
@@ -185,13 +223,28 @@ pub fn write(db: &Connection, data_dir: &Path, args: &SetArgs) -> Result<Setting
             }
         }
     }
-    read(db, data_dir)
+    read(db, data_dir, held_bytes)
+}
+
+/// What the cache file behind the current stream holds, if there is one.
+///
+/// Taken under the player's lock and released before the database's is taken. The two are
+/// never held together here on purpose: `aurora_db`'s mutex is not reentrant and the
+/// habit of taking locks in one order is what keeps that from mattering.
+fn held_bytes(services: &Services) -> Option<u64> {
+    services
+        .player
+        .lock()
+        .state()
+        .stats
+        .and_then(|s| s.cache_file_bytes)
 }
 
 #[tauri::command(async)]
 pub fn timeshift_settings(services: State<'_, Services>) -> Result<Settings> {
+    let held = held_bytes(&services);
     let db = services.db.lock();
-    read(&db, &services.data_dir)
+    read(&db, &services.data_dir, held)
 }
 
 /// Changes apply to the next channel tuned.
@@ -201,8 +254,9 @@ pub fn timeshift_settings(services: State<'_, Services>) -> Result<Settings> {
 /// somebody is watching.
 #[tauri::command(async)]
 pub fn timeshift_set_settings(services: State<'_, Services>, args: SetArgs) -> Result<Settings> {
+    let held = held_bytes(&services);
     let db = services.db.lock();
-    write(&db, &services.data_dir, &args)
+    write(&db, &services.data_dir, &args, held)
 }
 
 /// Empty the buffer. Returns the bytes reclaimed.
@@ -234,7 +288,7 @@ mod tests {
     #[test]
     fn the_defaults_are_the_buffer_the_spec_describes() {
         let db = aurora_db::open_memory().unwrap();
-        let s = read(&db, Path::new("/data")).unwrap();
+        let s = read(&db, Path::new("/data"), None).unwrap();
         assert!(s.enabled);
         assert_eq!(s.bytes, aurora_core::timeshift::DEFAULT_BYTES);
         assert_eq!(s.secs, 1800);
@@ -253,13 +307,17 @@ mod tests {
                 secs: Some(1),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
         assert_eq!(applied.bytes, MAX_BYTES);
         assert_eq!(applied.secs, MIN_SECS);
         // And the stored value is the clamped one, not the request: the next tune reads
         // the database, not this reply.
-        assert_eq!(read(&db, Path::new("/data")).unwrap().bytes, MAX_BYTES);
+        assert_eq!(
+            read(&db, Path::new("/data"), None).unwrap().bytes,
+            MAX_BYTES
+        );
     }
 
     #[test]
@@ -272,6 +330,7 @@ mod tests {
                 bytes: Some(4 * 1024 * 1024 * 1024),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
         let after = write(
@@ -281,6 +340,7 @@ mod tests {
                 secs: Some(600),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
         assert_eq!(after.bytes, 4 * 1024 * 1024 * 1024, "the size survived");
@@ -297,6 +357,7 @@ mod tests {
                 folder: Some("/mnt/fast/buffer".into()),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
         assert_eq!(moved.folder, "/mnt/fast/buffer");
@@ -308,6 +369,7 @@ mod tests {
                 folder: Some("   ".into()),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
         assert!(back.folder.ends_with("timeshift"), "{}", back.folder);
@@ -340,6 +402,7 @@ mod tests {
                 folder: Some(new.to_string_lossy().into_owned()),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
 
@@ -364,9 +427,9 @@ mod tests {
             folder: Some(dir.to_string_lossy().into_owned()),
             ..Default::default()
         };
-        write(&db, &data, &args).unwrap();
+        write(&db, &data, &args, None).unwrap();
         // The same path a second time, which is what pressing Apply twice does.
-        let after = write(&db, &data, &args).unwrap();
+        let after = write(&db, &data, &args, None).unwrap();
 
         assert_eq!(
             after.bytes_on_disk, 1024,
@@ -388,6 +451,7 @@ mod tests {
                 enabled: Some(false),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
         assert!(cache_for(&db, &dir).unwrap().is_none());
@@ -406,6 +470,7 @@ mod tests {
                 secs: Some(900),
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
 
@@ -444,7 +509,7 @@ mod tests {
         // The settings table is JSON, so a build that stored "1GB" as text is possible.
         settings::set(&db, BYTES_KEY, &"1GB".to_string()).unwrap();
         assert_eq!(
-            read(&db, Path::new("/data")).unwrap().bytes,
+            read(&db, Path::new("/data"), None).unwrap().bytes,
             aurora_core::timeshift::DEFAULT_BYTES
         );
     }

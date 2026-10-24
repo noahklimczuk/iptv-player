@@ -348,13 +348,76 @@ export interface TimeshiftWindow {
 }
 
 /** The buffer's configuration, and what it is costing on disk (README §7.6, §15). */
+/** What the sleep timer does when it comes due (README §13). */
+export type SleepAction =
+  /** Stop playback and leave Aurora up. The default, and the only one that loses nothing. */
+  | 'stopPlayback'
+  | 'quitApp'
+  /**
+   * Shut the machine down.
+   *
+   * Its own value rather than a flag on the others, so nothing can reach it by accident:
+   * the one path to a shutdown is somebody choosing it by name.
+   */
+  | 'shutDownPc';
+
+/** What was asked for, before it became an instant. */
+export type SleepAfter =
+  /** README §13's 15/30/45/60/90. */
+  | { minutes: number }
+  /** When the programme now on this channel ends. Needs guide data. */
+  | 'endOfProgramme'
+  /** When the episode now playing ends. Needs a duration. */
+  | 'endOfEpisode';
+
+export interface SleepDeadline {
+  /** When it fires, in Unix seconds. */
+  atUnix: number;
+  action: SleepAction;
+  /** Kept so the screen can say "end of programme" rather than a clock time. */
+  after: SleepAfter;
+}
+
+export interface SleepState {
+  armed: SleepDeadline | null;
+  /**
+   * Seconds left, or null when nothing is armed.
+   *
+   * Derived by the host, deliberately: the deadline was set against the host's clock,
+   * and a renderer subtracting its own would disagree with it by however far the two
+   * have drifted.
+   */
+  remainingSecs: number | null;
+  /** Whether the 60-second warning is up. */
+  warning: boolean;
+}
+
 export interface TimeshiftSettings {
   enabled: boolean;
   /** Rewind budget. Both caps are real and the tighter one decides the window. */
   bytes: number;
   secs: number;
   folder: string;
+  /**
+   * What the buffer is holding on disk right now, as mpv reports it.
+   *
+   * Measured rather than scanned. It used to be the size of the files in `folder`, which
+   * was always 0 — and two wrong conclusions were drawn from that zero in turn: first
+   * that nothing was being written, then that the buffer was memory-resident. Neither
+   * survived asking mpv. `file-cache-bytes` reads 10.4 MB, 18.3, 24.1, 28.5 over the
+   * first minute of a real stream while the process's memory stays flat at 379 MB. The
+   * buffer is on disk; a directory listing simply cannot see mpv's cache file.
+   */
   bytesOnDisk: number;
+  /**
+   * What "Empty buffer" could actually free, which is a different number.
+   *
+   * The live cache file is mpv's and cannot be deleted while it is open — Windows
+   * refuses, and the file in use is the programme being watched. This counts what is
+   * reclaimable: leftovers from a previous run or a crash. The button is gated on this,
+   * where it used to be gated on `bytesOnDisk` and so was **permanently disabled**.
+   */
+  reclaimableBytes: number;
 }
 
 export interface Track {
@@ -1524,6 +1587,20 @@ export interface Commands {
   'dvr.removeReminder': (args: { id: number }) => boolean;
   'dvr.storage': () => DvrStorage;
 
+  /** What the sleep timer is doing (README §13). */
+  'sleep.state': () => SleepState;
+  /**
+   * Arm the timer.
+   *
+   * Rejects with a sentence rather than guessing when what was asked for cannot be
+   * known: a channel with no guide data cannot say when its programme ends, and a stream
+   * reporting no duration cannot say when the episode does.
+   */
+  'sleep.set': (args: { after: SleepAfter; action: SleepAction }) => SleepState;
+  'sleep.cancel': () => SleepState;
+  /** "Keep watching" — push the deadline back without setting it again. */
+  'sleep.extend': (args: { minutes: number }) => SleepState;
+
   'timeshift.settings': () => TimeshiftSettings;
   /**
    * Change the buffer. Returns what was actually stored, which is not always what was
@@ -1641,6 +1718,15 @@ export interface Events {
    * dying is something the host notices and the UI cannot ask about often enough.
    */
   'mosaic.state': MosaicView;
+  /**
+   * The sleep timer's countdown, on the player's heartbeat while one is armed.
+   *
+   * Pushed rather than polled because the whole point of the timer is to act on somebody
+   * who has stopped interacting, and the host is what keeps the time.
+   */
+  'sleep.state': SleepState;
+  /** The timer came due and acted. Carries what it was, so a toast can say so. */
+  'sleep.fired': SleepDeadline;
   /** One lookup the assistant just ran, so a long turn shows its working. */
   'assistant.step': { step: string };
   /** Emitted shortly after launch when a newer build turns out to be published. */
