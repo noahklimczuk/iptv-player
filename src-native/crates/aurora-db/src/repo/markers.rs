@@ -10,18 +10,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
-/// How many of the user's own skips a series needs before Aurora extrapolates to
-/// episodes it has never seen skipped.
-/// How many of the viewer's own skips it takes before the rest of the show inherits them.
+/// How many of the viewer's own skips it takes before the rest of the show inherits
+/// them.
 ///
-/// One. The median of one observation is that observation, and a deliberate skip is a far
-/// better guess than nothing — which is what the alternative was, since a library with no
-/// chapters got no intro button until somebody had skipped on two separate episodes.
+/// Two, which is `aurora_core::markers::MIN_AGREEING_SAMPLES` and has to stay equal to
+/// it: that is where the agreement rule lives and this is the only caller that sets the
+/// bar.
 ///
-/// The cost is that one mis-drag colours the show. It is a small cost and it corrects
-/// itself: a skip on another episode moves the median, and the viewer can press again.
-/// Chapters, where they exist, outrank this entirely.
-pub const DEFAULT_MIN_SAMPLES: usize = 1;
+/// It was one, with a comment that named the cost and then accepted it — "one mis-drag
+/// colours the show". It did, and worse: the median of one observation is that
+/// observation, so a single twenty-second nudge became a marker on *every* episode of the
+/// show. Recorded as `User`, it also outranked everything else and the per-show "always
+/// skip" preference was allowed to fire it without asking.
+///
+/// Two agreeing skips is not a high bar for a real intro — somebody who skips the titles
+/// skips them every week — and it is a bar an accident does not clear, because an accident
+/// does not repeat in the same place. Chapters, where they exist, still outrank this
+/// entirely and still need only themselves.
+pub const DEFAULT_MIN_SAMPLES: usize = aurora_core::markers::MIN_AGREEING_SAMPLES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -235,8 +241,27 @@ pub fn resolve(
             learned.push(m);
             continue;
         }
-        let from_viewer =
+        // Then the viewer's, with presses and drags pooled.
+        //
+        // Pooled rather than ranked, because what the agreement rule needs is *samples of
+        // the same region*, and a press and a drag over the same intro are exactly that.
+        // Keeping them in separate buckets would mean a viewer who pressed Skip Intro on
+        // one episode and dragged past the titles on another had taught the show nothing,
+        // having told it the same thing twice.
+        //
+        // The ranking still happens, where it belongs: a drag is stored as `Seek`, so on
+        // the episode it was made it ranks below a learned median and never auto-skips.
+        // What is built here is `Learned` either way -- a median several episodes agree on
+        // -- and that is the claim being made, whatever the samples behind it were.
+        let mut from_viewer =
             series_observations(conn, series_id, kind, MarkerSource::User, episode_id)?;
+        from_viewer.extend(series_observations(
+            conn,
+            series_id,
+            kind,
+            MarkerSource::Seek,
+            episode_id,
+        )?);
         if let Some(m) = learn_from_series(&from_viewer, kind, min_samples) {
             learned.push(m);
         }
@@ -408,20 +433,40 @@ mod tests {
         }
     }
 
-    /// One skip, not two. The alternative was no intro button at all until somebody had
-    /// skipped on two separate episodes of the same show.
+    /// Two skips, not one — and this assertion has now been reversed twice, so the
+    /// reasoning matters more than the number.
+    ///
+    /// It was two originally, became one to get a button onto a chapterless library, and
+    /// is two again because one was unsafe in a way the change did not account for: the
+    /// median of a single observation *is* that observation, so one twenty-second nudge
+    /// became a marker on every episode of the show, recorded as `User` and therefore
+    /// eligible to be auto-skipped without being asked.
+    ///
+    /// What makes two affordable now is that the first skip is no longer wasted. A drag
+    /// is recorded as `Seek` and earns a button on *its own* episode immediately
+    /// (`a_lone_drag_is_offered_but_never_fires_by_itself`), so the viewer is not made to
+    /// watch two intros to earn the third. They get the button at once; the show only
+    /// generalises once something agrees.
     #[test]
-    fn one_skip_by_the_viewer_is_enough_for_the_rest_of_the_show() {
+    fn one_skip_does_not_carry_to_the_rest_of_the_show() {
         let (conn, _sid, eps) = seeded(3);
         record(&conn, eps[0], &intro(10.0, 80.0, MarkerSource::User), 0).unwrap();
 
         let resolved = resolve(&conn, eps[1], DEFAULT_MIN_SAMPLES, None).unwrap();
-        let found = resolved
+        assert!(
+            !resolved.iter().any(|m| m.kind == MarkerKind::Intro),
+            "one skip became every episode's intro: {resolved:?}"
+        );
+
+        // A second, agreeing skip is what generalises it.
+        record(&conn, eps[1], &intro(12.0, 78.0, MarkerSource::User), 0).unwrap();
+        let after = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = after
             .iter()
             .find(|m| m.kind == MarkerKind::Intro)
-            .unwrap();
-        assert_eq!(found.start_secs, 10.0);
+            .expect("two agreeing skips teach the show");
         assert_eq!(found.source, MarkerSource::Learned);
+        assert_eq!((found.start_secs, found.end_secs), (12.0, 78.0));
     }
 
     /// A chapter is evidence and a skip is an opinion, so the chapter wins even when the
@@ -553,42 +598,116 @@ mod tests {
         record(&conn, eps[0], &intro(30.0, 120.0, MarkerSource::User), 0).unwrap();
         record(&conn, eps[1], &intro(32.0, 118.0, MarkerSource::User), 0).unwrap();
 
-        // Episode 3 has no marker of its own, so it inherits the series median.
+        // Episode 3 has no marker of its own, so it inherits what the other two agree
+        // on -- the region *both* of them cover, which is 32..118 and not the pair of
+        // independent medians (31..119) that neither episode had.
         let resolved = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES, None).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].source, MarkerSource::Learned);
-        assert_eq!(resolved[0].start_secs, 31.0);
-        assert_eq!(resolved[0].end_secs, 119.0);
+        assert_eq!(resolved[0].start_secs, 32.0);
+        assert_eq!(resolved[0].end_secs, 118.0);
     }
 
-    /// This used to assert the opposite — that one skip was *not* enough — and the
-    /// behaviour was deliberately changed: a library with no chapters got no intro
-    /// button until somebody had skipped on two separate episodes, which is two episodes
-    /// of watching an intro to earn the right to skip the third.
-    ///
-    /// The cost is that one mis-drag colours the show, and it is a cheap one: a skip on
-    /// another episode moves the median, and a chapter anywhere in the series outranks
-    /// the lot. Kept as a test rather than deleted, because the old rule was a
-    /// deliberate choice too and the reversal should be legible.
+    /// Two skips in different places teach nothing, rather than teaching their average.
     #[test]
-    fn one_skip_is_now_enough_to_extrapolate() {
-        let (conn, _, eps) = seeded(3);
-        record(&conn, eps[0], &intro(30.0, 120.0, MarkerSource::User), 0).unwrap();
+    fn skips_that_disagree_do_not_become_a_marker_on_a_third_episode() {
+        let (conn, _, eps) = seeded(4);
+        // One viewer skipping the titles; one losing patience with a scene.
+        record(&conn, eps[0], &intro(0.0, 90.0, MarkerSource::User), 0).unwrap();
+        record(&conn, eps[1], &intro(150.0, 200.0, MarkerSource::Seek), 0).unwrap();
 
-        let resolved = resolve(&conn, eps[1], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let resolved = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES, None).unwrap();
+        assert!(
+            !resolved.iter().any(|m| m.kind == MarkerKind::Intro),
+            "two unrelated skips were averaged into an intro: {resolved:?}"
+        );
+    }
+
+    /// A press and a drag over the same intro are two samples of one region.
+    ///
+    /// Pooled on purpose: the agreement rule needs samples of the same region, and a
+    /// viewer who pressed Skip Intro on one episode and dragged past the titles on
+    /// another has said the same thing twice. Bucketed by source they would have taught
+    /// nothing.
+    #[test]
+    fn a_press_and_a_drag_agree_with_each_other() {
+        let (conn, _, eps) = seeded(3);
+        record(&conn, eps[0], &intro(10.0, 95.0, MarkerSource::User), 0).unwrap();
+        record(&conn, eps[1], &intro(14.0, 92.0, MarkerSource::Seek), 0).unwrap();
+
+        let resolved = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES, None).unwrap();
         let found = resolved
             .iter()
             .find(|m| m.kind == MarkerKind::Intro)
-            .expect("one skip should carry to the next episode");
-        assert_eq!(found.start_secs, 30.0);
-        assert_eq!(found.end_secs, 120.0);
+            .expect("a press and a drag over the same region are two samples");
+        assert_eq!((found.start_secs, found.end_secs), (14.0, 92.0));
         assert_eq!(found.source, MarkerSource::Learned);
+    }
 
-        // Two samples still work, and still produce the median rather than the latest.
-        record(&conn, eps[1], &intro(40.0, 130.0, MarkerSource::User), 0).unwrap();
-        let third = resolve(&conn, eps[2], DEFAULT_MIN_SAMPLES, None).unwrap();
-        let found = third.iter().find(|m| m.kind == MarkerKind::Intro).unwrap();
-        assert_eq!(found.start_secs, 35.0, "the median of 30 and 40");
+    /// And what the drag earns on its *own* episode is a button, not a silent jump.
+    #[test]
+    fn a_lone_drag_is_offered_but_never_fires_by_itself() {
+        let (conn, _, eps) = seeded(3);
+        record(&conn, eps[0], &intro(8.0, 98.0, MarkerSource::Seek), 0).unwrap();
+
+        // On the episode it was made: a button.
+        let own = resolve(&conn, eps[0], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = own
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .expect("the drag earns a button on its own episode");
+        assert_eq!(found.source, MarkerSource::Seek);
+        assert!(
+            !found.source.may_auto_skip(),
+            "a single unconfirmed drag must never fire without being asked"
+        );
+
+        // And on every other episode: nothing, until something agrees with it.
+        let next = resolve(&conn, eps[1], DEFAULT_MIN_SAMPLES, None).unwrap();
+        assert!(
+            !next.iter().any(|m| m.kind == MarkerKind::Intro),
+            "one drag reached another episode: {next:?}"
+        );
+    }
+
+    /// The bar the whole tier rests on, stated in one place.
+    ///
+    /// `DEFAULT_MIN_SAMPLES` is the only thing that sets it and it has to stay equal to
+    /// the core's `MIN_AGREEING_SAMPLES`, which is where the agreement rule lives. If the
+    /// two drift, this module asks for a number of samples the core does not cluster on
+    /// and the result is silently neither rule.
+    #[test]
+    fn the_sample_bar_is_the_cores_own() {
+        assert_eq!(
+            DEFAULT_MIN_SAMPLES,
+            aurora_core::markers::MIN_AGREEING_SAMPLES
+        );
+        // A const block, because clippy is right that this is decided at compile time
+        // -- which is the point. A build whose bar drops back to one should not compile.
+        const { assert!(DEFAULT_MIN_SAMPLES >= 2, "one observation is not a pattern") };
+    }
+
+    /// Ten skips in the same place do not widen the region beyond what they all cover.
+    #[test]
+    fn more_agreement_never_widens_the_skip() {
+        let (conn, _, eps) = seeded(6);
+        // Four skips of the same intro, each a little different, as real ones are.
+        record(&conn, eps[0], &intro(30.0, 120.0, MarkerSource::User), 0).unwrap();
+        record(&conn, eps[1], &intro(34.0, 116.0, MarkerSource::User), 0).unwrap();
+        record(&conn, eps[2], &intro(28.0, 124.0, MarkerSource::Seek), 0).unwrap();
+        record(&conn, eps[3], &intro(31.0, 119.0, MarkerSource::Seek), 0).unwrap();
+
+        let resolved = resolve(&conn, eps[4], DEFAULT_MIN_SAMPLES, None).unwrap();
+        let found = resolved
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .unwrap();
+        assert_eq!(
+            (found.start_secs, found.end_secs),
+            (34.0, 116.0),
+            "the region every sample covers, so the skip can never cut content one of \
+             them said was wanted"
+        );
     }
 
     #[test]
