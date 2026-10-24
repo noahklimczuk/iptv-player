@@ -117,6 +117,10 @@ class Ctx:
         # it is read from an offset rather than truncated between scenarios.
         self.stderr_path = stderr_path
         self.since = since
+        # The app's own storage for this run: `library.db` and `aurora.log`. Exposed
+        # because a scenario that wants to read what the app wrote should not have to
+        # rebuild the path from `CARGO_TARGET_DIR` and get it subtly different.
+        self.data_dir = DATA
         os.makedirs(SHOTS, exist_ok=True)
 
     def shot(self, tag):
