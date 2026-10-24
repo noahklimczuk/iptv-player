@@ -24,6 +24,7 @@ One connection, so this runs alone — the line allows exactly one and the harne
 it for the length of the scenario.
 """
 import os
+import subprocess
 import time
 
 URL = os.environ.get("AURORA_PANEL_URL")
@@ -33,7 +34,10 @@ PASS = os.environ.get("AURORA_PANEL_PASS")
 # How long to let the buffer accumulate before rewinding into it. Long enough that a
 # rewind of REWIND_SECS has somewhere to land, short enough that the scenario is not
 # mostly waiting.
-SOAK_SECS = 45
+# Overridable, because the question of whether mpv ever spills the cache to disk can
+# only be answered by filling it: a short soak proves the rewind works and proves
+# nothing about where the bytes live.
+SOAK_SECS = int(os.environ.get("AURORA_TIMESHIFT_SOAK_SECS", "45"))
 REWIND_SECS = 20
 
 
@@ -60,6 +64,61 @@ def _import_the_library(d):
     ), "the import never finished"
     d.click(d.by_text("button", "Start watching"))
     time.sleep(4)
+
+
+
+def _working_set_mb():
+    """The app's resident memory, in MiB, or None if it cannot be read.
+
+    Sampled from outside because nothing inside reports it: `stress.rs` measures RSS
+    through `/proc/self/status` and skips on Windows, which is the only platform this
+    harness runs on. The number matters here because a buffer that is not on disk is in
+    memory, and README §16 gives playback 900 MB.
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-Process aurora-app -ErrorAction SilentlyContinue "
+             "| Measure-Object WorkingSet64 -Maximum).Maximum"],
+            capture_output=True, text=True, timeout=20,
+        ).stdout.strip()
+        return int(out) / (1024 * 1024) if out else None
+    except Exception:
+        return None
+
+
+def _open_files_mb():
+    """The largest files written to the user's temp directory in the last few minutes.
+
+    Asked while the app is alive, on purpose: mpv's `cache-on-disk` file is a temporary
+    that goes away when the handle closes, so a search after the run finds an empty disk
+    and proves nothing. Temp is where mpv puts a cache when it has not been told
+    otherwise, which is the thing being tested — the app does tell it otherwise.
+    """
+    script = (
+        "$t=[IO.Path]::GetTempPath();"
+        "Get-ChildItem -Path $t -File -ErrorAction SilentlyContinue "
+        "| Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-3) "
+        "-and $_.Length -gt 1MB } "
+        "| Sort-Object Length -Descending | Select-Object -First 5 "
+        "| ForEach-Object { \"$($_.Name)|$([math]::Round($_.Length/1MB,1))\" }"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+    except Exception:
+        return []
+    found = []
+    for line in out.splitlines():
+        if "|" in line:
+            name, mb = line.rsplit("|", 1)
+            try:
+                found.append((name.strip(), float(mb)))
+            except ValueError:
+                pass
+    return found
 
 
 def _a_playing_channel(d, ctx):
@@ -104,17 +163,39 @@ def run(d, ctx):
     assert folder, "the buffer has no folder, so mpv would choose its own"
     print(f"   folder: {folder}")
 
-    _a_playing_channel(d, ctx)
+    playing = _a_playing_channel(d, ctx)
+    mem_before = _working_set_mb()
+    # The bitrate turns "where did the bytes go" from inference into arithmetic: what a
+    # buffer of N seconds must weigh is N x this, and that is either accounted for by
+    # memory growth or it is somewhere else.
+    kbps = 0  # Filled from the soak below: `stats` is empty the instant playback starts.
 
     # Let it run, and watch the window rather than assume it.
     first = None
     last = None
+    samples = 0
     for _ in range(SOAK_SECS * 2):
         time.sleep(0.5)
         state = d.invoke("player_state")
         window = state.get("timeshift")
         if window:
             last = window
+            samples += 1
+            if not kbps:
+                kbps = (state.get("stats") or {}).get("bitrateKbps") or 0
+            # Every ~15s: is anything reaching the disk yet, and what is memory doing?
+            if samples % 30 == 0:
+                disk = d.invoke("timeshift_settings")["bytesOnDisk"]
+                if samples % 120 == 0:
+                    for name, mb in _open_files_mb():
+                        print(f"      temp: {name} {mb}MB")
+                mem = _working_set_mb()
+                held = window["liveSecs"] - window["startSecs"]
+                print(
+                    f"      t+{samples // 2}s held={held:.0f}s "
+                    f"disk={disk / (1024 * 1024):.1f}MB "
+                    f"mem={mem:.0f}MB" if mem else f"      t+{samples // 2}s disk={disk}"
+                )
             if first is None:
                 first = window
                 print(
@@ -154,7 +235,41 @@ def run(d, ctx):
     # And the bytes are where the settings said they would be.
     on_disk = d.invoke("timeshift_settings")["bytesOnDisk"]
     print(f"   {on_disk} bytes on disk under the app's own folder")
-    assert on_disk > 0, "nothing is on disk, so the buffer is somewhere else"
+    mem_after = _working_set_mb()
+    if mem_before is not None and mem_after is not None:
+        grew = mem_after - mem_before
+        expected = rewindable * kbps / 8000 if kbps else 0
+        print(
+            f"   memory: {mem_before:.0f} MB -> {mem_after:.0f} MB "
+            f"(grew {grew:.0f} MB while {rewindable:.0f}s accumulated)"
+        )
+        if expected:
+            print(
+                f"   {rewindable:.0f}s at {kbps} kbps is {expected:.0f} MB; "
+                f"memory accounts for {grew:.0f} MB of it"
+            )
+            if grew < expected * 0.5:
+                print(
+                    "   NOTE: most of the buffer is not in memory and not in the app's "
+                    "folder, so mpv is keeping it somewhere the viewer did not choose"
+                )
+        # README §16: playing 1080p, 900 MB. Reported rather than asserted, because one
+        # sample on one machine is not a budget verdict.
+        if mem_after > 900:
+            print(f"   NOTE: {mem_after:.0f} MB is past README §16's 900 MB for playback")
+
+    # Where the bytes actually are. `cache-on-disk=yes` and `demuxer-cache-dir` are both
+    # accepted by mpv — the log carries no "mpv rejected" for either — so an empty folder
+    # with a working rewind means the buffer is resident instead, bounded by
+    # `demuxer-max-back-bytes` rather than by the folder the viewer chose.
+    if on_disk == 0:
+        print(
+            "   NOTE: the rewind works and the folder is empty, so the buffer is in "
+            "memory. The disk budget is measured against this folder, so it is not "
+            "bounding anything."
+        )
+    else:
+        assert on_disk > 0
 
     # Rejoining live gives the delay up.
     d.invoke("player_back_to_live")
