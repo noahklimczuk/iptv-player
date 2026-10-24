@@ -354,8 +354,15 @@ WHERE channels.id = ?1
 pub fn find_by_number(conn: &Connection, number: u32) -> Result<Option<i64>> {
     Ok(conn
         .query_row(
+            // Ordered, because two channels can hold one number and `LIMIT 1` without an
+            // order returns whichever the plan reaches. A real playlist carries the same
+            // feed several times — that is what `hide_duplicates` exists for — and the
+            // numbers come from the provider, so a collision is ordinary rather than
+            // corrupt. Typing 101 twice has to reach the same channel both times, so the
+            // tie goes to the lowest id: the first one imported, which is stable across
+            // restarts and across a re-import that adds more.
             "SELECT id FROM channels WHERE COALESCE(custom_number, number) = ?1 AND hidden = 0
-             LIMIT 1",
+             ORDER BY id LIMIT 1",
             params![number],
             |r| r.get(0),
         )
@@ -722,6 +729,39 @@ mod tests {
 
         assert!(find_by_number(&conn, 202).unwrap().is_some());
         assert!(find_by_number(&conn, 999).unwrap().is_none());
+    }
+
+    /// Two channels on one number is ordinary: the numbers come from the provider and a
+    /// real playlist carries the same feed more than once. Zapping to 101 has to reach
+    /// the same channel every time, which `LIMIT 1` with no order did not guarantee.
+    #[test]
+    fn two_channels_on_one_number_resolve_the_same_way_every_time() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let east = entry("Regional East", Some(101));
+        let west = entry("Regional West", Some(101));
+        upsert_batch(
+            &mut conn,
+            p,
+            &[("east".into(), &east), ("west".into(), &west)],
+            0,
+        )
+        .unwrap();
+
+        let rows = list(&conn, &ChannelFilter::default()).unwrap();
+        let ids: Vec<i64> = rows.iter().map(|c| c.id).collect();
+        assert_eq!(ids.len(), 2, "both feeds should be stored");
+
+        let picked = find_by_number(&conn, 101).unwrap().expect("one of them");
+        assert_eq!(
+            picked,
+            *ids.iter().min().unwrap(),
+            "the tie must go to the lowest id, which is the first imported"
+        );
+        // Repeated, because the defect was an answer that need not be the same twice.
+        for _ in 0..5 {
+            assert_eq!(find_by_number(&conn, 101).unwrap(), Some(picked));
+        }
     }
 
     #[test]

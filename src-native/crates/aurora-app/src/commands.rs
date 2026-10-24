@@ -120,9 +120,13 @@ pub fn epg_grid_slice(services: State<'_, Services>, args: GridSliceArgs) -> Res
     let wanted: Vec<channels::ChannelRow> = if args.channel_ids.is_empty() {
         all
     } else {
-        all.into_iter()
-            .filter(|c| args.channel_ids.contains(&c.id))
-            .collect()
+        // A set, not `Vec::contains`. That was a linear scan of the requested ids for
+        // every channel in the library, so asking about the whole list cost
+        // `channels × ids` comparisons — 6,698 × 6,698 is 44.9 million on this line,
+        // and 22,121 squared is 489 million on the one docs/ROADMAP.md describes. Same
+        // shape as the prefilter R-131 was about.
+        let asked: std::collections::HashSet<i64> = args.channel_ids.iter().copied().collect();
+        all.into_iter().filter(|c| asked.contains(&c.id)).collect()
     };
 
     let epg_ids: Vec<String> = wanted
@@ -167,6 +171,14 @@ pub struct NowNextManyArgs {
     pub channel_ids: Vec<i64>,
 }
 
+/// The most channels one `epg.nowNextMany` will answer about.
+///
+/// Generous against what the screen asks for — a virtualised list shows tens of rows,
+/// and a fast scroll coalesces into a few hundred at the very most — and small against
+/// what the library holds, which is what makes it a guard rather than a limit anyone
+/// meets.
+pub const MAX_NOW_NEXT_BATCH: usize = 512;
+
 /// Now and next for a screenful of channels, in one call.
 ///
 /// Live TV used to mount a `useCommand('epg.nowNext')` per row. With no virtualiser
@@ -181,9 +193,20 @@ pub fn epg_now_next_many(
     args: NowNextManyArgs,
 ) -> Result<std::collections::HashMap<i64, NowNext>> {
     let now = now_unix();
+    // A screenful, bounded. Each id costs two queries — the channel, then its
+    // programmes — all of them under the single writer mutex, so a caller asking about
+    // the whole library would hold it for 44,000 round trips and freeze everything else
+    // that needs the database. The virtualiser asks about rows on screen, which is tens;
+    // this is the guard for when something else asks, since a command is reachable by
+    // more than its caller.
+    let ids: Vec<i64> = args
+        .channel_ids
+        .into_iter()
+        .take(MAX_NOW_NEXT_BATCH)
+        .collect();
     let db = services.db.lock();
-    let mut out = std::collections::HashMap::with_capacity(args.channel_ids.len());
-    for id in args.channel_ids {
+    let mut out = std::collections::HashMap::with_capacity(ids.len());
+    for id in ids {
         let Some(epg_id) = channels::get(&db, id)?.and_then(|c| c.epg_channel_id) else {
             continue;
         };

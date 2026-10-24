@@ -166,6 +166,30 @@ const SELECT: &str = "SELECT id, channel_id, start, stop, title, sub_title, desc
 /// This is the guide grid's only query. The overlap test is `start < to AND stop > from`,
 /// which catches programmes that began before the window opened — without it the leftmost
 /// column of the grid is empty, which is the classic EPG bug.
+/// The most channels one `IN (...)` may name.
+///
+/// There was one placeholder per channel and no bound on how many, which left the guide
+/// a library's size away from failing outright: SQLite's `SQLITE_MAX_VARIABLE_NUMBER` is
+/// 32,766 in the version bundled here and 999 in anything older than 3.32. The real line
+/// carries 6,698 channels and carried 22,121 when docs/ROADMAP.md was written, and
+/// `hostile_input.rs` treats a fifty-thousand-entry playlist as a shape to support — so
+/// the ceiling was reachable by a viewer with a bigger subscription, and `prepare` would
+/// have refused the whole guide rather than any one channel.
+///
+/// Chunked rather than capped, because a cap here means channels silently missing from
+/// the guide. A larger library asks more questions instead.
+const IDS_PER_QUERY: usize = 500;
+
+/// The longest span one slice may cover.
+///
+/// `start < to AND stop > from` with nothing bounding `to - from` returns every
+/// programme every named channel has: the real line holds 453,072 rows, and a caller
+/// asking for a year would get all of them in one `Vec`, through one IPC reply, while
+/// holding the writer lock. The guide shows hours at a time, so two days is already far
+/// more than any view of it needs, and the window is clamped rather than refused — a
+/// guide that draws a shorter span is better than one that errors.
+pub const MAX_SLICE_SECS: i64 = 48 * 3600;
+
 pub fn grid_slice(
     conn: &Connection,
     epg_channel_ids: &[String],
@@ -175,25 +199,43 @@ pub fn grid_slice(
     if epg_channel_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat_n("?", epg_channel_ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "{SELECT} WHERE channel_id IN ({placeholders}) AND start < ? AND stop > ?
-         ORDER BY channel_id, start"
-    );
-
-    let mut stmt = conn.prepare(&sql)?;
-    let mut args: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(epg_channel_ids.len() + 2);
-    for id in epg_channel_ids {
-        args.push(id);
+    let to = to.min(from.saturating_add(MAX_SLICE_SECS));
+    if to <= from {
+        return Ok(Vec::new());
     }
-    args.push(&to);
-    args.push(&from);
 
-    let rows = stmt
-        .query_map(args.as_slice(), map_row)?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut rows = Vec::new();
+    for chunk in epg_channel_ids.chunks(IDS_PER_QUERY) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "{SELECT} WHERE channel_id IN ({placeholders}) AND start < ? AND stop > ?
+             ORDER BY channel_id, start"
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut args: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 2);
+        for id in chunk {
+            args.push(id);
+        }
+        args.push(&to);
+        args.push(&from);
+
+        rows.extend(
+            stmt.query_map(args.as_slice(), map_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+    }
+
+    // The ordering is part of what this returns, and chunking only orders within a
+    // chunk. Each channel lives in exactly one of them, so its programmes are already
+    // in `start` order and this restores the rest.
+    rows.sort_by(|a, b| {
+        a.channel_id
+            .cmp(&b.channel_id)
+            .then_with(|| a.start.cmp(&b.start))
+    });
     Ok(rows)
 }
 
@@ -205,7 +247,18 @@ pub fn now_next(
 ) -> Result<(Option<ProgrammeRow>, Option<ProgrammeRow>)> {
     let current = conn
         .query_row(
-            &format!("{SELECT} WHERE channel_id = ?1 AND start <= ?2 AND stop > ?2 LIMIT 1"),
+            // `ORDER BY start DESC`, because `LIMIT 1` without one picks whichever row
+            // the query plan reaches first. A provider's XMLTV overlaps constantly — a
+            // film listed 20:00–22:00 with a short at 21:00 both match 21:15 — and
+            // without an order "what's on now" was whatever the index happened to
+            // yield, which can differ between two calls a second apart. Descending
+            // takes the most recently started of the overlapping entries, which is the
+            // one a later listing is correcting an earlier one with; the `next` query
+            // below has always been ordered.
+            &format!(
+                "{SELECT} WHERE channel_id = ?1 AND start <= ?2 AND stop > ?2
+                 ORDER BY start DESC LIMIT 1"
+            ),
             params![epg_channel_id, now],
             map_row,
         )
@@ -344,6 +397,127 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    /// More channels than SQLite will take variables for.
+    ///
+    /// `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 in the bundled build, so this asks about
+    /// 33,000 and the unchunked version cannot even `prepare` the statement — it fails
+    /// the whole guide with "too many SQL variables" rather than losing one channel.
+    /// Most of these ids do not exist, which is the point: the cost being guarded is the
+    /// *placeholders*, so the control needs that many ids and not that many rows.
+    #[test]
+    fn more_channels_than_sqlite_allows_variables_still_works() {
+        let mut conn = crate::open_memory().unwrap();
+        insert_batch(
+            &mut conn,
+            &[
+                prog("ch00001", 0, 3600, "First"),
+                prog("ch32999", 0, 3600, "Last"),
+            ],
+        )
+        .unwrap();
+
+        let ids: Vec<String> = (0..33_000).map(|i| format!("ch{i:05}")).collect();
+        assert!(
+            ids.len() > 32_766,
+            "the control has to exceed the real limit"
+        );
+
+        let rows = grid_slice(&conn, &ids, 0, 3600).unwrap();
+        let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, vec!["First", "Last"]);
+    }
+
+    /// Chunking must not lose a channel or reorder what it returns, which is the half
+    /// the test above does not cover: it would pass on a library small enough to fit in
+    /// one query.
+    #[test]
+    fn chunking_keeps_every_channel_and_the_order_it_promises() {
+        let mut conn = crate::open_memory().unwrap();
+        let count = IDS_PER_QUERY * 2 + 7;
+        let batch: Vec<_> = (0..count)
+            .map(|i| prog(&format!("ch{i:05}"), 0, 3600, &format!("P{i}")))
+            .collect();
+        insert_batch(&mut conn, &batch).unwrap();
+
+        let ids: Vec<String> = (0..count).map(|i| format!("ch{i:05}")).collect();
+        let rows = grid_slice(&conn, &ids, 0, 3600).unwrap();
+        assert_eq!(rows.len(), count, "a channel was lost between chunks");
+
+        let mut sorted = rows.clone();
+        sorted.sort_by(|a, b| {
+            a.channel_id
+                .cmp(&b.channel_id)
+                .then_with(|| a.start.cmp(&b.start))
+        });
+        let got: Vec<&str> = rows.iter().map(|r| r.channel_id.as_str()).collect();
+        let want: Vec<&str> = sorted.iter().map(|r| r.channel_id.as_str()).collect();
+        assert_eq!(got, want, "chunking left the rows out of order");
+    }
+
+    /// A window nothing bounds returns every programme a channel ever had. The guide
+    /// shows hours; a caller asking for a year gets the clamp, not the library.
+    #[test]
+    fn an_absurd_window_is_clamped_rather_than_answered_in_full() {
+        let mut conn = crate::open_memory().unwrap();
+        // One programme an hour for sixty days, so there is something well past the cap.
+        let batch: Vec<_> = (0..24 * 60)
+            .map(|h| prog("a", h * 3600, (h + 1) * 3600, &format!("H{h}")))
+            .collect();
+        insert_batch(&mut conn, &batch).unwrap();
+
+        let a_year = grid_slice(&conn, &["a".into()], 0, 365 * 86_400).unwrap();
+        assert_eq!(
+            a_year.len() as i64,
+            MAX_SLICE_SECS / 3600,
+            "the window was not clamped"
+        );
+        // The clamp is a ceiling, not a floor: an ordinary request is untouched.
+        let three_hours = grid_slice(&conn, &["a".into()], 0, 3 * 3600).unwrap();
+        assert_eq!(three_hours.len(), 3);
+    }
+
+    /// A backwards or empty window asks for nothing, and must not be turned into the
+    /// whole cap by the clamp above.
+    #[test]
+    fn a_window_that_ends_before_it_starts_returns_nothing() {
+        let conn = seeded();
+        assert!(grid_slice(&conn, &["a".into()], 5000, 5000)
+            .unwrap()
+            .is_empty());
+        assert!(grid_slice(&conn, &["a".into()], 5000, 1000)
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Overlapping programmes are ordinary in a provider's XMLTV, and "what is on now"
+    /// has to be the same answer twice. Without an order this returned whichever row the
+    /// plan reached, so the Live TV strip could show one title and the guide another.
+    #[test]
+    fn overlapping_programmes_give_one_stable_answer_for_now() {
+        let mut conn = crate::open_memory().unwrap();
+        insert_batch(
+            &mut conn,
+            &[
+                prog("a", 0, 7200, "The long film"),
+                prog("a", 3600, 5400, "The short that overlaps it"),
+                prog("a", 7200, 9000, "After both"),
+            ],
+        )
+        .unwrap();
+
+        // 4500 is inside both the film and the short.
+        let (now, next) = now_next(&conn, "a", 4500).unwrap();
+        let now = now.expect("something is on");
+        assert_eq!(now.title, "The short that overlaps it");
+        assert_eq!(next.expect("something is next").title, "After both");
+
+        // And asking again gives the same one, which is the whole point.
+        for _ in 0..5 {
+            let (again, _) = now_next(&conn, "a", 4500).unwrap();
+            assert_eq!(again.unwrap().title, now.title);
+        }
     }
 
     #[test]
