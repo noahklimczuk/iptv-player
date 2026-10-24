@@ -196,6 +196,25 @@ impl NetFailure {
                 "The server refused the connection. The address or port may be wrong, \
                  or the provider may be down.",
             )
+        } else if l.contains("stopped sending data") {
+            // A stall, which is a timeout about something that was *working*.
+            //
+            // It used to fall into the branch below and be told "the address may be
+            // missing a port. Panels usually publish one, like :8080 or :2082" --
+            // setup advice, shown to somebody whose picture was on a second ago. The
+            // address cannot be the problem: it resolved, connected and delivered
+            // video. Reported from live viewing, where it is the commonest thing on
+            // screen.
+            //
+            // Matched before the general timeout branch because the watchdog's
+            // reason contains "timed out" as well, and the first arm wins.
+            (
+                ErrorCode::Timeout,
+                "The stream stopped",
+                "It was playing and then the data stopped arriving. That is usually \
+                 the provider or the connection having a bad moment, and it often \
+                 comes back on its own.",
+            )
         } else if l.contains("timed out") || l.contains("timeout") {
             (
                 ErrorCode::Timeout,
@@ -638,6 +657,32 @@ mod tests {
 
     /// These messages are shown by the setup wizard too, where nothing is playing and
     /// there is no stream to describe — only an address somebody has just typed.
+    /// A stall and a failed connection are both "timed out" and are not the same thing.
+    ///
+    /// The watchdog says "the stream stopped sending data: timed out" for a stream that
+    /// *was playing*, and that string contains "timed out", so it fell into the general
+    /// timeout arm and the viewer was told the address might be missing a port --
+    /// advice for a connection that never happened, shown about one that had been
+    /// delivering video a second earlier. Reported from live viewing.
+    #[test]
+    fn a_stall_is_not_told_to_check_its_port() {
+        let stalled = NetFailure::classify("the stream stopped sending data: timed out");
+        assert_eq!(stalled.code, ErrorCode::Timeout);
+        assert!(
+            !stalled.cause.contains("8080") && !stalled.cause.contains("port"),
+            "a stream that was playing was told to check its address: {}",
+            stalled.cause
+        );
+        assert!(stalled.message.contains("stopped"), "{}", stalled.message);
+
+        // And the one that never started still gets the advice that helps it, which is
+        // what the branch below this one exists for.
+        let never = NetFailure::classify("the stream did not start playing: timed out");
+        assert_eq!(never.code, ErrorCode::Timeout);
+        assert!(never.cause.contains("port"), "{}", never.cause);
+        assert_ne!(never.message, stalled.message);
+    }
+
     /// "The stream didn't respond in time", under a provider form, is a sentence about
     /// something that does not exist yet.
     #[test]

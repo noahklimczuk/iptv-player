@@ -167,9 +167,18 @@ jobs:
       - name: Install Playwright browser
         if: ${{ !cancelled() }}
         run: pnpm exec playwright install --with-deps chromium
+      # `--fail-on-flaky-tests`, which is the whole point of the retry being allowed.
+      #
+      # `retries: 1` in CI exists so one transient runner hiccup does not block a merge.
+      # What it also did was hide intermittency completely: a test that failed and passed
+      # on the retry left the job green and said nothing a reader of the summary would
+      # notice, so nobody could know whether this suite had flakes at all. The retry still
+      # happens -- the diagnostic value of "it passed the second time" is real -- but it
+      # now ends the job red with the test named, so a flake is a thing to fix rather than
+      # a thing to not find out about.
       - name: End-to-end journeys
         if: ${{ !cancelled() }}
-        run: pnpm exec playwright test
+        run: pnpm exec playwright test --fail-on-flaky-tests
 
       - uses: actions/upload-artifact@v4
         if: always()

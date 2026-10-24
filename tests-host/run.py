@@ -121,7 +121,44 @@ class Ctx:
         # because a scenario that wants to read what the app wrote should not have to
         # rebuild the path from `CARGO_TARGET_DIR` and get it subtly different.
         self.data_dir = DATA
+        # The session currently driving the app, which `relaunch` replaces. Tracked here
+        # because the caller holds the one it created and would otherwise quit a session
+        # that has already gone.
+        self.driver = None
         os.makedirs(SHOTS, exist_ok=True)
+
+    def relaunch(self, d):
+        """Close the app and open it again on the same data directory.
+
+        The second launch is a state the suite could not reach. Every scenario gets a
+        wiped `data` directory, which is right -- an empty library is the state that only
+        happens once and the one nothing had tested -- but it means every measurement
+        here is of a *first* launch. README §16 has two startup budgets and the other one
+        is "cold start to a library fully rendered, 4 seconds", which is meaningless
+        against an empty library: there is nothing to render.
+
+        So: quit the session, which closes the app, and open a new one without touching
+        the directory. What comes back is a second launch over whatever the scenario has
+        already imported.
+
+        The returned driver replaces the caller's. `self.driver` is what the runner
+        quits at the end, so a scenario that relaunches does not leave the runner holding
+        a dead session.
+        """
+        if d is not None:
+            try:
+                d.quit()
+            except Exception:
+                # Already gone is the outcome being asked for.
+                pass
+        # The window takes a moment to go, and the next launch opens the same SQLite
+        # file. Starting before the first process has let go of it is how a scenario
+        # ends up measuring a lock wait rather than a startup.
+        time.sleep(3)
+        kill_strays()
+        time.sleep(1)
+        self.driver = WD(EXE)
+        return self.driver
 
     def shot(self, tag):
         return os.path.join(SHOTS, f"{self.name}-{tag}.png")
@@ -510,6 +547,7 @@ def main():
             ctx.github = github
             try:
                 d = WD(EXE)
+                ctx.driver = d
                 mod.run(d, ctx)
                 print("   ok")
             except Exception as e:
@@ -568,8 +606,14 @@ def main():
                         # itself worth saying rather than swallowing.
                         print("   (no screenshot: the window was already gone)")
             finally:
-                if d:
-                    d.quit()
+                # Whichever session is live: a scenario that called `ctx.relaunch` has
+                # already quit the one created here, and quitting it twice raises.
+                live = ctx.driver or d
+                if live:
+                    try:
+                        live.quit()
+                    except Exception:
+                        pass
                 # Keep the log this scenario produced; the next one wipes `data`.
                 if os.path.exists(os.path.join(DATA, "aurora.log")):
                     shutil.copy(

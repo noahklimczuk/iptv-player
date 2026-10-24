@@ -47,6 +47,30 @@ pub const MAX_ROLLOVERS: u32 = 6;
 /// three times in an hour should still be trying.
 pub const MAX_VOD_RETRIES: u32 = 3;
 
+/// How many times a live channel's *current* source is reloaded before rolling over.
+///
+/// A film had this from the start and a channel did not, and the asymmetry was the whole
+/// bug. `recover` went straight to `current + 1`: one transient stall -- twelve seconds
+/// without the playhead moving, which is what `DEFAULT_STALL_TIMEOUT_SECS` calls dead --
+/// spent a rollover, recorded a failure against a source that was fine, and on a channel
+/// with **one** source returned false and left the error panel on screen. A viewer
+/// watching live TV on a provider that hiccups got a modal, with no retry attempted at
+/// all, as often as the provider hiccupped.
+///
+/// Two, not three. A live stream has no position to resume from, so a retry costs the
+/// viewer the same second or two a rollover does -- but it is far likelier to work,
+/// because the stream that just stopped is overwhelmingly the stream that will be fine
+/// in a moment. Rolling over remains what happens when retrying does not.
+pub const MAX_LIVE_RETRIES: u32 = 2;
+
+/// Seconds to wait before each live reload, indexed by how many have been tried.
+///
+/// Shorter than `VOD_BACKOFF_SECS`, because live has a cost a film does not: every second
+/// spent waiting is a second of the programme gone for good. Long enough that a provider
+/// which has just dropped the connection is not hammered, short enough that a recovered
+/// stream looks like a stutter rather than an outage.
+const LIVE_BACKOFF_SECS: [i64; MAX_LIVE_RETRIES as usize] = [1, 3];
+
 /// How long to wait before each reload, in seconds, indexed by how many have been tried.
 ///
 /// Immediately would be wrong twice over: a provider that just dropped the connection is
@@ -82,6 +106,15 @@ struct LiveSession {
     current: usize,
     options: LoadOptions,
     rollovers: u32,
+    /// Consecutive reloads of the *current* source, reset the moment playback is healthy.
+    ///
+    /// Separate from `rollovers`, which counts how many sources have been given up on.
+    /// A stream that recovers on its second attempt has cost nothing and must not bring
+    /// the channel closer to running out of sources.
+    retries: u32,
+    /// When the current failure was first seen, so the backoff is measured against it.
+    /// `None` while playing.
+    failed_at: Option<i64>,
 }
 
 pub struct Playback {
@@ -213,6 +246,8 @@ impl Playback {
             current: 0,
             options,
             rollovers: 0,
+            retries: 0,
+            failed_at: None,
         };
 
         let mut last_error = None;
@@ -372,6 +407,13 @@ impl Playback {
                 vod.retries = 0;
                 vod.failed_at = None;
             }
+            // And the same for a channel, so the retries a live source is allowed are
+            // three *in a row*. Without this an evening's viewing accumulates them and
+            // arrives at the one stall that mattered with nothing left to try.
+            if let Some(live) = self.session.lock().as_mut() {
+                live.retries = 0;
+                live.failed_at = None;
+            }
         }
 
         if state.status == PlayerStatus::Error && (self.try_recover(now) || self.retry_vod(now)) {
@@ -520,15 +562,64 @@ impl Playback {
 
         let next = session.current + 1;
         if next >= session.candidates.len() {
-            // Out of URLs: leave the error up rather than looping over the same dead
-            // list. The next deliberate tune re-reads the order, by which time the
-            // failures just recorded will have moved the good one to the front.
+            // No other URL to try. *Now* retrying this one is worth it -- which it was
+            // not a moment ago, while there was a different source available to roll to
+            // instantly (`a_channel_still_rolls_over_rather_than_reloading`).
+            //
+            // This is the case the viewer actually hits. A live stream that stops for
+            // twelve seconds is usually the provider hiccupping, not the source being
+            // wrong: it was working a second ago, which is the one thing a stall tells
+            // you that a failed tune does not. On a channel with a single source --
+            // ordinary on a real panel -- the old code recorded a failure, dropped the
+            // session and left "Your provider didn't respond in time" on screen **having
+            // attempted nothing at all**. Reported from live viewing: "this keeps showing
+            // up when watching live tv, it comes up quite often".
+            if session.retries < MAX_LIVE_RETRIES {
+                // First sight of this failure starts the clock rather than reloading at
+                // once: a provider that has just dropped the connection should not be
+                // asked again in the same breath.
+                let since = match session.failed_at {
+                    Some(at) => at,
+                    None => {
+                        if let Some(live) = self.session.lock().as_mut() {
+                            live.failed_at = Some(now);
+                        }
+                        return false;
+                    }
+                };
+                if now - since < LIVE_BACKOFF_SECS[session.retries as usize] {
+                    return false;
+                }
+
+                session.retries += 1;
+                session.failed_at = None;
+                tracing::info!(
+                    "channel {} stalled with no other source; reloading, attempt {} of \
+                     {MAX_LIVE_RETRIES}",
+                    session.channel_id,
+                    session.retries
+                );
+                let loaded = self.load_current(&session, now);
+                if !self.is_current(generation) {
+                    return false;
+                }
+                *self.session.lock() = Some(session);
+                return loaded.is_ok();
+            }
+
+            // Out of URLs and out of retries: leave the error up rather than looping over
+            // the same dead list. The next deliberate tune re-reads the order, by which
+            // time the failures just recorded will have moved the good one to the front.
             *self.session.lock() = None;
             return false;
         }
 
         session.current = next;
         session.rollovers += 1;
+        // The next source has not failed yet, and must get its own retries rather than
+        // inheriting the exhausted count of the one before it.
+        session.retries = 0;
+        session.failed_at = None;
         tracing::info!(
             "channel {} source {} failed, trying source {} of {}",
             session.channel_id,
@@ -1275,6 +1366,93 @@ mod tests {
         playback.tick(at);
         playback.tick(at + 2);
         assert_eq!(fake.loaded().len(), 4, "gave up on a film it had recovered");
+    }
+
+    /// The channel with nowhere to roll to, which is what a viewer actually hits.
+    ///
+    /// Reported from live viewing: "this keeps showing up when watching live tv, it
+    /// comes up quite often" -- *this* being "Your provider didn't respond in time".
+    /// A single source is ordinary on a real panel, and a twelve-second stall is what
+    /// `DEFAULT_STALL_TIMEOUT_SECS` calls dead. The old path recorded a failure, dropped
+    /// the session and left the modal up having attempted nothing.
+    #[test]
+    fn a_channel_with_one_source_is_retried_rather_than_given_up_on() {
+        let (playback, fake, _db) = harness(1);
+        playback.play_live(1, NOW).unwrap();
+        assert_eq!(fake.loaded(), vec![url(0)]);
+
+        fake.die();
+        // The first tick starts the backoff clock rather than reloading at once.
+        playback.tick(NOW);
+        assert_eq!(
+            fake.loaded(),
+            vec![url(0)],
+            "a provider that just dropped the connection is not asked again in the same              breath"
+        );
+
+        // And once the backoff has passed, the same source is tried again.
+        playback.tick(NOW + 2);
+        assert_eq!(
+            fake.loaded(),
+            vec![url(0), url(0)],
+            "the only source there is was never retried"
+        );
+    }
+
+    /// Bounded, so a dead channel does not reconnect for ever.
+    #[test]
+    fn retrying_the_last_source_gives_up_eventually() {
+        let (playback, fake, _db) = harness(1);
+        playback.play_live(1, NOW).unwrap();
+
+        let mut at = NOW;
+        for _ in 0..MAX_LIVE_RETRIES + 2 {
+            fake.die();
+            playback.tick(at);
+            at += 5;
+            playback.tick(at);
+            at += 5;
+        }
+        assert_eq!(
+            fake.loaded().len() as u32,
+            1 + MAX_LIVE_RETRIES,
+            "the first load plus its retries, and then it stops"
+        );
+    }
+
+    /// Recovering resets the count, so the retries are consecutive ones.
+    #[test]
+    fn a_channel_that_comes_back_gets_its_retries_again() {
+        let (playback, fake, _db) = harness(1);
+        playback.play_live(1, NOW).unwrap();
+
+        let mut at = NOW;
+        // Stall, retry, recover -- twice over.
+        for _ in 0..2 {
+            fake.die();
+            playback.tick(at);
+            at += 2;
+            playback.tick(at);
+            fake.playing_at(1_000.0);
+            playback.tick(at + 1);
+            at += 60;
+        }
+        assert_eq!(
+            fake.loaded().len(),
+            3,
+            "a channel that recovered twice should have been reloaded twice"
+        );
+
+        // And a third stall is still worth retrying, because the playing in between
+        // reset the count. With a lifetime budget this reload would not happen.
+        fake.die();
+        playback.tick(at);
+        playback.tick(at + 2);
+        assert_eq!(
+            fake.loaded().len(),
+            4,
+            "gave up on a channel it had recovered"
+        );
     }
 
     /// Live TV keeps its own recovery. A channel with another source rolls over to it
