@@ -125,6 +125,9 @@ class Ctx:
         # because the caller holds the one it created and would otherwise quit a session
         # that has already gone.
         self.driver = None
+        # Set by the runner: brings `tauri-driver` back up. `relaunch` cannot do it
+        # itself because the process handles live in `main`.
+        self.restart_driver = None
         os.makedirs(SHOTS, exist_ok=True)
 
     def relaunch(self, d):
@@ -155,8 +158,24 @@ class Ctx:
         # file. Starting before the first process has let go of it is how a scenario
         # ends up measuring a lock wait rather than a startup.
         time.sleep(3)
-        kill_strays()
-        time.sleep(1)
+
+        # `tauri-driver` has to come back before a new session can be opened.
+        #
+        # This is what the first version of this method got wrong. It called
+        # `kill_strays()` and then `WD(EXE)` -- and `kill_strays` kills `tauri-driver`
+        # and `msedgedriver` by name, which is its whole job. So the relaunch took the
+        # driver down and immediately tried to connect to it: "No connection could be
+        # made because the target machine actively refused it", after an import that had
+        # just spent ten minutes succeeding.
+        #
+        # `restart_driver` already does the kill *and* the bring-back, in that order,
+        # and is what the runner uses when a driver dies mid-scenario. Reused rather
+        # than reimplemented.
+        if self.restart_driver is None:
+            raise RuntimeError(
+                "ctx.relaunch needs the runner's driver restart; it is set in main()"
+            )
+        self.restart_driver()
         self.driver = WD(EXE)
         return self.driver
 
@@ -525,6 +544,16 @@ def main():
 
     kill_strays()
     procs, stderr_path, github = start_background()
+
+    def bring_the_driver_back():
+        """Restart `tauri-driver`, keeping the runner's handles in step.
+
+        A closure rather than a method on `Ctx`, because the process list belongs to this
+        function and a scenario that relaunches must not leave `main` holding handles to
+        processes that have gone.
+        """
+        nonlocal procs, stderr_path, github
+        procs, stderr_path, github = restart_driver(procs, stderr_path, github)
     failures = []
     skipped = []
     try:
@@ -548,6 +577,7 @@ def main():
             try:
                 d = WD(EXE)
                 ctx.driver = d
+                ctx.restart_driver = bring_the_driver_back
                 mod.run(d, ctx)
                 print("   ok")
             except Exception as e:

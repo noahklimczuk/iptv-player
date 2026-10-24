@@ -71,15 +71,33 @@ def _import_the_library(d):
     ), "the import never finished"
     d.click(d.by_text("button", "Start watching"))
     time.sleep(4)
+    # Off the player before closing, so the warm launch restores a *list* and not a
+    # tune. Otherwise the first thing the second launch does is open a stream, and the
+    # clock would be timing the provider's handshake rather than this app rendering a
+    # library -- which is the thing README §16 budgets four seconds for.
+    try:
+        d.invoke("player_stop")
+    except Exception:
+        pass
+    d.js("window.location.hash = '#/live'; return true;")
+    time.sleep(2)
 
 
 def _launches(log):
     """Every (started, revealed) pair in the log, in order.
 
-    A pair rather than the last of each: the file holds both launches by the time this
-    reads it, and taking the newest `starting` with the newest `revealed` would be right
-    only by luck. Walked instead, so a launch that never revealed a window is visible as
-    a pair with nothing in it rather than silently borrowing the next launch's mark.
+    Walked as pairs rather than as "the newest of each", so a launch that never revealed
+    a window shows up as a pair with nothing in it instead of silently borrowing the next
+    launch's mark.
+
+    In practice this file holds **one** launch, because the app rotates its log on every
+    start: `aurora.log` becomes `aurora.log.1` and a fresh one is opened
+    (`aurora_app::logging::rotate`, which exists precisely so "it crashed, I reopened it"
+    does not destroy the evidence). The first version of this scenario counted launches
+    before and after the relaunch and asserted the number had gone up; it cannot, and the
+    run failed with "the log shows 1 launch(es) and the relaunch should have added one"
+    after a ten-minute import. The rotation is the right behaviour and the assertion was
+    the wrong question.
     """
     out = []
     with open(log, encoding="utf-8", errors="replace") as fh:
@@ -106,32 +124,69 @@ def run(d, ctx):
     # Close it and open it again on the same directory. This is the launch being
     # measured; everything above is only how the library got there.
     log = os.path.join(ctx.data_dir, "aurora.log")
-    before = len(_launches(log))
-    opened_at = time.time()
+    relaunched_at = dt.datetime.now(dt.timezone.utc)
     d = ctx.relaunch(d)
 
-    # "Fully rendered" asked of the window, because the log cannot see a poster. The
-    # import ends on "Start watching", so a warm launch comes back to Live TV.
-    assert d.wait_body(
-        lambda b: len(b.strip()) > 400, timeout=60
-    ), "the second launch never put anything on screen"
-    wall = time.time() - opened_at
+    # Library content, in whichever shape the app comes back in.
+    #
+    # Not `channel-row` alone: a warm launch lands on **Home**, not on Live TV, and
+    # asking for a row there got "no element matched within 90s" -- which says the row is
+    # absent and nothing about what is there. The budget is "cold start to a library
+    # fully rendered", and a home screen of posters is that as much as a channel list is.
+    #
+    # Photographed either way, so a failure is a description rather than another guess.
+    rendered = (
+        "[data-testid='channel-row'], [data-testid='channel-tile'], "
+        "[data-testid='catalog-card']"
+    )
+    found_at = None
+    end = time.time() + 90
+    while time.time() < end:
+        if d.find_all(rendered):
+            found_at = dt.datetime.now(dt.timezone.utc)
+            break
+        time.sleep(0.25)
+    d.shot(ctx.shot("warm-start"))
+    if found_at is None:
+        body = ""
+        try:
+            body = d.js("return document.body.innerText;") or ""
+        except Exception:
+            pass
+        raise AssertionError(
+            "the warm launch rendered no library content in 90s. What was on screen:\n"
+            + body[:1200]
+        )
 
     time.sleep(2)  # the reveal is logged from a command, and the write is buffered
     launches = _launches(log)
-    assert len(launches) > before, (
-        f"the log shows {len(launches)} launch(es) and the relaunch should have added one"
-    )
+    assert launches, "the second launch wrote no log at all"
     started, revealed = launches[-1]
+    # The log was rotated when this launch opened it, so what is in it is this launch.
+    # Checked against the clock anyway: a stale file -- a launch that failed so early it
+    # never rotated, say -- would otherwise be measured as though it were the warm start.
+    assert started >= relaunched_at - dt.timedelta(seconds=60), (
+        f"the newest launch in the log began at {started}, before the relaunch at "
+        f"{relaunched_at} -- this is not the launch that was just made"
+    )
     assert revealed is not None, (
         "the second launch never called back into the host, so it did not become "
         "interactive at all"
     )
 
+    # **From the app's own first log line**, not from when this scenario asked for a
+    # relaunch.
+    #
+    # `ctx.relaunch` quits the session, waits for the window to go, kills the drivers and
+    # starts them again -- eight to ten seconds of deliberate sleeping before the app is
+    # even launched. Timing from the scenario's side swept all of that into the number
+    # and reported 20.190s for a startup, which is the harness measuring itself. The
+    # host's own `starting` line is the first instant that belongs to the app.
     interactive = (revealed - started).total_seconds()
+    wall = (found_at - started).total_seconds()
     print(f"   warm start -> interactive: {interactive:.3f}s")
     print(f"   warm start -> library on screen: {wall:.3f}s (budget {BUDGET_SECS}s)")
     print(f"   {channels} channels in the library, and not counting load before main")
     if wall > BUDGET_SECS:
-        print(f"   NOTE: {wall:.3f}s is past README §16's {BUDGET_SECS}s")
+        print(f"   NOTE: {wall:.3f}s is past README \u00a716's {BUDGET_SECS}s")
     ctx.assert_no_panic()

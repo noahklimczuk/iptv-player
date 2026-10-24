@@ -96,6 +96,36 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   );
 
   /**
+   * Which row is being dragged, in the favourites view (README §4, "drag to reorder").
+   *
+   * Only there. Everywhere else the list is ordered by channel number, which is the
+   * provider's numbering and not something a viewer owns — dragging a row would either
+   * be ignored or silently renumber somebody's channels. The favourites list is the one
+   * whose order is the viewer's own, and `channels::list` now sorts it by
+   * `favorites.sort_order` so a new order has somewhere to show.
+   */
+  const [dragging, setDragging] = useState<number | null>(null);
+
+  const reorderFavorites = useCallback(
+    (fromId: number, toId: number) => {
+      if (fromId === toId) return;
+      const ids = (channels ?? []).map((c) => c.id);
+      const from = ids.indexOf(fromId);
+      const to = ids.indexOf(toId);
+      if (from < 0 || to < 0) return;
+      const next = [...ids];
+      next.splice(to, 0, ...next.splice(from, 1));
+      // Sent whole rather than as "move this one to index N": a positional patch has to
+      // agree with the host about what the order was, and the host renumbers from the
+      // list it is given, so what lands is exactly what is on screen.
+      invoke('favorites.reorder', { profileId, channelIds: next })
+        .then(() => setFavNonce((n) => n + 1))
+        .catch(report('Could not save the new order'));
+    },
+    [channels, profileId],
+  );
+
+  /**
    * Narrowing, sorting and lettering, in that order, on the rows already in memory.
    *
    * Client-side on purpose: `channels.list` is not paged — it answers with every channel
@@ -377,6 +407,14 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
                       guide={guide.get(c.id) ?? null}
                       onTune={onTune}
                       onToggleFavorite={toggleFavorite}
+                      draggable={favoritesOnly}
+                      dragging={dragging === c.id}
+                      onDragStart={() => setDragging(c.id)}
+                      onDragEnd={() => setDragging(null)}
+                      onDropOn={() => {
+                        if (dragging != null) reorderFavorites(dragging, c.id);
+                        setDragging(null);
+                      }}
                     />
                   ) : (
                     <ChannelTile
@@ -408,12 +446,19 @@ const NUMBER = new Intl.NumberFormat('en-US');
 
 function ChannelRow({
   channel, guide, onTune, onToggleFavorite,
+  draggable = false, dragging = false, onDragStart, onDragEnd, onDropOn,
 }: {
   channel: Channel;
   /** Now and next, fetched for the visible window rather than by this row. */
   guide: NowNext | null;
   onTune: (c: Channel) => void;
   onToggleFavorite: (c: Channel) => void;
+  /** Only in the favourites view, where the order is the viewer's own. */
+  draggable?: boolean;
+  dragging?: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDropOn?: () => void;
 }) {
   // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
   const clockTime = useClockTime();
@@ -432,6 +477,13 @@ function ChannelRow({
       tabIndex={0}
       data-testid="channel-row"
       aria-label={`Watch ${channel.name}`}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      // `preventDefault` on dragover is what makes an element a drop target at all;
+      // without it the browser refuses the drop and `onDrop` never fires.
+      onDragOver={draggable ? (e) => e.preventDefault() : undefined}
+      onDrop={draggable ? (e) => { e.preventDefault(); onDropOn?.(); } : undefined}
       onClick={() => onTune(channel)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTune(channel); }
@@ -440,7 +492,13 @@ function ChannelRow({
         display: 'grid', gridTemplateColumns: '44px 44px 1fr auto', gap: 'var(--sp-3)',
         alignItems: 'center', padding: 'var(--sp-3)', textAlign: 'left',
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-        borderRadius: 'var(--r-md)', cursor: 'pointer', color: 'inherit',
+        borderRadius: 'var(--r-md)', color: 'inherit',
+        // `grab` only where there is something to grab: a move cursor on a list that
+        // cannot be reordered promises something that does not happen.
+        cursor: draggable ? 'grab' : 'pointer',
+        // The row being dragged fades, so the gap it will leave is visible while the
+        // pointer is somewhere else.
+        opacity: dragging ? 0.4 : 1,
         // The height the virtualiser was told, not the height the content wants. Rows are
         // absolutely positioned at multiples of `ROW_H`, so one that grows taller than
         // that is drawn *over* the row below — and the row below, being later in the DOM,

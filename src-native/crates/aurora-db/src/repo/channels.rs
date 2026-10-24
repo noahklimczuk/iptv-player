@@ -192,10 +192,25 @@ WHERE 1=1
     sql.push_str(&filter.library.where_sql(crate::repo::filtering::Kind::Live));
     // Qualified: `favorites` has a `sort_order` of its own, and an unqualified one
     // is ambiguous the moment the join is there.
-    sql.push_str(
-        " ORDER BY COALESCE(channels.custom_number, channels.number, 999999),
-                   channels.sort_order, channels.name",
-    );
+    //
+    // And in the favourites view it is that one that leads. `favorites.sort_order` is
+    // what "drag to reorder" writes, and ordering this list by channel number instead
+    // meant a viewer could rearrange their favourites and see no change -- the column
+    // was written, read by `lists::favorite_channel_ids`, and then overruled by the only
+    // query the screen actually uses. Everywhere else the channel number leads, which is
+    // what a channel list is for.
+    if filter.favorites_only {
+        sql.push_str(
+            " ORDER BY fav.sort_order,
+                       COALESCE(channels.custom_number, channels.number, 999999),
+                       channels.name",
+        );
+    } else {
+        sql.push_str(
+            " ORDER BY COALESCE(channels.custom_number, channels.number, 999999),
+                       channels.sort_order, channels.name",
+        );
+    }
     if let Some(limit) = filter.limit {
         sql.push_str(&format!(" LIMIT {limit} OFFSET {}", filter.offset));
     }
