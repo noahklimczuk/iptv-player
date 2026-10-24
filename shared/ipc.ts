@@ -170,7 +170,13 @@ export interface ResumePoint {
 /** README §9: intro / recap / credits regions the Skip button can jump. */
 export type MarkerKind = 'intro' | 'recap' | 'credits';
 /** Where a marker came from, so the UI can explain itself. */
-export type MarkerSource = 'chapters' | 'user' | 'learned' | 'convention';
+export type MarkerSource =
+  | 'chapters'
+  | 'user'
+  /** A forward jump the viewer made that nothing has corroborated yet. */
+  | 'seek'
+  | 'learned'
+  | 'convention';
 
 export interface SkipMarker {
   kind: MarkerKind;

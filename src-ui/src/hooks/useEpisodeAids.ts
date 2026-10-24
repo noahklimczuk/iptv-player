@@ -45,6 +45,11 @@ const MAY_AUTO_SKIP: Record<SkipMarker['source'], boolean> = {
   chapters: true,
   user: true,
   learned: true,
+  // One forward jump, which nothing has corroborated. It earns a button the viewer can
+  // press -- and pressing it records `user`, which does auto-skip -- but a drag is an
+  // inference about an intention and must not become a silent jump on every later
+  // episode of the show.
+  seek: false,
   // Placed by the clock rather than by evidence. See the comment on `autoSkip`.
   convention: false,
 };

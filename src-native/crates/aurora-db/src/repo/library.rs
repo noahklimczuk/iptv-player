@@ -1089,6 +1089,98 @@ pub fn episodes_for(
 /// This is deliberately *not* `progress::next_episode`, which finds the next
 /// **unwatched** episode for a Continue Watching rail. The Next Episode button has to
 /// go to the literal next one even if the viewer has seen it.
+/// The next episode, searched across every copy of the show.
+///
+/// `following_episode` looks only inside one `series_id`, which is a dead end now that a
+/// collapsed show's episode list is the union of its copies (`filtering::group_of`). A
+/// viewer watching a season that came from one copy reaches its last episode, and the
+/// season that continues it lives under another id -- so Up Next did not appear and
+/// autoplay stopped, in the middle of a show the app was quite happily listing.
+///
+/// `group` is best-copy-first, as `group_of` returns it, and that order is the
+/// tie-break: where two copies both have season 2 episode 1, the viewer gets the same
+/// one the episode list offered them.
+pub fn following_episode_in(
+    conn: &Connection,
+    episode_id: i64,
+    group: &[i64],
+) -> Result<Option<EpisodeRow>> {
+    if group.len() <= 1 {
+        return following_episode(conn, episode_id);
+    }
+    let Some((_, season, episode)) = conn
+        .query_row(
+            "SELECT series_id, season, episode FROM episodes WHERE id = ?1",
+            params![episode_id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+
+    // Every copy's candidate for "the next episode", then the best copy's wins. Asked as
+    // one query per copy rather than an `IN` list so the ids stay bound parameters.
+    let mut best: Option<EpisodeRow> = None;
+    for series_id in group {
+        let Some(candidate) = next_in_series(conn, *series_id, season, episode)? else {
+            continue;
+        };
+        let better = match &best {
+            None => true,
+            // Earlier in the show wins outright; a tie goes to the copy the group ranked
+            // first, which is the one already reached.
+            Some(current) => {
+                (candidate.season, candidate.episode) < (current.season, current.episode)
+            }
+        };
+        if better {
+            best = Some(candidate);
+        }
+    }
+    Ok(best)
+}
+
+/// The next episode within one series row.
+fn next_in_series(
+    conn: &Connection,
+    series_id: i64,
+    season: i64,
+    episode: i64,
+) -> Result<Option<EpisodeRow>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, season, episode, title, overview, still, runtime_mins,
+                    series_id, air_date
+             FROM episodes
+             WHERE series_id = ?1
+               AND (season > ?2 OR (season = ?2 AND episode > ?3))
+             ORDER BY season, episode
+             LIMIT 1",
+            params![series_id, season, episode],
+            |r| {
+                Ok(EpisodeRow {
+                    id: r.get(0)?,
+                    series_id: r.get(7)?,
+                    season: r.get::<_, i64>(1)? as u16,
+                    episode: r.get::<_, i64>(2)? as u16,
+                    title: r.get(3)?,
+                    overview: r.get(4)?,
+                    still: r.get(5)?,
+                    runtime_mins: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    air_date: r.get(8)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<EpisodeRow>> {
     let Some((series_id, season, episode)) = conn
         .query_row(
@@ -2512,6 +2604,139 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, "new");
+    }
+
+    /// The Landman case: season 1 in one copy, season 2 in the other.
+    ///
+    /// The merged episode list shows both, so Up Next has to cross the boundary too.
+    /// Bounded to one `series_id` it did not, and autoplay stopped at the end of
+    /// season 1 of a show the app was listing in full.
+    #[test]
+    fn next_episode_crosses_from_one_copy_of_a_show_to_another() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let mut show = |key: &str, title: &str| {
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title,
+                    match_key: "landman",
+                    year: Some(2024),
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap()
+        };
+        let four_k = show("s-4k", "Landman [4K]");
+        let plain = show("s-sd", "Landman");
+
+        // The 4K copy carries season 1; only the other has season 2.
+        upsert_episodes(
+            &mut conn,
+            four_k,
+            &[NewEpisode {
+                season: 1,
+                episode: 1,
+                url: "4k-s1e1".into(),
+                ..Default::default()
+            }],
+            0,
+        )
+        .unwrap();
+        upsert_episodes(
+            &mut conn,
+            plain,
+            &[
+                NewEpisode {
+                    season: 1,
+                    episode: 1,
+                    url: "sd-s1e1".into(),
+                    ..Default::default()
+                },
+                NewEpisode {
+                    season: 2,
+                    episode: 1,
+                    url: "sd-s2e1".into(),
+                    ..Default::default()
+                },
+            ],
+            0,
+        )
+        .unwrap();
+
+        let last_of_season_one = episodes_for(&conn, four_k, None).unwrap()[0].id;
+
+        // Inside the one copy there is nowhere to go, which is the dead end.
+        assert!(following_episode(&conn, last_of_season_one)
+            .unwrap()
+            .is_none());
+
+        // Across the group there is: season 2, from the copy that has it.
+        let group = [four_k, plain];
+        let next = following_episode_in(&conn, last_of_season_one, &group)
+            .unwrap()
+            .expect("season 2 is in the other copy");
+        assert_eq!((next.season, next.episode), (2, 1));
+        assert_eq!(next.series_id, plain);
+    }
+
+    /// Where both copies have the next episode, the viewer gets the one the list offered.
+    #[test]
+    fn the_best_copy_wins_a_tie_for_the_next_episode() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        let mut show = |key: &str| {
+            upsert_series(
+                &mut conn,
+                p,
+                &NewSeries {
+                    provider_key: key,
+                    title: "Show",
+                    match_key: "show",
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap()
+        };
+        let best = show("s-best");
+        let other = show("s-other");
+        for (sid, tag) in [(best, "best"), (other, "other")] {
+            upsert_episodes(
+                &mut conn,
+                sid,
+                &[
+                    NewEpisode {
+                        season: 1,
+                        episode: 1,
+                        url: format!("{tag}-1"),
+                        ..Default::default()
+                    },
+                    NewEpisode {
+                        season: 1,
+                        episode: 2,
+                        url: format!("{tag}-2"),
+                        ..Default::default()
+                    },
+                ],
+                0,
+            )
+            .unwrap();
+        }
+
+        let first = episodes_for(&conn, best, None).unwrap()[0].id;
+        // `group_of` returns the best copy first, and that order decides the tie.
+        let next = following_episode_in(&conn, first, &[best, other])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            next.series_id, best,
+            "a tie went to the copy nobody is watching"
+        );
+        assert_eq!((next.season, next.episode), (1, 2));
     }
 
     #[test]

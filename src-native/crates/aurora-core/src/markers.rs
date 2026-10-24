@@ -83,6 +83,20 @@ pub enum MarkerSource {
     Chapters,
     User,
     Learned,
+    /// A forward jump the viewer made, which nothing has corroborated yet.
+    ///
+    /// Separate from `User` — which means the Skip button was *pressed*, an informed act
+    /// on a region already on screen — because a bare seek is an inference about an
+    /// intention. Dragging forward twenty seconds four minutes into an episode might be
+    /// skipping the titles, or it might be impatience with a scene. One of those should
+    /// teach the show something and the other should not, and the only honest reading of
+    /// a single jump is "possibly".
+    ///
+    /// So it earns a button, which a viewer can confirm by pressing (and that press
+    /// records `User`), and it never fires on its own and never spreads to other episodes
+    /// on its own: `may_auto_skip` says no, and learning needs `MIN_AGREEING_SAMPLES` of
+    /// these before any other episode inherits anything.
+    Seek,
     /// From the episode's own duration and nothing else. Only ever the credits.
     Convention,
 }
@@ -93,6 +107,7 @@ impl MarkerSource {
             MarkerSource::Chapters => "chapters",
             MarkerSource::User => "user",
             MarkerSource::Learned => "learned",
+            MarkerSource::Seek => "seek",
             MarkerSource::Convention => "convention",
         }
     }
@@ -102,6 +117,7 @@ impl MarkerSource {
             "chapters" => Some(MarkerSource::Chapters),
             "user" => Some(MarkerSource::User),
             "learned" => Some(MarkerSource::Learned),
+            "seek" => Some(MarkerSource::Seek),
             "convention" => Some(MarkerSource::Convention),
             _ => None,
         }
@@ -110,9 +126,14 @@ impl MarkerSource {
     /// Higher wins when two sources describe the same region.
     pub fn trust(self) -> u8 {
         match self {
-            MarkerSource::Chapters => 4,
-            MarkerSource::User => 3,
-            MarkerSource::Learned => 2,
+            MarkerSource::Chapters => 5,
+            MarkerSource::User => 4,
+            MarkerSource::Learned => 3,
+            // Below `Learned` deliberately. A median that several episodes agree on is
+            // better evidence than one jump nothing has corroborated, and this used to be
+            // the other way round by accident: a bare seek was recorded as `User`, so one
+            // mis-drag outranked everything the rest of the show had to say.
+            MarkerSource::Seek => 2,
             // Last, so anything with evidence behind it wins. A conventional credits
             // marker exists to fill a hole, not to argue with a chapter.
             MarkerSource::Convention => 1,
@@ -127,7 +148,10 @@ impl MarkerSource {
     /// minute of an episode whose runtime was wrong, which is how somebody loses the
     /// final scene of a finale.
     pub fn may_auto_skip(self) -> bool {
-        !matches!(self, MarkerSource::Convention)
+        matches!(
+            self,
+            MarkerSource::Chapters | MarkerSource::User | MarkerSource::Learned
+        )
     }
 }
 
@@ -322,43 +346,118 @@ fn position_is_sane(kind: MarkerKind, marker: &SkipMarker, duration_secs: f64) -
     }
 }
 
-/// Median of a set of samples. Returns `None` for an empty slice.
-fn median(values: &mut [f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
+/// How far apart two observations may be and still be describing the same region.
+///
+/// Episodes of one show do not have identical intros: a cold open runs a different length
+/// each week, and the viewer's own thumb lands somewhere different each time. Twenty
+/// seconds is wide enough for that and narrow enough that an intro and a scene somebody
+/// skipped elsewhere in the first few minutes do not read as the same thing.
+pub const AGREEMENT_SECS: f64 = 20.0;
+
+/// How many observations have to agree before a show teaches its other episodes.
+///
+/// Two, not one. The old value was one, with its own comment admitting the cost: "one
+/// mis-drag colours the show". It did, and worse than the comment says — the median of a
+/// single observation *is* that observation, so a single twenty-second nudge became a
+/// marker on every episode of the show, and a `User` one, which the per-show "always
+/// skip" preference is allowed to fire without asking. One accident, silently applied to
+/// a whole series for ever.
+///
+/// Two agreeing observations is not a high bar for a real intro -- a viewer who skips the
+/// titles does it every episode -- and it is a bar an accident does not clear, because an
+/// accident does not repeat in the same place.
+pub const MIN_AGREEING_SAMPLES: usize = 2;
+
+/// The largest set of observations that all describe the same region.
+///
+/// Agreement is on both ends: two jumps that start together and end a minute apart are
+/// not the same region. Quadratic, over a handful of rows per show per kind.
+fn largest_agreeing(observations: &[(f64, f64)]) -> Vec<&(f64, f64)> {
+    let mut best: Vec<&(f64, f64)> = Vec::new();
+    for anchor in observations {
+        let cluster: Vec<&(f64, f64)> = observations
+            .iter()
+            .filter(|(s, e)| {
+                (s - anchor.0).abs() <= AGREEMENT_SECS && (e - anchor.1).abs() <= AGREEMENT_SECS
+            })
+            .collect();
+        if cluster.len() > best.len() {
+            best = cluster;
+        }
     }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = values.len() / 2;
-    Some(if values.len().is_multiple_of(2) {
-        (values[mid - 1] + values[mid]) / 2.0
-    } else {
-        values[mid]
-    })
+    best
 }
 
-/// Infer a marker for an episode that has none, from the user's own skips elsewhere
-/// in the same series.
+/// Infer a marker for an episode that has none, from what the rest of the series shows.
 ///
-/// Uses the median rather than the mean so one mis-drag does not poison the show, and
-/// requires at least `min_samples` observations so a single accident is not treated as
-/// a pattern.
+/// Two deliberate choices, both about skipping *less* rather than guessing more:
+///
+/// **Agreement, not an average.** Only the observations that agree with each other count,
+/// and if fewer than `min_samples` of them do, the show has not taught anything. The
+/// medians this used to take were independent — median of the starts and median of the
+/// ends — which can synthesise a region no episode ever had: observations of `0..90` and
+/// `55..115` gave `27.5..102.5`, which is not either intro, is not the average of them in
+/// any meaningful sense, and begins half a minute into content the viewer wanted.
+///
+/// **The intersection, not the union.** What comes back is the region every agreeing
+/// observation covers — the latest start and the earliest end. Being short costs the
+/// viewer a few seconds of titles they can sit through; being long costs them the opening
+/// of the episode, which is the thing they cannot get back without rewinding. The error
+/// is asymmetric, so this leans on the safe side of it.
 pub fn learn_from_series(
     observations: &[(f64, f64)],
     kind: MarkerKind,
     min_samples: usize,
 ) -> Option<SkipMarker> {
-    if observations.len() < min_samples.max(1) {
+    let cluster = largest_agreeing(observations);
+    if cluster.len() < min_samples.max(1) {
         return None;
     }
-    let mut starts: Vec<f64> = observations.iter().map(|(s, _)| *s).collect();
-    let mut ends: Vec<f64> = observations.iter().map(|(_, e)| *e).collect();
-    let marker = SkipMarker::new(
-        kind,
-        median(&mut starts)?,
-        median(&mut ends)?,
-        MarkerSource::Learned,
-    );
+    let start = cluster.iter().map(|(s, _)| *s).fold(f64::MIN, f64::max);
+    let end = cluster.iter().map(|(_, e)| *e).fold(f64::MAX, f64::min);
+    let marker = SkipMarker::new(kind, start, end, MarkerSource::Learned);
     marker.is_plausible().then_some(marker)
+}
+
+/// Trim overlaps so no two buttons claim the same second of video.
+///
+/// Two markers of different kinds can overlap honestly — a chapter list that says the
+/// recap runs to 0:90 and a learned intro that starts at 0:75 are both doing their best —
+/// and `active_marker` takes the first match in start order, so the overlap decided which
+/// *label* the button wore by an accident of sorting. A viewer pressing "Skip Recap" then
+/// landed in the middle of the titles, or pressed "Skip Intro" and lost the last of the
+/// recap.
+///
+/// The less trusted marker yields: its start moves to the end of the better one. If that
+/// leaves it too short to be worth a button it goes altogether, because half a region is
+/// not a skip anybody wants.
+fn separate(markers: &mut Vec<SkipMarker>) {
+    markers.sort_by(|a, b| {
+        a.start_secs
+            .partial_cmp(&b.start_secs)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut out: Vec<SkipMarker> = Vec::new();
+    for mut m in markers.drain(..) {
+        if let Some(previous) = out.last_mut() {
+            if m.start_secs < previous.end_secs {
+                if m.source.trust() > previous.source.trust() {
+                    // The better marker keeps its region; the one already placed gives up
+                    // the tail they share.
+                    previous.end_secs = m.start_secs;
+                    if !previous.is_plausible() {
+                        out.pop();
+                    }
+                } else {
+                    m.start_secs = previous.end_secs;
+                }
+            }
+        }
+        if m.is_plausible() {
+            out.push(m);
+        }
+    }
+    *markers = out;
 }
 
 /// Merge markers from several sources, keeping the most trusted per kind.
@@ -379,11 +478,7 @@ pub fn merge(sources: &[Vec<SkipMarker>]) -> Vec<SkipMarker> {
             }
         }
     }
-    best.sort_by(|a, b| {
-        a.start_secs
-            .partial_cmp(&b.start_secs)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    separate(&mut best);
     best
 }
 
@@ -449,6 +544,19 @@ pub fn conventional(duration_secs: f64) -> Vec<SkipMarker> {
 /// seconds is comfortably below any real one and above every nudge the UI itself offers.
 pub const MIN_SEEK_EVIDENCE_SECS: f64 = 20.0;
 
+/// How far into an episode a *seek* may start and still be read as skipping the titles.
+///
+/// Much tighter than the window a chapter gets. A chapter titled "Intro" is a statement
+/// about the file, so it is believed wherever it plausibly sits; a seek is an inference
+/// about why somebody moved their thumb, and the further in it happens the worse that
+/// inference gets. Intros — including after a cold open — are over well inside three
+/// minutes; a jump at four is far more likely to be impatience with a scene.
+///
+/// This is the gate that was missing. `position_is_sane` gave a seek the same ten-minute
+/// window a chapter gets, so a twenty-second nudge four minutes into an episode was
+/// recorded as that show's intro and applied to every episode of it.
+pub const SEEK_INTRO_WINDOW_SECS: f64 = 180.0;
+
 /// Intro evidence from a forward jump the viewer made by hand.
 ///
 /// Tier 2 is "the user — when someone skips manually, where they skipped is recorded",
@@ -467,6 +575,37 @@ pub const MIN_SEEK_EVIDENCE_SECS: f64 = 20.0;
 /// the episode, and beginning where an intro can be. Deliberately the same, so a seek
 /// cannot produce a marker a chapter could not have.
 pub fn intro_from_seek(from_secs: f64, to_secs: f64, duration_secs: f64) -> Option<SkipMarker> {
+    seek_evidence(from_secs, to_secs, duration_secs, &[])
+}
+
+/// What a forward jump the viewer made is evidence *of*.
+///
+/// Three things this decides, and the old `intro_from_seek` got two of them wrong.
+///
+/// **Which kind.** It called every jump an intro. But the first thing a viewer skips is
+/// very often the recap — "Previously on…" — and recording that as the intro put a button
+/// labelled "Skip Intro" over the recap, left the real intro with no marker, and gave the
+/// show a learned intro in the wrong place. `known` is what the episode already has from
+/// better sources, so a jump that starts inside a known recap is recap evidence and a jump
+/// that starts inside a known intro is intro evidence. With nothing known it is an intro,
+/// which is the commoner case and the one a viewer can correct by pressing the button.
+///
+/// **How far in.** `SEEK_INTRO_WINDOW_SECS`, not the ten minutes a chapter gets. See that
+/// constant.
+///
+/// **What it is worth.** `MarkerSource::Seek`, not `User`. A press of the Skip button is
+/// `User`; a drag is a guess at the same intention and ranks below a median the rest of
+/// the show agrees on.
+///
+/// `None` unless the jump passes every gate a chapter passes — long enough to be worth a
+/// button, short enough not to be a scrub across the episode, and beginning where the kind
+/// it is being read as can actually begin.
+pub fn seek_evidence(
+    from_secs: f64,
+    to_secs: f64,
+    duration_secs: f64,
+    known: &[SkipMarker],
+) -> Option<SkipMarker> {
     if !from_secs.is_finite() || !to_secs.is_finite() {
         return None;
     }
@@ -479,11 +618,24 @@ pub fn intro_from_seek(from_secs: f64, to_secs: f64, duration_secs: f64) -> Opti
     } else {
         0.0
     };
-    let marker = SkipMarker::new(MarkerKind::Intro, from_secs, to_secs, MarkerSource::User);
+    // What the viewer was sitting in when they jumped, where the episode already knows.
+    // Credits are not a candidate: a jump out of the credits is going to the next episode,
+    // not teaching anything, and `SEEK_INTRO_WINDOW_SECS` excludes it anyway.
+    let kind = known
+        .iter()
+        .filter(|m| matches!(m.kind, MarkerKind::Recap | MarkerKind::Intro))
+        .find(|m| from_secs >= m.start_secs && from_secs < m.end_secs)
+        .map(|m| m.kind)
+        .unwrap_or(MarkerKind::Intro);
+
+    let marker = SkipMarker::new(kind, from_secs, to_secs, MarkerSource::Seek);
     if marker.duration_secs() < MIN_SEEK_EVIDENCE_SECS {
         return None;
     }
-    if !marker.is_plausible() || !position_is_sane(MarkerKind::Intro, &marker, duration) {
+    if from_secs > SEEK_INTRO_WINDOW_SECS {
+        return None;
+    }
+    if !marker.is_plausible() || !position_is_sane(kind, &marker, duration) {
         return None;
     }
     Some(marker)
@@ -504,8 +656,22 @@ pub fn up_next_at(
     if let Some(credits) = markers.iter().find(|m| m.kind == MarkerKind::Credits) {
         return Some(credits.start_secs);
     }
-    Some((duration_secs - fallback_tail_secs).max(duration_secs * 0.5))
+    // The floor used to be half the runtime, which is not a floor on a short file: on a
+    // two-minute one `duration - 60` *is* half of it, so the Up Next card came up over the
+    // middle of the episode. A card offering the next episode half way through this one is
+    // not an aid, it is a mistake the viewer has to dismiss.
+    //
+    // `MIN_UP_NEXT_RATIO` instead, so the card is always in the tail whatever the runtime,
+    // and a file too short for a tail to mean anything gets no card at all.
+    if duration_secs < MIN_EPISODE_FOR_CONVENTION_SECS {
+        return None;
+    }
+    Some((duration_secs - fallback_tail_secs).max(duration_secs * MIN_UP_NEXT_RATIO))
 }
+
+/// The earliest point in an episode the Up Next card may appear, as a fraction of the
+/// runtime. Anything earlier is over content rather than over the tail.
+pub const MIN_UP_NEXT_RATIO: f64 = 0.8;
 
 #[cfg(test)]
 mod seek_tests {
@@ -518,10 +684,66 @@ mod seek_tests {
     fn dragging_past_the_titles_is_intro_evidence() {
         let marker = intro_from_seek(8.0, 98.0, 45.0 * 60.0).expect("a 90-second jump at 8s");
         assert_eq!(marker.kind, MarkerKind::Intro);
-        assert_eq!(marker.source, MarkerSource::User);
         assert_eq!(marker.start_secs, 8.0);
         assert_eq!(marker.end_secs, 98.0);
         assert!(marker.is_plausible());
+        // `Seek`, not `User`: a drag is a guess at an intention and a press of the button
+        // is that intention stated. The difference is what the viewer gets for free --
+        // nothing happens on its own from one jump.
+        assert_eq!(marker.source, MarkerSource::Seek);
+        assert!(
+            !marker.source.may_auto_skip(),
+            "one drag must never become a silent jump on every later episode"
+        );
+        assert!(
+            marker.source.trust() < MarkerSource::Learned.trust(),
+            "a jump nothing corroborates must not outrank what the show agrees on"
+        );
+    }
+
+    /// Which kind a jump is evidence of, when the episode already knows something.
+    ///
+    /// A viewer's first skip is very often the recap, and calling it the intro put a
+    /// button labelled "Skip Intro" over "Previously on...", left the real intro with no
+    /// marker at all, and taught the series an intro in the recap's place.
+    #[test]
+    fn a_jump_out_of_a_known_recap_is_recap_evidence() {
+        let known = [SkipMarker::new(
+            MarkerKind::Recap,
+            0.0,
+            70.0,
+            MarkerSource::Chapters,
+        )];
+        let out_of_the_recap =
+            seek_evidence(5.0, 68.0, 45.0 * 60.0, &known).expect("a jump inside the recap");
+        assert_eq!(out_of_the_recap.kind, MarkerKind::Recap);
+
+        // And a jump that starts after the recap is still the intro.
+        let after = seek_evidence(72.0, 140.0, 45.0 * 60.0, &known).expect("a jump after it");
+        assert_eq!(after.kind, MarkerKind::Intro);
+
+        // With nothing known it is an intro, which is the commoner case and the one the
+        // viewer can correct by pressing the button.
+        assert_eq!(
+            seek_evidence(5.0, 68.0, 45.0 * 60.0, &[]).unwrap().kind,
+            MarkerKind::Intro
+        );
+    }
+
+    /// The credits are never what a jump teaches.
+    ///
+    /// Jumping out of the credits is going to the next episode, not a statement about
+    /// where they start.
+    #[test]
+    fn a_jump_is_never_credits_evidence() {
+        let known = [SkipMarker::new(
+            MarkerKind::Credits,
+            60.0,
+            150.0,
+            MarkerSource::Chapters,
+        )];
+        let m = seek_evidence(70.0, 140.0, 45.0 * 60.0, &known).expect("a jump at 70s");
+        assert_eq!(m.kind, MarkerKind::Intro, "not Credits: {m:?}");
     }
 
     /// A stream that reports no duration at all, which is the ordinary case on a
@@ -609,17 +831,50 @@ mod seek_tests {
         );
     }
 
-    /// The window is the one `position_is_sane` already defines, including R-15's
-    /// ceiling: a three-hour film does not get a one-hour intro window.
+    /// A seek gets a much tighter window than a chapter, and this is why.
+    ///
+    /// A chapter titled "Intro" is a statement about the file, believed wherever it
+    /// plausibly sits -- `position_is_sane` gives it ten minutes, fifteen on a long one.
+    /// A seek is an inference about why somebody moved their thumb, and it decays fast:
+    /// at four minutes in, a twenty-second jump is far more likely to be impatience with
+    /// a scene than the titles.
+    ///
+    /// Sharing the chapter window is the defect this closes. A nudge four minutes into
+    /// one episode was recorded as the show's intro and, with `min_samples` of one,
+    /// applied to every episode of it.
     #[test]
-    fn the_window_matches_the_rule_chapters_go_through() {
+    fn a_seek_gets_a_tighter_window_than_a_chapter() {
         let three_hours = 3.0 * 60.0 * 60.0;
-        // 15 minutes is the ceiling, so 14:30 is in and 15:30 is out.
-        assert!(intro_from_seek(870.0, 930.0, three_hours).is_some());
-        assert!(intro_from_seek(930.0, 990.0, three_hours).is_none());
-        // And a short episode gets the first third rather than a flat ten minutes.
-        let twenty_two = 22.0 * 60.0;
-        assert!(intro_from_seek(400.0, 460.0, twenty_two).is_some());
+        // A chapter at 14:30 of a three-hour film is still allowed to call itself an
+        // intro...
+        let late_chapter = SkipMarker::new(MarkerKind::Intro, 870.0, 930.0, MarkerSource::Chapters);
+        assert!(position_fits_kind(&late_chapter, three_hours));
+        // ...and the identical jump is not evidence of one.
+        assert!(intro_from_seek(870.0, 930.0, three_hours).is_none());
+
+        // The boundary, stated: three minutes in is the last moment a drag can mean the
+        // titles.
+        assert!(intro_from_seek(175.0, 240.0, three_hours).is_some());
+        assert!(intro_from_seek(185.0, 250.0, three_hours).is_none());
+
+        // The case the window is generous enough for: a cold open, then the titles.
+        assert!(
+            intro_from_seek(95.0, 160.0, 45.0 * 60.0).is_some(),
+            "a skip after a cold open is the case this has to keep"
+        );
+    }
+
+    /// The accident this rework exists to stop, end to end.
+    #[test]
+    fn an_impatient_nudge_mid_episode_teaches_nothing() {
+        let episode = 45.0 * 60.0;
+        // Four minutes in, a twenty-five second jump. Under the old window this became
+        // the show's intro.
+        assert!(intro_from_seek(240.0, 265.0, episode).is_none());
+        // And even inside the window, one jump cannot reach another episode: learning
+        // needs agreement.
+        let one = [(8.0, 98.0)];
+        assert!(learn_from_series(&one, MarkerKind::Intro, MIN_AGREEING_SAMPLES).is_none());
     }
 }
 
@@ -914,13 +1169,54 @@ mod tests {
         );
     }
 
+    /// What the agreeing observations all cover, and nothing beyond it.
     #[test]
-    fn learns_the_median_of_user_skips() {
+    fn learns_the_region_the_observations_agree_on() {
         let obs = [(30.0, 120.0), (32.0, 118.0), (95.0, 200.0)];
         let learned = learn_from_series(&obs, MarkerKind::Intro, 2).unwrap();
-        assert_eq!(learned.start_secs, 32.0, "median resists the outlier");
-        assert_eq!(learned.end_secs, 120.0);
+        // The outlier at 95s agrees with nothing, so it is not in the cluster at all --
+        // and the two that do agree are skipped only where both of them say to.
+        assert_eq!(learned.start_secs, 32.0, "the latest start the cluster has");
+        assert_eq!(learned.end_secs, 118.0, "the earliest end it has");
         assert_eq!(learned.source, MarkerSource::Learned);
+    }
+
+    /// The region the independent medians used to invent.
+    ///
+    /// `median(starts)` and `median(ends)` were taken separately, so two observations
+    /// that do not describe the same region produced one that neither episode had:
+    /// `0..90` and `55..115` gave `27.5..102.5`, which starts half a minute into content
+    /// the viewer wanted and ends inside the episode. Disagreement has to mean "nothing
+    /// learned", not "something averaged".
+    #[test]
+    fn observations_that_disagree_teach_nothing() {
+        let obs = [(0.0, 90.0), (55.0, 115.0)];
+        assert!(
+            learn_from_series(&obs, MarkerKind::Intro, 2).is_none(),
+            "two different regions must not be averaged into a third"
+        );
+        // Each on its own is a cluster of one, so a caller willing to act on one sample
+        // gets a real observation rather than a synthesised one.
+        let single = learn_from_series(&obs[..1], MarkerKind::Intro, 1).unwrap();
+        assert_eq!((single.start_secs, single.end_secs), (0.0, 90.0));
+    }
+
+    /// Agreement is on both ends. Two jumps that start together and end a minute apart
+    /// are not the same region.
+    #[test]
+    fn agreement_is_on_both_ends_of_a_region() {
+        let same_start = [(10.0, 40.0), (12.0, 130.0)];
+        assert!(learn_from_series(&same_start, MarkerKind::Intro, 2).is_none());
+    }
+
+    /// An intersection too short to be worth a button is no marker.
+    #[test]
+    fn an_intersection_too_short_to_press_is_not_offered() {
+        // They agree within the tolerance, but what both cover is under
+        // `MIN_MARKER_SECS`.
+        let barely = [(10.0, 30.0), (28.0, 48.0)];
+        let learned = learn_from_series(&barely, MarkerKind::Intro, 2);
+        assert!(learned.is_none(), "{learned:?}");
     }
 
     #[test]
@@ -1010,10 +1306,29 @@ mod tests {
         assert_eq!(up_next_at(&[], 2700.0, 45.0), Some(2655.0));
     }
 
+    /// A file too short for a tail to mean anything gets no card.
+    ///
+    /// The floor used to be half the runtime, which is not a floor at all on a short
+    /// file: on a 60-second clip with a 45-second tail, `duration - tail` *is* 15s and
+    /// half the runtime is 30s, so the card came up at the half-way mark. An Up Next
+    /// prompt over the middle of what you are watching is not an aid.
     #[test]
-    fn up_next_never_lands_in_the_first_half_of_a_short_episode() {
-        // A 60s clip with a 45s tail would otherwise prompt at 15s.
-        assert_eq!(up_next_at(&[], 60.0, 45.0), Some(30.0));
+    fn a_clip_too_short_for_a_tail_gets_no_up_next_card() {
+        assert_eq!(up_next_at(&[], 60.0, 45.0), None);
+        assert_eq!(up_next_at(&[], 9.0 * 60.0, 45.0), None);
+    }
+
+    /// And where there is a card, it is always in the tail.
+    #[test]
+    fn up_next_is_always_in_the_last_fifth() {
+        for duration in [600.0, 1320.0, 2700.0, 7200.0] {
+            let at = up_next_at(&[], duration, 45.0).expect("a real episode gets a card");
+            assert!(
+                at >= duration * MIN_UP_NEXT_RATIO,
+                "{duration}s episode prompts at {at}s, which is not its tail"
+            );
+            assert!(at < duration);
+        }
     }
 
     #[test]

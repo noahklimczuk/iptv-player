@@ -711,6 +711,53 @@ CREATE INDEX idx_markers_episode ON skip_markers(episode_id, kind);
 ALTER TABLE epg_channels ADD COLUMN display_names TEXT;
 "#,
     },
+    Migration {
+        version: 15,
+        name: "seek_is_its_own_marker_source",
+        sql: r#"
+-- `MarkerSource::Seek`: a forward jump the viewer made that nothing has corroborated.
+--
+-- It used to be recorded as `user`, which is the source a *press of the Skip button*
+-- has. The two are not the same evidence. A press acts on a region already on screen;
+-- a drag is an inference about why somebody moved their thumb. Recorded as `user` it
+-- outranked everything the rest of the show had to say and -- because
+-- `may_auto_skip()` was `!matches!(self, Convention)` -- the per-show "always skip"
+-- preference was allowed to fire it without asking. One twenty-second nudge, applied
+-- silently to every episode of a series.
+--
+-- `seek` ranks below `learned` and never auto-skips, so a single jump earns a button
+-- and nothing more.
+--
+-- The rows already stored as `user` are left as `user`. They cannot be told apart --
+-- both paths wrote the same string -- and demoting all of them would throw away the
+-- deliberate button presses along with the accidents. They are bounded in number and
+-- the agreement rule in `learn_from_series` now contains the damage: a lone
+-- observation no longer reaches another episode whatever its source.
+--
+-- SQLite cannot alter a CHECK, so the table is rebuilt, exactly as migration 14 did
+-- for the same column. It is small -- one row per marker per episode -- and
+-- `PRAGMA foreign_keys` is off during a migration, so the episode references survive
+-- the swap.
+CREATE TABLE skip_markers_new (
+    id          INTEGER PRIMARY KEY,
+    episode_id  INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL CHECK (kind IN ('intro','recap','credits')),
+    source      TEXT    NOT NULL
+                CHECK (source IN ('chapters','user','learned','seek','convention')),
+    start_secs  REAL    NOT NULL,
+    end_secs    REAL    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (episode_id, kind, source)
+);
+INSERT INTO skip_markers_new
+    (id, episode_id, kind, source, start_secs, end_secs, created_at)
+    SELECT id, episode_id, kind, source, start_secs, end_secs, created_at
+      FROM skip_markers;
+DROP TABLE skip_markers;
+ALTER TABLE skip_markers_new RENAME TO skip_markers;
+CREATE INDEX idx_markers_episode ON skip_markers(episode_id, kind);
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 14;
+pub const LATEST_VERSION: u32 = 15;

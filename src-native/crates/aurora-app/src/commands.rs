@@ -986,9 +986,22 @@ pub fn library_playback_aids(
     };
 
     let resolved = markers::resolve(&db, args.episode_id, markers::DEFAULT_MIN_SAMPLES, duration)?;
-    let prefs = match markers::series_id_of(&db, args.episode_id)? {
+    let series = markers::series_id_of(&db, args.episode_id)?;
+    let prefs = match series {
         Some(series_id) => markers::prefs(&db, args.profile_id, series_id)?,
         None => markers::SeriesPrefs::default(),
+    };
+
+    // Across every copy of this show, for the same reason its episode list is: a season
+    // that came from one copy runs out, and the one that continues it belongs to another
+    // row. Bounded to the copy alone, Up Next vanished at that boundary and autoplay
+    // stopped halfway through a show the app was listing in full.
+    let group = match series {
+        Some(series_id) => {
+            let filter = filtering::LibraryFilter::load(&db)?;
+            filter.group_of(&db, filtering::Kind::Series, series_id)?
+        }
+        None => Vec::new(),
     };
 
     Ok(EpisodePlaybackAids {
@@ -998,7 +1011,7 @@ pub fn library_playback_aids(
             UP_NEXT_TAIL_SECS,
         ),
         markers: resolved,
-        next_episode: library::following_episode(&db, args.episode_id)?,
+        next_episode: library::following_episode_in(&db, args.episode_id, &group)?,
         prefs,
     })
 }
@@ -1055,25 +1068,43 @@ pub struct ObserveSeekArgs {
     pub duration_secs: f64,
 }
 
-/// Learn an intro from a forward seek the viewer made by hand.
+/// Learn from a forward seek the viewer made by hand.
 ///
 /// `library_record_skip` above is reached only from the Skip button, and that button is
-/// only on screen when an intro marker already exists — so on a library whose streams
-/// carry no chapters there was no way for an intro to come into being, and no way for a
-/// viewer to teach one. Tier 2 is "the user, when someone skips manually"; dragging past
-/// the titles is that, and this is where it gets recorded.
+/// only on screen when a marker already exists — so on a library whose streams carry no
+/// chapters there was no way for an intro to come into being, and no way for a viewer to
+/// teach one. Dragging past the titles is the manual skip the design's second tier is
+/// about, and this is where it gets recorded.
+///
+/// What it is recorded *as* is the part that was wrong. Every jump was called an intro
+/// and stored as `User` — the source a deliberate press has — so a viewer skipping the
+/// recap taught the show an intro in the recap's place, and a single impatient nudge
+/// outranked everything the rest of the series had to say. `seek_evidence` decides the
+/// kind from what this episode already knows, and `MarkerSource::Seek` ranks the claim
+/// honestly: a button, never a silent jump, and nothing another episode inherits until a
+/// second observation agrees with it.
 ///
 /// Returns whether the jump was taken as evidence, so the caller can refresh its markers
-/// rather than guess. `aurora_core::markers::intro_from_seek` owns the decision and puts
-/// a seek through the same gates a chapter goes through.
+/// rather than guess.
 #[tauri::command(async)]
 pub fn library_observe_seek(services: State<'_, Services>, args: ObserveSeekArgs) -> Result<bool> {
-    let Some(marker) =
-        aurora_core::markers::intro_from_seek(args.from_secs, args.to_secs, args.duration_secs)
-    else {
+    let db = services.db.lock();
+    // What the episode already has, so a jump out of a known recap is not filed as an
+    // intro. Read before the write, under the one lock -- the db mutex is not reentrant.
+    let known = markers::resolve(
+        &db,
+        args.episode_id,
+        markers::DEFAULT_MIN_SAMPLES,
+        (args.duration_secs > 0.0).then_some(args.duration_secs),
+    )?;
+    let Some(marker) = aurora_core::markers::seek_evidence(
+        args.from_secs,
+        args.to_secs,
+        args.duration_secs,
+        &known,
+    ) else {
         return Ok(false);
     };
-    let db = services.db.lock();
     markers::record(&db, args.episode_id, &marker, now_unix())?;
     Ok(true)
 }

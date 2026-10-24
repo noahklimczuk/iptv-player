@@ -18,6 +18,76 @@ import { isTyping } from '@/hooks/useHotkeys';
 const HIDE_AFTER_MS = 3200;
 
 /**
+ * How much one wheel notch moves the volume.
+ *
+ * The five the keyboard already uses for ArrowUp and ArrowDown (`useHotkeys`), so a notch
+ * and a key press mean the same thing.
+ */
+const VOLUME_STEP = 5;
+
+/**
+ * The ceiling the host applies anyway (`player::set_volume` does `volume.min(200)`), and
+ * the floor `VolumeArgs::volume` being a `u32` requires.
+ *
+ * Clamped here rather than left to the host because the floor is not merely tidiness:
+ * sending a negative volume is refused by serde with "invalid value: integer `-5`,
+ * expected u32", and the `.catch` turns that into a notification — so scrolling down at
+ * zero would raise an error toast for an action that had already finished (R-85).
+ */
+const MIN_VOLUME = 0;
+const MAX_VOLUME = 200;
+
+/**
+ * How much accumulated wheel travel spends one notch.
+ *
+ * A mouse wheel sends one event of about 100px per detent; a trackpad sends a stream of
+ * small ones, and a precision mouse sends many smaller still. Acting on each event would
+ * make one two-finger drag slam the volume from silence to 200, so travel is accumulated
+ * and spent a notch at a time. Fifty is half a detent, which keeps a real wheel feeling
+ * immediate — one click, one step — while a trackpad has to travel a sensible distance.
+ */
+const WHEEL_NOTCH_PX = 50;
+
+/**
+ * One wheel event's travel in pixels, whatever units it arrived in.
+ *
+ * `deltaMode` is lines or pages on some browsers and devices rather than pixels, and the
+ * raw number means something completely different in each — three lines and three pixels
+ * are not comparable. Firefox on Windows reports lines for an ordinary mouse wheel.
+ */
+function wheelPixels(e: WheelEvent): number {
+  if (e.deltaMode === 1) return e.deltaY * 16;  // lines
+  if (e.deltaMode === 2) return e.deltaY * 400; // pages
+  return e.deltaY;
+}
+
+/**
+ * Whether this wheel event was aimed at something other than the picture.
+ *
+ * Two cases, and the first was the one that mattered. The overlay covers the whole
+ * window, so the wheel reaches the transport bar, the channel banner and the audio,
+ * subtitle and playback panels as readily as it reaches the video — and over a *control*
+ * it must do nothing. Scrolling the playback panel and watching the volume drop is not
+ * a wheel shortcut, it is a wheel that goes off wherever you point it.
+ *
+ * The second is a panel with more content than height, which has its own scrolling to do.
+ * Asked of the element rather than of a list of selectors, so a panel that overflows
+ * later is covered without anybody remembering it.
+ */
+function awayFromThePicture(target: EventTarget | null, stopAt: HTMLElement): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== stopAt) {
+    if (node instanceof HTMLElement && node.dataset.osdChrome !== undefined) return true;
+    if (node.scrollHeight > node.clientHeight) {
+      const overflow = getComputedStyle(node).overflowY;
+      if (overflow === 'auto' || overflow === 'scroll') return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
  * How long to record when the channel has no guide.
  *
  * A provider with no EPG is common, and "there is nothing in the guide so you cannot
@@ -187,6 +257,54 @@ export function PlayerOverlay({
     return () => window.removeEventListener('keydown', wake);
   }, [bump]);
 
+  /**
+   * Volume on the wheel, over the picture.
+   *
+   * A native listener rather than React's `onWheel`, for two reasons. React attaches
+   * wheel at the root as a *passive* listener, so `preventDefault` there does nothing but
+   * log a warning — and the page behind this overlay must not scroll while somebody is
+   * turning the volume up. And a native listener is where `{ passive: false }` can be
+   * said at all.
+   *
+   * The volume is read from the player state through a ref rather than captured, so the
+   * listener is registered once for the life of the overlay instead of on every one of
+   * the twenty state updates a second playback produces.
+   */
+  const surface = useRef<HTMLDivElement | null>(null);
+  const volume = useRef(player.volume);
+  volume.current = player.volume;
+  const travel = useRef(0);
+  useEffect(() => {
+    const el = surface.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (awayFromThePicture(e.target, el)) return;
+      e.preventDefault();
+      travel.current += wheelPixels(e);
+      const notches = Math.trunc(travel.current / WHEEL_NOTCH_PX);
+      if (notches === 0) return;
+      travel.current -= notches * WHEEL_NOTCH_PX;
+      // Up is louder: `deltaY` is negative when the wheel goes away from the viewer.
+      const next = Math.min(
+        MAX_VOLUME,
+        Math.max(MIN_VOLUME, volume.current - notches * VOLUME_STEP),
+      );
+      // Woken for the same reason every other action wakes it: an action with no
+      // feedback is the defect R-74 was about, and the volume readout is in the chrome
+      // this shows. Done even when the value did not move -- at 0 or 200 the viewer
+      // still needs to see why nothing is happening.
+      bump();
+      if (next === volume.current) return;
+      // Optimistic, so a flick of the wheel does not wait for a round trip before the
+      // next notch is computed from the old number.
+      volume.current = next;
+      invoke('player.setVolume', { volume: next })
+        .catch(report('Could not change the volume'));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [bump]);
+
   const playing = player.status === 'playing';
   const behind = behindLive(player);
   // Whether there is a real video surface behind this overlay.
@@ -205,6 +323,7 @@ export function PlayerOverlay({
     // which would put a focus stop in front of every control it contains.
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
+      ref={surface}
       onMouseMove={bump}
       onClick={bump}
       style={{
@@ -261,6 +380,7 @@ export function PlayerOverlay({
         {visible && (
           <>
             <motion.div
+              data-osd-chrome=""
               initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -16 }} transition={{ duration: 0.18 }}
               style={{
@@ -312,6 +432,7 @@ export function PlayerOverlay({
             {showStats && player.stats && <StatsOverlay stats={player.stats} />}
 
             <motion.div
+              data-osd-chrome=""
               initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 24 }} transition={{ duration: 0.18 }}
               style={{

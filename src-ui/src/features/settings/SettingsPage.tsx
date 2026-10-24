@@ -258,6 +258,7 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             ['J / L', 'Seek ±10s'],
             ['T', 'Pause live TV · press again for the live edge'],
             ['↑ / ↓', 'Volume · M mute'],
+            ['Mouse wheel', 'Volume, scrolling over the picture'],
             ['F / F11', 'Fullscreen'],
             ['P', 'Picture-in-picture'],
             ['I', 'Info · the channel banner, or a title’s details'],
