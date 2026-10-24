@@ -39,6 +39,22 @@ use crate::watchdog::{Phase, Watchdog};
 /// the import table always agree.
 const LIBMPV_DLL: &str = "libmpv-2.dll";
 
+/// What one read of `demuxer-cache-state` says about the cache behind the current stream.
+///
+/// Three things from one property: how far back the data reaches, how much of it there
+/// is, and whether any of it is in a file. Every field defaults to "mpv did not say",
+/// because every caller has to cope with that anyway — the property is absent before the
+/// first packet and on a stream with no cache at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct CacheReport {
+    /// The oldest moment still held, from `seekable-ranges`.
+    start_secs: Option<f64>,
+    /// Everything the demuxer cache holds, history and forward buffer together.
+    total_bytes: u64,
+    /// The part of it in mpv's cache file, or `None` when there is no cache file.
+    file_bytes: Option<u64>,
+}
+
 /// Whether libmpv can actually be loaded, asked before anything needs it.
 fn libmpv_loadable() -> bool {
     use windows::core::PCWSTR;
@@ -495,34 +511,50 @@ impl MpvBackend {
         });
         // mpv knows exactly where its retained data starts, and it is the authority when
         // it answers: the budget can only ever over-estimate, never under.
-        if let Some(start) = self.cache_start() {
+        if let Some(start) = self.cache_report().start_secs {
             window.start_secs = window.start_secs.max(start).min(window.position_secs);
         }
         self.state.timeshift = Some(window);
     }
 
-    /// The oldest moment still held, from `demuxer-cache-state`.
+    /// What `demuxer-cache-state` says: the oldest moment held, and where the bytes are.
     ///
-    /// Read out of the property's documented shape — a map with a `seekable-ranges`
-    /// array of `{start, end}` — and, like everything else in this file, never yet run
-    /// against a real stream. `None` when mpv does not answer, which is why the caller
-    /// has a bound of its own.
-    fn cache_start(&self) -> Option<f64> {
-        let state: MpvNode = self.mpv.get_property("demuxer-cache-state").ok()?;
-        for (key, value) in state.map()? {
-            if key != "seekable-ranges" {
-                continue;
-            }
-            // The first range is the oldest. A live stream that has not been seeked has
-            // exactly one.
-            let first = value.array()?.next()?;
-            for (field, number) in first.map()? {
-                if field == "start" {
-                    return number.f64();
+    /// One read for all three, because the property builds a whole map and the tick asks
+    /// twice a second. Read out of the property's documented shape — `seekable-ranges` is
+    /// an array of `{start, end}`, `total-bytes` and `file-cache-bytes` are integers, and
+    /// the last is *absent* rather than zero when mpv has no cache file.
+    fn cache_report(&self) -> CacheReport {
+        let mut report = CacheReport::default();
+        let Ok(state) = self.mpv.get_property::<MpvNode>("demuxer-cache-state") else {
+            return report;
+        };
+        let Some(map) = state.map() else {
+            return report;
+        };
+        for (key, value) in map {
+            match key.as_str() {
+                // The first range is the oldest. A live stream that has not been seeked
+                // has exactly one.
+                "seekable-ranges" => {
+                    report.start_secs = value
+                        .array()
+                        .and_then(|mut r| r.next())
+                        .and_then(|first| first.map())
+                        .and_then(|fields| {
+                            fields
+                                .filter(|(field, _)| field == "start")
+                                .find_map(|(_, number)| number.f64())
+                        });
                 }
+                "total-bytes" => report.total_bytes = value.i64().unwrap_or(0).max(0) as u64,
+                // Absent unless mpv opened a cache file, which is the whole question.
+                "file-cache-bytes" => {
+                    report.file_bytes = value.i64().map(|b| b.max(0) as u64);
+                }
+                _ => {}
             }
         }
-        None
+        report
     }
 
     /// Bits per second of everything being read, or 0 when mpv has not said yet.
@@ -582,6 +614,7 @@ impl MpvBackend {
     fn refresh_stats(&mut self) {
         let w: Option<i64> = self.mpv.get_property("width").ok();
         let h: Option<i64> = self.mpv.get_property("height").ok();
+        let cache = self.cache_report();
         self.state.stats = Some(PlaybackStats {
             resolution: match (w, h) {
                 (Some(w), Some(h)) if w > 0 => Some(format!("{w}x{h}")),
@@ -605,6 +638,8 @@ impl MpvBackend {
                 .get_property("demuxer-cache-duration")
                 .unwrap_or(0.0),
             hw_decoder: self.mpv.get_property("hwdec-current").ok(),
+            cache_bytes: cache.total_bytes,
+            cache_file_bytes: cache.file_bytes,
         });
     }
 

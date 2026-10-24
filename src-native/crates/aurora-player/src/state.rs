@@ -98,6 +98,19 @@ pub struct PlaybackStats {
     pub dropped_frames: u64,
     pub buffer_secs: f64,
     pub hw_decoder: Option<String>,
+    /// Everything mpv's demuxer cache is holding for this stream, in bytes — the rewind
+    /// history and the forward buffer together.
+    pub cache_bytes: u64,
+    /// How much of `cache_bytes` is in mpv's cache *file*, or `None` when this stream has
+    /// no file cache at all.
+    ///
+    /// The difference between "the rewind buffer is on disk" and "the rewind buffer is in
+    /// RAM", which matters because the two spend different budgets (README §16 gives
+    /// playback 900 MB, and a 10 GB rewind would not fit in it). A directory listing
+    /// cannot answer it: mpv names its own cache file and is the only authority on
+    /// whether it opened one. `timeshift_live.py` asked the folder and got zero while
+    /// the rewind worked, which is how this field came to exist.
+    pub cache_file_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

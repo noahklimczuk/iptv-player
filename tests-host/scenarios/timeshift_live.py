@@ -121,6 +121,23 @@ def _open_files_mb():
     return found
 
 
+def _print_cache(state):
+    """What mpv says about its own cache, which is the only authority on where it is.
+
+    A directory listing cannot answer it. `timeshift::bytes_on_disk` scans the folder the
+    viewer chose and got zero while a rewind of 465s worked, and the conclusion drawn from
+    that -- that the buffer must be in memory -- did not survive the arithmetic either:
+    the process grew by far less than the buffer weighed. `demuxer-cache-state` carries
+    `file-cache-bytes`, present only when mpv opened a cache file, so it settles both
+    readings at once.
+    """
+    stats = state.get("stats") or {}
+    total = stats.get("cacheBytes") or 0
+    on_file = stats.get("cacheFileBytes")
+    where = "no cache file" if on_file is None else f"{on_file / (1024 * 1024):.1f}MB in a file"
+    print(f"      mpv cache: {total / (1024 * 1024):.1f}MB held, {where}")
+
+
 def _a_playing_channel(d, ctx):
     """Tune channels until one actually plays, and return its state."""
     # `channels.list` takes a filter, not a page — the whole visible list comes back
@@ -191,6 +208,7 @@ def run(d, ctx):
                         print(f"      temp: {name} {mb}MB")
                 mem = _working_set_mb()
                 held = window["liveSecs"] - window["startSecs"]
+                _print_cache(state)
                 print(
                     f"      t+{samples // 2}s held={held:.0f}s "
                     f"disk={disk / (1024 * 1024):.1f}MB "
@@ -258,18 +276,41 @@ def run(d, ctx):
         if mem_after > 900:
             print(f"   NOTE: {mem_after:.0f} MB is past README §16's 900 MB for playback")
 
-    # Where the bytes actually are. `cache-on-disk=yes` and `demuxer-cache-dir` are both
-    # accepted by mpv — the log carries no "mpv rejected" for either — so an empty folder
-    # with a working rewind means the buffer is resident instead, bounded by
-    # `demuxer-max-back-bytes` rather than by the folder the viewer chose.
-    if on_disk == 0:
+    # Where the bytes actually are, asked of mpv rather than inferred from the folder.
+    #
+    # Both `cache-on-disk=yes` and `demuxer-cache-dir` are accepted — the log carries no
+    # "mpv rejected" for either — so a folder that scans empty while a rewind works has
+    # two possible readings, and a directory listing cannot tell them apart:
+    #
+    #   * mpv opened no cache file, and the history is in RAM; or
+    #   * mpv opened one that `fs::read_dir` cannot see, because a cache file is a
+    #     temporary and a temporary need not keep a name in its directory.
+    #
+    # `file-cache-bytes` is present in `demuxer-cache-state` only when a cache file
+    # exists, so it distinguishes them. Reported, not asserted: which one holds is a
+    # finding about mpv, and this scenario exists to establish it.
+    _print_cache(after)
+    stats = after.get("stats") or {}
+    on_file = stats.get("cacheFileBytes")
+    held_bytes = stats.get("cacheBytes") or 0
+    if on_file is None:
         print(
-            "   NOTE: the rewind works and the folder is empty, so the buffer is in "
-            "memory. The disk budget is measured against this folder, so it is not "
-            "bounding anything."
+            "   NOTE: mpv reports no cache file, so the rewind history is in memory, "
+            f"bounded by demuxer-max-back-bytes ({settings['bytes'] / (1024 ** 3):.0f} "
+            "GiB) rather than by the folder. The folder picker and the disk readout in "
+            "Settings describe something that does not happen."
+        )
+    elif on_disk == 0:
+        print(
+            f"   NOTE: mpv has {on_file / (1024 * 1024):.1f}MB in a cache file, and the "
+            "folder scans as empty -- so the file is there without a directory entry, "
+            "and `timeshift::bytes_on_disk` is asking the wrong thing rather than "
+            "reporting an empty buffer."
         )
     else:
         assert on_disk > 0
+    if held_bytes:
+        print(f"   held: {held_bytes / (1024 * 1024):.1f}MB of demuxer cache in total")
 
     # Rejoining live gives the delay up.
     d.invoke("player_back_to_live")

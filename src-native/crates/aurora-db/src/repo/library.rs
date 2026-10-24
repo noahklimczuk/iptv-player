@@ -399,7 +399,15 @@ pub struct SeriesRow {
     pub trailer_key: Option<String>,
 }
 
-const SERIES_SELECT: &str = "SELECT series.id,
+/// One show's columns, with the `seasons` column left to the caller.
+///
+/// A collapsed row stands for every copy of its title (`filtering::group_of`), and
+/// what it can offer is the union of their seasons -- so the count on a card has to
+/// be asked the same way the episode list is, or a card reads "1 season" and opens
+/// on two.
+fn series_select(seasons: &str) -> String {
+    format!(
+        "SELECT series.id,
        COALESCE(custom_title, tmdb_title, title), year, quality,
                                     poster, backdrop, logo_art, overview, rating,
                                     certification, genres, added_at, lang_code,
@@ -408,10 +416,15 @@ const SERIES_SELECT: &str = "SELECT series.id,
                                       WHERE c.item_kind = 'series' AND c.item_id = series.id
                                         AND c.is_cast = 1
                                       ORDER BY c.ord),
-                                    (SELECT group_concat(DISTINCT e.season)
-                                       FROM episodes e WHERE e.series_id = series.id),
+                                    {seasons},
                                     trailer_key
-                             FROM series";
+                             FROM series"
+    )
+}
+
+/// The seasons stored against this row alone.
+const OWN_SEASONS: &str =
+    "(SELECT group_concat(DISTINCT e.season) FROM episodes e WHERE e.series_id = series.id)";
 
 fn map_series(r: &rusqlite::Row<'_>) -> rusqlite::Result<SeriesRow> {
     let genres: Option<String> = r.get(10)?;
@@ -451,8 +464,9 @@ pub fn list_series(conn: &Connection, q: &BrowseQuery) -> Result<Vec<SeriesRow>>
     };
     let (filters, mut params) = browse_filters("series", q);
     let sql = format!(
-        "{SERIES_SELECT} WHERE series.hidden = 0{}{filters} ORDER BY {order} \
+        "{} WHERE series.hidden = 0{}{filters} ORDER BY {order} \
          LIMIT :limit OFFSET :offset",
+        series_select(&q.library.merged_seasons_sql()),
         q.library.where_sql(crate::repo::filtering::Kind::Series),
     );
     params.push((":limit", &q.limit));
@@ -626,8 +640,15 @@ pub fn clear_listing_attempt(conn: &Connection, series_id: i64) -> Result<()> {
     Ok(())
 }
 
+/// One show by id, with the seasons stored against that row.
+///
+/// Not the merged count, and it does not need to be: every screen that opens a show
+/// reads its seasons off the episode list `library.episodes` returns -- which *is*
+/// merged -- and `DetailModal` stopped reading this field for an unrelated reason.
+/// The grid's cards come from `list_series`, which has the filter and asks the
+/// merged question.
 pub fn series(conn: &Connection, id: i64) -> Result<Option<SeriesRow>> {
-    let sql = format!("{SERIES_SELECT} WHERE series.id = ?1");
+    let sql = format!("{} WHERE series.id = ?1", series_select(OWN_SEASONS));
     Ok(conn.query_row(&sql, params![id], map_series).optional()?)
 }
 

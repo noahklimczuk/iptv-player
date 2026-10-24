@@ -114,47 +114,126 @@ impl LibraryFilter {
             out.push_str(&self.language_clause(t));
         }
         if self.hide_duplicates {
-            let year = if kind.has_year() {
-                format!(" AND COALESCE(dup.year,0) = COALESCE({t}.year,0)")
-            } else {
-                String::new()
-            };
-            // The inner search carries the same language rule: a Spanish copy must not
-            // suppress the English one when English-only is on.
-            let lang = if self.english_only {
-                self.language_clause("dup")
-            } else {
-                String::new()
-            };
-            // And a channel's country, because the prefix that carried it is not in the
-            // key.
-            //
-            // `match_key` is built from the name after `split_country_prefix` has taken
-            // the prefix off -- which is what makes `UK | BBC One` and `BBC One` one
-            // channel, and is wanted. The consequence not written down anywhere is that
-            // `US *  TNT` and `CA *  TNT` both key to `tnt`, so one of them disappeared
-            // when "hide duplicates" was on: two different regional channels, collapsed
-            // because the only thing distinguishing them had already been removed.
-            //
-            // The country survived that strip -- `channels.country` is written by the
-            // same split -- so it is what tells the two cases apart. Two feeds of one
-            // brand from one country still collapse, which is the case this feature is
-            // for. `IS` rather than `=` so that two untagged channels compare equal
-            // instead of both being kept (R-08).
-            let region = if matches!(kind, Kind::Live) {
-                format!(" AND dup.country IS {t}.country")
-            } else {
-                String::new()
-            };
             out.push_str(&format!(
                 " AND NOT EXISTS (SELECT 1 FROM {t} dup
-                     WHERE dup.match_key = {t}.match_key{year}{lang}{region}
-                       AND dup.hidden = 0
+                     WHERE {}
                        AND (dup.quality_rank > {t}.quality_rank
-                            OR (dup.quality_rank = {t}.quality_rank AND dup.id < {t}.id)))"
+                            OR (dup.quality_rank = {t}.quality_rank AND dup.id < {t}.id)))",
+                self.same_title_sql(kind, "dup", t),
             ));
         }
         out
+    }
+
+    /// What makes two rows of `kind` the same thing, between two aliases of its table.
+    ///
+    /// One definition, used by everything that cares about a duplicate group: the
+    /// subquery in `where_sql` that picks the survivor, and `group_of`, which says what
+    /// that survivor is standing for. Written once because the two have to agree exactly
+    /// — a group the collapser and the merger disagree about either shows a row twice or
+    /// loses what the hidden row was carrying.
+    fn same_title_sql(&self, kind: Kind, a: &str, b: &str) -> String {
+        let mut out = format!("{a}.match_key = {b}.match_key AND {a}.hidden = 0");
+        // Movies and series are the same title only if they are also the same year.
+        if kind.has_year() {
+            out.push_str(&format!(" AND COALESCE({a}.year,0) = COALESCE({b}.year,0)"));
+        }
+        // A channel's country, because the prefix that carried it is not in the key.
+        //
+        // `match_key` is built from the name after `split_country_prefix` has taken the
+        // prefix off -- which is what makes `UK | BBC One` and `BBC One` one channel, and
+        // is wanted. The consequence not written down anywhere is that `US *  TNT` and
+        // `CA *  TNT` both key to `tnt`, so one of them disappeared when "hide
+        // duplicates" was on: two different regional channels, collapsed because the only
+        // thing distinguishing them had already been removed.
+        //
+        // The country survived that strip -- `channels.country` is written by the same
+        // split -- so it is what tells the two cases apart. Two feeds of one brand from
+        // one country still collapse, which is the case this feature is for. `IS` rather
+        // than `=` so that two untagged channels compare equal instead of both being kept
+        // (R-08).
+        if matches!(kind, Kind::Live) {
+            out.push_str(&format!(" AND {a}.country IS {b}.country"));
+        }
+        // The same language rule as the outer query: a Spanish copy must not suppress the
+        // English one when English-only is on.
+        if self.english_only {
+            out.push_str(&self.language_clause(a));
+        }
+        out
+    }
+
+    /// The `seasons` column for a series query: every season any copy of the show has.
+    ///
+    /// The SQL half of `group_of`, for the one place that cannot call it — a column in a
+    /// list query, evaluated per row. Same predicate, so the number on the card and the
+    /// episodes behind it are the same answer.
+    ///
+    /// With collapsing off this is the plain question, because then every copy is its own
+    /// card and each should count only what it holds.
+    pub fn merged_seasons_sql(&self) -> String {
+        if !self.hide_duplicates {
+            return "(SELECT group_concat(DISTINCT e.season)
+                       FROM episodes e WHERE e.series_id = series.id)"
+                .to_string();
+        }
+        format!(
+            "(SELECT group_concat(DISTINCT e.season)
+                FROM episodes e JOIN series sib ON sib.id = e.series_id
+               WHERE {})",
+            self.same_title_sql(Kind::Series, "sib", "series"),
+        )
+    }
+
+    /// Every row the one visible row stands for, best copy first.
+    ///
+    /// `where_sql` answers "does a better copy of this exist" and so keeps exactly one
+    /// row per group. This answers the other half of the same question — *which* rows
+    /// that one is standing for — so a caller can merge what they hold instead of only
+    /// showing the winner. The first id returned is the row `where_sql` keeps, because
+    /// the ordering here is that predicate read forwards: better quality first, and the
+    /// lower id among equals.
+    ///
+    /// Collapsing turned off means a group of one. Nothing is hidden then, so nothing is
+    /// being stood for, and merging rows the viewer can already see separately would show
+    /// each of them the others' contents.
+    ///
+    /// Not [`alternates`], which asks a neighbouring question for the source picker: it
+    /// lists every copy of a title whatever its language or country and whatever the
+    /// filters say, because a viewer who opened the picker wants the whole choice. This
+    /// one is bounded by the filter in force, because it decides what a *collapsed* row
+    /// stands for, and a row the viewer cannot see must not contribute to one they can.
+    ///
+    /// This exists because hiding was losing content rather than just losing a choice.
+    /// A panel's 4K copy of a show and its ordinary copy are one title with one year, so
+    /// the 4K row wins and the other disappears — but the two listings are fetched from
+    /// the provider separately and need not agree. Measured against the subscription in
+    /// docs/ROADMAP.md: 859 of 7,435 series groups have more than one copy, and in a
+    /// sample of fourteen, one (`Landman`) had a second season that existed *only* in the
+    /// copy being hidden. The season was unreachable in the app and present on the panel.
+    pub fn group_of(&self, conn: &Connection, kind: Kind, id: i64) -> Result<Vec<i64>> {
+        if !self.hide_duplicates {
+            return Ok(vec![id]);
+        }
+        let t = kind.table();
+        let sql = format!(
+            "SELECT g.id FROM {t} g JOIN {t} me ON me.id = ?1
+              WHERE {}
+              ORDER BY g.quality_rank DESC, g.id",
+            self.same_title_sql(kind, "g", "me"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let ids = stmt
+            .query_map(params![id], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<i64>, _>>()?;
+        // A row the filter itself excludes -- a Spanish copy under English-only -- is not
+        // in its own result: the language rule is applied to the candidates, so the only
+        // rows that come back are ones the viewer could have been shown, and the asked-for
+        // row is not one of them. It is still the row the caller asked about, reached by a
+        // search or a deep link, and it is standing for nothing. Answering with the group
+        // it is *not* part of would show it somebody else's episodes; answering with
+        // nothing would show it none of its own.
+        Ok(if ids.contains(&id) { ids } else { vec![id] })
     }
 
     /// The language condition for one table alias, in whichever reading is in force.
@@ -774,6 +853,130 @@ mod tests {
 
         let series = names(&conn, Kind::Series, &ENGLISH);
         assert_eq!(series, vec!["Breaking Bad".to_string()]);
+    }
+
+    /// The group is the collapser's own answer, read forwards.
+    ///
+    /// This is the property the merge depends on: whatever `where_sql` leaves standing
+    /// has to be the first id `group_of` returns. If the two ever disagree the viewer
+    /// sees one copy's title with another copy's episodes.
+    #[test]
+    fn the_surviving_row_is_the_first_of_its_group() {
+        let conn = seeded();
+        for kind in [Kind::Live, Kind::Movies, Kind::Series] {
+            for id in ids(&conn, kind, &DUPES) {
+                let group = DUPES.group_of(&conn, kind, id).unwrap();
+                assert_eq!(
+                    group.first(),
+                    Some(&id),
+                    "{kind:?} {id} survives the filter but is not its own group's best copy:                      {group:?}"
+                );
+            }
+        }
+    }
+
+    /// And every hidden row names the survivor as its own best copy, so a merge started
+    /// from either row reaches the same group.
+    #[test]
+    fn a_hidden_row_belongs_to_the_group_of_the_row_that_replaced_it() {
+        let conn = seeded();
+        let visible = ids(&conn, Kind::Live, &DUPES);
+        let all = ids(&conn, Kind::Live, &LibraryFilter::default());
+        let hidden: Vec<i64> = all
+            .iter()
+            .copied()
+            .filter(|i| !visible.contains(i))
+            .collect();
+        assert!(
+            !hidden.is_empty(),
+            "the fixture has no collapsed duplicates"
+        );
+        for id in hidden {
+            let group = DUPES.group_of(&conn, Kind::Live, id).unwrap();
+            assert!(
+                group.contains(&id),
+                "{id} is missing from its own group: {group:?}"
+            );
+            assert!(
+                visible.contains(&group[0]),
+                "hidden channel {id} points at {} , which is not what the grid shows: {group:?}",
+                group[0]
+            );
+        }
+    }
+
+    /// With collapsing off, a group is one row — because nothing is standing for anything.
+    #[test]
+    fn nothing_is_merged_when_nothing_is_hidden() {
+        let conn = seeded();
+        for id in ids(&conn, Kind::Series, &LibraryFilter::default()) {
+            assert_eq!(
+                LibraryFilter::default()
+                    .group_of(&conn, Kind::Series, id)
+                    .unwrap(),
+                vec![id],
+            );
+        }
+    }
+
+    /// The case this was built for, in the shape the panel actually has it.
+    ///
+    /// `EN ★ Landman [4K]` and `EN ★ Landman` are one title with one year, so the 4K row
+    /// wins and the other is hidden — and the hidden one was the only copy carrying
+    /// season 2. The group has to name both rows, best first, so the caller can union
+    /// their episodes.
+    #[test]
+    fn a_shows_duplicate_copies_are_both_in_its_group() {
+        let mut conn = seeded();
+        conn.execute(
+            "INSERT INTO series (id, provider_id, provider_key, title, match_key, year,
+                                 quality, last_seen_at)
+             VALUES (90,'1','s90','Landman','landman',2024,NULL,0),
+                    (91,'1','s91','Landman [4K]','landman',2024,'4K',0)",
+            [],
+        )
+        .unwrap();
+        reclassify(&mut conn).unwrap();
+
+        // The grid shows one of them, and it is the 4K copy.
+        let shown = ids(&conn, Kind::Series, &DUPES);
+        assert!(
+            shown.contains(&91),
+            "the 4K copy should be the one shown: {shown:?}"
+        );
+        assert!(
+            !shown.contains(&90),
+            "both copies are in the grid: {shown:?}"
+        );
+
+        // And the copy it hid is reachable from it, which is what makes the merge
+        // possible: season 2 lives only in row 90.
+        assert_eq!(
+            DUPES.group_of(&conn, Kind::Series, 91).unwrap(),
+            vec![91, 90]
+        );
+    }
+
+    /// A copy the filter excludes still answers for itself.
+    ///
+    /// Asked about a Spanish row under English-only, the group cannot be empty: the
+    /// caller is about to list that row's episodes, and an empty group would turn
+    /// "merge the siblings in" into "show nothing".
+    #[test]
+    fn a_row_the_filter_excludes_is_still_its_own_group() {
+        let conn = seeded();
+        let spanish: i64 = conn
+            .query_row(
+                "SELECT id FROM series WHERE title = '[SPANISH] Breaking Bad'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let group = BOTH.group_of(&conn, Kind::Series, spanish).unwrap();
+        assert!(
+            group.contains(&spanish),
+            "an excluded row answered with somebody else's group: {group:?}"
+        );
     }
 
     #[test]
