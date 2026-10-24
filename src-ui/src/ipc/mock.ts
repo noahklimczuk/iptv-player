@@ -302,6 +302,7 @@ let player: PlayerState = {
   stats: {
     resolution: '1920x1080', videoCodec: 'h264', audioCodec: 'eac3', fps: 50,
     bitrateKbps: 6200, droppedFrames: 0, bufferSecs: 8.4, hwDecoder: 'd3d11va',
+    cacheBytes: 420 * 1024 * 1024, cacheFileBytes: 380 * 1024 * 1024,
   },
 };
 

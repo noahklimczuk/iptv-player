@@ -385,6 +385,13 @@ export interface PlaybackStats {
   droppedFrames: number;
   bufferSecs: number;
   hwDecoder: string | null;
+  /** Everything mpv's demuxer cache holds: the rewind history and the forward buffer. */
+  cacheBytes: number;
+  /**
+   * How much of `cacheBytes` is in mpv's cache file, or `null` when there is no cache
+   * file — which is the difference between a rewind buffer on disk and one in RAM.
+   */
+  cacheFileBytes: number | null;
 }
 
 export interface GuideSlice {
