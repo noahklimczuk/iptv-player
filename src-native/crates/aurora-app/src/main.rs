@@ -602,6 +602,7 @@ fn main() {
             library::likes_toggle,
             library::lists_marks,
             library::favorites_toggle,
+            library::favorites_reorder,
             library::progress_get,
             library::progress_forget,
             library::progress_for_series,

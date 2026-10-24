@@ -1519,6 +1519,14 @@ export interface Commands {
    */
   'lists.marks': (args: { profileId: number }) => { myList: string[]; liked: string[] };
   'favorites.toggle': (args: { profileId: number; channelId: number }) => boolean;
+  /**
+   * Put the favourites in a new order (README §4, "drag to reorder").
+   *
+   * Takes the whole list rather than one move, because a positional patch has to agree
+   * with the host about what the order was, and two of them racing leaves a sequence
+   * nobody asked for. Returns how many rows were renumbered.
+   */
+  'favorites.reorder': (args: { profileId: number; channelIds: number[] }) => number;
 
   'profiles.list': () => Profile[];
   'profiles.create': (args: {

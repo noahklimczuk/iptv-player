@@ -124,6 +124,14 @@ const geminiKey = () => {
   if (!mockGeminiEnabled) return '';
   return mockGeminiKey || BUILT_IN_KEY;
 };
+/**
+ * The favourite channels, in the order the viewer put them in.
+ *
+ * A `Set` because membership is the common question, and because JavaScript iterates one
+ * in insertion order — which is exactly the host's `favorites.sort_order` with its
+ * `added_at` tie-break. `favorites.reorder` rebuilds it, so the ordering here is the same
+ * fact as the ordering there rather than a parallel one.
+ */
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
@@ -1799,10 +1807,20 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   // `favorite` is reported the way the host reports it: from the live set, not from
   // the fixture the channel was built with. Reading a stale fixture flag is how the
   // mock and the host drifted apart in the first place.
-  'channels.list': ({ group, favoritesOnly } = {}) =>
-    visibleChannels()
+  'channels.list': ({ group, favoritesOnly } = {}) => {
+    const rows = visibleChannels()
       .filter((c) => (!group || c.group === group) && (!favoritesOnly || favorites.has(c.id)))
-      .map((c) => ({ ...c, favorite: favorites.has(c.id) })),
+      .map((c) => ({ ...c, favorite: favorites.has(c.id) }));
+    // The favourites view is ordered by the *favourites'* order, as `channels::list` is
+    // now: it sorts by `fav.sort_order` there, and that is what "drag to reorder"
+    // writes. Everywhere else the channel number leads, which is what the fixture is
+    // already in.
+    if (favoritesOnly) {
+      const order = [...favorites];
+      rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    }
+    return rows;
+  },
   'channels.groups': () => {
     const counts = new Map<string, number>();
     for (const c of visibleChannels()) {
@@ -2245,8 +2263,19 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'lists.marks': () => ({ myList: [...myList], liked: [...liked] }),
   'favorites.toggle': ({ channelId }) => {
     if (favorites.has(channelId)) { favorites.delete(channelId); return false; }
+    // Added at the end, where the host puts it: `next_sort_order` is `MAX + 1`, so a
+    // newly hearted channel does not jump to the top of a list somebody has arranged.
     favorites.add(channelId);
     return true;
+  },
+  'favorites.reorder': ({ channelIds }) => {
+    // Rebuilt from the list given, keeping anything the caller did not mention — a
+    // favourite added since the screen rendered keeps its place rather than vanishing.
+    const named = channelIds.filter((id) => favorites.has(id));
+    const rest = [...favorites].filter((id) => !named.includes(id));
+    favorites.clear();
+    for (const id of [...named, ...rest]) favorites.add(id);
+    return named.length;
   },
 
   /* ── Profiles (README §11) ────────────────────────────────────────────── */

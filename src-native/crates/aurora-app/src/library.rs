@@ -365,6 +365,33 @@ pub fn favorites_toggle(services: State<'_, Services>, args: FavoriteArgs) -> Re
     )?)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderFavoritesArgs {
+    pub profile_id: i64,
+    /// The whole list, in its new order.
+    pub channel_ids: Vec<i64>,
+}
+
+/// Put the favourites in the order the viewer dragged them into (README §4).
+///
+/// The whole list rather than "move this one to position N": a positional patch has to
+/// agree with the client about what the order *was*, and two of them racing leaves a
+/// sequence neither party asked for. Sending the list the viewer is looking at makes the
+/// operation idempotent and the result exactly what is on screen.
+#[tauri::command(async)]
+pub fn favorites_reorder(
+    services: State<'_, Services>,
+    args: ReorderFavoritesArgs,
+) -> Result<usize> {
+    let mut db = services.db.lock();
+    Ok(lists::reorder_favorites(
+        &mut db,
+        args.profile_id,
+        &args.channel_ids,
+    )?)
+}
+
 /* ── Resume ───────────────────────────────────────────────────────────────── */
 
 #[derive(Debug, Deserialize)]

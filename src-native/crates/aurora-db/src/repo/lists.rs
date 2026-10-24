@@ -109,10 +109,11 @@ pub fn toggle_favorite(
     if removed > 0 {
         return Ok(false);
     }
+    let at_end = next_sort_order(conn, profile_id);
     conn.execute(
         "INSERT INTO favorites (profile_id, list_name, item_kind, item_id, sort_order, added_at)
-         VALUES (?1, ?2, 'channel', ?3, 0, ?4)",
-        params![profile_id, FAVORITES, channel_id, now],
+         VALUES (?1, ?2, 'channel', ?3, ?5, ?4)",
+        params![profile_id, FAVORITES, channel_id, now, at_end],
     )?;
     Ok(true)
 }
@@ -175,6 +176,67 @@ pub fn liked(conn: &Connection, profile_id: i64) -> Result<Vec<(ItemKind, i64)>>
     Ok(out)
 }
 
+/// Put this profile's favourite channels in the order given (README §4, "drag to
+/// reorder").
+///
+/// The read side has always honoured an order -- `favorite_channel_ids` ends
+/// `ORDER BY sort_order, added_at` -- and nothing ever wrote one. Both inserts in this
+/// module put a literal `0` in the column, so every favourite tied on `sort_order` and
+/// the tie-break did all the work: the list was in the order things were hearted, and
+/// could not be in any other.
+///
+/// `ids` is the whole list in its new order. Taking the entire list rather than "move
+/// this one to position N" is what makes the operation idempotent and the result exactly
+/// what the viewer sees: a positional patch has to agree with the client about what the
+/// order *was*, and two of them racing leaves a sequence neither asked for.
+///
+/// Rows not named in `ids` are left alone. A favourite hearted on another device between
+/// the screen rendering and the drag landing is not something this knows about, and
+/// deleting it -- or renumbering it to the front -- would be worse than letting it keep
+/// its place.
+pub fn reorder_favorites(conn: &mut Connection, profile_id: i64, ids: &[i64]) -> Result<usize> {
+    let tx = conn.transaction()?;
+    let mut moved = 0;
+    {
+        let mut stmt = tx.prepare(
+            "UPDATE favorites SET sort_order = ?4
+              WHERE profile_id = ?1 AND list_name = ?2
+                AND item_kind = 'channel' AND item_id = ?3",
+        )?;
+        for (position, id) in ids.iter().enumerate() {
+            // `position + 1`, so no row keeps the 0 every insert writes. Leaving a
+            // reordered row at 0 would tie it with every favourite added afterwards, and
+            // the tie-break is `added_at` -- so a channel dragged to the top would be
+            // overtaken by the next thing hearted.
+            moved += stmt.execute(params![
+                profile_id,
+                FAVORITES,
+                id,
+                i64::try_from(position)
+                    .unwrap_or(i64::MAX)
+                    .saturating_add(1)
+            ])?;
+        }
+    }
+    tx.commit()?;
+    Ok(moved)
+}
+
+/// The next `sort_order` for a new favourite, so it lands at the end rather than tying.
+///
+/// Both inserts used a literal `0`. Once anything has been reordered that is no longer a
+/// neutral value -- it is *first* -- so a newly hearted channel jumped to the top of a
+/// list the viewer had arranged.
+fn next_sort_order(conn: &Connection, profile_id: i64) -> i64 {
+    conn.query_row(
+        "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM favorites
+          WHERE profile_id = ?1 AND list_name = ?2 AND item_kind = 'channel'",
+        params![profile_id, FAVORITES],
+        |r| r.get(0),
+    )
+    .unwrap_or(1)
+}
+
 pub fn favorite_channel_ids(conn: &Connection, profile_id: i64) -> Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT item_id FROM favorites
@@ -188,6 +250,119 @@ pub fn favorite_channel_ids(conn: &Connection, profile_id: i64) -> Result<Vec<i6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The order the viewer drags things into is the order that comes back.
+    ///
+    /// Nothing ever wrote `sort_order` -- both inserts put a literal `0` -- so every
+    /// favourite tied and `added_at` decided the list. It could only ever be in the
+    /// order things were hearted.
+    #[test]
+    fn favourites_come_back_in_the_order_they_were_put_in() {
+        let mut conn = crate::open_memory().unwrap();
+        seed_channels(&conn, &[10, 20, 30]);
+        for (i, id) in [10, 20, 30].iter().enumerate() {
+            toggle_favorite(&conn, 1, *id, 100 + i as i64).unwrap();
+        }
+        assert_eq!(favorite_channel_ids(&conn, 1).unwrap(), vec![10, 20, 30]);
+
+        // Dragged into reverse.
+        assert_eq!(reorder_favorites(&mut conn, 1, &[30, 20, 10]).unwrap(), 3);
+        assert_eq!(favorite_channel_ids(&conn, 1).unwrap(), vec![30, 20, 10]);
+    }
+
+    /// A newly hearted channel joins the end, not the top.
+    ///
+    /// Both inserts wrote `0`, which is a neutral value only while nothing has been
+    /// reordered. Once something has, 0 is *first* -- so hearting a channel sent it to
+    /// the top of a list somebody had arranged.
+    #[test]
+    fn a_new_favourite_lands_at_the_end_of_an_arranged_list() {
+        let mut conn = crate::open_memory().unwrap();
+        seed_channels(&conn, &[10, 20, 30]);
+        toggle_favorite(&conn, 1, 10, 100).unwrap();
+        toggle_favorite(&conn, 1, 20, 101).unwrap();
+        reorder_favorites(&mut conn, 1, &[20, 10]).unwrap();
+
+        toggle_favorite(&conn, 1, 30, 102).unwrap();
+        assert_eq!(
+            favorite_channel_ids(&conn, 1).unwrap(),
+            vec![20, 10, 30],
+            "a newly hearted channel jumped the order the viewer chose"
+        );
+    }
+
+    /// Reordering is per profile, like the favourites themselves.
+    #[test]
+    fn one_profile_cannot_reorder_anothers_favourites() {
+        let mut conn = crate::open_memory().unwrap();
+        seed_channels(&conn, &[10, 20]);
+        // `favorites.profile_id` references `profiles`, and only the default one exists
+        // in a fresh database.
+        conn.execute(
+            "INSERT INTO profiles (id,name,created_at) VALUES (2,'Second',0)",
+            [],
+        )
+        .unwrap();
+        for p in [1, 2] {
+            toggle_favorite(&conn, p, 10, 100).unwrap();
+            toggle_favorite(&conn, p, 20, 101).unwrap();
+        }
+        reorder_favorites(&mut conn, 1, &[20, 10]).unwrap();
+        assert_eq!(favorite_channel_ids(&conn, 1).unwrap(), vec![20, 10]);
+        assert_eq!(
+            favorite_channel_ids(&conn, 2).unwrap(),
+            vec![10, 20],
+            "the other profile's order moved"
+        );
+    }
+
+    /// A favourite the caller did not name keeps its place rather than vanishing.
+    #[test]
+    fn a_favourite_missing_from_the_list_is_left_alone() {
+        let mut conn = crate::open_memory().unwrap();
+        seed_channels(&conn, &[10, 20, 30]);
+        for (i, id) in [10, 20, 30].iter().enumerate() {
+            toggle_favorite(&conn, 1, *id, 100 + i as i64).unwrap();
+        }
+        // Only two named, as a screen that rendered before the third was hearted would.
+        assert_eq!(reorder_favorites(&mut conn, 1, &[20, 10]).unwrap(), 2);
+        let after = favorite_channel_ids(&conn, 1).unwrap();
+        assert!(
+            after.contains(&30),
+            "the unnamed favourite was lost: {after:?}"
+        );
+        assert_eq!(after.len(), 3);
+    }
+
+    /// Channels the reorder names but which are not favourites change nothing.
+    #[test]
+    fn reordering_cannot_invent_a_favourite() {
+        let mut conn = crate::open_memory().unwrap();
+        seed_channels(&conn, &[10, 20]);
+        toggle_favorite(&conn, 1, 10, 100).unwrap();
+        assert_eq!(reorder_favorites(&mut conn, 1, &[20, 10]).unwrap(), 1);
+        assert_eq!(favorite_channel_ids(&conn, 1).unwrap(), vec![10]);
+    }
+
+    /// Channels for the tests above, since `favorites` references nothing itself but the
+    /// profile and the list reads join against `channels` in the real query.
+    fn seed_channels(conn: &Connection, ids: &[i64]) {
+        conn.execute(
+            "INSERT OR IGNORE INTO providers (id,name,kind,base_url,created_at)
+             VALUES (1,'P','m3u','https://example.com',0)",
+            [],
+        )
+        .unwrap();
+        for id in ids {
+            conn.execute(
+                "INSERT OR IGNORE INTO channels
+                   (id, provider_id, provider_key, name, match_key, last_seen_at)
+                 VALUES (?1, 1, ?2, ?3, ?3, 0)",
+                params![id, format!("k{id}"), format!("ch{id}")],
+            )
+            .unwrap();
+        }
+    }
     use crate::repo::profiles;
 
     /// The flag the recommender reads for a film had no writer at all: `toggle_favorite`
