@@ -35,6 +35,26 @@ on:
     branches: [main]
   pull_request:
 
+# The token's scope, stated rather than inherited.
+#
+# Without this block a job gets the repository default, which here is read-only, and
+# `rustsec/audit-check` needs `checks: write` to publish its findings as a check run.
+# With no vulnerabilities and seven informational warnings to report, it tried, was
+# refused, and emitted `::error Resource not accessible by integration` — so the step
+# failed with a name that pointed straight at the advisories and a cause that had nothing
+# to do with them. `main` went red on a clean audit.
+#
+# Found because batch-31 took the `pull_request` gate off this job so it runs on merges
+# too. That is the gate working: this difference between the push and pull-request
+# contexts had no way to show itself before.
+#
+# `contents: read` is written out because naming one permission drops every default, and
+# the checkout needs it. The installer job keeps its own block, which replaces this one
+# wholesale rather than adding to it.
+permissions:
+  contents: read
+  checks: write
+
 env:
   CARGO_TERM_COLOR: always
 
