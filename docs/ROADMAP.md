@@ -5,7 +5,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 — Spike | libmpv behind transparent WebView2 | **Run on Windows 11, and it works.** WebView2 153 and libmpv v0.41: 1920x1080 H.264 at 60fps on `d3d11va-copy`, composited behind the UI, input still reaching the UI over it, and the surface following a resize and a move to a display of another scale factor. `AUDIT/test-report.md` §11 has the numbers and `tests-host/scenarios/video_surface.py` keeps them honest. One miss: a channel change took 1.91s against the 1.5s budget. |
+| 0 — Spike | libmpv behind transparent WebView2 | **Run on Windows 11, and it works.** WebView2 153 and libmpv v0.41: 1920x1080 H.264 at 60fps on `d3d11va-copy`, composited behind the UI, input still reaching the UI over it, and the surface following a resize and a move to a display of another scale factor. `AUDIT/test-report.md` §11 has the numbers and `tests-host/scenarios/video_surface.py` keeps them honest. One apparent miss: a channel change took 1.91s against the 1.5s budget — measured against a public CDN, and re-measured against a real panel on 2026-10-24 at a median of 1.24s, which is inside it. `tests-host/scenarios/zap_budget.py` has the breakdown. |
 | 1 — Foundation | Workspace, typed IPC, SQLite + migrations, tokens, app shell, CI | **Done** |
 | 2 — Ingestion | M3U + Xtream + XMLTV fetching and parsing, classification, series grouping, rules | **Done.** aurora-ingest fetches, parses, reconciles and indexes; credentials go to the OS store. Stalker portals (§4.3, Optional) are not built. Episode listings are: a request each, 28,693 of them on the panel this was measured against, so they are fetched when a show is opened and swept in bounded batches in the background (`aurora-app/src/series.rs`). |
 | 3 — Player | Playback service, OSD, shortcuts | **Trait, NullBackend, mpv backend, OSD and hotkeys done.** Tuning now tries a channel's sources in order and rolls over when one dies, and a host-side heartbeat emits the `player.state` event the UI has always listened for and nothing ever sent. **Real decoding is verified** (Phase 0, above). Running it also closed the two failures no suite could reach: a dead stream left the player `Loading` for ever because the event pump stopped at the first `Err` (F-30), and a missing libmpv killed the process in the loader with no window and no log, which the `NullBackend` fallback could not possibly report (F-34). |
@@ -17,7 +17,7 @@ Phases mirror `README.md` §21. Status is honest about what is *verified* versus
 | 9 — Personalization | Profiles, parental controls, search, palette | **Done.** Profiles with PINs and a picker, certification ceilings, kids profiles, adult categories hidden by default, attempt throttling. Per-channel/category locks are stored but have no UI yet. |
 | 13 — First run | Wizard: add provider, validate, import | **Done** (README §13). |
 | 10 — QoL | §13 list, TV mode, multi-view, PiP, remote | **Partial:** themes, TV density, reduce-motion, keyboard map, command palette, and **multi-view** — 2×2, 3×3, 1+3 and 1+5, one mpv instance per tile, audio focus on `1`–`9`, saved layouts, and a connection-limit check that counts recordings in flight and refuses before opening rather than after. **PiP is built too**: `aurora-app/src/pip.rs`, six registered commands (`pip_state`, `pip_toggle`, `pip_set_enabled`, `pip_set_corner`, `preview_place`, `preview_clear`), `PipTile.tsx` for the frame, the shell clipped around it by `holeClipPath`, and `P` bound in `useHotkeys` — this entry said it was not, which undersold the one phase it is most specific about (R-144). Sleep timer, tray and backup/restore are not built. |
-| 11 — Hardening | Perf budgets, soak, diagnostics | **Partial.** A 1.0 audit pass fixed 23 findings, two of them Critical (every command on the main thread; a playlist panicking the process) — see `AUDIT/findings.md`. Soak numbers are measured: 2,000 zaps always end on the right channel, 2,400 concurrent tunes across 8 threads never wedge, 20,000 tunes grow RSS by 0 kB. Diagnostics, log rotation and log export exist, and Settings → Diagnostics now names the video engine, because a black rectangle has two completely different causes. Of the §16 budgets that need a window, **zap time has a number and it is over**: 1.91s, 1.96s and 2.13s against 1.5s, on one machine against a public CDN rather than a provider. Startup is still unmeasured. |
+| 11 — Hardening | Perf budgets, soak, diagnostics | **Partial.** A 1.0 audit pass fixed 23 findings, two of them Critical (every command on the main thread; a playlist panicking the process) — see `AUDIT/findings.md`. Soak numbers are measured: 2,000 zaps always end on the right channel, 2,400 concurrent tunes across 8 threads never wedge, 20,000 tunes grow RSS by 0 kB. Diagnostics, log rotation and log export exist, and Settings → Diagnostics now names the video engine, because a black rectangle has two completely different causes. Of the §16 budgets that need a window, **zap time is now measured against a real provider and is inside its budget**: a median of 1.24s over nine zaps (min 1.07, max 1.65, two of nine over), against 1.5s. The earlier 1.91s, 1.96s and 2.13s were a public CDN, and this entry's own caveat — "the number may be the CDN" — turned out to be the whole of it. The breakdown is what settles the question of what to optimise: of that 1.24s, **0.02s is this app** (resolving the url, taking the player mutex, telling mpv to load) and 0.00s is waiting for data after mpv reports playing. The rest is the provider's handshake. §16's suggested fix, pre-buffering the next channel in the zap order, needs a second concurrent stream and cannot run on a `max_connections = 1` line at all — the mosaic and the DVR already refuse to exceed that same count. So there is no optimisation here with headroom to aim at. Startup is still unmeasured. |
 | 12 — Release | Installers, signing, auto-update | **Partial.** A merge builds and publishes an NSIS installer *and* the portable zip, both carrying the GPL/LGPL texts and `THIRD-PARTY-NOTICES.md`, which Settings → About reads from beside the executable. **Both kinds of copy swap their own files** — the installed one used to run the installer, which for a standard user meant UAC asking for administrator credentials they do not have, so an installed copy simply could not update itself (D25, checklist 1c). Both paths have now run on Windows: a portable 0.11.0 renamed its own running exe and came back as 0.11.1, and an MSI per-user upgrade kept a real library of 22,121 channels, 117,510 films and 453,072 programmes intact. The per-machine NSIS install, its Start-menu entry and the uninstall sweep need an administrator account, not another machine. Nothing is code-signed — accepted rather than fixed, since the publisher and the user are the same person (checklist 2). |
 
 ## What is actually verified
@@ -199,8 +199,9 @@ decodes with `d3d11va-copy` and composites behind the UI, the UI still takes inp
 it, and the surface follows a resize. The numbers are in `AUDIT/test-report.md` §11 and
 `tests-host/scenarios/video_surface.py` keeps them honest.
 
-One measurement missed its budget: a channel change took 1.91s against the 1.5s in
-README §16. And the run found that mpv has no `cache-dir` option, so the timeshift buffer
+One measurement appeared to miss its budget: a channel change took 1.91s against the
+1.5s in README §16 — on a public CDN. Against the panel it is a median of 1.24s and
+inside the budget (2026-10-24, `tests-host/scenarios/zap_budget.py`). And the run found that mpv has no `cache-dir` option, so the timeshift buffer
 had been landing in mpv's own directory rather than the viewer's — fixed, and §12 of the
 report explains it.
 
@@ -246,7 +247,9 @@ The four questions this section asked, answered on the machine (`AUDIT/test-repo
 3. **Resizing does not tear the two apart.** After a resize, client `1220x740` and
    surface `1220x740`; moved to a second display of a different scale factor the surface
    follows exactly. Snapping and alt-tab were not separately exercised.
-4. **Zap time is 1.91s, against the 1.5s budget** — the one answer that missed.
+4. **Zap time was 1.91s against the 1.5s budget** — the one answer that appeared to
+   miss, and the CDN's rather than the app's: a median of 1.24s against a real panel,
+   of which 0.02s happens inside this app.
 
 So the fallback is not needed: a native XAML/WinUI shell for the player surface, with
 the web layer confined to non-playback screens, was what (1) or (3) failing would have
@@ -323,9 +326,14 @@ supply, and `AUDIT/release-checklist.md` is the authority on it:
 - **That a recording is a file, not just a state** (item 3). Needs a run of
   `python tests-host/run.py real_panel` with panel credentials, on a checkout that is not
   under OneDrive — its cloud placeholders deny the per-scenario wipe.
-- **The zap budget.** 1.91s against 1.5s, measured against a public CDN rather than a
-  provider. Worth re-measuring against a real panel before optimising anything, since the
-  number may be the CDN.
+- **The zap budget — answered, 2026-10-24.** Re-measured against the panel, as this
+  entry asked: median 1.24s over nine zaps against the 1.5s budget, with 0.02s of it
+  inside this app and none of it waiting for data after mpv says it is playing. The
+  number was the CDN. Nothing was optimised because the measurement left nothing to
+  optimise, and pre-buffering — §16's suggestion — requires a second connection that a
+  one-connection line forbids. `tests-host/scenarios/zap_budget.py` is the standing
+  measurement; two of nine zaps did exceed the budget, so this is met at the median and
+  not comfortably.
 - **Install and uninstall** (item 5). Needs an administrator account: Tauri's NSIS build
   requests elevation before it parses `/CURRENTUSER`. The upgrade half is done.
 - **Code signing** (item 2) — accepted, not fixed, while the publisher and the user are
