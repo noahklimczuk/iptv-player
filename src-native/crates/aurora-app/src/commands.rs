@@ -469,38 +469,89 @@ pub struct EpisodesArgs {
     pub season: Option<u16>,
 }
 
+/// A show's episodes — every copy of that show's, merged.
+///
+/// "Hide duplicates" keeps the best copy of a title and hides the rest, and for a film
+/// that costs nothing but a choice of quality. For a show it was costing *content*: the
+/// copies are separate listings on the panel and need not carry the same seasons, so a
+/// season present only in the hidden copy could not be reached at all. Merging here
+/// rather than in the collapser keeps one row in the grid, which is what the viewer asked
+/// for, while the show itself holds everything any copy of it has.
+///
+/// Where the merge goes is decided by what the screen reads: `DetailModal`'s season tabs
+/// come from the episodes this returns, not from `SeriesRow.seasons`, so a season added
+/// here becomes reachable rather than merely counted.
 #[tauri::command(async)]
 pub fn library_episodes(
     services: State<'_, Services>,
     args: EpisodesArgs,
 ) -> Result<Vec<library::EpisodeRow>> {
-    {
+    // Which rows this show is standing for, and which of them have nothing stored yet.
+    // Both asked under one lock, and the lock dropped before the network below.
+    let (group, missing) = {
         let db = services.db.lock();
-        // Whether to go and ask the panel is a question about the *show*, not about
-        // the season being displayed. Asking per season looks the same for a show with
-        // nothing stored and a show whose season 2 is simply empty — and for a show
-        // whose episodes are all in season 2, the fetch would land them and this would
-        // then filter them all away, every time, for good.
-        if !library::episodes_for(&db, args.series_id, None)?.is_empty() {
-            return Ok(library::episodes_for(&db, args.series_id, args.season)?);
+        let filter = filtering::LibraryFilter::load(&db)?;
+        let group = filter.group_of(&db, filtering::Kind::Series, args.series_id)?;
+        let mut missing = Vec::new();
+        for id in &group {
+            // Whether to go and ask the panel is a question about the *show*, not about
+            // the season being displayed. Asking per season looks the same for a show
+            // with nothing stored and a show whose season 2 is simply empty — and for a
+            // show whose episodes are all in season 2, the fetch would land them and this
+            // would then filter them all away, every time, for good.
+            if library::episodes_for(&db, *id, None)?.is_empty() {
+                missing.push(*id);
+            }
+        }
+        (group, missing)
+    };
+
+    // An import writes the series row but not its episodes — one request per show would
+    // mean 28,693 of them before the library was usable — so the listing is fetched the
+    // first time somebody opens the show. That is what the refresh's own warning has
+    // always claimed happens; until now nothing did it, and every series on every panel
+    // showed "0 seasons" forever.
+    //
+    // The lock is released above, deliberately: this goes to the network, and holding it
+    // across a request is what used to freeze the DVR scheduler during a refresh.
+    for id in &missing {
+        if let Err(e) = crate::series::fetch_episodes(&services, *id) {
+            // Fatal only for the show that was actually asked for. A sibling copy that
+            // will not list is a reason to show less, not a reason to show nothing:
+            // before this merge existed the viewer got the asked-for copy's episodes and
+            // that must remain the floor.
+            if *id == args.series_id {
+                tracing::warn!(series = id, "could not fetch episodes: {e}");
+                return Err(e);
+            }
+            tracing::warn!(
+                series = id,
+                "a duplicate copy of this show would not list its episodes ({e});                  merging what the others have"
+            );
         }
     }
 
-    // Nothing stored. An import writes the series row but not its episodes — one
-    // request per show would mean 28,693 of them before the library was usable — so
-    // the listing is fetched the first time somebody opens the show. That is what the
-    // refresh's own warning has always claimed happens; until now nothing did it, and
-    // every series on every panel showed "0 seasons" forever.
-    //
-    // The lock is released above, deliberately: this goes to the network, and holding
-    // it across a request is what used to freeze the DVR scheduler during a refresh.
-    if let Err(e) = crate::series::fetch_episodes(&services, args.series_id) {
-        tracing::warn!(series = args.series_id, "could not fetch episodes: {e}");
-        return Err(e);
-    }
-
     let db = services.db.lock();
-    Ok(library::episodes_for(&db, args.series_id, args.season)?)
+    if group.len() == 1 {
+        return Ok(library::episodes_for(&db, args.series_id, args.season)?);
+    }
+    let mut merged: Vec<library::EpisodeRow> = Vec::new();
+    for id in &group {
+        for episode in library::episodes_for(&db, *id, args.season)? {
+            // Keyed on which episode it is, not on its id: every copy has its own row
+            // for season 1 episode 1, and the group is in best-copy-first order, so the
+            // first one seen is the one the viewer should get. Without this, a show with
+            // two complete copies would list all 62 of its episodes twice.
+            if !merged
+                .iter()
+                .any(|kept| kept.season == episode.season && kept.episode == episode.episode)
+            {
+                merged.push(episode);
+            }
+        }
+    }
+    merged.sort_by_key(|e| (e.season, e.episode));
+    Ok(merged)
 }
 
 #[derive(Debug, Deserialize)]
