@@ -447,6 +447,18 @@ mod tests {
         )
         .unwrap();
         crate::repo::filtering::reclassify(&mut conn).unwrap();
+
+        // The baseline is stated rather than inherited. Collapsing duplicates is on by
+        // default now, so "nothing is filtered" has to be asked for -- and a test whose
+        // first assertion depends on a default is a test that changes meaning when the
+        // default does.
+        crate::repo::filtering::LibraryFilter {
+            english_only: false,
+            hide_duplicates: false,
+            hide_untagged: false,
+        }
+        .save(&conn)
+        .unwrap();
         assert_eq!(grouped(&conn, "matrix", NOW, 10).unwrap().movies.len(), 3);
 
         // Search is a way into the library, not a way around the filters.

@@ -135,6 +135,30 @@ const geminiKey = () => {
 const favorites = new Set<number>(
   fx.channels.filter((c) => c.favorite).map((c) => c.id),
 );
+
+/** The default list's name, as `aurora_db::repo::lists::FAVORITES` has it. */
+const DEFAULT_LIST = 'Favorites';
+
+/**
+ * The other named lists, each in the order the viewer put it in (README §4).
+ *
+ * The default list stays in `favorites` above rather than moving in here, because every
+ * existing journey and the heart itself read that set directly. A list exists because
+ * something is in it, which is how the host derives them too -- no empty-list state on
+ * either side.
+ */
+const namedFavorites = new Map<string, Set<number>>();
+
+function listSet(list?: string): Set<number> {
+  const name = (list ?? '').trim();
+  if (!name || name === DEFAULT_LIST) return favorites;
+  let set = namedFavorites.get(name);
+  if (!set) {
+    set = new Set<number>();
+    namedFavorites.set(name, set);
+  }
+  return set;
+}
 const progress = new Map<string, Progress>();
 
 for (const p of fx.seedProgress) {
@@ -468,7 +492,9 @@ export function onIngestProgress(fn: (p: IngestProgress) => void) {
 
 let filters: LibraryFilters = {
   englishOnly: false,
-  hideDuplicates: false,
+  // On, as `filtering::DEFAULT_HIDE_DUPLICATES` has it: a provider that lists a film at
+  // 4K and again at HD is listing one film, and the grid says so without being asked.
+  hideDuplicates: true,
   hideUntagged: false,
 };
 
@@ -1814,16 +1840,19 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   // `favorite` is reported the way the host reports it: from the live set, not from
   // the fixture the channel was built with. Reading a stale fixture flag is how the
   // mock and the host drifted apart in the first place.
-  'channels.list': ({ group, favoritesOnly } = {}) => {
+  'channels.list': ({ group, favoritesOnly, favoritesList } = {}) => {
+    const set = listSet(favoritesList);
     const rows = visibleChannels()
-      .filter((c) => (!group || c.group === group) && (!favoritesOnly || favorites.has(c.id)))
-      .map((c) => ({ ...c, favorite: favorites.has(c.id) }));
+      .filter((c) => (!group || c.group === group) && (!favoritesOnly || set.has(c.id)))
+      // The heart answers for the list being shown, as the host's `favorite` column
+      // does: a filled heart while a list is open means "in *this* list".
+      .map((c) => ({ ...c, favorite: set.has(c.id) }));
     // The favourites view is ordered by the *favourites'* order, as `channels::list` is
     // now: it sorts by `fav.sort_order` there, and that is what "drag to reorder"
     // writes. Everywhere else the channel number leads, which is what the fixture is
     // already in.
     if (favoritesOnly) {
-      const order = [...favorites];
+      const order = [...set];
       rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
     }
     return rows;
@@ -2272,20 +2301,54 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return true;
   },
   'lists.marks': () => ({ myList: [...myList], liked: [...liked] }),
-  'favorites.toggle': ({ channelId }) => {
-    if (favorites.has(channelId)) { favorites.delete(channelId); return false; }
+  'favorites.toggle': ({ channelId, list }) => {
+    const set = listSet(list);
+    if (set.has(channelId)) {
+      set.delete(channelId);
+      // A list is its rows, so an emptied one stops existing -- as it does on the host,
+      // which derives the lists from the rows.
+      if (set !== favorites && set.size === 0) namedFavorites.delete((list ?? '').trim());
+      return false;
+    }
     // Added at the end, where the host puts it: `next_sort_order` is `MAX + 1`, so a
     // newly hearted channel does not jump to the top of a list somebody has arranged.
-    favorites.add(channelId);
+    set.add(channelId);
     return true;
   },
-  'favorites.reorder': ({ channelIds }) => {
+  'favorites.lists': () => {
+    const out = [{ name: DEFAULT_LIST, channels: favorites.size }];
+    for (const [name, set] of namedFavorites) out.push({ name, channels: set.size });
+    // The default first, then alphabetical, as the host sorts them.
+    return out
+      .slice(0, 1)
+      .concat(out.slice(1).sort((a, b) => a.name.localeCompare(b.name)));
+  },
+  'favorites.renameList': ({ from, to }) => {
+    const name = to.trim();
+    if (!name || from === name) return 0;
+    const source = listSet(from);
+    const moved = source.size;
+    const target = listSet(name);
+    for (const id of source) target.add(id);
+    if (source !== favorites) namedFavorites.delete(from.trim());
+    else favorites.clear();
+    return moved;
+  },
+  'favorites.deleteList': ({ name }) => {
+    const set = listSet(name);
+    const had = set.size;
+    set.clear();
+    if (set !== favorites) namedFavorites.delete(name.trim());
+    return had;
+  },
+  'favorites.reorder': ({ channelIds, list }) => {
     // Rebuilt from the list given, keeping anything the caller did not mention — a
     // favourite added since the screen rendered keeps its place rather than vanishing.
-    const named = channelIds.filter((id) => favorites.has(id));
-    const rest = [...favorites].filter((id) => !named.includes(id));
-    favorites.clear();
-    for (const id of [...named, ...rest]) favorites.add(id);
+    const set = listSet(list);
+    const named = channelIds.filter((id) => set.has(id));
+    const rest = [...set].filter((id) => !named.includes(id));
+    set.clear();
+    for (const id of [...named, ...rest]) set.add(id);
     return named.length;
   },
 

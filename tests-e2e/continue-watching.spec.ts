@@ -157,3 +157,30 @@ test('live TV is not recorded — there is no position to come back to', async (
   // rail must be exactly as it was.
   expect(await resumable(page)).toEqual(before);
 });
+
+/**
+ * Continue Watching is the first rail on the screen.
+ *
+ * It was second. `AiRail` rendered above every rail including this one, while its own
+ * comment said "Second, under Continue Watching: what you were already part-way through
+ * beats a suggestion". The comment was the intent and the order was the bug.
+ */
+test('Continue Watching is the first rail on Home', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  const rail = page.getByRole('region', { name: 'Continue Watching' });
+  await expect(rail).toBeVisible();
+
+  // First of the *rails*, by document order. The billboard is a region too and sits
+  // above them by design, so it is excluded by name rather than by position -- the
+  // question is which shelf comes first, not which element.
+  const labels = (
+    await page
+      .getByRole('region')
+      .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? ''))
+  ).filter((l) => l && l !== 'Featured');
+
+  expect(labels[0]).toBe('Continue Watching');
+  // And there is more than one, so this is not passing because nothing else rendered.
+  expect(labels.length).toBeGreaterThan(1);
+});

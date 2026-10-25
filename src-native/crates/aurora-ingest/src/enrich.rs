@@ -550,6 +550,22 @@ mod tests {
     #[test]
     fn one_title_failing_does_not_stop_the_batch() {
         let mut conn = db();
+        // Four copies of one film, on purpose: the fake client answers every search with
+        // the same candidate, so four *different* titles would be three `nomatch` and
+        // one `failed` rather than the four failures this is about.
+        //
+        // Which means collapsing has to be off here, and said so rather than assumed.
+        // `pending` applies the library filter -- deliberately, so a hidden row costs no
+        // TMDB call -- and collapsing duplicates is on by default now, which leaves one
+        // of these four visible. This test is about the batch surviving an error, not
+        // about the filter.
+        aurora_db::repo::filtering::LibraryFilter {
+            english_only: false,
+            hide_duplicates: false,
+            hide_untagged: false,
+        }
+        .save(&conn)
+        .unwrap();
         for i in 0..4 {
             movie(&conn, &format!("m{i}"), "The Matrix", Some(1999));
         }
