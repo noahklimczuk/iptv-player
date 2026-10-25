@@ -40,6 +40,14 @@ const TILE_MIN_W = 150;
 export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   const [group, setGroup] = useState<string | undefined>(undefined);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  /**
+   * Which named list is on screen (README §4).
+   *
+   * `undefined` is the default list, which is what the heart writes to and what every
+   * caller meant before named lists existed. Kept as "absent" rather than as the
+   * literal name so the host decides what the default is called in exactly one place.
+   */
+  const [favoritesList, setFavoritesList] = useState<string | undefined>(undefined);
   const [view, setView] = useState<'list' | 'grid'>('list');
   const [typed, setTyped] = useState('');
   const [letter, setLetter] = useState<string | undefined>();
@@ -61,8 +69,15 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   const [favNonce, setFavNonce] = useState(0);
   const { data: channels, loading } = useCommand(
     'channels.list',
-    { group, favoritesOnly, profileId },
-    [group, favoritesOnly, profileId, favNonce],
+    { group, favoritesOnly, profileId, favoritesList },
+    [group, favoritesOnly, profileId, favoritesList, favNonce],
+  );
+  // The lists themselves, refetched on the same nonce: hearting the last channel out of
+  // a list is what makes that list stop existing, and the picker has to notice.
+  const { data: favoriteLists } = useCommand(
+    'favorites.lists',
+    { profileId },
+    [profileId, favNonce],
   );
 
   /**
@@ -88,9 +103,34 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
 
   const toggleFavorite = useCallback(
     (channel: Channel) => {
-      invoke('favorites.toggle', { profileId, channelId: channel.id })
+      // Into the list being shown, so the heart means "in this list" wherever it is
+      // pressed. On the ordinary channel list that is the default one.
+      invoke('favorites.toggle', { profileId, channelId: channel.id, list: favoritesList })
         .then(() => setFavNonce((n) => n + 1))
         .catch(report(`Could not change favourites for ${channel.name}`));
+    },
+    [profileId, favoritesList],
+  );
+
+  /**
+   * Add a channel to a list that does not exist yet.
+   *
+   * A list exists because something is in it -- that is how the host derives them -- so
+   * creating one and filling it are the same gesture, and there is no empty list to
+   * leave behind if somebody changes their mind halfway.
+   */
+  const addToNewList = useCallback(
+    (channel: Channel) => {
+      const name = window.prompt(`Add ${channel.name} to a new list called:`)?.trim();
+      if (!name) return;
+      invoke('favorites.toggle', { profileId, channelId: channel.id, list: name })
+        .then(() => {
+          setFavNonce((n) => n + 1);
+          setFavoritesList(name);
+          setFavoritesOnly(true);
+          setGroup(undefined);
+        })
+        .catch(report(`Could not add ${channel.name} to ${name}`));
     },
     [profileId],
   );
@@ -118,11 +158,11 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
       // Sent whole rather than as "move this one to index N": a positional patch has to
       // agree with the host about what the order was, and the host renumbers from the
       // list it is given, so what lands is exactly what is on screen.
-      invoke('favorites.reorder', { profileId, channelIds: next })
+      invoke('favorites.reorder', { profileId, list: favoritesList, channelIds: next })
         .then(() => setFavNonce((n) => n + 1))
         .catch(report('Could not save the new order'));
     },
-    [channels, profileId],
+    [channels, profileId, favoritesList],
   );
 
   /**
@@ -244,8 +284,31 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
             // Favourites cut across groups, so choosing them clears the group rather
             // than intersecting with it — "my favourites, within UK Sports" is a
             // question nobody asks of a list of fourteen channels.
-            onSelect: () => { setFavoritesOnly(true); setGroup(undefined); },
+            onSelect: () => {
+              setFavoritesOnly(true);
+              setGroup(undefined);
+              setFavoritesList(undefined);
+            },
           },
+          // One entry per named list, under the default.
+          //
+          // In the sidebar rather than in a dropdown beside the heading: these are
+          // *where things are*, like a group, and the sidebar is already the answer to
+          // "which slice of the library am I looking at". A picker somewhere else would
+          // be a second answer to the same question.
+          ...(favoriteLists ?? [])
+            .filter((list) => list.name !== 'Favourites' && list.name !== 'Favorites')
+            .map((list) => ({
+              label: `${list.name} (${list.channels})`,
+              value: undefined,
+              icon: 'heart' as const,
+              active: favoritesOnly && favoritesList === list.name,
+              onSelect: () => {
+                setFavoritesOnly(true);
+                setGroup(undefined);
+                setFavoritesList(list.name);
+              },
+            })),
         ]}
       />
 
@@ -259,7 +322,7 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
         <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
           {/* Which list this is. "Live TV" over one group of 482 left nothing on screen
               saying which group, once the strip had scrolled away. */}
-          {favoritesOnly ? 'Favourites' : group ?? 'Live TV'}
+          {favoritesOnly ? favoritesList ?? 'Favourites' : group ?? 'Live TV'}
         </h1>
         <span
           data-testid="channel-count"
@@ -415,6 +478,7 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
                         if (dragging != null) reorderFavorites(dragging, c.id);
                         setDragging(null);
                       }}
+                      onAddToNewList={addToNewList}
                     />
                   ) : (
                     <ChannelTile
@@ -445,7 +509,7 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
 const NUMBER = new Intl.NumberFormat('en-US');
 
 function ChannelRow({
-  channel, guide, onTune, onToggleFavorite,
+  channel, guide, onTune, onToggleFavorite, onAddToNewList,
   draggable = false, dragging = false, onDragStart, onDragEnd, onDropOn,
 }: {
   channel: Channel;
@@ -453,6 +517,8 @@ function ChannelRow({
   guide: NowNext | null;
   onTune: (c: Channel) => void;
   onToggleFavorite: (c: Channel) => void;
+  /** Put this channel in a list that does not exist yet (README §4). */
+  onAddToNewList?: (c: Channel) => void;
   /** Only in the favourites view, where the order is the viewer's own. */
   draggable?: boolean;
   dragging?: boolean;
@@ -609,6 +675,24 @@ function ChannelRow({
         >
           <Icon name="heart" size={16} filled={channel.favorite} />
         </button>
+        {/* A way into a list that does not exist yet. A list exists because something is
+            in it -- that is how the host derives them -- so creating one and filling it
+            are the same gesture, and there is no empty list left behind if somebody
+            changes their mind halfway. */}
+        {onAddToNewList && (
+          <button
+            type="button"
+            aria-label={`Add ${channel.name} to a new list`}
+            onClick={(e) => { e.stopPropagation(); onAddToNewList(channel); }}
+            style={{
+              display: 'grid', placeItems: 'center', width: 30, height: 30,
+              background: 'transparent', border: 'none', borderRadius: 'var(--r-full)',
+              cursor: 'pointer', color: 'var(--text-faint)',
+            }}
+          >
+            <Icon name="plus" size={14} />
+          </button>
+        )}
         <Icon name="play" size={18} filled style={{ color: 'var(--text-faint)' }} />
       </div>
     </div>

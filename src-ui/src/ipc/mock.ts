@@ -149,7 +149,22 @@ const DEFAULT_LIST = 'Favorites';
  */
 const namedFavorites = new Map<string, Set<number>>();
 
+/**
+ * The set behind a list name, without bringing it into existence.
+ *
+ * Creating on read was a bug with two faces: *looking* at a list that had just been
+ * emptied put it back, so the sidebar kept offering it and the view kept filtering by
+ * it. A list exists because something is in it, and reading is not putting something in
+ * it. `ensureList` is the writing half.
+ */
 function listSet(list?: string): Set<number> {
+  const name = (list ?? '').trim();
+  if (!name || name === DEFAULT_LIST) return favorites;
+  return namedFavorites.get(name) ?? new Set<number>();
+}
+
+/** The set behind a list name, creating it because something is about to go in it. */
+function ensureList(list?: string): Set<number> {
   const name = (list ?? '').trim();
   if (!name || name === DEFAULT_LIST) return favorites;
   let set = namedFavorites.get(name);
@@ -2302,7 +2317,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
   'lists.marks': () => ({ myList: [...myList], liked: [...liked] }),
   'favorites.toggle': ({ channelId, list }) => {
-    const set = listSet(list);
+    const set = ensureList(list);
     if (set.has(channelId)) {
       set.delete(channelId);
       // A list is its rows, so an emptied one stops existing -- as it does on the host,
@@ -2328,7 +2343,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (!name || from === name) return 0;
     const source = listSet(from);
     const moved = source.size;
-    const target = listSet(name);
+    const target = ensureList(name);
     for (const id of source) target.add(id);
     if (source !== favorites) namedFavorites.delete(from.trim());
     else favorites.clear();
@@ -2344,7 +2359,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'favorites.reorder': ({ channelIds, list }) => {
     // Rebuilt from the list given, keeping anything the caller did not mention — a
     // favourite added since the screen rendered keeps its place rather than vanishing.
-    const set = listSet(list);
+    const set = ensureList(list);
     const named = channelIds.filter((id) => set.has(id));
     const rest = [...set].filter((id) => !named.includes(id));
     set.clear();
