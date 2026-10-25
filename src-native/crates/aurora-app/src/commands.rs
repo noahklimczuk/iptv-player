@@ -19,6 +19,10 @@ pub struct ListChannelsArgs {
     /// Whose favourites. Optional so a caller that does not care — the zapper's own
     /// channel list, say — does not have to pass one.
     pub profile_id: Option<i64>,
+    /// Which named list of favourites to show, when `favorites_only` is set. Absent is
+    /// the default list, which is what every caller meant before named lists existed.
+    #[serde(default)]
+    pub favorites_list: Option<String>,
 }
 
 #[tauri::command(async)]
@@ -42,6 +46,7 @@ pub fn channels_list(
             // mock transport did filter, which is why every browser journey looked
             // right.
             favorites_only: args.favorites_only.unwrap_or(false),
+            favorites_list: args.favorites_list,
         },
     )?)
 }

@@ -58,6 +58,10 @@ pub struct ChannelFilter {
     pub profile_id: Option<i64>,
     /// Show only this profile's favourites. Does nothing without `profile_id`.
     pub favorites_only: bool,
+    /// Which named list the favourites come from, or the default when absent
+    /// (README §4). The `favorite` flag on every row answers for this list too, so a
+    /// heart shown while a list is open means "in *this* list".
+    pub favorites_list: Option<String>,
 }
 
 /// Insert or update a batch of channels for one provider.
@@ -169,7 +173,7 @@ FROM channels
 LEFT JOIN favorites fav
        ON fav.item_id = channels.id
       AND fav.item_kind = 'channel'
-      AND fav.list_name = 'Favorites'
+      AND fav.list_name = :list
       AND fav.profile_id = :profile
 LEFT JOIN providers prov ON prov.id = channels.provider_id
 WHERE 1=1
@@ -217,16 +221,23 @@ WHERE 1=1
 
     let mut stmt = conn.prepare(&sql)?;
     let profile = filter.profile_id.unwrap_or(-1);
+    // Bound rather than interpolated: a list name is whatever the viewer typed, and the
+    // one thing a name must never be able to do is end the string it is sitting in.
+    let list = filter
+        .favorites_list
+        .as_deref()
+        .and_then(crate::repo::lists::clean_list_name)
+        .unwrap_or_else(|| crate::repo::lists::FAVORITES.to_string());
     let rows = match &filter.group {
         Some(g) => stmt
             .query_map(
-                rusqlite::named_params! { ":group": g, ":profile": profile },
+                rusqlite::named_params! { ":group": g, ":profile": profile, ":list": list },
                 row_to_channel,
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?,
         None => stmt
             .query_map(
-                rusqlite::named_params! { ":profile": profile },
+                rusqlite::named_params! { ":profile": profile, ":list": list },
                 row_to_channel,
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?,
@@ -430,7 +441,7 @@ mod tests {
             .find(|c| c.name == "CNN HD")
             .unwrap()
             .id;
-        crate::repo::lists::toggle_favorite(&conn, me, cnn, 0).unwrap();
+        crate::repo::lists::toggle_favorite(&conn, me, cnn, None, 0).unwrap();
 
         let mine = ChannelFilter {
             profile_id: Some(me),
@@ -450,7 +461,7 @@ mod tests {
         assert_eq!(rows[0].id, cnn);
 
         // Toggling off removes it again.
-        crate::repo::lists::toggle_favorite(&conn, me, cnn, 0).unwrap();
+        crate::repo::lists::toggle_favorite(&conn, me, cnn, None, 0).unwrap();
         assert!(list(&conn, &only).unwrap().is_empty());
     }
 
@@ -470,7 +481,7 @@ mod tests {
         let other = conn.last_insert_rowid();
 
         let cnn = list(&conn, &ChannelFilter::default()).unwrap()[0].id;
-        crate::repo::lists::toggle_favorite(&conn, me, cnn, 0).unwrap();
+        crate::repo::lists::toggle_favorite(&conn, me, cnn, None, 0).unwrap();
 
         let theirs = ChannelFilter {
             profile_id: Some(other),
