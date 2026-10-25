@@ -443,3 +443,48 @@ test('clearing the Number cell hands the channel back to the provider', async ({
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: label })).toHaveText(provider);
 });
+
+/**
+ * A logo of the viewer's own (README §4, "custom logos").
+ *
+ * `channels.custom_logo` has been read by the channel grid since the column existed --
+ * `channels::list` selects `COALESCE(custom_logo, logo)` -- and `playlist.reset` has
+ * always cleared it, and it has always counted towards a row being "edited". The
+ * *writer* was missing, so a provider's broken logo was permanent and the only thing
+ * that could ever touch the column was a reset that unset it.
+ */
+test("a channel can be given a logo of its own, and have the provider's back", async ({
+  page,
+}) => {
+  await openEditor(page);
+  const cell = page.getByRole('button', { name: 'Logo for Meridian News' });
+  await expect(cell).toBeVisible();
+
+  await cell.click();
+  const field = page.getByRole('textbox', { name: 'Logo for Meridian News' });
+  await field.fill('https://example.invalid/mine.png');
+  await field.press('Enter');
+
+  await expect(
+    page.getByRole('button', { name: 'Logo for Meridian News' }),
+  ).toHaveText(/mine\.png/);
+
+  // Blank restores the provider's, the way 0 restores their channel number.
+  await page.getByRole('button', { name: 'Logo for Meridian News' }).click();
+  const again = page.getByRole('textbox', { name: 'Logo for Meridian News' });
+  await again.fill('');
+  await again.press('Enter');
+  await expect(
+    page.getByRole('button', { name: 'Logo for Meridian News' }),
+  ).not.toHaveText(/mine\.png/);
+});
+
+test('films have no playlist logo to edit', async ({ page }) => {
+  // A film's artwork comes from enrichment, not from the playlist, and `movies` has no
+  // `custom_logo` column -- so offering the field would be a control that cannot work.
+  await openEditor(page, 'Movies');
+  await expect(page.getByRole('button', { name: /^Logo for / })).toHaveCount(0);
+  // ...and the rows are there with editable names, so this is not passing against an
+  // empty screen.
+  await expect(page.getByRole('button', { name: /^Name for / }).first()).toBeVisible();
+});

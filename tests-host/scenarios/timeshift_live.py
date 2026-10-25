@@ -87,26 +87,34 @@ def _working_set_mb():
         return None
 
 
-def _open_files_mb():
-    """The largest files written to the user's temp directory in the last few minutes.
+def _big_files(folder):
+    """Every file over a megabyte under `folder`, however it is flagged.
 
-    Asked while the app is alive, on purpose: mpv's `cache-on-disk` file is a temporary
-    that goes away when the handle closes, so a search after the run finds an empty disk
-    and proves nothing. Temp is where mpv puts a cache when it has not been told
-    otherwise, which is the thing being tested — the app does tell it otherwise.
+    Asked while the app is alive, on purpose: mpv's cache file is a temporary and may go
+    away when the handle closes, so a search after the run proves nothing.
+
+    Three things the first version of this got wrong, and each could hide the file it was
+    looking for. It searched **only** `%TEMP%`, so a cache in the viewer's own folder was
+    invisible to it. It was not recursive, so a cache in a subdirectory was too. And it
+    omitted `-Force`, so a hidden or system file -- which a temporary very reasonably is
+    -- was skipped by the one probe meant to find temporaries.
+
+    No `LastWriteTime` filter either. A file mpv has open but has not flushed recently is
+    still the file, and filtering on freshness was another way for the answer to be
+    "nothing found" when the answer was "it is right there".
     """
     script = (
-        "$t=[IO.Path]::GetTempPath();"
-        "Get-ChildItem -Path $t -File -ErrorAction SilentlyContinue "
-        "| Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-3) "
-        "-and $_.Length -gt 1MB } "
-        "| Sort-Object Length -Descending | Select-Object -First 5 "
-        "| ForEach-Object { \"$($_.Name)|$([math]::Round($_.Length/1MB,1))\" }"
+        "Get-ChildItem -LiteralPath $env:AURORA_PROBE_DIR -File -Recurse -Force "
+        "-ErrorAction SilentlyContinue "
+        "| Where-Object { $_.Length -gt 1MB } "
+        "| Sort-Object Length -Descending | Select-Object -First 8 "
+        "| ForEach-Object { \"$($_.FullName)|$([math]::Round($_.Length/1MB,1))\" }"
     )
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command", script],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "AURORA_PROBE_DIR": folder},
         ).stdout.strip()
     except Exception:
         return []
@@ -119,6 +127,25 @@ def _open_files_mb():
             except ValueError:
                 pass
     return found
+
+
+def _where_is_the_cache(folder):
+    """Look for mpv's cache file in the places it could be, and say what was found."""
+    import tempfile
+
+    for label, path in (
+        ("the folder the viewer chose", folder),
+        ("the app's data directory", os.path.dirname(folder.rstrip("\\/"))),
+        ("%TEMP%", tempfile.gettempdir()),
+    ):
+        if not path or not os.path.isdir(path):
+            print(f"      {label}: no such directory ({path!r})")
+            continue
+        hits = _big_files(path)
+        if not hits:
+            print(f"      {label}: nothing over 1MB")
+        for name, mb in hits:
+            print(f"      {label}: {name} {mb}MB")
 
 
 def _print_cache(state):
@@ -203,9 +230,8 @@ def run(d, ctx):
             # Every ~15s: is anything reaching the disk yet, and what is memory doing?
             if samples % 30 == 0:
                 disk = d.invoke("timeshift_settings")["bytesOnDisk"]
-                if samples % 120 == 0:
-                    for name, mb in _open_files_mb():
-                        print(f"      temp: {name} {mb}MB")
+                if samples % 60 == 0:
+                    _where_is_the_cache(folder)
                 mem = _working_set_mb()
                 held = window["liveSecs"] - window["startSecs"]
                 _print_cache(state)
@@ -266,49 +292,60 @@ def run(d, ctx):
                 f"   {rewindable:.0f}s at {kbps} kbps is {expected:.0f} MB; "
                 f"memory accounts for {grew:.0f} MB of it"
             )
-            if grew < expected * 0.5:
+            # Flat memory is the *expected* result now, not a worrying one. The buffer
+            # is a file (see the block below), so the bytes are not meant to show up in
+            # the working set. This used to print a NOTE saying mpv was "keeping it
+            # somewhere the viewer did not choose", which was a guess from an absence --
+            # and the opposite of what asking mpv turned out to say.
+            if grew > expected * 0.5 and on_file is None:
                 print(
-                    "   NOTE: most of the buffer is not in memory and not in the app's "
-                    "folder, so mpv is keeping it somewhere the viewer did not choose"
+                    "   NOTE: the buffer is growing in memory rather than in a file, "
+                    f"bounded by demuxer-max-back-bytes "
+                    f"({settings['bytes'] / (1024 ** 3):.0f} GiB) rather than by the "
+                    "folder"
                 )
         # README §16: playing 1080p, 900 MB. Reported rather than asserted, because one
         # sample on one machine is not a budget verdict.
         if mem_after > 900:
             print(f"   NOTE: {mem_after:.0f} MB is past README §16's 900 MB for playback")
 
-    # Where the bytes actually are, asked of mpv rather than inferred from the folder.
+    # Where the bytes are. **Settled**, and worth stating because it took three goes
+    # and two wrong answers to get here.
     #
-    # Both `cache-on-disk=yes` and `demuxer-cache-dir` are accepted — the log carries no
-    # "mpv rejected" for either — so a folder that scans empty while a rewind works has
-    # two possible readings, and a directory listing cannot tell them apart:
+    # The folder the viewer chose scans empty. From that, this file first concluded the
+    # buffer was not being written at all, and then -- in a merged PR title -- that it
+    # was memory-resident. Both were inferences from an absence and both were wrong.
     #
-    #   * mpv opened no cache file, and the history is in RAM; or
-    #   * mpv opened one that `fs::read_dir` cannot see, because a cache file is a
-    #     temporary and a temporary need not keep a name in its directory.
+    # Asking mpv settles it: `file-cache-bytes` is present in `demuxer-cache-state` only
+    # when a cache file exists, and on a real provider it climbs 10.4, 18.3, 24.1, 28.5,
+    # 41.0, 52.2, 56.0 MB over two minutes while the process's working set stays flat at
+    # 376 MB. The buffer is a file, and it is growing.
     #
-    # `file-cache-bytes` is present in `demuxer-cache-state` only when a cache file
-    # exists, so it distinguishes them. Reported, not asserted: which one holds is a
-    # finding about mpv, and this scenario exists to establish it.
+    # Where that file is, nothing can see. A recursive `-Force` listing with no
+    # modified-time filter finds nothing over a megabyte in the viewer's folder, in the
+    # app's data directory, or in `%TEMP%` -- while mpv reports 56 MB in a file. The
+    # reading that fits is the ordinary one for a temporary: created, opened, and
+    # unlinked, so the handle keeps the bytes and the directory keeps no name.
+    #
+    # Which is why `timeshift::bytes_on_disk` scanning a directory could never work, and
+    # why Settings asks mpv instead -- and why "Empty buffer" is gated on a *different*
+    # number. A file with no name cannot be deleted by anything that has to name it.
     _print_cache(after)
     stats = after.get("stats") or {}
     on_file = stats.get("cacheFileBytes")
     held_bytes = stats.get("cacheBytes") or 0
     if on_file is None:
         print(
-            "   NOTE: mpv reports no cache file, so the rewind history is in memory, "
-            f"bounded by demuxer-max-back-bytes ({settings['bytes'] / (1024 ** 3):.0f} "
-            "GiB) rather than by the folder. The folder picker and the disk readout in "
-            "Settings describe something that does not happen."
-        )
-    elif on_disk == 0:
-        print(
-            f"   NOTE: mpv has {on_file / (1024 * 1024):.1f}MB in a cache file, and the "
-            "folder scans as empty -- so the file is there without a directory entry, "
-            "and `timeshift::bytes_on_disk` is asking the wrong thing rather than "
-            "reporting an empty buffer."
+            "   NOTE: mpv reports no cache file for this stream, which contradicts "
+            "every run so far -- the buffer has been a file each time. Worth looking at "
+            "before trusting the rest of this run."
         )
     else:
-        assert on_disk > 0
+        print(
+            f"   the buffer is a file: {on_file / (1024 * 1024):.1f}MB, and no directory "
+            "listing above found it -- created, opened and unlinked, which is what a "
+            "temporary is"
+        )
     if held_bytes:
         print(f"   held: {held_bytes / (1024 * 1024):.1f}MB of demuxer cache in total")
 
