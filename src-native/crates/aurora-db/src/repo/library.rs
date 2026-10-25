@@ -137,8 +137,17 @@ fn split_names(raw: Option<String>) -> Vec<String> {
 /// Applied here, at the boundary where a row becomes something the UI will paint, rather
 /// than in the SQL — the stored `title` has to keep the tag, because `reclassify` reads
 /// it back to decide the language. See `aurora_core::lang::strip_language_prefix`.
+/// The title as it goes on screen.
+///
+/// Two things come off: the language prefix a provider puts in front (`EN * `), and the
+/// quality marker it puts behind (`[4K]`). Both describe the *copy* rather than the
+/// title, and the grid shows one entry per title now -- so a merged entry titled
+/// `Breaking Bad [4K]` still read like "the 4K version" of something rather than like
+/// the show. The quality is not lost: it is a column of its own and the card wears it as
+/// a badge.
 fn shown(raw: String) -> String {
-    aurora_core::lang::strip_language_prefix(&raw).unwrap_or(raw)
+    let without_prefix = aurora_core::lang::strip_language_prefix(&raw).unwrap_or(raw);
+    aurora_core::title::strip_quality_tag(&without_prefix)
 }
 
 fn map_movie(r: &rusqlite::Row<'_>) -> rusqlite::Result<MovieRow> {

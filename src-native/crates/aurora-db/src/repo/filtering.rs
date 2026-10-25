@@ -15,6 +15,21 @@ use crate::repo::settings;
 
 const KEY_ENGLISH_ONLY: &str = "filter.english_only";
 const KEY_HIDE_DUPLICATES: &str = "filter.hide_duplicates";
+
+/// One entry per title, by default.
+///
+/// This was off, so a provider that lists a film twice -- once at 4K and once not --
+/// filled the grid with pairs, and the viewer's answer to "why is everything here
+/// twice" was a switch in Settings they had to find.
+///
+/// Off was the safe default while collapsing *lost* things: before the episode lists of
+/// a show's copies were merged, hiding the lesser copy could hide a season that existed
+/// only in it. That is fixed, so the cautious default is no longer buying anything, and
+/// what it costs is the ordinary library looking duplicated.
+///
+/// Still a switch, and still honoured: a stored value wins over this, so anybody who
+/// turned it off keeps it off.
+pub const DEFAULT_HIDE_DUPLICATES: bool = true;
 const KEY_HIDE_UNTAGGED: &str = "filter.hide_untagged";
 /// Bumped when classification changes, so an existing library is re-read rather than
 /// silently keeping whatever the previous build decided.
@@ -88,7 +103,7 @@ impl LibraryFilter {
     pub fn load(conn: &Connection) -> Result<Self> {
         Ok(Self {
             english_only: settings::get_or(conn, KEY_ENGLISH_ONLY, false)?,
-            hide_duplicates: settings::get_or(conn, KEY_HIDE_DUPLICATES, false)?,
+            hide_duplicates: settings::get_or(conn, KEY_HIDE_DUPLICATES, DEFAULT_HIDE_DUPLICATES)?,
             hide_untagged: settings::get_or(conn, KEY_HIDE_UNTAGGED, false)?,
         })
     }
@@ -1240,19 +1255,26 @@ mod tests {
     }
 
     #[test]
-    fn settings_round_trip_and_default_to_off() {
+    fn settings_round_trip_and_collapsing_is_on_unless_turned_off() {
         let conn = crate::open_memory().unwrap();
-        assert_eq!(
-            LibraryFilter::load(&conn).unwrap(),
-            LibraryFilter::default()
-        );
-        let f = LibraryFilter {
-            english_only: true,
-            hide_duplicates: true,
-            hide_untagged: false,
-        };
-        f.save(&conn).unwrap();
-        assert_eq!(LibraryFilter::load(&conn).unwrap(), f);
+        // A fresh library collapses duplicates: a provider that lists a film at 4K and
+        // again at HD is listing one film, and the grid says so without being asked.
+        let fresh = LibraryFilter::load(&conn).unwrap();
+        assert!(fresh.hide_duplicates, "a fresh library shows every copy");
+        assert!(!fresh.english_only, "and filters nothing else by default");
+        assert!(!fresh.hide_untagged);
+
+        // A stored value wins over the default, in both directions -- which is what
+        // makes changing the default safe for somebody who already chose.
+        for wanted in [false, true] {
+            let f = LibraryFilter {
+                english_only: true,
+                hide_duplicates: wanted,
+                hide_untagged: false,
+            };
+            f.save(&conn).unwrap();
+            assert_eq!(LibraryFilter::load(&conn).unwrap(), f);
+        }
     }
 
     #[test]

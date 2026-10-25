@@ -352,6 +352,9 @@ pub fn lists_marks(services: State<'_, Services>, args: MarksArgs) -> Result<Mar
 pub struct FavoriteArgs {
     pub profile_id: i64,
     pub channel_id: i64,
+    /// Which named list, or the default when absent (README §4).
+    #[serde(default)]
+    pub list: Option<String>,
 }
 
 #[tauri::command(async)]
@@ -361,6 +364,7 @@ pub fn favorites_toggle(services: State<'_, Services>, args: FavoriteArgs) -> Re
         &db,
         args.profile_id,
         args.channel_id,
+        args.list.as_deref(),
         now_unix(),
     )?)
 }
@@ -369,6 +373,9 @@ pub fn favorites_toggle(services: State<'_, Services>, args: FavoriteArgs) -> Re
 #[serde(rename_all = "camelCase")]
 pub struct ReorderFavoritesArgs {
     pub profile_id: i64,
+    /// Which named list, or the default when absent.
+    #[serde(default)]
+    pub list: Option<String>,
     /// The whole list, in its new order.
     pub channel_ids: Vec<i64>,
 }
@@ -388,7 +395,73 @@ pub fn favorites_reorder(
     Ok(lists::reorder_favorites(
         &mut db,
         args.profile_id,
+        args.list.as_deref(),
         &args.channel_ids,
+    )?)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoriteListsArgs {
+    pub profile_id: i64,
+}
+
+/// The named lists this profile has (README §4).
+///
+/// Derived from the rows rather than kept in a table: a list exists because something is
+/// in it. The default is always offered even when empty, because it is where the heart
+/// puts things and a picker that loses its only entry the moment you empty it has lost
+/// the viewer their way back.
+#[tauri::command(async)]
+pub fn favorites_lists(
+    services: State<'_, Services>,
+    args: FavoriteListsArgs,
+) -> Result<Vec<lists::FavoriteList>> {
+    let db = services.db.lock();
+    Ok(lists::favorite_lists(&db, args.profile_id)?)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameFavoriteListArgs {
+    pub profile_id: i64,
+    pub from: String,
+    pub to: String,
+}
+
+/// Rename a list, moving everything in it. Renaming onto an existing name merges them.
+#[tauri::command(async)]
+pub fn favorites_rename_list(
+    services: State<'_, Services>,
+    args: RenameFavoriteListArgs,
+) -> Result<usize> {
+    let db = services.db.lock();
+    Ok(lists::rename_favorite_list(
+        &db,
+        args.profile_id,
+        &args.from,
+        &args.to,
+    )?)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteFavoriteListArgs {
+    pub profile_id: i64,
+    pub name: String,
+}
+
+/// Empty a list, returning how many channels were in it.
+#[tauri::command(async)]
+pub fn favorites_delete_list(
+    services: State<'_, Services>,
+    args: DeleteFavoriteListArgs,
+) -> Result<usize> {
+    let db = services.db.lock();
+    Ok(lists::delete_favorite_list(
+        &db,
+        args.profile_id,
+        &args.name,
     )?)
 }
 

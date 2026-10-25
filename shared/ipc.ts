@@ -952,6 +952,12 @@ export interface PlaylistPatch {
   hidden?: boolean;
 }
 
+/** One named list of favourites, and how many channels are in it (README §4). */
+export interface FavoriteList {
+  name: string;
+  channels: number;
+}
+
 /** Another copy of the same title — the source picker behind a collapsed entry. */
 export interface Alternate {
   id: number;
@@ -1297,7 +1303,13 @@ export interface Commands {
   'playlist.reset': (args: { kind: PlaylistKind; ids: number[] }) => number;
 
   'channels.list': (
-    args: { group?: string; favoritesOnly?: boolean; profileId?: number },
+    args: {
+      group?: string;
+      favoritesOnly?: boolean;
+      profileId?: number;
+      /** Which named list, when `favoritesOnly` is set. Absent is the default list. */
+      favoritesList?: string;
+    },
   ) => Channel[];
   'channels.groups': () => { name: string; count: number }[];
   'channels.byNumber': (args: { number: number }) => Channel | null;
@@ -1530,7 +1542,30 @@ export interface Commands {
    * the interface to hold them and answer from memory.
    */
   'lists.marks': (args: { profileId: number }) => { myList: string[]; liked: string[] };
-  'favorites.toggle': (args: { profileId: number; channelId: number }) => boolean;
+  /**
+   * Put a channel in a named list of favourites, or take it out again (README §4).
+   *
+   * `list` names which one; absent is the default. A channel can be in several lists at
+   * once, so this toggles its membership of *that* list and says nothing about others.
+   */
+  'favorites.toggle': (args: {
+    profileId: number;
+    channelId: number;
+    list?: string;
+  }) => boolean;
+  /** The named lists this profile has, the default first and the rest alphabetical. */
+  'favorites.lists': (args: { profileId: number }) => FavoriteList[];
+  /**
+   * Rename a list, moving everything in it. Renaming onto a name that already exists
+   * merges the two. Returns the rows moved.
+   */
+  'favorites.renameList': (args: {
+    profileId: number;
+    from: string;
+    to: string;
+  }) => number;
+  /** Empty a list, returning how many channels were in it. */
+  'favorites.deleteList': (args: { profileId: number; name: string }) => number;
   /**
    * Put the favourites in a new order (README §4, "drag to reorder").
    *
@@ -1538,7 +1573,11 @@ export interface Commands {
    * with the host about what the order was, and two of them racing leaves a sequence
    * nobody asked for. Returns how many rows were renumbered.
    */
-  'favorites.reorder': (args: { profileId: number; channelIds: number[] }) => number;
+  'favorites.reorder': (args: {
+    profileId: number;
+    list?: string;
+    channelIds: number[];
+  }) => number;
 
   'profiles.list': () => Profile[];
   'profiles.create': (args: {

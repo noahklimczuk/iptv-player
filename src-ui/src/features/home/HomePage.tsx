@@ -192,7 +192,15 @@ export function HomePage({
         )
         // A rail with a heading and no posters reads as a loading failure, which is why
         // the host drops empty ones — so removing the last card has to drop it here too.
-        .filter((rail) => rail.items.length > 0),
+        .filter((rail) => rail.items.length > 0)
+        // Continue Watching first, whatever order it arrived in.
+        //
+        // The host already builds it first, so this is belt and braces rather than a
+        // correction -- but "first" is a promise this screen makes and the host is free
+        // to reorder its own output. Sorted rather than assumed, so the promise survives
+        // that.
+        .sort((a, b) => Number(b.kind === 'continueWatching')
+          - Number(a.kind === 'continueWatching')),
     [rails, removed],
   );
 
@@ -238,19 +246,31 @@ export function HomePage({
   return (
     <div>
       <HeroBillboard items={heroItems} onOpen={onOpen} onPlay={onPlay} />
-      {/* Second, under Continue Watching: what you were already part-way through beats a
-          suggestion, and everything below is the library's own shelves. Renders nothing
-          until it has something, so on a library with no key it does not exist. */}
+      {/* Continue Watching, then the suggestion, then the library's own shelves.
+
+          What you were already part-way through beats a suggestion -- which is what the
+          comment on `AiRail` claimed before this, while the code rendered the AI rail
+          *above* every rail including that one. The comment was the intent and the order
+          was the bug. */}
+      {visibleRails
+        .filter((rail) => rail.kind === 'continueWatching')
+        .map((rail) => (
+          <Rail
+            key={rail.id}
+            rail={rail}
+            onOpen={onOpen}
+            onPlay={onPlay}
+            onRemove={removeFromContinue}
+          />
+        ))}
+      {/* Renders nothing until it has something, so on a library with no key it does
+          not exist. */}
       <AiRail onOpen={onOpen} onPlay={onPlay} />
-      {visibleRails.map((rail) => (
-        <Rail
-          key={rail.id}
-          rail={rail}
-          onOpen={onOpen}
-          onPlay={onPlay}
-          onRemove={rail.kind === 'continueWatching' ? removeFromContinue : undefined}
-        />
-      ))}
+      {visibleRails
+        .filter((rail) => rail.kind !== 'continueWatching')
+        .map((rail) => (
+          <Rail key={rail.id} rail={rail} onOpen={onOpen} onPlay={onPlay} />
+        ))}
       <div style={{ height: 'var(--sp-8)' }} />
     </div>
   );

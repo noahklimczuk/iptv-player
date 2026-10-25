@@ -231,6 +231,10 @@ test('English only hides tagged foreign content across all three lists', async (
 });
 
 test('collapsing duplicates leaves the best copy of each channel', async ({ page }) => {
+  // The baseline is asked for rather than inherited. Collapsing is on by default now --
+  // a provider that lists a channel twice is listing one channel -- so "both copies
+  // visible" is a state this test has to establish before it can watch one disappear.
+  await setFilter(page, 'Collapse duplicates', false);
   const before = (await liveChannelNames(page)).join(' ');
   expect(before).toContain('Meridian News SD');
 
@@ -487,4 +491,28 @@ test('films have no playlist logo to edit', async ({ page }) => {
   // ...and the rows are there with editable names, so this is not passing against an
   // empty screen.
   await expect(page.getByRole('button', { name: /^Name for / }).first()).toBeVisible();
+});
+
+/**
+ * One title per film, without being asked (README §7.3).
+ *
+ * A provider that lists a film at 4K and again at HD is listing one film. Collapsing was
+ * off by default, so the grid filled with pairs and the viewer's answer to "why is
+ * everything here twice" was a switch in Settings they had to find.
+ *
+ * Off was the safe default while collapsing *lost* things: before a show's copies had
+ * their episode lists merged, hiding the lesser copy could hide a season that existed
+ * only in it. That is fixed, so the caution was no longer buying anything.
+ */
+test('a fresh library shows one entry per title, not one per copy', async ({ page }) => {
+  const names = (await liveChannelNames(page)).join(' ');
+  expect(names).toContain('Meridian News');
+  // Not the pair. Both copies carried a quality suffix; neither should be on screen.
+  expect(names).not.toContain('Meridian News SD');
+  expect(names).not.toContain('Meridian News HD');
+
+  // And the switch is still there and still works, so this is a default rather than a
+  // decision taken away.
+  await setFilter(page, 'Collapse duplicates', false);
+  expect((await liveChannelNames(page)).join(' ')).toContain('Meridian News SD');
 });

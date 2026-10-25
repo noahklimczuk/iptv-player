@@ -469,6 +469,69 @@ pub fn key_words(name: &str) -> Vec<String> {
         .collect()
 }
 
+/// Quality markers safe to remove from a title that is going on screen.
+///
+/// Deliberately a *shorter* list than [`CHANNEL_TAGS`], which is for building a match
+/// key. A key can afford to drop an ambiguous word, because the only cost is two entries
+/// grouping together; a title cannot, because the cost is a film called something else.
+///
+/// So the bare numbers are out — `1080` and `720` are plausible titles, and *1917* and
+/// *2012* are real films — and so are the English words `plus`, `raw`, `alt`, `vip` and
+/// `backup`: "Raw", "Plus One" and "Backup Plan" are all things a provider might list.
+/// What is left cannot be anything but a quality tag.
+const SHOWN_QUALITY_TAGS: &[&str] = &[
+    "uhd", "fhd", "hd", "sd", "4k", "8k", "hevc", "h265", "h264", "1080p", "720p", "480p", "2160p",
+    "4320p",
+];
+
+/// Take the quality marker off a title that is going to be displayed.
+///
+/// Two copies of one film are one film, and the grid says so now — the duplicate
+/// collapser keeps the best copy, which is usually the 4K one, whose title is
+/// `Breaking Bad [4K]`. Shown unchanged, the merged entry still reads like "the 4K
+/// version" rather than like the film, which is the thing somebody collapsing duplicates
+/// asked not to see. The quality is not lost: it is a column of its own and the card
+/// already wears it as a badge.
+///
+/// Only a *trailing* marker, and only one, bracketed or bare. A tag sits at the end of a
+/// provider's name — `Dune [4K]`, `Dune - 4K`, `Dune 4K` — and anything in the middle is
+/// far likelier to be the title: *4K* could be a documentary about resolution, but
+/// *Dune 4K Remastered* is not asking for its middle word to go.
+pub fn strip_quality_tag(name: &str) -> String {
+    let trimmed = name.trim_end();
+    // A bracketed tag at the very end: `Dune [4K]`, `Dune (UHD)`.
+    if let Some(open) = trimmed.rfind(['[', '(', '{']) {
+        let close = trimmed.chars().last();
+        let closes = matches!(close, Some(']') | Some(')') | Some('}'));
+        if closes {
+            let inner: String = trimmed[open + 1..trimmed.len() - 1]
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect();
+            if SHOWN_QUALITY_TAGS.contains(&inner.to_ascii_lowercase().as_str()) {
+                return trimmed[..open]
+                    .trim_end()
+                    .trim_end_matches(['-', '·', '|'])
+                    .trim_end()
+                    .to_string();
+            }
+        }
+    }
+    // A bare one: `Dune 4K`, `Dune - UHD`.
+    let mut words = trimmed.rsplitn(2, char::is_whitespace);
+    if let (Some(last), Some(rest)) = (words.next(), words.next()) {
+        let key: String = last.chars().filter(|c| c.is_alphanumeric()).collect();
+        if SHOWN_QUALITY_TAGS.contains(&key.to_ascii_lowercase().as_str()) {
+            let rest = rest.trim_end().trim_end_matches(['-', '·', '|']).trim_end();
+            // Never return nothing: a stream genuinely called "4K" keeps its name.
+            if !rest.is_empty() {
+                return rest.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
 /// Detect the quality tier advertised in a channel or stream name.
 pub fn detect_quality(name: &str) -> Option<String> {
     let lower = fold_diacritics(name).to_lowercase();
@@ -712,6 +775,47 @@ mod tests {
         let (name, code) = split_country_prefix("BBC One");
         assert_eq!(name, "BBC One");
         assert_eq!(code, None);
+    }
+
+    /// Two copies of one film are one film, and the title says so.
+    #[test]
+    fn a_quality_tag_comes_off_a_displayed_title() {
+        for (raw, want) in [
+            ("Breaking Bad [4k]", "Breaking Bad"),
+            ("Dune [4K]", "Dune"),
+            ("Dune (UHD)", "Dune"),
+            ("Dune 4K", "Dune"),
+            ("Dune - 4K", "Dune"),
+            ("Dune | FHD", "Dune"),
+            ("Some Show 1080p", "Some Show"),
+            ("Trailing space 4K  ", "Trailing space"),
+        ] {
+            assert_eq!(strip_quality_tag(raw), want, "{raw}");
+        }
+    }
+
+    /// And a title that merely looks like one keeps every word.
+    ///
+    /// This is why `SHOWN_QUALITY_TAGS` is shorter than `CHANNEL_TAGS`: a match key can
+    /// afford to drop an ambiguous word, because the cost is two entries grouping
+    /// together. A title cannot -- the cost is a film called something else.
+    #[test]
+    fn a_title_that_looks_like_a_tag_is_left_alone() {
+        for raw in [
+            "1917",
+            "2012",
+            "Plus One",
+            "The Backup Plan",
+            "Raw",
+            "Dune 4K Remastered",
+            "Blade Runner 2049",
+            "1080",
+            "720",
+            "4K",
+            "Æon Flux",
+        ] {
+            assert_eq!(strip_quality_tag(raw), raw, "{raw} was altered");
+        }
     }
 
     #[test]
