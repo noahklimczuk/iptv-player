@@ -366,7 +366,9 @@ function Row({
   kind: PlaylistKind;
   selected: boolean;
   onSelect: () => void;
-  onPatch: (patch: { name?: string; number?: number; group?: string; hidden?: boolean }) => void;
+  onPatch: (
+    patch: { name?: string; number?: number; group?: string; logo?: string; hidden?: boolean },
+  ) => void;
   onReset: () => void;
 }) {
   const language = languageName(row.lang);
@@ -436,6 +438,34 @@ function Row({
           </span>
         )}
       </div>
+
+      {/* The logo, which the provider often gets wrong and nothing could fix.
+          `custom_logo` has been read by the channel grid and cleared by Reset since the
+          column existed; it simply had no writer, so a broken logo was permanent. */}
+      {kind === 'live' && (
+        <div style={{ width: 200, minWidth: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
+          {row.logo ? (
+            <img
+              src={row.logo}
+              alt=""
+              width={28}
+              height={28}
+              style={{ objectFit: 'contain', borderRadius: 4, flex: '0 0 auto' }}
+              // A broken URL is the ordinary case here -- it is why somebody is
+              // overriding it -- so the slot collapses rather than showing a torn page.
+              onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
+            />
+          ) : (
+            <span style={{ width: 28, flex: '0 0 auto' }} />
+          )}
+          <EditableCell
+            value={row.logo ?? ''}
+            label={`Logo for ${row.name}`}
+            weight={400}
+            onCommit={(next) => onPatch({ logo: next })}
+          />
+        </div>
+      )}
 
       <div style={{ width: 120, display: 'flex', gap: 6, alignItems: 'center' }}>
         {row.quality && <Badge tone="neutral">{row.quality}</Badge>}

@@ -477,6 +477,8 @@ interface Edit {
   name?: string | null;
   number?: number | null;
   group?: string | null;
+  /** Channels only; a film's artwork comes from enrichment, not the playlist. */
+  logo?: string | null;
   hidden?: boolean;
 }
 const edits = new Map<string, Edit>();
@@ -657,8 +659,11 @@ function allRows(kind: PlaylistKind): PlaylistEntry[] {
         group: c.group,
         quality: c.quality,
         lang: c.lang ?? null,
+        // The same `COALESCE(custom_logo, logo)` the host selects, so the editor edits
+        // what the grid shows rather than a column beside it.
+        logo: e.logo ?? original.logo ?? null,
         hidden: c.hidden,
-        edited: e.name != null || e.number != null || e.group != null,
+        edited: e.name != null || e.number != null || e.group != null || e.logo != null,
         duplicates: list.filter(
           (o) => o.id !== c.id && fx.matchKey(o.name) === fx.matchKey(c.name),
         ).length,
@@ -679,6 +684,8 @@ function allRows(kind: PlaylistKind): PlaylistEntry[] {
       group: item.genres[0] ?? null,
       quality: item.quality,
       lang: item.lang ?? null,
+      // Films and shows have no playlist logo; their artwork is enrichment's.
+      logo: null,
       hidden: isHidden(kind, item.id),
       edited: e.name != null,
       duplicates: list.filter(
@@ -1895,6 +1902,10 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (patch.name !== undefined) edit.name = patch.name.trim() || null;
     if (patch.number !== undefined) edit.number = patch.number === 0 ? null : patch.number;
     if (patch.group !== undefined) edit.group = patch.group.trim() || null;
+    // Channels only, as the host has it: `movies` has no `custom_logo` column.
+    if (patch.logo !== undefined && kind === 'live') {
+      edit.logo = patch.logo.trim() || null;
+    }
     if (patch.hidden !== undefined) edit.hidden = patch.hidden;
     putEdit(kind, id, edit);
   },

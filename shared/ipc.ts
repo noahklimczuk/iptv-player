@@ -907,6 +907,11 @@ export interface PlaylistEntry {
   group: string | null;
   quality: Quality | null;
   lang: string | null;
+  /**
+   * The logo this entry shows — the viewer's if they set one, the provider's if not.
+   * Null for films and shows, whose artwork comes from enrichment.
+   */
+  logo: string | null;
   hidden: boolean;
   /** Any override is set, so the row can offer a reset. */
   edited: boolean;
@@ -937,6 +942,13 @@ export interface PlaylistPatch {
   name?: string;
   number?: number;
   group?: string;
+  /**
+   * A logo of the viewer's own, for a channel whose provider sent a broken one or none.
+   *
+   * Channels only — a film's artwork comes from enrichment, not from the playlist. An
+   * empty string restores the provider's, the same way `number: 0` restores theirs.
+   */
+  logo?: string;
   hidden?: boolean;
 }
 

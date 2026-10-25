@@ -26,6 +26,9 @@ pub struct PlaylistRow {
     pub group: Option<String>,
     pub quality: Option<String>,
     pub lang: Option<String>,
+    /// The logo this entry shows: the viewer's if they set one, the provider's if not.
+    /// `None` for films and shows, which take their artwork from enrichment.
+    pub logo: Option<String>,
     pub hidden: bool,
     /// True when any `custom_*` column is set, so the editor can offer a reset.
     pub edited: bool,
@@ -76,6 +79,7 @@ struct Columns {
     provider_name: &'static str,
     number: &'static str,
     group: &'static str,
+    logo: &'static str,
     edited: &'static str,
 }
 
@@ -86,6 +90,9 @@ fn columns(kind: Kind) -> Columns {
             provider_name: "t.name",
             number: "COALESCE(t.custom_number, t.number)",
             group: "COALESCE(t.custom_group, t.group_title)",
+            // The same expression `channels::list` shows in the grid, so the editor is
+            // editing the thing on screen rather than a column next to it.
+            logo: "COALESCE(t.custom_logo, t.logo)",
             edited: "(t.custom_name IS NOT NULL OR t.custom_number IS NOT NULL
                       OR t.custom_group IS NOT NULL OR t.custom_logo IS NOT NULL)",
         },
@@ -94,6 +101,8 @@ fn columns(kind: Kind) -> Columns {
             provider_name: "t.title",
             number: "NULL",
             group: "t.group_title",
+            // Films and shows have no such column; their artwork is enrichment's.
+            logo: "NULL",
             edited: "(t.custom_title IS NOT NULL)",
         },
     }
@@ -159,7 +168,7 @@ pub fn list(conn: &Connection, q: &Query) -> Result<Vec<PlaylistRow>> {
     };
     let sql = format!(
         "SELECT t.id, {name}, {provider_name}, {number}, {group}, t.quality, t.lang_code,
-                t.hidden, {edited},
+                {logo}, t.hidden, {edited},
                 (SELECT count(*) - 1 FROM {table} d
                   WHERE d.match_key = t.match_key{year}),
                 p.name
@@ -171,6 +180,7 @@ pub fn list(conn: &Connection, q: &Query) -> Result<Vec<PlaylistRow>> {
         provider_name = c.provider_name,
         number = c.number,
         group = c.group,
+        logo = c.logo,
         edited = c.edited,
         year = year_match(q.kind),
     );
@@ -193,10 +203,11 @@ pub fn list(conn: &Connection, q: &Query) -> Result<Vec<PlaylistRow>> {
                 group: r.get(4)?,
                 quality: r.get(5)?,
                 lang: r.get(6)?,
-                hidden: r.get::<_, i64>(7)? != 0,
-                edited: r.get::<_, i64>(8)? != 0,
-                duplicates: r.get::<_, i64>(9)?.max(0) as u32,
-                provider: r.get(10)?,
+                logo: r.get(7)?,
+                hidden: r.get::<_, i64>(8)? != 0,
+                edited: r.get::<_, i64>(9)? != 0,
+                duplicates: r.get::<_, i64>(10)?.max(0) as u32,
+                provider: r.get(11)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -241,6 +252,9 @@ pub struct Patch {
     pub name: Option<String>,
     pub number: Option<u32>,
     pub group: Option<String>,
+    /// A logo of the viewer's own, for a channel whose provider supplied a bad one or
+    /// none. Blank puts the provider's back.
+    pub logo: Option<String>,
     pub hidden: Option<bool>,
 }
 
@@ -287,6 +301,22 @@ pub fn update(conn: &Connection, kind: Kind, id: i64, patch: &Patch) -> Result<(
             &format!("UPDATE {table} SET {column} = ?2 WHERE id = ?1"),
             params![id, blank_to_none(group)],
         )?;
+    }
+    if let Some(logo) = &patch.logo {
+        // Channels only. `custom_logo` is a column on `channels`, and a film's artwork
+        // comes from enrichment rather than from the playlist -- `movies` has no such
+        // column, so writing one here would be a SQL error rather than a no-op.
+        //
+        // The read side has always honoured this: `channels::list` selects
+        // `COALESCE(channels.custom_logo, channels.logo)`, and `playlist::reset` clears
+        // it along with the other overrides. Only the writer was missing, so a column
+        // that the grid displays and the editor resets could never be given a value.
+        if matches!(kind, Kind::Live) {
+            conn.execute(
+                "UPDATE channels SET custom_logo = ?2 WHERE id = ?1",
+                params![id, blank_to_none(logo)],
+            )?;
+        }
     }
     if let Some(hidden) = patch.hidden {
         conn.execute(
@@ -363,6 +393,62 @@ pub fn reset(conn: &mut Connection, kind: Kind, ids: &[i64]) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
+    /// A logo of the viewer's own, which the column could never be given before.
+    ///
+    /// `custom_logo` has always been *read* -- `channels::list` selects
+    /// `COALESCE(custom_logo, logo)` -- and always been cleared by `reset`, and counted
+    /// towards `edited`. The writer was simply missing, so a provider's broken logo was
+    /// permanent.
+    #[test]
+    fn a_channel_can_be_given_a_logo_of_its_own() {
+        let conn = seeded();
+        let q = Query::default();
+        let before = list(&conn, &q).unwrap();
+        let row = before.iter().find(|r| r.id == 1).expect("channel 1");
+        let provider_logo = row.logo.clone();
+
+        update(
+            &conn,
+            Kind::Live,
+            1,
+            &Patch {
+                logo: Some("https://example.invalid/mine.png".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = list(&conn, &q).unwrap();
+        let row = after.iter().find(|r| r.id == 1).expect("channel 1");
+        assert_eq!(
+            row.logo.as_deref(),
+            Some("https://example.invalid/mine.png")
+        );
+        assert_ne!(row.logo, provider_logo, "the override did not take");
+        assert!(
+            row.edited,
+            "an overridden logo is an edit the row can reset"
+        );
+
+        // Blank puts the provider's back, the way `number: 0` restores theirs.
+        update(
+            &conn,
+            Kind::Live,
+            1,
+            &Patch {
+                logo: Some("   ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let back = list(&conn, &q).unwrap();
+        let row = back.iter().find(|r| r.id == 1).expect("channel 1");
+        assert_eq!(
+            row.logo, provider_logo,
+            "the provider's logo did not come back"
+        );
+    }
+
     use super::*;
 
     fn seeded() -> Connection {
@@ -668,6 +754,7 @@ mod tests {
                 name: Some("Renamed".into()),
                 number: Some(7),
                 group: Some("Mine".into()),
+                logo: Some("https://example.invalid/mine.png".into()),
                 hidden: Some(true),
             },
         )
