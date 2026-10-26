@@ -161,40 +161,87 @@ impl<'a> ChatClient<'a> {
 /// what the API specifies: the function's output is something being *given to* the model,
 /// so it arrives from the same side as the person's own words.
 fn contents_of(history: &[Turn]) -> Vec<serde_json::Value> {
+    // A call we cannot sign is told as prose instead, along with its result.
+    //
+    // Gemini requires `thoughtSignature` back on every `functionCall` part and rejects
+    // the request outright without it — the error names the function and its position,
+    // and the whole turn fails. `ToolCall::thought_signature` is `None` whenever the
+    // model did not send one, and sending the call anyway is the one thing guaranteed
+    // not to work.
+    //
+    // So those turns are degraded rather than dropped: the model still learns that it
+    // asked and what came back, which is what the next round needs, and the request
+    // stays one the API will accept. Done as a *pair* because a `functionResponse` is
+    // only legal after the `functionCall` it answers — degrading one and not the other
+    // trades a rejected request for a differently rejected request.
+    let mut unsigned = vec![false; history.len()];
+    for (i, turn) in history.iter().enumerate() {
+        if let Turn::ToolCall {
+            thought_signature: None,
+            ..
+        } = turn
+        {
+            unsigned[i] = true;
+            if let Some(Turn::ToolResult { .. }) = history.get(i + 1) {
+                unsigned[i + 1] = true;
+            }
+        }
+    }
+
     history
         .iter()
-        .map(|turn| match turn {
-            Turn::User { text } => json!({ "role": "user", "parts": [{ "text": text }] }),
-            Turn::Model { text } => json!({ "role": "model", "parts": [{ "text": text }] }),
-            Turn::ToolCall {
-                name,
-                args,
-                thought_signature,
-            } => {
-                let mut part = json!({ "functionCall": { "name": name, "args": args } });
-                // Beside `functionCall`, not inside it: the signature is a property of
-                // the *part*, which is where the API looks for it.
-                if let Some(signature) = thought_signature {
-                    part["thoughtSignature"] = json!(signature);
-                }
-                json!({ "role": "model", "parts": [part] })
-            }
-            Turn::ToolResult { name, result } => json!({
-                "role": "user",
-                "parts": [{
-                    "functionResponse": {
-                        "name": name,
-                        // The API wants an object here; a bare array or string is
-                        // rejected, so anything that is not already a map is wrapped.
-                        "response": match result {
-                            serde_json::Value::Object(_) => result.clone(),
-                            other => json!({ "result": other }),
-                        },
-                    },
-                }],
-            }),
+        .enumerate()
+        .map(|(i, turn)| match turn {
+            _ if unsigned[i] => match turn {
+                Turn::ToolCall { name, args, .. } => json!({
+                    "role": "model",
+                    "parts": [{ "text": format!("(Looked up {name} with {args})") }],
+                }),
+                Turn::ToolResult { name, result } => json!({
+                    "role": "user",
+                    "parts": [{ "text": format!("(Result of {name}: {result})") }],
+                }),
+                // Unreachable: only the two above are ever marked.
+                other => turn_part(other),
+            },
+            other => turn_part(other),
         })
         .collect()
+}
+
+/// One turn as the API's `contents` entry, for a turn that needs no special handling.
+fn turn_part(turn: &Turn) -> serde_json::Value {
+    match turn {
+        Turn::User { text } => json!({ "role": "user", "parts": [{ "text": text }] }),
+        Turn::Model { text } => json!({ "role": "model", "parts": [{ "text": text }] }),
+        Turn::ToolCall {
+            name,
+            args,
+            thought_signature,
+        } => {
+            let mut part = json!({ "functionCall": { "name": name, "args": args } });
+            // Beside `functionCall`, not inside it: the signature is a property of
+            // the *part*, which is where the API looks for it.
+            if let Some(signature) = thought_signature {
+                part["thoughtSignature"] = json!(signature);
+            }
+            json!({ "role": "model", "parts": [part] })
+        }
+        Turn::ToolResult { name, result } => json!({
+            "role": "user",
+            "parts": [{
+                "functionResponse": {
+                    "name": name,
+                    // The API wants an object here; a bare array or string is
+                    // rejected, so anything that is not already a map is wrapped.
+                    "response": match result {
+                        serde_json::Value::Object(_) => result.clone(),
+                        other => json!({ "result": other }),
+                    },
+                },
+            }],
+        }),
+    }
 }
 
 impl Chatter for ChatClient<'_> {
@@ -355,6 +402,128 @@ fn unreadable(e: &serde_json::Error) -> NetFailure {
 
 #[cfg(test)]
 mod tests {
+    /// A call the model signed goes back exactly as it came.
+    #[test]
+    fn a_signed_call_keeps_its_signature() {
+        let sent = contents_of(&[
+            Turn::ToolCall {
+                name: "search_library".into(),
+                args: json!({ "text": "heat" }),
+                thought_signature: Some("sig-abc".into()),
+            },
+            Turn::ToolResult {
+                name: "search_library".into(),
+                result: json!({ "hits": 2 }),
+            },
+        ]);
+        assert_eq!(sent[0]["parts"][0]["thoughtSignature"], json!("sig-abc"));
+        assert!(sent[0]["parts"][0]["functionCall"].is_object());
+        assert!(sent[1]["parts"][0]["functionResponse"].is_object());
+    }
+
+    /// A call the model did **not** sign is never sent as a `functionCall`.
+    ///
+    /// Gemini requires `thoughtSignature` back on every one and rejects the request
+    /// outright without it -- "Function call is missing a thought_signature in
+    /// functionCall parts", naming the function and its position. Reported from the app,
+    /// which is how this gap was found: the signature was being carried correctly and
+    /// there were still two ways to emit a part that had none.
+    #[test]
+    fn an_unsigned_call_is_told_as_prose_instead() {
+        let sent = contents_of(&[
+            Turn::ToolCall {
+                name: "search_library".into(),
+                args: json!({ "text": "heat" }),
+                thought_signature: None,
+            },
+            Turn::ToolResult {
+                name: "search_library".into(),
+                result: json!({ "hits": 2 }),
+            },
+        ]);
+        // Neither half is a function part, so there is nothing for the API to reject.
+        assert!(
+            sent[0]["parts"][0].get("functionCall").is_none(),
+            "{sent:?}"
+        );
+        assert!(
+            sent[1]["parts"][0].get("functionResponse").is_none(),
+            "{sent:?}"
+        );
+        // And the model is still told what happened, which is what the next round needs.
+        let said = sent[0]["parts"][0]["text"].as_str().unwrap();
+        assert!(said.contains("search_library"), "{said}");
+        let back = sent[1]["parts"][0]["text"].as_str().unwrap();
+        assert!(back.contains("hits"), "{back}");
+        assert_eq!(sent[0]["role"], json!("model"));
+        assert_eq!(sent[1]["role"], json!("user"));
+    }
+
+    /// Degrading is a pair, because a response is only legal after the call it answers.
+    #[test]
+    fn an_unsigned_call_does_not_leave_its_result_as_a_function_response() {
+        let sent = contents_of(&[
+            Turn::User { text: "hi".into() },
+            Turn::ToolCall {
+                name: "a".into(),
+                args: json!({}),
+                thought_signature: None,
+            },
+            Turn::ToolResult {
+                name: "a".into(),
+                result: json!({ "ok": true }),
+            },
+            // A signed one after it is untouched: the degradation is per pair, not a
+            // mode the whole request falls into.
+            Turn::ToolCall {
+                name: "b".into(),
+                args: json!({}),
+                thought_signature: Some("sig-b".into()),
+            },
+            Turn::ToolResult {
+                name: "b".into(),
+                result: json!({ "ok": true }),
+            },
+        ]);
+        assert!(sent[1]["parts"][0].get("functionCall").is_none());
+        assert!(sent[2]["parts"][0].get("functionResponse").is_none());
+        assert_eq!(sent[3]["parts"][0]["thoughtSignature"], json!("sig-b"));
+        assert!(sent[4]["parts"][0]["functionResponse"].is_object());
+    }
+
+    /// Every `functionResponse` in a request answers a `functionCall` before it.
+    ///
+    /// The property rather than a case: an unpaired response is rejected whatever put it
+    /// there, and the cap on lookups used to push one on its own.
+    #[test]
+    fn every_function_response_follows_its_call() {
+        let history = vec![
+            Turn::User { text: "hi".into() },
+            Turn::ToolCall {
+                name: "a".into(),
+                args: json!({}),
+                thought_signature: Some("s".into()),
+            },
+            Turn::ToolResult {
+                name: "a".into(),
+                result: json!({}),
+            },
+            Turn::Model {
+                text: "done".into(),
+            },
+        ];
+        let sent = contents_of(&history);
+        for (i, entry) in sent.iter().enumerate() {
+            if entry["parts"][0].get("functionResponse").is_some() {
+                let before = &sent[i - 1];
+                assert!(
+                    before["parts"][0].get("functionCall").is_some(),
+                    "entry {i} answers nothing: {sent:?}"
+                );
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

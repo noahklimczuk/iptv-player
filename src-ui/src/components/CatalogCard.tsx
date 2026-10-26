@@ -16,7 +16,7 @@ import { progressPct, remaining, runtime } from '@/lib/format';
 import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useUi } from '@/state/ui';
 import { Badge, IconButton, ProgressBar, Poster } from './Primitives';
-import { TrailerFrame } from './TrailerFrame';
+import { TrailerPopup } from './TrailerPopup';
 
 const PREVIEW_DELAY_MS = 700;
 
@@ -167,25 +167,14 @@ export const CatalogCard = memo(function CatalogCard({
         <div style={{ position: 'relative' }}>
           <Poster src={item.poster} alt={item.title} />
 
-          {/* Over the poster, which stays underneath: the trailer is 16:9 and a poster
-              is 2:3, so the frame covers the middle band and the artwork fills the rest.
-              Mounted only on the one expanded card — a rail of twenty iframes would be
-              twenty video players. */}
-          {preview && item.trailerKey && (
-            <div
-              style={{
-                position: 'absolute', left: 0, right: 0, top: '50%',
-                transform: 'translateY(-50%)', aspectRatio: '16 / 9',
-                overflow: 'hidden', background: '#000',
-              }}
-            >
-              <TrailerFrame
-                trailerKey={item.trailerKey}
-                muted
-                title={`Trailer for ${item.title}`}
-              />
-            </div>
-          )}
+          {/* The trailer is *not* here any more.
+              
+              It used to play over the poster: 16:9 inside a 2:3 tile, so it covered the
+              middle band of something 150px wide and the artwork filled the rest. Big
+              enough to prove a trailer exists and too small to watch, for the same cost
+              as a real one — it is a video player either way. It plays in
+              `TrailerPopup` now, over the page. Still mounted only for the one expanded
+              card: a rail of twenty iframes would be twenty video players. */}
 
           {rank !== undefined && (
             <div
@@ -419,6 +408,19 @@ export const CatalogCard = memo(function CatalogCard({
         )}
 
       </motion.div>
+
+      {/* Over the page rather than inside the tile. Outside the card's own box so the
+          card's `overflow` and transform cannot clip or scale it, and rendered last so
+          it sits above the rail without the card needing a z-index of its own. */}
+      <AnimatePresence>
+        {preview && item.trailerKey && (
+          <TrailerPopup
+            trailerKey={item.trailerKey}
+            title={item.title}
+            onClose={() => setPreview(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 });

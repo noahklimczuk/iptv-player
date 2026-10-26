@@ -179,6 +179,47 @@ impl NetFailure {
                 "Your provider is rate-limiting this connection",
                 "Too many requests in a short time. Waiting a moment usually clears it.",
             )
+        } else if status == Some(888) {
+            // 888, which is not a status code at all.
+            //
+            // Measured against this panel on 2026-10-25, with the account reporting
+            // `status: Active`, `auth: 1` and `active_cons: 0`, from one IP in one
+            // minute:
+            //
+            //   * a VOD stream  -> HTTP 200, bytes flowing;
+            //   * three live streams -> 888, 888, 503.
+            //
+            // So it is not the credentials, not the line being full, not the address and
+            // not the client: the same request that works for a film is refused for a
+            // channel. Every user agent tried got the same answer, including VLC's and
+            // libavformat's, and sending none at all got a 503 instead -- which is the
+            // same refusal wearing a standard number.
+            //
+            // Reported as "live tv is completely broken", and it arrived as **"Something
+            // went wrong with that request -- Aurora could not tell what from the error
+            // it got back"**, because 888 is in no family any branch names. That answer
+            // is worse than the problem: it tells a viewer their app is confused when
+            // what happened is that their provider said no.
+            //
+            // **And it passes.** The same channel that answered 888 to every client
+            // tried was serving `video/mp2t` with a 200 about twenty minutes later,
+            // nothing having changed at this end. So the wording says "right now"
+            // and suggests waiting: a refusal that clears by itself must not be
+            // reported as a subscription problem to go and argue about.
+            //
+            // Deliberately *not* filed as a connection limit, which is where 555 goes.
+            // The two look alike and are not: 555 arrives with the line's one slot
+            // already in use, and this arrives with none. Guessing "you are watching
+            // elsewhere" at somebody who is not would send them looking for a device
+            // that is not on.
+            (
+                ErrorCode::Refused,
+                "Your provider is not serving this channel right now",
+                "The panel refused it outright rather than failing to answer. That \
+                 is usually their live service having a moment: films and shows \
+                 often keep working while it lasts, and it has been seen to clear \
+                 by itself within the hour. Another source may work meanwhile.",
+            )
         } else if status == Some(555)
             || l.contains("connection limit")
             || l.contains("max connections")
@@ -681,6 +722,48 @@ mod tests {
         assert_eq!(never.code, ErrorCode::Timeout);
         assert!(never.cause.contains("port"), "{}", never.cause);
         assert_ne!(never.message, stalled.message);
+    }
+
+    /// 888 is a refusal, not a confusion.
+    ///
+    /// Measured against the real panel: the account was `Active` with `active_cons: 0`,
+    /// a VOD stream returned HTTP 200 with bytes, and live channels returned 888. It
+    /// reached the viewer as "Aurora could not tell what from the error it got back",
+    /// which blames the app for the provider saying no.
+    #[test]
+    fn a_non_standard_refusal_is_still_a_refusal() {
+        for raw in ["HTTP 888", "server returned 888", "http error 888: "] {
+            let f = NetFailure::classify(raw);
+            assert_eq!(f.code, ErrorCode::Refused, "{raw}");
+            assert!(
+                !f.message.contains("could not tell"),
+                "{raw} still reads as a confusion: {}",
+                f.message
+            );
+            assert!(
+                f.message.to_lowercase().contains("provider"),
+                "{}",
+                f.message
+            );
+        }
+    }
+
+    /// And it is not mistaken for the connection limit, which looks just like it.
+    ///
+    /// 555 arrives when the line's one slot is already in use; 888 arrived with none in
+    /// use. Telling somebody they are "watching on another device" when they are not
+    /// sends them looking for a device that is not on.
+    #[test]
+    fn a_refusal_is_not_reported_as_a_second_device() {
+        let refused = NetFailure::classify("HTTP 888");
+        let limit = NetFailure::classify("HTTP 555");
+        assert_eq!(limit.code, ErrorCode::ConnectionLimit);
+        assert_ne!(refused.code, limit.code);
+        assert!(
+            !refused.message.contains("another device"),
+            "{}",
+            refused.message
+        );
     }
 
     /// "The stream didn't respond in time", under a provider form, is a sentence about
