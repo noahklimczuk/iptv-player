@@ -1006,6 +1006,18 @@ pub fn send(
             if calls_made >= MAX_CALLS {
                 // Told, not silently dropped: a model that asked for a fifteenth lookup
                 // needs to know why it did not get one, or it asks again.
+                //
+                // The *call* goes back too, which it did not before. A `functionResponse`
+                // with no `functionCall` in front of it is not a shape the API accepts:
+                // every response has to answer a call it can see, and the refusal was
+                // being sent on its own. One unpaired response poisons the whole request,
+                // so a conversation that reached the cap stopped working rather than
+                // being told it had reached the cap.
+                working.push(Turn::ToolCall {
+                    name: call.name.clone(),
+                    args: call.args.clone(),
+                    thought_signature: call.thought_signature.clone(),
+                });
                 working.push(Turn::ToolResult {
                     name: call.name.clone(),
                     result: json!({
