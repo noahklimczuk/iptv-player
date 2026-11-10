@@ -36,12 +36,23 @@ export function useNowNext(visibleIds: number[]): Map<number, NowNext> {
     const wanted = visibleIds.filter((id) => !asked.current.has(id));
     if (wanted.length === 0) return;
 
-    let live = true;
     const timer = window.setTimeout(() => {
       for (const id of wanted) asked.current.add(id);
       invoke('epg.nowNextMany', { channelIds: wanted })
         .then((pairs) => {
-          if (!live) return;
+          // Merged against whichever rows are on screen by the time it lands.
+          //
+          // This used to be discarded unless the visible window was still the one
+          // that asked, and that plus `asked` lost rows for good: the ids go in when
+          // the request goes *out*, so a reply thrown away for arriving late left them
+          // marked as asked with nothing learned -- and nothing asks twice. Scrolling
+          // on while a request is in flight is the normal way to use a list, and is
+          // exactly what `SETTLE_MS` produces, so those channels showed no now/next
+          // for the life of the page.
+          //
+          // There is also nothing for a late reply to be stale against: `known` is
+          // keyed by channel id, and now/next is about the clock rather than about the
+          // scroll position.
           setKnown((prev) => {
             const next = new Map(prev);
             for (const [id, pair] of Object.entries(pairs)) next.set(Number(id), pair);
@@ -56,10 +67,9 @@ export function useNowNext(visibleIds: number[]): Map<number, NowNext> {
         });
     }, SETTLE_MS);
 
-    return () => {
-      live = false;
-      window.clearTimeout(timer);
-    };
+    // Only the timer. A request already sent is left to land, because its answer is
+    // worth having and the ids it covers have already been spent.
+    return () => window.clearTimeout(timer);
     // `key` is the identity of the window; the array itself is new every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);

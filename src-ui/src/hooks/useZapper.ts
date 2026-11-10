@@ -44,6 +44,24 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
   const previous = useRef<Channel | null>(null);
   const digitTimer = useRef<number | undefined>(undefined);
   /**
+   * What the viewer has most recently asked to be on. The UI half of the host's
+   * `Playback::generation`, and there for the same reason.
+   *
+   * Every path to a channel is synchronous except digit entry, which has to ask the
+   * host what channel 101 *is* before it can tune it. So two entries can be in flight
+   * at once — type 101, wait out the 1.8s timeout, type 205 — and `channels.byNumber`
+   * takes the single writer mutex, so which reply lands first is not which was asked
+   * first. The viewer typed 205 and ended up on 101.
+   *
+   * Pressing Ch+ or clicking a channel during that lookup is the same race with a
+   * worse ending: the host's own generation counter means the *stream* is whatever was
+   * asked for last, but nothing stopped the stale reply from calling `tune`, which sets
+   * `current`, the banner and the last-channel target. The picture and everything
+   * naming it disagreed, and `previous` then sent Backspace to a channel that was never
+   * on.
+   */
+  const intent = useRef(0);
+  /**
    * Four fields, subscribed to one at a time (R-90).
    *
    * `useUi()` with no selector subscribes to every field in the store, and the host's
@@ -66,6 +84,7 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
 
   const tune = useCallback(
     (ch: Channel, { reveal = true }: TuneOptions = {}) => {
+      intent.current += 1;
       if (current && current.id !== ch.id) previous.current = current;
       setCurrent(ch);
       showBanner(ch.id);
@@ -100,10 +119,16 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
     const n = Number(digits);
     clearDigits();
     if (!Number.isFinite(n) || n <= 0) return;
+    // Claimed before the lookup, so a second entry committed while this one is waiting
+    // invalidates it rather than queueing behind it.
+    const mine = (intent.current += 1);
     const hit = await invoke('channels.byNumber', { number: n }).catch((e: unknown) => {
       report(`Could not find channel ${n}`)(e);
       return null;
     });
+    // Anything the viewer has asked for since owns the channel now. Tuning here would
+    // put them back on the number they had already moved on from.
+    if (intent.current !== mine) return;
     if (hit) tune(hit);
   }, [digits, clearDigits, tune]);
 

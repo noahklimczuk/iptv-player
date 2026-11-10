@@ -3006,6 +3006,26 @@ export function hangMock(name: string): void {
 }
 
 /**
+ * Commands whose answer arrives late, and how late.
+ *
+ * The third thing a host can do, and the one neither `faults` nor `hangs` covers: it
+ * answers, correctly, after the screen has moved on. `hangs` never comes back and a
+ * fault comes back as a refusal, so until this existed no journey could put a *valid*
+ * reply behind the thing that happened next -- which is the condition the batching
+ * guide hooks get wrong. They mark the ids they asked about before the reply lands, so
+ * a reply the UI discards for arriving late leaves those channels marked as asked with
+ * nothing learned, and nothing asks twice.
+ *
+ * A real panel does this constantly: `epg.nowNextMany` is two queries per channel under
+ * the single writer mutex, and scrolling a list of 22,121 channels outruns it easily.
+ */
+const slows = new Map<string, number>();
+
+export function slowMock(name: string, ms: number): void {
+  slows.set(name, ms);
+}
+
+/**
  * What the UI has asked for, and how big the answer was.
  *
  * A test seam like `__auroraFailNext`, and the one the mock was missing: every journey
@@ -3063,6 +3083,11 @@ export async function invokeMock<K extends CommandName>(
   const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
   const result = await fn(args);
+  // Recorded before the wait, not after: the question was asked when it was asked, and
+  // a journey that polls `__auroraCalls` to know the request went out should not have
+  // to wait out the answer to see it.
   record(name, args, result);
+  const slow = slows.get(name);
+  if (slow !== undefined) await new Promise((r) => setTimeout(r, slow));
   return result;
 }
