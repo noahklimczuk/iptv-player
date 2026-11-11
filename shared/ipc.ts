@@ -436,7 +436,7 @@ export interface PlaybackError {
     | 'dns' | 'refused' | 'tls' | 'unauthorized' | 'forbidden' | 'notFound' | 'badRequest'
     | 'rateLimited'
     | 'serverError' | 'connectionLimit' | 'timeout' | 'unsupportedCodec'
-    | 'drmProtected' | 'dropped' | 'unknown';
+    | 'drmProtected' | 'dropped' | 'blocked' | 'unknown';
   message: string;
   cause: string;
   actions: ErrorAction[];
