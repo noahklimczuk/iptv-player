@@ -555,9 +555,26 @@ impl Playback {
 
         // Whatever was playing just stopped playing, so that is a failure against the
         // source, not just against this attempt.
-        if let Some((source_id, _)) = session.candidates.get(session.current) {
-            let db = self.db.lock();
-            let _ = sources::record_failure(&db, *source_id, now);
+        //
+        // Once per failure, not once per heartbeat. `tick` calls this every 250 ms for
+        // as long as the status is `Error`, and the retry path below returns `false`
+        // without loading anything while the backoff runs -- so a single stall on a
+        // channel with one source came through here about seventeen times (once on
+        // first sight, then four a second for the 1s and 3s of `LIVE_BACKOFF_SECS`) and
+        // recorded a failure every time. `fail_count` is not a log, it is the number
+        // `cooldown_secs` multiplies by `COOLDOWN_STEP_SECS`: seventeen pinned a healthy
+        // source at `MAX_COOLDOWN_SECS`, so one hiccup sorted it last for six minutes
+        // and the ordering meant to start the next tune from the stream that works was
+        // reading a count seventeen times the truth.
+        //
+        // `failed_at` is exactly "this failure has already been seen": `None` while
+        // playing, cleared again before each retry, so a stream that dies twice is
+        // still counted twice.
+        if session.failed_at.is_none() {
+            if let Some((source_id, _)) = session.candidates.get(session.current) {
+                let db = self.db.lock();
+                let _ = sources::record_failure(&db, *source_id, now);
+            }
         }
 
         let next = session.current + 1;
@@ -1397,6 +1414,47 @@ mod tests {
             vec![url(0), url(0)],
             "the only source there is was never retried"
         );
+    }
+
+    /// One stall is one failure, however many heartbeats it spans.
+    ///
+    /// `tick` runs four times a second and `recover` returns early for the whole of
+    /// `LIVE_BACKOFF_SECS` without loading anything, so the failure recorded on first
+    /// sight was recorded again on every heartbeat in between. `fail_count` feeds
+    /// `cooldown_secs`, which is `fail_count * COOLDOWN_STEP_SECS` capped at
+    /// `MAX_COOLDOWN_SECS` -- so a provider hiccup on a healthy source sorted it last
+    /// for the full six minutes, and the next tune's ordering was reading a number
+    /// about seventeen times too big.
+    #[test]
+    fn a_stall_is_one_failure_against_the_source_not_one_per_heartbeat() {
+        let (playback, fake, db) = harness(1);
+        playback.play_live(1, NOW).unwrap();
+        assert_eq!(
+            fail_count(&db, 1),
+            0,
+            "a source that just played is healthy"
+        );
+
+        fake.die();
+        // A second of heartbeats at the real 250 ms cadence, which all share one
+        // whole-second `now`, and none of which gets past the backoff.
+        for _ in 0..4 {
+            playback.tick(NOW);
+        }
+        assert_eq!(
+            fake.loaded(),
+            vec![url(0)],
+            "nothing was reloaded, so there is nothing new to blame the source for"
+        );
+        assert_eq!(
+            fail_count(&db, 1),
+            1,
+            "the stream died once; the heartbeat is not a second opinion"
+        );
+
+        // And the retry still happens once the backoff has passed.
+        playback.tick(NOW + 2);
+        assert_eq!(fake.loaded(), vec![url(0), url(0)]);
     }
 
     /// Bounded, so a dead channel does not reconnect for ever.

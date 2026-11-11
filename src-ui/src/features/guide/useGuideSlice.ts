@@ -69,36 +69,52 @@ export function useGuideSlice(
     const wanted = visibleIds.filter((id) => !asked.current.has(id));
     if (wanted.length === 0) return;
 
-    let live = true;
-    // Counted once and released once, whether the fetch finishes or the window moves
-    // out from under it. Decrementing in both places unconditionally is how a spinner
-    // comes to run backwards.
+    // The set *is* the identity of the time window: the reset above replaces it, so
+    // comparing it later is how a reply knows whether the window it describes is still
+    // the one on screen. Captured rather than re-read, because `asked.current` by then
+    // may be the next window's set.
+    //
+    // What this replaces dropped a reply whenever the *visible rows* had changed, and
+    // together with `asked` that lost those rows for good -- the ids go in when the
+    // request goes out, so a discarded reply left them marked as asked with nothing
+    // learned, and nothing asks twice. Scrolling on while a request was in flight is
+    // the normal way to read a guide, and is precisely what `SETTLE_MS` produces, so
+    // those rows stayed blank until the window moved. Only `from`/`to` can make a reply
+    // untrue (R-91); the rows on screen cannot.
+    const windowAsked = asked.current;
+    // Counted once and released once. Decrementing in both places unconditionally is
+    // how a spinner comes to run backwards.
     let counted = true;
     const released = () => {
       if (!counted) return;
       counted = false;
       setPending((n) => n - 1);
     };
+    let sent = false;
     setPending((n) => n + 1);
     const timer = globalThis.setTimeout(() => {
+      sent = true;
       for (const id of wanted) asked.current.add(id);
       invoke('epg.gridSlice', { from, to, channelIds: wanted })
         .then((slice) => {
-          if (!live) return;
+          if (asked.current !== windowAsked) return;
           setByEpgId((prev) => ({ ...prev, ...slice.programmes }));
         })
         .catch((e: unknown) => {
           // Ask again next time it scrolls past: a guide that failed once is not a
-          // guide that does not exist.
-          for (const id of wanted) asked.current.delete(id);
+          // guide that does not exist. Against the set that asked, so this cannot
+          // un-ask ids the window that replaced it has legitimately claimed.
+          for (const id of wanted) windowAsked.delete(id);
           report('Could not load the guide for these channels')(e);
         })
         .finally(released);
     }, SETTLE_MS);
 
     return () => {
-      live = false;
-      released();
+      // Released here only if the request never went out. One that is already in
+      // flight will still be merged, so it is still pending and `finally` owns it --
+      // releasing it here would clear the skeleton while its rows are still coming.
+      if (!sent) released();
       globalThis.clearTimeout(timer);
     };
     // `key` is the identity of the window; the array itself is new every render.

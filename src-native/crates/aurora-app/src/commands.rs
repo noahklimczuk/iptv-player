@@ -112,6 +112,50 @@ pub struct GuideSlice {
     pub to: i64,
 }
 
+/// The most channels one `epg.gridSlice` will answer about.
+///
+/// `epg::grid_slice` bounds the *time* axis with `MAX_SLICE_SECS` and deliberately
+/// chunks rather than caps the channel axis, because a cap in the repository means rows
+/// silently missing from a guide somebody asked for. Nothing bounded the channel axis
+/// *here*, though, and this is where it needed bounding: an empty `channel_ids` means
+/// every channel in the library, which on the live line is 1,549 channels with a guide
+/// id, 35,576 programmes in 24 hours and **14.82 MB in one reply** — assembled into a
+/// `Vec`, a `HashMap` and a serde payload while holding the single writer mutex, so
+/// everything else waits on it (R-130).
+///
+/// R-130 fixed the caller, and `tests-e2e/guide-payload.spec.ts` asserts it never asks
+/// that way again, but a command is reachable by more than its caller — the same
+/// reasoning `MAX_NOW_NEXT_BATCH` is there for, and the same shape of guard. Generous
+/// against what a virtualised grid mounts, which is a few dozen rows, and small against
+/// what a library holds.
+pub const MAX_SLICE_CHANNELS: usize = 512;
+
+/// Which channels one guide slice answers about.
+///
+/// A free function rather than inline, because this is the whole of the bound and a
+/// `tauri::command` needs `State<Services>` to call — so inline it is reachable only by
+/// a running app. Which is how the channel axis went unbounded while the time axis, one
+/// layer down in a plain function, grew both a constant and tests for it.
+fn slice_channels(all: Vec<channels::ChannelRow>, asked: &[i64]) -> Vec<channels::ChannelRow> {
+    let mut wanted: Vec<channels::ChannelRow> = if asked.is_empty() {
+        all
+    } else {
+        // A set, not `Vec::contains`. That was a linear scan of the requested ids for
+        // every channel in the library, so asking about the whole list cost
+        // `channels × ids` comparisons — 6,698 × 6,698 is 44.9 million on this line,
+        // and 22,121 squared is 489 million on the one docs/ROADMAP.md describes. Same
+        // shape as the prefilter R-131 was about.
+        let asked: std::collections::HashSet<i64> = asked.iter().copied().collect();
+        all.into_iter().filter(|c| asked.contains(&c.id)).collect()
+    };
+    // Bounded after the filter, so asking by id is bounded too and not only the
+    // everything case. `truncate` keeps the library's own order, which is the order the
+    // grid draws its rows in, so what survives is the top of the screen rather than an
+    // arbitrary slice of it.
+    wanted.truncate(MAX_SLICE_CHANNELS);
+    wanted
+}
+
 #[tauri::command(async)]
 pub fn epg_grid_slice(services: State<'_, Services>, args: GridSliceArgs) -> Result<GuideSlice> {
     let db = services.db.lock();
@@ -122,17 +166,7 @@ pub fn epg_grid_slice(services: State<'_, Services>, args: GridSliceArgs) -> Res
             ..Default::default()
         },
     )?;
-    let wanted: Vec<channels::ChannelRow> = if args.channel_ids.is_empty() {
-        all
-    } else {
-        // A set, not `Vec::contains`. That was a linear scan of the requested ids for
-        // every channel in the library, so asking about the whole list cost
-        // `channels × ids` comparisons — 6,698 × 6,698 is 44.9 million on this line,
-        // and 22,121 squared is 489 million on the one docs/ROADMAP.md describes. Same
-        // shape as the prefilter R-131 was about.
-        let asked: std::collections::HashSet<i64> = args.channel_ids.iter().copied().collect();
-        all.into_iter().filter(|c| asked.contains(&c.id)).collect()
-    };
+    let wanted = slice_channels(all, &args.channel_ids);
 
     let epg_ids: Vec<String> = wanted
         .iter()
@@ -1308,5 +1342,51 @@ mod tests {
         );
         assert!(err.is_err(), "a refusal was swallowed");
         assert_eq!(err.unwrap_err().to_string(), "mpv said no");
+    }
+
+    fn library(n: usize) -> Vec<channels::ChannelRow> {
+        (0..n)
+            .map(|i| channels::ChannelRow {
+                id: i as i64 + 1,
+                name: format!("Channel {i}"),
+                epg_channel_id: Some(format!("c{i}.example")),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// Naming no channels still means every channel, but no longer means *all* of them.
+    ///
+    /// On the live line that request is 1,549 channels with a guide id and 35,576
+    /// programmes in 24 hours — 14.82 MB in one reply, built while holding the single
+    /// writer mutex. R-130 fixed the caller and a journey keeps it fixed, but a command
+    /// is reachable by more than its caller.
+    #[test]
+    fn a_guide_slice_that_names_nothing_is_still_bounded() {
+        let wanted = slice_channels(library(MAX_SLICE_CHANNELS * 3), &[]);
+        assert_eq!(wanted.len(), MAX_SLICE_CHANNELS);
+        // The top of the library, which is the top of the grid, rather than some
+        // arbitrary slice of it.
+        assert_eq!(wanted.first().unwrap().id, 1);
+    }
+
+    /// And asking by id is bounded on the same terms, not just the everything case.
+    #[test]
+    fn a_guide_slice_that_names_too_many_channels_is_bounded_too() {
+        let ids: Vec<i64> = (1..=(MAX_SLICE_CHANNELS as i64 * 2)).collect();
+        let wanted = slice_channels(library(MAX_SLICE_CHANNELS * 3), &ids);
+        assert_eq!(wanted.len(), MAX_SLICE_CHANNELS);
+    }
+
+    /// What the guide actually asks for passes through untouched: a screenful of rows,
+    /// in the library's order, and only the ones named.
+    #[test]
+    fn a_screenful_is_answered_in_full() {
+        let wanted = slice_channels(library(6_698), &[4, 2, 9]);
+        assert_eq!(
+            wanted.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![2, 4, 9],
+            "the library's order, not the order they were asked in"
+        );
     }
 }

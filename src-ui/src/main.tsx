@@ -6,7 +6,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
 import {
   clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setPlayerErrorMock,
-  setSilentDurationMock,
+  setSilentDurationMock, slowMock,
 } from './ipc';
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
@@ -31,6 +31,9 @@ installGlobalErrorHandlers();
 // …and lets them make one go quiet rather than refuse, which is the failure the boot
 // screen exists to survive and the one nothing could express before.
 (window as unknown as { __auroraHang?: unknown }).__auroraHang = hangMock;
+// …and lets them make one answer *late* rather than not at all, which is the third
+// thing a real host does and the one the batching guide hooks used to lose rows to.
+(window as unknown as { __auroraSlow?: unknown }).__auroraSlow = slowMock;
 // …and lets them put the player into the state the error panel is for, which a refusing
 // command cannot: `player.error` comes from the host's `NetFailure`, so until this
 // existed no journey could press the panel's buttons.
@@ -49,6 +52,15 @@ installGlobalErrorHandlers();
   const params = new URLSearchParams(window.location.search);
   for (const name of params.get('hang')?.split(',') ?? []) {
     if (name.trim()) hangMock(name.trim());
+  }
+  // `?slow=epg.nowNextMany:600` — answers, 600ms after the screen asked. The hooks that
+  // batch guide lookups mark their ids as asked before the reply lands, so what the UI
+  // does with a *late but valid* answer decides whether those rows ever fill in, and
+  // the first of those requests goes out before a test can evaluate anything.
+  for (const spec of params.get('slow')?.split(',') ?? []) {
+    const [name, ms] = spec.split(':');
+    const delay = Number(ms);
+    if (name?.trim() && Number.isFinite(delay) && delay > 0) slowMock(name.trim(), delay);
   }
   const stuck = Number(params.get('bootStuck'));
   if (Number.isFinite(stuck) && stuck > 0) {
