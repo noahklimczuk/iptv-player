@@ -23,7 +23,7 @@ async function settle(page: Page, ms = 700) {
 /** The embed address, so the assertions are about YouTube and not about any iframe. */
 const EMBED = /^https:\/\/www\.youtube-nocookie\.com\/embed\//;
 
-test('hovering a show plays its trailer over the poster @motion', async ({ page }) => {
+test('hovering a show plays its trailer in a popup @motion', async ({ page }) => {
   await page.goto('/#/series');
   await expect(page.getByRole('heading', { name: 'Series' })).toBeVisible();
   const cards = page.getByTestId('catalog-card');
@@ -31,14 +31,30 @@ test('hovering a show plays its trailer over the poster @motion', async ({ page 
 
   await cards.first().hover();
   // The dwell before a preview starts is 700ms.
-  const frame = cards.first().getByTestId('trailer-frame');
+  //
+  // In a popup over the page, not inside the tile. It used to play over the poster --
+  // 16:9 inside a 2:3 card, so it covered the middle band of something 150px wide:
+  // enough to prove a trailer exists and too small to watch, for the cost of a real
+  // video player either way.
+  const popup = page.getByTestId('trailer-popup');
+  await expect(popup).toBeVisible({ timeout: 5000 });
+  const frame = popup.getByTestId('trailer-frame');
   await expect(frame).toBeVisible({ timeout: 5000 });
+
+  // Bigger than the card it came from, which is the whole point of the change.
+  const card = await cards.first().boundingBox();
+  const playing = await frame.boundingBox();
+  expect(playing!.width).toBeGreaterThan(card!.width * 2);
   await expect(frame).toHaveAttribute('src', EMBED);
   // Muted, because muted is the only autoplay an engine allows.
   await expect(frame).toHaveAttribute('src', /[?&]mute=1/);
   await expect(frame).toHaveAttribute('src', /[?&]autoplay=1/);
   // And the label is only there because the video is.
   await expect(cards.first().getByText('Preview playing')).toBeVisible();
+
+  // Moving away closes it, which is how a hover-driven thing has to end.
+  await page.mouse.move(5, 5);
+  await expect(popup).toHaveCount(0);
 
   await page.screenshot({ path: `${SHOTS}/48-card-trailer.png` });
 });
