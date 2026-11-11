@@ -134,10 +134,22 @@ jobs:
         # lockfile is under src-native, not at the repository root — so the default `.`
         # made the step die with "Couldn't load ./Cargo.lock" before it audited
         # anything. It had never once run.
+        #
+        # `ignore` has to be given here as well as in `src-native/.cargo/audit.toml`,
+        # and the two must agree. The action runs `cargo audit` from the repository
+        # root and passes `--file src-native/Cargo.lock`, so cargo-audit never looks
+        # beside the lockfile it is reading and never sees that file — while a developer
+        # running `cargo audit` from `src-native` sees only that file and not this
+        # input. The reasoning for each entry lives in the toml, which is the one a
+        # person reads; this is the copy CI honours.
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: src-native
+          # RUSTSEC-2026-0459 — the bundled SQLite's uninitialised-page-cache read.
+          # Needs a database somebody else wrote, and nothing here opens one. Accepted
+          # until `rusqlite 0.41`; see `src-native/.cargo/audit.toml`.
+          ignore: RUSTSEC-2026-0459
 
       - name: JavaScript advisories
         # Fails the job on a high or critical only: a moderate in a dev-only tool is
