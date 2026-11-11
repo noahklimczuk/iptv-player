@@ -323,7 +323,7 @@ fn main() {
                     // the UI can be told about, and nine threads doing it four times a
                     // second would cost more than the mosaic does.
                     supervised("mosaic", || {
-                        if let Some(view) = mosaic.tick() {
+                        if let Some(view) = mosaic.tick(aurora_app::now_unix()) {
                             aurora_app::emit(&player_handle, "mosaic.state", &view);
                         }
                     });
