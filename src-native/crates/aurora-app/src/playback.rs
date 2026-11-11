@@ -47,6 +47,33 @@ pub const MAX_ROLLOVERS: u32 = 6;
 /// three times in an hour should still be trying.
 pub const MAX_VOD_RETRIES: u32 = 3;
 
+/// How many times the *first* load of a film, episode or catch-up programme is tried
+/// before the viewer is shown an error.
+///
+/// `MAX_VOD_RETRIES` above covers a stream that died while playing. Nothing covered one
+/// that never started: `play_item` loaded once and returned the error, and because it
+/// returned before recording a `VodSession` the heartbeat could not retry it either. A
+/// film got exactly one attempt where a channel gets one per source.
+///
+/// That mattered because a panel's refusal is often not about the title at all. Measured
+/// against the real subscription, 300 sampled films and episodes: 81.7% played on the
+/// first attempt, 1.7% were genuinely gone (404), 5.3% were being intercepted before
+/// they reached the provider, and **11.3% answered a non-standard HTTP 888 with an HTML
+/// body on one attempt and the video on the next** -- the same URL, seconds apart. Two
+/// thirds of everything that would not play was a coin toss nobody re-flipped.
+///
+/// Three attempts, not more: the viewer is sitting in front of a spinner, and the
+/// backoff below is deliberately short for the same reason.
+pub const MAX_VOD_OPEN_TRIES: u32 = 3;
+
+/// How long to wait before each re-attempt of a first load, in milliseconds.
+///
+/// Much shorter than `VOD_BACKOFF_SECS`, which is for a stream that was playing and can
+/// afford to wait: here nothing is on screen yet. Long enough not to be the same instant
+/// -- a panel that just refused needs a moment -- and short enough that three attempts
+/// are under a second of waiting.
+const VOD_OPEN_BACKOFF_MS: [u64; (MAX_VOD_OPEN_TRIES - 1) as usize] = [250, 600];
+
 /// How many times a live channel's *current* source is reloaded before rolling over.
 ///
 /// A film had this from the start and a channel did not, and the asymmetry was the whole
@@ -147,6 +174,14 @@ pub struct Playback {
     /// password. Held here rather than reached through `Services` because `Playback` is
     /// constructed before it and the heartbeat's `recover` needs it too (R-126).
     credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
+    /// Used on one path only: explaining a load that failed, by asking the URL what it
+    /// answers with. See `aurora_core::neterr::diagnose_stream` for why mpv's own words
+    /// cannot cover it. `None` in tests that do not reach for it.
+    http: Option<Arc<aurora_ingest::http::HttpClient>>,
+    /// How `open_vod` waits between attempts. Overridable so the tests covering that
+    /// retry do not spend a real second each sleeping through its backoff, the way
+    /// `HttpClient::without_sleeping` does for the same reason.
+    sleep: Box<dyn Fn(std::time::Duration) + Send + Sync>,
 }
 
 impl Playback {
@@ -155,6 +190,7 @@ impl Playback {
         player: Arc<Mutex<Box<dyn PlayerBackend>>>,
         data_dir: PathBuf,
         credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
+        http: Option<Arc<aurora_ingest::http::HttpClient>>,
     ) -> Self {
         Self {
             db,
@@ -166,7 +202,15 @@ impl Playback {
             tune: Mutex::new(()),
             generation: AtomicU64::new(0),
             credentials,
+            http,
+            sleep: Box::new(std::thread::sleep),
         }
+    }
+
+    #[cfg(test)]
+    fn without_sleeping(mut self) -> Self {
+        self.sleep = Box::new(|_| {});
+        self
     }
 
     /// Claim the next tune. Returns the guard that serialises it and the generation
@@ -297,15 +341,7 @@ impl Playback {
             )?
         };
         *self.session.lock() = None;
-        let mut player = self.player.lock();
-        player.load(&url, &options)?;
-        *self.vod.lock() = Some(VodSession {
-            url,
-            options,
-            retries: 0,
-            failed_at: None,
-        });
-        Ok(player.state())
+        self.open_vod(url, options)
     }
 
     /// Play a past programme (README §7.5). Also not a failover session: catch-up is
@@ -331,17 +367,71 @@ impl Playback {
             )?
         };
         *self.session.lock() = None;
-        let mut player = self.player.lock();
-        player.load(&url, &options)?;
         // Reloading the same catch-up URL is safe and is not failover: it asks the
         // provider for the same window of the same channel, which is the same programme.
-        *self.vod.lock() = Some(VodSession {
-            url,
-            options,
-            retries: 0,
-            failed_at: None,
-        });
-        Ok(player.state())
+        self.open_vod(url, options)
+    }
+
+    /// Load something non-live, re-attempting a refusal that could plausibly go away.
+    ///
+    /// Shared by `play_item` and `play_catchup` because the failure they were each
+    /// getting wrong is the same one, and so is the remedy. See `MAX_VOD_OPEN_TRIES` for
+    /// what the panel actually does.
+    ///
+    /// Only a refusal `NetFailure` calls retryable is re-attempted. A 404 is the title
+    /// being gone and a 401 is the password being wrong; asking twice more cannot change
+    /// either, and the two seconds spent doing it are two seconds the viewer spends
+    /// looking at a spinner instead of at the sentence that tells them what to do.
+    fn open_vod(&self, url: String, options: LoadOptions) -> Result<PlayerState> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let outcome = {
+                let mut player = self.player.lock();
+                player.load(&url, &options)
+            };
+            let error = match outcome {
+                Ok(()) => {
+                    let state = self.player.lock().state();
+                    *self.vod.lock() = Some(VodSession {
+                        url,
+                        options,
+                        retries: 0,
+                        failed_at: None,
+                    });
+                    return Ok(state);
+                }
+                Err(e) => e,
+            };
+
+            let failure = aurora_core::neterr::NetFailure::classify(&error.to_string());
+            if attempt >= MAX_VOD_OPEN_TRIES || !failure.retryable {
+                // Recorded even though nothing is playing, so the heartbeat's own retry
+                // takes over if the picture arrives late. Without it a load that failed
+                // left no session at all, which is the half of this bug that could not
+                // be seen from `play_item`.
+                let explained = self.explain(&url);
+                *self.vod.lock() = Some(VodSession {
+                    url,
+                    options,
+                    retries: 0,
+                    failed_at: None,
+                });
+                return Err(match explained {
+                    Some(sentence) => AppError::Other(sentence),
+                    None => error.into(),
+                });
+            }
+
+            tracing::info!(
+                "{} would not open ({}), attempt {attempt} of {MAX_VOD_OPEN_TRIES}",
+                aurora_ingest::http::redact(&url),
+                failure.message
+            );
+            (self.sleep)(std::time::Duration::from_millis(
+                VOD_OPEN_BACKOFF_MS[(attempt - 1) as usize],
+            ));
+        }
     }
 
     /// Seek, held inside the timeshift buffer when there is one.
@@ -524,6 +614,49 @@ impl Playback {
         loaded.is_ok()
     }
 
+    /// A truer sentence about a failed load than mpv can produce, if there is one.
+    ///
+    /// mpv says what happened to mpv. When the answer was an HTML page served with a
+    /// 200, what happened to mpv was a successful download of something it could not
+    /// demux -- and the viewer was shown a sentence about a broken file for a title that
+    /// was never reached. One request, on a path where playback has already failed,
+    /// settles it.
+    ///
+    /// `None` means keep mpv's own words, which covers the probe saying nothing useful
+    /// and the probe itself failing: a diagnosis that cannot be made is not a reason to
+    /// discard one that could.
+    fn explain(&self, url: &str) -> Option<String> {
+        let http = self.http.as_ref()?;
+        let probe = match http.probe_stream(url) {
+            Ok(probe) => probe,
+            Err(e) => {
+                tracing::debug!(
+                    "could not probe {}: {}",
+                    aurora_ingest::http::redact(url),
+                    e.message
+                );
+                return None;
+            }
+        };
+        let failure = aurora_core::neterr::diagnose_stream(
+            probe.status,
+            &probe.content_type,
+            &probe.requested_host,
+            &probe.final_host,
+        )?;
+        tracing::warn!(
+            "{} answered {} {} from {}: {}",
+            aurora_ingest::http::redact(url),
+            probe.status,
+            probe.content_type,
+            probe.final_host,
+            failure.message
+        );
+        // The shape every other refusal in this crate reaches the viewer in: the
+        // message, then the cause under it. `AppError` serialises as one string.
+        Some(format!("{}. {}", failure.message, failure.cause))
+    }
+
     /// Roll over, unless a tune is already under way.
     ///
     /// The heartbeat runs every 250 ms on its own thread and must never queue up
@@ -668,10 +801,17 @@ mod tests {
     #[derive(Default)]
     struct FakeInner {
         loaded: Vec<String>,
+        /// Every load *attempted*, refusals included. `loaded` holds only the ones that
+        /// worked, which cannot tell one attempt from three.
+        tried: Vec<String>,
         /// The position each load was asked to start at, in the same order as `loaded`.
         /// What proves a reload resumed where the stream died rather than at the top.
         starts: Vec<Option<f64>>,
         refuse: Vec<String>,
+        /// URLs refused only for the next so many loads, and what to say while doing it.
+        /// A panel that refuses one attempt and serves the next is the commonest reason
+        /// a film will not play; see `MAX_VOD_OPEN_TRIES`.
+        flaky: std::collections::HashMap<String, (u32, String)>,
         state: PlayerState,
     }
 
@@ -694,6 +834,17 @@ mod tests {
         }
         fn refuse(&self, url: &str) {
             self.0.lock().refuse.push(url.to_string());
+        }
+        /// Refuse `url` for its next `times` loads with `message`, then serve it.
+        fn refuse_times(&self, url: &str, times: u32, message: &str) {
+            self.0
+                .lock()
+                .flaky
+                .insert(url.to_string(), (times, message.to_string()));
+        }
+        /// How many loads were attempted of `url`, refusals included.
+        fn attempts(&self, url: &str) -> usize {
+            self.0.lock().tried.iter().filter(|u| *u == url).count()
         }
         /// Make loading `url` take `millis`, so a test can hold a tune open.
         fn delay(&self, url: &str, millis: u64) {
@@ -734,8 +885,15 @@ mod tests {
                 std::thread::sleep(wait);
             }
             let mut inner = self.0.lock();
+            inner.tried.push(url.to_string());
             if inner.refuse.iter().any(|u| u == url) {
                 return Err(PlayerError::Command(format!("refused {url}")));
+            }
+            if let Some((left, message)) = inner.flaky.get_mut(url) {
+                if *left > 0 {
+                    *left -= 1;
+                    return Err(PlayerError::Command(message.clone()));
+                }
             }
             inner.loaded.push(url.to_string());
             inner.starts.push(options.start_at_secs);
@@ -834,7 +992,9 @@ mod tests {
                 player,
                 tempdir("failover"),
                 std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
-            ),
+                None,
+            )
+            .without_sleeping(),
             fake,
             db,
         )
@@ -939,6 +1099,7 @@ mod tests {
                 player,
                 dir.clone(),
                 std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
+                None,
             ),
             shared,
             dir,
@@ -999,6 +1160,7 @@ mod tests {
                 player,
                 tempdir("race"),
                 std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
+                None,
             )),
             fake,
         )
@@ -1282,6 +1444,94 @@ mod tests {
         assert_eq!(
             fake.loaded(),
             vec![url(0), "http://example.com/film.mkv".to_string()]
+        );
+    }
+
+    /// The bug this branch is about: a film that would not play on one attempt and
+    /// would have played on the next.
+    ///
+    /// `play_item` loaded once and returned the error, and because it returned *before*
+    /// recording a `VodSession` the heartbeat's own retry could not reach it either --
+    /// so a film got exactly one attempt where a channel gets one per source. On the
+    /// real subscription that single attempt was refused for 11.3% of sampled titles
+    /// with a non-standard HTTP 888 and an HTML body, and the identical URL served the
+    /// video seconds later.
+    #[test]
+    fn a_film_refused_once_is_asked_again_rather_than_failed() {
+        let (playback, fake, db) = harness(1);
+        let film = seed_film(&db);
+        // Refused on the first attempt only -- which is what the panel actually does.
+        fake.refuse_times(&film, 1, "http error 888");
+
+        playback
+            .play_item("movie", 1, None)
+            .expect("a film refused once must still be played");
+
+        assert_eq!(fake.attempts(&film), 2, "the refusal was not re-attempted");
+        assert_eq!(fake.loaded(), vec![film], "the film never actually loaded");
+    }
+
+    /// And it gives up rather than hammering: three attempts, then the error.
+    #[test]
+    fn a_film_that_is_refused_every_time_is_tried_three_times_and_no_more() {
+        let (playback, fake, db) = harness(1);
+        let film = seed_film(&db);
+        fake.refuse_times(&film, 99, "http error 888");
+
+        let refused = playback.play_item("movie", 1, None);
+        assert!(
+            refused.is_err(),
+            "a film nothing will serve must still refuse"
+        );
+        assert_eq!(
+            fake.attempts(&film),
+            MAX_VOD_OPEN_TRIES as usize,
+            "the attempt budget is not being kept to"
+        );
+    }
+
+    /// A refusal no retry can change is not retried at all.
+    ///
+    /// The viewer is in front of a spinner. Spending the budget on a 404 buys nothing
+    /// and costs them the wait before the sentence that tells them the title is gone.
+    #[test]
+    fn a_film_the_provider_does_not_have_is_asked_for_once() {
+        let (playback, fake, db) = harness(1);
+        let film = seed_film(&db);
+        fake.refuse_times(&film, 99, "server returned 404 Not Found");
+
+        assert!(playback.play_item("movie", 1, None).is_err());
+        assert_eq!(
+            fake.attempts(&film),
+            1,
+            "a 404 was retried; no retry can make the provider have it"
+        );
+    }
+
+    /// A load that failed still leaves a session behind, so the heartbeat can carry on
+    /// trying after the command has given up.
+    ///
+    /// This is the other half of the same bug. `play_item` returned on the `?` before
+    /// `*self.vod.lock()` was ever set, so a film that failed to start was invisible to
+    /// `retry_vod` -- the three retries a *playing* film gets were unreachable for one
+    /// that never started.
+    #[test]
+    fn a_film_that_would_not_start_is_still_a_session_the_heartbeat_can_retry() {
+        let (playback, fake, db) = harness(1);
+        let film = seed_film(&db);
+        fake.refuse_times(&film, 99, "http error 888");
+        assert!(playback.play_item("movie", 1, None).is_err());
+
+        // The provider comes back, and the heartbeat -- not the viewer -- notices.
+        fake.refuse_times(&film, 0, "");
+        fake.die();
+        playback.tick(NOW);
+        playback.tick(NOW + VOD_BACKOFF_SECS[0] + 1);
+
+        assert_eq!(
+            fake.loaded(),
+            vec![film],
+            "the heartbeat never retried a film that failed to start"
         );
     }
 

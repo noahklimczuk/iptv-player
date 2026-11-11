@@ -48,6 +48,15 @@ pub enum ErrorCode {
     /// nothing timed out and distinct from `ServerError` because nothing errored — and
     /// worth its own sentence, since it is the commonest way an IPTV stream dies.
     Dropped,
+    /// The request never reached the provider: something between this device and them
+    /// answered it instead.
+    ///
+    /// Its own code rather than `ServerError` or `Unknown` because the thing to do about
+    /// it is in neither of those sentences. The provider is working and the title is
+    /// fine; a filter -- DNS on the router, the ISP's, a "safe browsing" service -- is
+    /// serving a web page in place of the stream, and no retry and no other title will
+    /// change that. See `diagnose_stream`.
+    Blocked,
     Unknown,
 }
 
@@ -378,6 +387,7 @@ impl NetFailure {
                 | ErrorCode::Unauthorized
                 | ErrorCode::NotFound
                 | ErrorCode::BadRequest
+                | ErrorCode::Blocked
         );
 
         let mut actions = Vec::new();
@@ -430,6 +440,103 @@ impl NetFailure {
             retryable,
         }
     }
+}
+
+/// Explain a failed stream load from what the URL answers when asked directly.
+///
+/// `classify` works on the words mpv produced, and there is one important failure it
+/// cannot see: the request never reaches the provider. An Xtream panel redirects a VOD
+/// request to one of its streaming servers, and a DNS-level filter -- on the router, in
+/// the ISP, in a "safe browsing" service -- can take that second hop over and answer it
+/// with HTTP 200 and an HTML page. The player gets a successful download of a web page
+/// where a film should be, and says the file is broken. The file was never reached.
+///
+/// Returns `None` when the probe shows nothing a viewer could act on, so the caller
+/// keeps mpv's own classification. Deliberately quiet rather than guessing: a probe
+/// that merely failed differently is not evidence of interception.
+///
+/// `requested_host` is the host Aurora asked for; `final_host` is where the request
+/// ended up after every redirect. A provider legitimately redirects between its own
+/// hosts, so the comparison is on the registrable tail rather than the exact name.
+pub fn diagnose_stream(
+    status: u16,
+    content_type: &str,
+    requested_host: &str,
+    final_host: &str,
+) -> Option<NetFailure> {
+    let served_video = content_type.starts_with("video/")
+        || content_type.starts_with("audio/")
+        || content_type.contains("mpegurl")
+        || content_type.contains("octet-stream")
+        || content_type.contains("mp2t");
+    let served_page = content_type.contains("html") || content_type.contains("xhtml");
+    let ok = (200..300).contains(&status);
+
+    // The request ended somewhere that is not the provider's and not a relative of it.
+    let hijacked = !final_host.is_empty()
+        && !requested_host.is_empty()
+        && registrable(final_host) != registrable(requested_host);
+
+    if ok && served_page && hijacked {
+        return Some(NetFailure {
+            code: ErrorCode::Blocked,
+            message: "Something on this network blocked the stream".into(),
+            cause: format!(
+                "The request for this title was redirected away from your provider to \
+                 {final_host}, which answered with a web page instead of video. That is \
+                 a filter between this device and the provider -- usually DNS on the \
+                 router, in the ISP, or a \"safe browsing\" service -- not a problem \
+                 with the title. Other titles on the same provider will play, because \
+                 the panel serves them from different machines."
+            ),
+            actions: vec![ErrorAction::OpenSettings],
+            // Every attempt lands on the same blocked machine: the panel pins a title to
+            // one streaming server, which is why these titles fail identically for ever
+            // while their neighbours are fine. Offering Retry would be a button that
+            // cannot work.
+            retryable: false,
+        });
+    }
+
+    if ok && served_page {
+        return Some(NetFailure {
+            code: ErrorCode::Blocked,
+            message: "Your provider sent a web page, not video".into(),
+            cause: "The address answered successfully, but with a page rather than a \
+                    stream. That is usually a provider error notice, or a portal asking \
+                    something of this connection."
+                .into(),
+            retryable: true,
+            actions: vec![ErrorAction::Retry, ErrorAction::ReportBroken],
+        });
+    }
+
+    // A non-2xx probe is better explained by the status than by anything here, and a
+    // 2xx that really did serve video means the failure was mpv's to explain.
+    if !ok {
+        return Some(NetFailure::classify(&format!("HTTP error {status}")));
+    }
+    let _ = served_video;
+    None
+}
+
+/// The registrable tail of a host: the last two labels, lower-cased.
+///
+/// `cdn7.panel.example` and `panel.example` are the same provider; `www.safebrowse.io`
+/// is not. Crude on purpose -- this decides the wording of an error message, and a
+/// public-suffix list for that would be a dependency and a data file to keep current.
+/// An IP address has no tail worth taking, so it is compared whole.
+fn registrable(host: &str) -> String {
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return host.to_ascii_lowercase();
+    }
+    let labels: Vec<&str> = host.trim_end_matches('.').split('.').collect();
+    let tail = if labels.len() >= 2 {
+        labels[labels.len() - 2..].join(".")
+    } else {
+        host.to_string()
+    };
+    tail.to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -838,5 +945,90 @@ mod tests {
             assert!(!e.cause.is_empty());
             assert!(!e.actions.is_empty(), "{raw} produced no actions");
         }
+    }
+
+    /// The failure that looks like success.
+    ///
+    /// Measured against the real subscription: 5.3% of sampled films and episodes ended
+    /// at a 3,303-byte `text/html` page served from a CDN rather than at the provider.
+    /// The panel redirects a VOD request to one of its streaming servers, and a filter
+    /// between the device and that server answers the second hop itself -- with a 200.
+    /// mpv downloads the page, cannot demux it, and reports a broken file for a title it
+    /// never reached.
+    #[test]
+    fn a_stream_answered_by_a_filter_page_says_so_rather_than_blaming_the_file() {
+        let f = diagnose_stream(200, "text/html", "panel.example", "www.safebrowse.io")
+            .expect("an HTML page from another host is not a diagnosis to stay quiet about");
+        assert_eq!(f.code, ErrorCode::Blocked);
+        assert!(
+            f.cause.contains("safebrowse.io"),
+            "the host that answered is the one actionable fact: {}",
+            f.cause
+        );
+        // Every attempt lands on the same blocked machine, so a Retry button would be a
+        // button that cannot work.
+        assert!(!f.retryable);
+        assert!(!f.actions.contains(&ErrorAction::Retry));
+    }
+
+    /// A provider redirecting between its own machines is not interception.
+    ///
+    /// This is the ordinary case: the panel answers on `panel.example` and serves from
+    /// `cdn7.panel.example`. Comparing hosts exactly would have called every working
+    /// stream on the subscription blocked.
+    #[test]
+    fn a_providers_own_streaming_server_is_not_a_filter() {
+        assert!(diagnose_stream(200, "video/mp4", "panel.example", "cdn7.panel.example").is_none());
+        // And the bare IPs these panels actually redirect to, which have no tail to take.
+        assert!(
+            diagnose_stream(206, "video/x-matroska", "panel.example", "45.134.21.65").is_none()
+        );
+    }
+
+    /// A page served by the provider itself is still not video, and still worth saying.
+    #[test]
+    fn a_page_from_the_provider_is_reported_as_a_page() {
+        let f = diagnose_stream(
+            200,
+            "text/html; charset=utf-8",
+            "panel.example",
+            "panel.example",
+        )
+        .expect("a web page where a film should be is always worth a sentence");
+        assert_eq!(f.code, ErrorCode::Blocked);
+        // Unlike the hijack: the provider may simply have been having a moment.
+        assert!(f.retryable);
+    }
+
+    /// Video that arrived means the failure was mpv's to explain, so this says nothing.
+    #[test]
+    fn a_stream_that_served_video_is_left_to_mpv_to_explain() {
+        for content_type in [
+            "video/mp4",
+            "video/x-matroska",
+            "audio/mpeg",
+            "application/octet-stream",
+            "application/vnd.apple.mpegurl",
+            "video/mp2t",
+        ] {
+            assert!(
+                diagnose_stream(206, content_type, "panel.example", "panel.example").is_none(),
+                "{content_type} was second-guessed"
+            );
+        }
+    }
+
+    /// A non-2xx probe is explained by its status, through the classifier that already
+    /// has the words for it.
+    #[test]
+    fn a_probe_that_was_refused_is_explained_by_its_status() {
+        let gone = diagnose_stream(404, "text/html", "panel.example", "panel.example")
+            .expect("a 404 is a diagnosis");
+        assert_eq!(gone.code, ErrorCode::NotFound);
+        assert!(!gone.retryable);
+
+        let busy = diagnose_stream(403, "text/html", "panel.example", "panel.example")
+            .expect("a 403 is a diagnosis");
+        assert_eq!(busy.code, ErrorCode::Forbidden);
     }
 }

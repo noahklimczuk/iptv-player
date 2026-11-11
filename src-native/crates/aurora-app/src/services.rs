@@ -121,6 +121,9 @@ impl Services {
 
         let pip = Arc::new(crate::pip::Pip::new(Arc::clone(&player)));
 
+        // Wrapped here rather than at the end, so `Playback` can hold a handle too.
+        let http = Arc::new(http);
+
         Ok(Self {
             pip,
             playback: Arc::new(crate::playback::Playback::new(
@@ -128,6 +131,7 @@ impl Services {
                 Arc::clone(&player),
                 data_dir.clone(),
                 Arc::clone(&credentials),
+                Some(Arc::clone(&http)),
             )),
             mosaic,
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
@@ -137,7 +141,7 @@ impl Services {
             dvr,
             db,
             player,
-            http: Arc::new(http),
+            http,
             credentials,
             data_dir,
             opened,

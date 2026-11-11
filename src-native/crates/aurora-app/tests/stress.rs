@@ -146,6 +146,9 @@ fn harness() -> (Arc<Playback>, Counter) {
             // The fixtures store plain URLs, so nothing here needs a password: the
             // resolver hands a stored address straight back (R-126).
             Arc::new(aurora_ingest::credentials::MemoryStore::default()),
+            // No HTTP client: nothing here reaches the network, so there is nothing for
+            // `explain` to ask and mpv's own words stand.
+            None,
         )),
         counter,
     )
