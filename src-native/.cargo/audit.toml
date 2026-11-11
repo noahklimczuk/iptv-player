@@ -1,0 +1,36 @@
+# Advisories this workspace has looked at and accepted, with the reasoning.
+#
+# `cargo audit` reads this when run from `src-native`, which is where the workspace's
+# `Cargo.toml` and `Cargo.lock` live. CI does not: `rustsec/audit-check` runs from the
+# repository root and takes its own `ignore` input, so the list in
+# `.github/workflows/ci.yml` has to agree with this one. Two places, deliberately —
+# the alternative is a local `cargo audit` that disagrees with the pull request.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0459 — CVE-2026-119375, in the SQLite that `libsqlite3-sys 0.30.1`
+    # bundles (3.53.2). SQLite before 3.54.0 can hand back uninitialised page-cache
+    # memory when a database file is opened together with a sibling `-wal` whose page
+    # size differs from the database's, so a crafted pair of files can make ordinary
+    # queries return stale bytes from the process's own memory.
+    #
+    # Accepted because the attack needs a database **somebody else wrote**, and this app
+    # only ever opens its own. The single production call is
+    # `Services::new` -> `aurora_db::open_or_recover(data_dir.join("library.db"))`, on a
+    # directory the same function has just `create_dir_all`-ed, holding a database the
+    # app created and migrated itself. Nothing opens a SQLite file from a path a viewer
+    # chose: an import reads M3U and XMLTV, a playlist is text, and the catch-up and EPG
+    # paths are HTTP. The remaining `Connection::open` calls are `#[cfg(test)]`, and the
+    # `AURORA_REAL_LIBRARY` override is read-only and `#[ignore]`-gated to the
+    # real-panel tests.
+    #
+    # Worth re-reading if that ever changes — an "open someone's existing library" or
+    # "import from another player's database" feature would put this back in scope.
+    #
+    # The fix is `libsqlite3-sys >= 0.39`, which arrives with `rusqlite 0.41` — nine
+    # minor versions on from the 0.32 pinned here, across a crate that changes API
+    # between minors, and it moves the workspace MSRV from 1.80 to 1.89. That is its own
+    # change with its own review, not a line in an unrelated pull request, which is why
+    # this is an accepted risk with a successor rather than a silenced one.
+    "RUSTSEC-2026-0459",
+]
