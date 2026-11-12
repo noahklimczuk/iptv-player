@@ -451,16 +451,21 @@ impl NetFailure {
 /// of a web page where a film should be, and says the file is broken. The file was never
 /// reached.
 ///
-/// Where that something sits is worth not guessing at. Measured on 2026-11-12, the whole
-/// of `Riverdale` -- all 138 episodes, every season -- is pinned to one streaming server
-/// that answers *every* request, including `/` and a path that cannot exist, with a 302
-/// to a "security" interstitial; a TCP connect to it takes as long as an ICMP round trip
-/// does, so nothing on this side of the link is answering early, and six asks for the
-/// same episode never moved off that machine. Ten films sampled the same afternoon were
-/// spread over six other servers and nine of them served video. So the filter is as
-/// likely to be at the provider's end as on the viewer's network, and the sentence
-/// `diagnose_stream` returns says which to suspect from what else plays rather than
-/// sending everybody to their router.
+/// Where that something sits is worth measuring rather than guessing, and the first
+/// attempt at this guessed wrong. Compare the handshake with the wait for the first
+/// byte. Measured on 2026-11-12 against the server every episode of `Riverdale` is
+/// pinned to: the connection took 118ms to open -- the honest distance -- and the
+/// reply arrived **6ms** later. Three servers on the same subscription that do serve
+/// video opened in 119-125ms and answered 122ms, 130ms and 250ms later, which is one
+/// round trip, as physics requires. A reply that comes back in 6ms was written by
+/// something about a millisecond away: a device on the viewer's own network, which
+/// opens the connection to the real server and then answers the request itself.
+///
+/// That inverts the advice. The filter blocklists particular addresses, so almost
+/// everything plays and a handful of titles never will -- "the rest of your library
+/// works" is not evidence that the provider is at fault, which is what the first
+/// version of this sentence told people. The test that does separate the two is a
+/// different network, so that is what the cause asks for.
 ///
 /// Returns `None` when the probe shows nothing a viewer could act on, so the caller
 /// keeps mpv's own classification. Deliberately quiet rather than guessing: a probe
@@ -495,12 +500,17 @@ pub fn diagnose_stream(
             cause: format!(
                 "The request for this title ended at {final_host}, which returned a \
                  warning page instead of video. The panel keeps each title on one \
-                 streaming server, and every request to this one gets that answer -- \
-                 so retrying, or trying another episode of the same show, lands on \
-                 it again. If the rest of your library plays, that machine is \
-                 blocked at the provider's end and only they can move the title; if \
-                 everything does this, the filter is on this network: a router web \
-                 protection, a DNS service, or one your ISP applies."
+                 streaming server, and that server's address is being blocked, so \
+                 retrying or trying another episode of the same show lands on it \
+                 again. Most of your library will keep playing, because a filter \
+                 blocks addresses one at a time -- so the rest working is not a sign \
+                 the fault is at the provider. To tell the two apart, try this title \
+                 on another network, a phone hotspot will do: if it plays there, the \
+                 block is the web protection on your router or gateway (your ISP may \
+                 call it Advanced Security) or security software on this machine, and \
+                 turning that off or exempting this device is the fix. If it fails \
+                 there too, the server is one only your provider can move the title \
+                 off."
             ),
             actions: vec![ErrorAction::OpenSettings],
             // Every attempt lands on the same blocked machine: the panel pins a title to
@@ -1001,11 +1011,11 @@ mod tests {
         .expect("206 plus a page is the same interception as 200 plus a page");
         assert_eq!(f.code, ErrorCode::Blocked);
         assert!(!f.retryable, "the server answers every request this way");
-        // The viewer is told how to tell a blocked server from a blocked network, which
-        // is the difference between reporting a title and reconfiguring a router.
+        // The viewer is pointed at the one test that tells a filter on their own
+        // network from a server their provider has lost: try it somewhere else.
         assert!(
-            f.cause.contains("rest of your library"),
-            "the sentence does not say how to tell the two apart: {}",
+            f.cause.contains("another network"),
+            "the sentence does not name the test that separates the two: {}",
             f.cause
         );
     }
