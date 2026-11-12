@@ -47,42 +47,54 @@ function ItemCard({
   return (
     <div
       data-testid={`assistant-item-${item.kind}-${item.id}`}
+      className="dl-panel"
       style={{
         display: 'flex',
-        gap: 'var(--sp-3)',
-        padding: 'var(--sp-3)',
-        borderRadius: 'var(--r-md)',
-        background: 'color-mix(in srgb, var(--surface) 70%, transparent)',
-        border: '1px solid var(--border)',
-        alignItems: 'center',
+        flexDirection: 'column',
+        gap: 10,
+        padding: 12,
+        minWidth: 0,
       }}
     >
-      <div style={{ width: 48, flexShrink: 0 }}>
-        <Poster src={item.poster} alt={item.title} ratio={item.kind === 'live' ? 1 : 2 / 3} />
-      </div>
-      <div style={{ flex: 1, minWidth: 0, display: 'grid', gap: 2 }}>
-        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div style={{ position: 'relative' }}>
+        <Poster src={item.poster} alt={item.title} ratio={1.28} radius="var(--r-lg)" />
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute', inset: 'auto 0 0 0', padding: '28px 16px 12px',
+            borderRadius: '0 0 var(--r-lg) var(--r-lg)',
+            background: 'linear-gradient(to top, rgb(22 22 26 / 0.55), transparent)',
+            color: 'var(--on-art)', fontWeight: 800, fontSize: 'var(--fs-xl)',
+            letterSpacing: '-0.01em', lineHeight: 1.15,
+          }}
+        >
           {item.title}
-          {item.year != null && (
-            <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}> · {item.year}</span>
-          )}
         </span>
-        {item.note && (
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{item.note}</span>
+        {item.kind !== 'live' && (
+          <Button
+            size="sm" variant="secondary" icon="info" aria-label={`About ${item.title}`}
+            onClick={() => onOpen(item)}
+            style={{ position: 'absolute', top: 10, right: 10, width: 36, padding: 0 }}
+          />
         )}
       </div>
+      <div style={{ minWidth: 0, display: 'grid', gap: 2, padding: '0 2px' }}>
+        <span className="sr-only">{item.title}</span>
+        <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text-muted)' }}>
+          {item.year != null && <>{item.year}{item.note ? ' · ' : ''}</>}
+          {item.note}
+        </span>
+      </div>
       <Button
-        size="sm"
         variant="primary"
         icon="play"
+        iconFilled
         data-testid={`assistant-play-${item.kind}-${item.id}`}
         onClick={() => onPlay(item)}
+        style={{ width: '100%', marginTop: 'auto' }}
       >
         Play
       </Button>
-      {item.kind !== 'live' && (
-        <Button size="sm" variant="ghost" icon="info" aria-label={`About ${item.title}`} onClick={() => onOpen(item)} />
-      )}
     </div>
   );
 }
@@ -107,22 +119,30 @@ function Bubble({
       }}
     >
       <div
-        style={{
-          maxWidth: '46rem',
-          padding: 'var(--sp-3) var(--sp-4)',
-          borderRadius: 'var(--r-lg)',
-          background: mine
-            ? 'color-mix(in srgb, var(--accent) 22%, transparent)'
-            : 'color-mix(in srgb, var(--surface) 70%, transparent)',
-          border: `1px solid ${mine ? 'color-mix(in srgb, var(--accent) 40%, transparent)' : 'var(--border)'}`,
-          whiteSpace: 'pre-wrap',
-          lineHeight: 1.5,
-        }}
+        style={
+          // Daylight: the viewer's turn is an ink bubble on the right; the answer is
+          // bold text on the page, with its picks as cards under it.
+          mine
+            ? {
+                maxWidth: '40rem', padding: '10px 18px', borderRadius: 18,
+                background: 'var(--text)', color: 'var(--bg)',
+                fontWeight: 700, whiteSpace: 'pre-wrap', lineHeight: 1.45,
+              }
+            : {
+                maxWidth: '52rem', fontWeight: 700, fontSize: 'var(--fs-lg)',
+                whiteSpace: 'pre-wrap', lineHeight: 1.5, color: 'var(--text)',
+              }
+        }
       >
         {message.text}
       </div>
       {message.items.length > 0 && (
-        <div style={{ display: 'grid', gap: 'var(--sp-2)', width: '100%', maxWidth: '46rem' }}>
+        <div
+          style={{
+            display: 'grid', gap: 16, width: '100%', maxWidth: 1000,
+            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+          }}
+        >
           {message.items.map((item) => (
             <ItemCard key={`${item.kind}:${item.id}`} item={item} onPlay={onPlay} onOpen={onOpen} />
           ))}
@@ -250,14 +270,18 @@ export function AssistantPage({
         }}
       >
         <div style={{ display: 'grid', gap: 4 }}>
-          <h1 style={{ margin: 0, fontSize: 24 }}>Assistant</h1>
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+          {/* The board says "Ask Aurora"; the heading's name stays "Assistant". */}
+          <h1 className="dl-page-title">
+            <span aria-hidden>Ask Aurora</span>
+            <span className="sr-only">Assistant</span>
+          </h1>
+          <p style={{ margin: 0, color: 'var(--text-muted)', fontWeight: 500 }}>
             Ask for something to watch. It can look through your library and hand you
             titles to play.
           </p>
         </div>
         {shown.length > 0 && (
-          <Button variant="ghost" icon="close" onClick={clear} data-testid="assistant-clear">
+          <Button variant="outline" onClick={clear} data-testid="assistant-clear">
             Clear
           </Button>
         )}
@@ -268,7 +292,7 @@ export function AssistantPage({
 
   if (needsKey) {
     return (
-      <div style={{ padding: 'var(--sp-6)', display: 'grid', gap: 'var(--sp-5)' }}>
+      <div style={{ padding: '4px 36px var(--sp-6)', display: 'grid', gap: 'var(--sp-5)' }}>
         {header}
         <EmptyState
           icon="sparkle"
@@ -282,11 +306,13 @@ export function AssistantPage({
   return (
     <div
       style={{
-        padding: 'var(--sp-6)',
+        padding: '4px 36px 16px',
         display: 'grid',
         gap: 'var(--sp-5)',
         gridTemplateRows: 'auto 1fr auto',
-        height: '100%',
+        // The top bar shares the scroller with this page, so "the rest of the window" is
+        // the scroller less the bar -- or the input ends up under the nav pill.
+        height: 'calc(100% - var(--topbar-h))',
         minHeight: 0,
       }}
     >
@@ -301,7 +327,7 @@ export function AssistantPage({
             <p style={{ margin: 0, color: 'var(--text-muted)' }}>Try one of these:</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-2)' }}>
               {SUGGESTIONS.map((s) => (
-                <Button key={s} size="sm" onClick={() => send(s)} data-testid="assistant-suggestion">
+                <Button key={s} onClick={() => send(s)} data-testid="assistant-suggestion">
                   {s}
                 </Button>
               ))}
@@ -319,10 +345,10 @@ export function AssistantPage({
             style={{
               display: 'grid',
               gap: 4,
-              padding: 'var(--sp-3) var(--sp-4)',
-              borderRadius: 'var(--r-lg)',
-              background: 'color-mix(in srgb, var(--surface) 70%, transparent)',
-              border: '1px solid var(--border)',
+              padding: '12px 18px',
+              borderRadius: 18,
+              background: 'var(--surface)',
+              boxShadow: 'var(--shadow-1)',
               justifySelf: 'start',
               maxWidth: '46rem',
             }}
@@ -346,21 +372,26 @@ export function AssistantPage({
           e.preventDefault();
           send(draft);
         }}
-        style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}
+        className="dl-panel"
+        style={{
+          display: 'flex', gap: 'var(--sp-2)', alignItems: 'center', padding: 10,
+          maxWidth: 780, width: '100%',
+        }}
       >
+        <div style={{ flex: 1, display: 'grid' }}>
         <TextField
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Ask for something to watch…"
           aria-label="Ask the assistant"
           data-testid="assistant-input"
-          style={{ flex: 1 }}
+          style={{ background: 'transparent', fontSize: 'var(--fs-md)' }}
           disabled={thinking}
         />
+        </div>
         <Button
           type="submit"
           variant="primary"
-          icon="chevronRight"
           disabled={thinking || draft.trim().length === 0}
           data-testid="assistant-send"
         >
