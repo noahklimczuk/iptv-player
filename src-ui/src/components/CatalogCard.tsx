@@ -157,15 +157,15 @@ export const CatalogCard = memo(function CatalogCard({
           // to whatever happens to be positioned above it.
           position: 'relative',
           transformOrigin: index === 0 ? 'left center' : 'center center',
-          borderRadius: 'var(--r-md)',
+          borderRadius: 'var(--r-lg)',
           cursor: 'pointer',
           boxShadow: expanded ? 'var(--shadow-4)' : 'none',
-          background: 'var(--bg-elevated)',
+          background: expanded ? 'var(--bg-elevated)' : 'transparent',
           outline: 'none',
         }}
       >
         <div style={{ position: 'relative' }}>
-          <Poster src={item.poster} alt={item.title} />
+          <Poster src={item.poster} alt={item.title} radius="var(--r-lg)" />
 
           {/* The trailer is *not* here any more.
               
@@ -181,8 +181,9 @@ export const CatalogCard = memo(function CatalogCard({
               aria-hidden
               style={{
                 position: 'absolute', left: -14, bottom: -10,
-                fontSize: 'clamp(54px, 7vw, 92px)', fontWeight: 900, lineHeight: 0.8,
-                color: 'var(--bg)', WebkitTextStroke: '3px var(--text-faint)',
+                fontSize: 'clamp(54px, 7vw, 92px)', lineHeight: 0.8,
+                fontFamily: 'var(--font-display)', fontWeight: 800,
+                color: 'var(--surface)', WebkitTextStroke: '3px var(--text)',
                 pointerEvents: 'none', fontVariantNumeric: 'tabular-nums',
               }}
             >
@@ -192,19 +193,23 @@ export const CatalogCard = memo(function CatalogCard({
 
           <div
             style={{
-              position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4,
+              position: 'absolute', top: 10, right: 10, display: 'flex', gap: 4,
             }}
           >
             {item.quality === '4K' && <Badge tone="accent">4K</Badge>}
-            {isSeries && <Badge tone="outline">Series</Badge>}
+            {isSeries && (
+              <Badge style={{ background: 'var(--on-art)', color: 'var(--text-on-light)' }}>
+                Series
+              </Badge>
+            )}
           </div>
 
           {pct > 0 && (
             <div
               data-testid="card-progress"
-              style={{ position: 'absolute', left: 8, right: 8, bottom: 8 }}
+              style={{ position: 'absolute', left: 10, right: 10, bottom: 10 }}
             >
-              <ProgressBar percent={pct} />
+              <ProgressBar percent={pct} height={6} />
             </div>
           )}
         {/*
@@ -246,7 +251,7 @@ export const CatalogCard = memo(function CatalogCard({
                 right: 0,
                 bottom: 0,
                 overflow: 'hidden',
-                borderRadius: '0 0 var(--r-md) var(--r-md)',
+                borderRadius: '0 0 var(--r-lg) var(--r-lg)',
                 // Fades into the artwork rather than sitting on a hard edge, since it
                 // is now over the poster instead of under it.
                 background:
@@ -347,14 +352,14 @@ export const CatalogCard = memo(function CatalogCard({
                 {preview && item.trailerKey && (
                   <div
                     style={{
-                      marginTop: 6, fontSize: 9, color: 'var(--accent-2)',
+                      marginTop: 6, fontSize: 9, color: 'var(--accent)',
                       display: 'flex', alignItems: 'center', gap: 4,
                     }}
                   >
                     <span
                       style={{
                         width: 5, height: 5, borderRadius: '50%',
-                        background: 'var(--accent-2)',
+                        background: 'var(--live)',
                       }}
                     />
                     Preview playing
@@ -370,10 +375,11 @@ export const CatalogCard = memo(function CatalogCard({
           <div
             data-testid="card-title"
             style={{
-              padding: '6px 2px 0',
-              fontSize: 'var(--fs-sm)',
-              fontWeight: 600,
+              padding: '10px 2px 0',
+              fontSize: 'var(--fs-md)',
+              fontWeight: 800,
               lineHeight: 1.25,
+              color: 'var(--text)',
               // Two lines, then ellipsis: a long title must not push its neighbours
               // out of the grid's rows.
               display: '-webkit-box',
@@ -386,7 +392,12 @@ export const CatalogCard = memo(function CatalogCard({
           </div>
         )}
         {showTitle && year && (
-          <div style={{ padding: '1px 2px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+          <div
+            style={{
+              padding: '3px 2px 0', fontSize: 'var(--fs-sm)', fontWeight: 700,
+              color: 'var(--text-faint)',
+            }}
+          >
             {year}
           </div>
         )}

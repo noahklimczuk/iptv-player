@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { CatalogItem } from '@shared/ipc';
+import type { CatalogItem, Channel } from '@shared/ipc';
 import { AiRail } from './AiRail';
+import { OnNowTile } from './OnNowTile';
 import { HeroBillboard } from '@/components/HeroBillboard';
 import { Rail } from '@/components/Rail';
 import { EmptyState, Skeleton } from '@/components/Primitives';
@@ -10,9 +11,25 @@ import { report } from '@/lib/errors';
 import { useUi } from '@/state/ui';
 import { useProfile } from '@/state/profile';
 
+/**
+ * Daylight's bento: a 12-column grid of rounded tiles on the paper page. The featured
+ * tile takes seven columns, "On now" the other five, and every shelf below is a
+ * full-width tile of its own.
+ */
+const BENTO: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
+  gap: 16,
+  padding: '4px 36px 0',
+};
+
 export function HomePage({
-  onOpen, onPlay,
-}: { onOpen: (i: CatalogItem) => void; onPlay: (i: CatalogItem) => void }) {
+  onOpen, onPlay, onTune,
+}: {
+  onOpen: (i: CatalogItem) => void;
+  onPlay: (i: CatalogItem) => void;
+  onTune?: (c: Channel) => void;
+}) {
   const profileId = useProfile((s) => s.active?.id ?? 1);
   // Re-read when the library has moved. Closing the player navigates nowhere, so
   // nothing here remounts — and without this, watching something left Home showing
@@ -216,20 +233,14 @@ export function HomePage({
 
   if (loading || !rails) {
     return (
-      <div style={{ padding: 'var(--sp-6)' }}>
-        <Skeleton h={380} r={12} />
-        <div style={{ marginTop: 'var(--sp-6)', display: 'grid', gap: 'var(--sp-6)' }}>
-          {[0, 1, 2].map((i) => (
-            <div key={i}>
-              <Skeleton w={220} h={22} />
-              <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-                {Array.from({ length: 8 }, (_, j) => (
-                  <Skeleton key={j} w={168} h={252} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+      <div style={BENTO}>
+        <div style={{ gridColumn: 'span 7' }}><Skeleton h={320} r={24} /></div>
+        <div style={{ gridColumn: 'span 5' }}><Skeleton h={320} r={24} /></div>
+        {[0, 1].map((i) => (
+          <div key={i} style={{ gridColumn: '1 / -1' }}>
+            <Skeleton h={320} r={24} />
+          </div>
+        ))}
       </div>
     );
   }
@@ -244,8 +255,13 @@ export function HomePage({
   }
 
   return (
-    <div>
-      <HeroBillboard items={heroItems} onOpen={onOpen} onPlay={onPlay} />
+    <div style={BENTO}>
+      <div style={{ gridColumn: 'span 7', minHeight: 320, display: 'flex' }}>
+        <HeroBillboard items={heroItems} onOpen={onOpen} onPlay={onPlay} />
+      </div>
+      <div style={{ gridColumn: 'span 5', display: 'flex', flexDirection: 'column' }}>
+        <OnNowTile onTune={onTune} />
+      </div>
       {/* Continue Watching, then the suggestion, then the library's own shelves.
 
           What you were already part-way through beats a suggestion -- which is what the
@@ -271,7 +287,7 @@ export function HomePage({
         .map((rail) => (
           <Rail key={rail.id} rail={rail} onOpen={onOpen} onPlay={onPlay} />
         ))}
-      <div style={{ height: 'var(--sp-8)' }} />
+      <div style={{ gridColumn: '1 / -1', height: 'var(--sp-4)' }} />
     </div>
   );
 }
