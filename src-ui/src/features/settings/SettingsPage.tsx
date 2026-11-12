@@ -48,27 +48,67 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
   const { data: providers, reload: reloadProviders } = useCommand('providers.list', undefined, []);
   const [editing, setEditing] = useState<number | null>(null);
   const { data: stats } = useCommand('library.stats', undefined, []);
+  const [current, setCurrent] = useState(SECTIONS[0]!);
 
   return (
     <div
       style={{
-        padding: 'var(--sp-5) var(--sp-6)',
-        maxWidth: 860,
-        // `maxWidth` alone pins the column to the left of a wide window; the auto
-        // margins are what actually centre it.
+        padding: '4px 36px var(--sp-6)',
+        display: 'grid',
+        gridTemplateColumns: '240px minmax(0, 1fr)',
+        gap: 24,
+        alignItems: 'start',
+        maxWidth: 1240,
+        // Centred in the space the page has, like the single column it replaces.
         margin: '0 auto',
+        position: 'relative',
       }}
     >
-      <h1 style={{ margin: '0 0 var(--sp-5)', fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
-        Settings
-      </h1>
+      {/* Named for assistive technology; the top bar already says Settings on screen. */}
+      <h1 className="sr-only">Settings</h1>
+      {/* Daylight's section index: a white panel, the current section on an ink pill.
+          Links that scroll the page, not routes: the sections are all on this one. */}
+      <nav
+        aria-label="Settings sections"
+        className="dl-panel"
+        style={{
+          position: 'sticky', top: 'calc(var(--topbar-h) + 4px)', padding: 12,
+          display: 'grid', gap: 2,
+        }}
+      >
+        {SECTIONS.map((title) => (
+          <a
+            key={title}
+            href={`#${sectionId(title)}`}
+            aria-current={current === title ? 'true' : undefined}
+            onClick={(e) => {
+              // Not a navigation: the router owns the hash.
+              e.preventDefault();
+              setCurrent(title);
+              document.getElementById(sectionId(title))
+                ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            style={{
+              display: 'block', padding: '9px 14px', borderRadius: 'var(--r-md)',
+              textDecoration: 'none', fontWeight: 700, fontSize: 'var(--fs-md)',
+              background: current === title ? 'var(--text)' : 'transparent',
+              color: current === title ? 'var(--bg)' : 'var(--text)',
+            }}
+          >
+            {title}
+          </a>
+        ))}
+      </nav>
+
+      <div className="dl-panel" style={{ padding: '24px 28px', minWidth: 0 }}>
 
       {!isNativeHost() && (
         <div
           style={{
-            marginBottom: 'var(--sp-5)', padding: 'var(--sp-3) var(--sp-4)',
-            border: '1px solid var(--warning)', borderRadius: 'var(--r-md)',
-            background: 'color-mix(in srgb, var(--warning) 12%, transparent)',
+            marginBottom: 'var(--sp-5)', padding: '12px 16px',
+            border: '1px solid color-mix(in srgb, var(--warning) 50%, transparent)',
+            borderRadius: 'var(--r-md)',
+            background: 'color-mix(in srgb, var(--warning) 14%, var(--surface))',
             fontSize: 'var(--fs-sm)',
           }}
         >
@@ -84,10 +124,10 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             ? Math.round((p.expiresAt - Date.now() / 1000) / 86400)
             : null;
           return (
-            <div key={p.id}>
+            <div key={p.id} style={providerCard}>
             <div style={rowStyle}>
               <div>
-                <div style={{ fontWeight: 650 }}>{p.name}</div>
+                <div style={{ fontWeight: 800, fontSize: 'var(--fs-lg)' }}>{p.name}</div>
                 <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
                   {p.kind.toUpperCase()} · {p.channelCount} channels ·
                   {' '}{p.movieCount} movies · {p.seriesCount} series
@@ -95,12 +135,12 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {p.maxConnections != null && (
-                  <Badge tone="outline">
+                  <Badge tone="neutral">
                     {p.activeConnections ?? 0}/{p.maxConnections} connections
                   </Badge>
                 )}
                 {days != null && (
-                  <Badge tone={days < 7 ? 'live' : 'neutral'}>
+                  <Badge tone={days < 7 ? 'live' : 'new'}>
                     {days < 0 ? 'Expired' : `${days} days left`}
                   </Badge>
                 )}
@@ -135,34 +175,40 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
       </Section>
 
       <Section title="Appearance">
-        <Field label="Theme">
-          <div style={{ display: 'flex', gap: 6 }}>
+        <Field label="Theme" hint="Applies to every screen except the player.">
+          <div className="dl-seg">
             {(['dark', 'oled', 'light', 'contrast'] as Theme[]).map((t) => (
-              <Button
-                key={t} size="sm"
-                variant={ui.theme === t ? 'primary' : 'secondary'}
+              <button
+                key={t}
+                type="button"
+                data-active={ui.theme === t}
+                data-variant={ui.theme === t ? 'primary' : 'secondary'}
                 onClick={() => ui.setTheme(t)}
                 style={{ textTransform: 'capitalize' }}
               >
                 {t}
-              </Button>
+              </button>
             ))}
           </div>
         </Field>
         <Field label="Interface density" hint="TV mode enlarges everything for a 10-foot UI.">
-          <div style={{ display: 'flex', gap: 6 }}>
-            <Button
-              size="sm" variant={ui.density === 'desktop' ? 'primary' : 'secondary'}
+          <div className="dl-seg">
+            <button
+              type="button"
+              data-active={ui.density === 'desktop'}
+              data-variant={ui.density === 'desktop' ? 'primary' : 'secondary'}
               onClick={() => ui.setDensity('desktop')}
             >
               Desktop
-            </Button>
-            <Button
-              size="sm" variant={ui.density === 'tv' ? 'primary' : 'secondary'}
+            </button>
+            <button
+              type="button"
+              data-active={ui.density === 'tv'}
+              data-variant={ui.density === 'tv' ? 'primary' : 'secondary'}
               onClick={() => ui.setDensity('tv')}
             >
               TV
-            </Button>
+            </button>
           </div>
         </Field>
         <Field label="Animations" hint="Disables hover previews, trailer autoplay and transitions.">
@@ -271,8 +317,19 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
           ))}
         </dl>
       </Section>
+      </div>
     </div>
   );
+}
+
+/** The sections, in page order, for the index. */
+const SECTIONS = [
+  'Providers', 'Appearance', 'Artwork and metadata', 'Recommendations', 'Filtering',
+  'Pause live TV', 'Library', 'Updates', 'About', 'Diagnostics', 'Keyboard',
+];
+
+function sectionId(title: string): string {
+  return `settings-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 }
 
 /**
@@ -287,26 +344,22 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
  * journey that went looking for the second.
  */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const headingId = `settings-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  const headingId = sectionId(title);
   return (
-    <section aria-labelledby={headingId} style={{ marginBottom: 'var(--sp-6)' }}>
+    <section
+      aria-labelledby={headingId}
+      style={{ marginBottom: 'var(--sp-6)', scrollMarginTop: 'calc(var(--topbar-h) + 8px)' }}
+    >
       <h2
         id={headingId}
         style={{
-          margin: '0 0 var(--sp-3)', fontSize: 'var(--fs-xs)', fontWeight: 700,
-          letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-faint)',
+          margin: '0 0 var(--sp-2)', fontSize: 'var(--fs-sm)', fontWeight: 800,
+          color: 'var(--text-muted)',
         }}
       >
         {title}
       </h2>
-      <div
-        style={{
-          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-          borderRadius: 'var(--r-lg)', padding: 'var(--sp-4)',
-        }}
-      >
-        {children}
-      </div>
+      <div>{children}</div>
     </section>
   );
 }
@@ -324,16 +377,15 @@ function Toggle({
   label, on, onToggle,
 }: { label: string; on: boolean; onToggle: () => void }) {
   return (
-    <Button
-      size="sm"
+    <button
+      type="button"
+      className="dl-switch"
       role="switch"
       aria-checked={on}
       aria-label={label}
-      variant={on ? 'primary' : 'secondary'}
+      title={on ? 'On' : 'Off'}
       onClick={onToggle}
-    >
-      {on ? 'On' : 'Off'}
-    </Button>
+    />
   );
 }
 
@@ -344,13 +396,13 @@ function Field({
     <div
       style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-4)',
-        padding: 'var(--sp-2) 0',
+        padding: '16px 0', borderBottom: '1px solid var(--border)',
       }}
     >
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600 }}>{label}</div>
+        <div style={{ fontWeight: 800, fontSize: 'var(--fs-lg)' }}>{label}</div>
         {hint && (
-          <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>{hint}</div>
+          <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>{hint}</div>
         )}
       </div>
       {children}
@@ -360,11 +412,16 @@ function Field({
 
 const rowStyle = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  gap: 'var(--sp-4)', padding: 'var(--sp-2) 0',
+  gap: 'var(--sp-4)', padding: 'var(--sp-2) 0', flexWrap: 'wrap',
+} as const;
+/** A provider is its own card inside the panel, as on the board. */
+const providerCard = {
+  padding: '10px 18px', marginBottom: 10, borderRadius: 'var(--r-lg)',
+  border: '1px solid var(--border)', boxShadow: 'var(--shadow-1)',
 } as const;
 const dtStyle = { color: 'var(--text-faint)' } as const;
 const ddStyle = { margin: 0, color: 'var(--text-muted)' } as const;
 const kbdStyle = {
-  border: '1px solid var(--border-strong)', borderRadius: 4, padding: '1px 6px',
-  fontSize: 'var(--fs-xs)', fontFamily: 'ui-monospace, monospace',
+  background: 'var(--surface-sunk)', borderRadius: 6, padding: '2px 8px',
+  fontSize: 'var(--fs-xs)', fontWeight: 800, fontFamily: 'inherit',
 } as const;

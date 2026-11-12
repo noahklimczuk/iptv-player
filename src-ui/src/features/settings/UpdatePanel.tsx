@@ -213,8 +213,8 @@ export function UpdatePanel() {
         }}
       >
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600 }}>Check on launch</div>
-          <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)', maxWidth: 560 }}>
+          <div style={{ fontWeight: 800, fontSize: 'var(--fs-lg)' }}>Check on launch</div>
+          <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', maxWidth: 560 }}>
             Asks GitHub once every six hours, in the background, and never interrupts
             playback. Turning it off means finding out about fixes by looking.
           </div>
@@ -225,17 +225,10 @@ export function UpdatePanel() {
           aria-label="Check for updates on launch"
           disabled={!data}
           onClick={() => void setAutomatic(!(data?.automatic ?? true))}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
-            padding: '7px 14px', borderRadius: 'var(--r-full)', cursor: 'pointer',
-            fontSize: 'var(--fs-sm)', fontWeight: 600,
-            border: `1px solid ${data?.automatic ? 'transparent' : 'var(--border-strong)'}`,
-            background: data?.automatic ? 'var(--accent)' : 'transparent',
-            color: data?.automatic ? 'var(--accent-text)' : 'var(--text-muted)',
-          }}
-        >
-          {data?.automatic ? 'On' : 'Off'}
-        </button>
+          type="button"
+          className="dl-switch"
+          title={data?.automatic ? 'On' : 'Off'}
+        />
       </div>
 
       {(error ?? status.error) && (

@@ -46,14 +46,14 @@ export function TimeshiftPanel() {
         label="Pause live TV"
         hint="Keeps the channel you are watching on disk so it can be paused and rewound."
       >
-        <Button
-          size="sm"
-          variant={settings.enabled ? 'primary' : 'secondary'}
+        <button
+          type="button"
+          className="dl-switch"
+          aria-pressed={settings.enabled}
           aria-label={settings.enabled ? 'Turn pause live TV off' : 'Turn pause live TV on'}
+          title={settings.enabled ? 'On' : 'Off'}
           onClick={() => void apply({ enabled: !settings.enabled })}
-        >
-          {settings.enabled ? 'On' : 'Off'}
-        </Button>
+        />
       </Row>
 
       <Row label="Buffer size" hint="The disk it may use.">
