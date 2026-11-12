@@ -1003,6 +1003,14 @@ export interface MosaicTile {
   focused: boolean;
   status: PlayerState['status'];
   /**
+   * Whether this tile is the one holding the picture.
+   *
+   * Always true of a filled tile in an ordinary mosaic, where every tile has its own
+   * stream. In a rotating one exactly one tile is showing and the rest draw their
+   * channel's name, logo and what is on now.
+   */
+  showing: boolean;
+  /**
    * Why this tile has no picture. A tile failing is ordinary — it is one stream of
    * several — so it is reported here rather than failing the whole mosaic.
    */
@@ -1014,6 +1022,19 @@ export interface MosaicView {
   layout: MosaicLayout | null;
   tiles: MosaicTile[];
   focused: number;
+  /**
+   * Whether this mosaic shares one connection between its tiles, showing each in turn.
+   *
+   * What a line that allows a single stream can actually have. Entered from the refusal
+   * — see `rotationOffered` — rather than chosen up front, because a line that can
+   * carry four tiles should give four pictures.
+   */
+  rotating: boolean;
+  /**
+   * Seconds until the picture moves to the next tile, or `null` when it is not going to:
+   * an ordinary mosaic, or a rotation the viewer pinned by focusing a tile.
+   */
+  nextInSecs: number | null;
 }
 
 /**
@@ -1033,6 +1054,11 @@ export type MosaicCheck = MosaicBudget & {
   tiles: number;
   /** The largest layout that would fit right now, or `null` when none does. */
   largestFitting: MosaicLayout | null;
+  /**
+   * Whether this layout can be had as a rotation instead: one stream, moved from tile
+   * to tile every few seconds. True exactly when the budget refuses.
+   */
+  rotationOffered: boolean;
   /** Recordings in flight, so the UI can say why the budget is tighter than the line. */
   recordings: number;
 };
@@ -1415,6 +1441,18 @@ export interface Commands {
     layout: MosaicLayout;
     channelIds: (number | null)[];
   }) => MosaicView;
+  /**
+   * Open a mosaic that shares one connection between its tiles, showing each in turn.
+   *
+   * Offered by `mosaic.check` when the budget refuses the layout. Needs one stream
+   * whatever the layout, so it is never refused for the budget.
+   */
+  'mosaic.openRotating': (args: {
+    layout: MosaicLayout;
+    channelIds: (number | null)[];
+  }) => MosaicView;
+  /** Let a rotation the viewer pinned by focusing a tile start moving again. */
+  'mosaic.resumeRotation': () => MosaicView;
   'mosaic.close': () => MosaicView;
   'mosaic.state': () => MosaicView;
   /** Move audio to a tile — `1`–`9`, or a click. */

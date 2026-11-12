@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use aurora_core::failover;
 use aurora_db::repo::sources;
 use aurora_db::rusqlite::Connection;
 use aurora_player::backend::LoadOptions;
@@ -32,10 +33,10 @@ use crate::error::{AppError, Result};
 
 /// How many times a single tune may roll to another source before giving up.
 ///
-/// Bounded because a provider having a total outage would otherwise spin through every
-/// URL it owns for ever, and a stopped picture with an error on it is more honest than
-/// an endless reconnect.
-pub const MAX_ROLLOVERS: u32 = 6;
+/// Re-exported from `aurora_core::failover`, which owns the live failover policy so the
+/// multi-view tiles get the same one. Kept named here because this is where a reader
+/// looking for it comes first.
+pub use aurora_core::failover::{MAX_RETRIES as MAX_LIVE_RETRIES, MAX_ROLLOVERS};
 
 /// How many times a film or episode is reloaded after the stream dies before the error
 /// is left on screen.
@@ -73,30 +74,6 @@ pub const MAX_VOD_OPEN_TRIES: u32 = 3;
 /// -- a panel that just refused needs a moment -- and short enough that three attempts
 /// are under a second of waiting.
 const VOD_OPEN_BACKOFF_MS: [u64; (MAX_VOD_OPEN_TRIES - 1) as usize] = [250, 600];
-
-/// How many times a live channel's *current* source is reloaded before rolling over.
-///
-/// A film had this from the start and a channel did not, and the asymmetry was the whole
-/// bug. `recover` went straight to `current + 1`: one transient stall -- twelve seconds
-/// without the playhead moving, which is what `DEFAULT_STALL_TIMEOUT_SECS` calls dead --
-/// spent a rollover, recorded a failure against a source that was fine, and on a channel
-/// with **one** source returned false and left the error panel on screen. A viewer
-/// watching live TV on a provider that hiccups got a modal, with no retry attempted at
-/// all, as often as the provider hiccupped.
-///
-/// Two, not three. A live stream has no position to resume from, so a retry costs the
-/// viewer the same second or two a rollover does -- but it is far likelier to work,
-/// because the stream that just stopped is overwhelmingly the stream that will be fine
-/// in a moment. Rolling over remains what happens when retrying does not.
-pub const MAX_LIVE_RETRIES: u32 = 2;
-
-/// Seconds to wait before each live reload, indexed by how many have been tried.
-///
-/// Shorter than `VOD_BACKOFF_SECS`, because live has a cost a film does not: every second
-/// spent waiting is a second of the programme gone for good. Long enough that a provider
-/// which has just dropped the connection is not hammered, short enough that a recovered
-/// stream looks like a stutter rather than an outage.
-const LIVE_BACKOFF_SECS: [i64; MAX_LIVE_RETRIES as usize] = [1, 3];
 
 /// How long to wait before each reload, in seconds, indexed by how many have been tried.
 ///
@@ -678,43 +655,74 @@ impl Playback {
     ///
     /// Returns whether anything was actually attempted, so `tick` knows whether the
     /// error it saw is still the truth.
+    ///
+    /// The policy itself is `aurora_core::failover`, which the multi-view tiles share —
+    /// this is the half that owns the locks, the player and the generation check. The
+    /// two were one method here, so a tile, which is a live stream by any definition,
+    /// had none of it.
     fn recover(&self, now: i64, generation: u64) -> bool {
         let Some(mut session) = self.session.lock().clone() else {
             return false;
         };
-        if session.rollovers >= MAX_ROLLOVERS {
-            return false;
-        }
+
+        let attempt = failover::Attempt {
+            current: session.current,
+            sources: session.candidates.len(),
+            rollovers: session.rollovers,
+            retries: session.retries,
+            failed_at: session.failed_at,
+        };
+        let decision = failover::next(attempt, now);
 
         // Whatever was playing just stopped playing, so that is a failure against the
         // source, not just against this attempt.
         //
         // Once per failure, not once per heartbeat. `tick` calls this every 250 ms for
-        // as long as the status is `Error`, and the retry path below returns `false`
-        // without loading anything while the backoff runs -- so a single stall on a
-        // channel with one source came through here about seventeen times (once on
-        // first sight, then four a second for the 1s and 3s of `LIVE_BACKOFF_SECS`) and
-        // recorded a failure every time. `fail_count` is not a log, it is the number
-        // `cooldown_secs` multiplies by `COOLDOWN_STEP_SECS`: seventeen pinned a healthy
-        // source at `MAX_COOLDOWN_SECS`, so one hiccup sorted it last for six minutes
-        // and the ordering meant to start the next tune from the stream that works was
-        // reading a count seventeen times the truth.
+        // as long as the status is `Error`, and the waiting answers below load nothing
+        // -- so a single stall on a channel with one source came through here about
+        // seventeen times (once on first sight, then four a second for the 1s and 3s of
+        // the backoff) and recorded a failure every time. `fail_count` is not a log, it
+        // is the number `cooldown_secs` multiplies by `COOLDOWN_STEP_SECS`: seventeen
+        // pinned a healthy source at `MAX_COOLDOWN_SECS`, so one hiccup sorted it last
+        // for six minutes and the ordering meant to start the next tune from the stream
+        // that works was reading a count seventeen times the truth.
         //
-        // `failed_at` is exactly "this failure has already been seen": `None` while
-        // playing, cleared again before each retry, so a stream that dies twice is
-        // still counted twice.
-        if session.failed_at.is_none() {
+        // Not on `Stop`, and that exclusion is load-bearing: the rollovers-spent path
+        // never sets `failed_at`, so every heartbeat afterwards would be a first sight
+        // and the over-counting would come straight back by another door.
+        if attempt.first_sight() && decision != failover::Next::Stop {
             if let Some((source_id, _)) = session.candidates.get(session.current) {
                 let db = self.db.lock();
                 let _ = sources::record_failure(&db, *source_id, now);
             }
         }
 
-        let next = session.current + 1;
-        if next >= session.candidates.len() {
-            // No other URL to try. *Now* retrying this one is worth it -- which it was
-            // not a moment ago, while there was a different source available to roll to
-            // instantly (`a_channel_still_rolls_over_rather_than_reloading`).
+        match decision {
+            // Out of rollovers. Leave the session up: the next deliberate tune re-reads
+            // the order, by which time the failures recorded have moved the good one to
+            // the front.
+            failover::Next::Stop => false,
+            // The backoff has not elapsed. A provider that has just dropped the
+            // connection should not be asked again in the same breath.
+            failover::Next::Wait => false,
+            // First sight. Start the clock and let the error show rather than pretending
+            // otherwise by holding the old state, which would be a picture that is not
+            // there.
+            failover::Next::StartClock => {
+                if let Some(live) = self.session.lock().as_mut() {
+                    live.failed_at = Some(now);
+                }
+                false
+            }
+            // Out of URLs and out of retries: drop it rather than looping over the same
+            // dead list.
+            failover::Next::Abandon => {
+                *self.session.lock() = None;
+                false
+            }
+            // Nothing to roll to, so retrying this one is worth it -- which it was not a
+            // moment ago, while a different source was available to roll to instantly
+            // (`a_channel_still_rolls_over_rather_than_reloading`).
             //
             // This is the case the viewer actually hits. A live stream that stops for
             // twelve seconds is usually the provider hiccupping, not the source being
@@ -724,63 +732,42 @@ impl Playback {
             // session and left "Your provider didn't respond in time" on screen **having
             // attempted nothing at all**. Reported from live viewing: "this keeps showing
             // up when watching live tv, it comes up quite often".
-            if session.retries < MAX_LIVE_RETRIES {
-                // First sight of this failure starts the clock rather than reloading at
-                // once: a provider that has just dropped the connection should not be
-                // asked again in the same breath.
-                let since = match session.failed_at {
-                    Some(at) => at,
-                    None => {
-                        if let Some(live) = self.session.lock().as_mut() {
-                            live.failed_at = Some(now);
-                        }
-                        return false;
-                    }
-                };
-                if now - since < LIVE_BACKOFF_SECS[session.retries as usize] {
-                    return false;
-                }
-
+            failover::Next::Retry => {
                 session.retries += 1;
                 session.failed_at = None;
                 tracing::info!(
-                    "channel {} stalled with no other source; reloading, attempt {} of \
-                     {MAX_LIVE_RETRIES}",
+                    "channel {} stalled with no other source; reloading, attempt {} of                      {MAX_LIVE_RETRIES}",
                     session.channel_id,
                     session.retries
                 );
-                let loaded = self.load_current(&session, now);
-                if !self.is_current(generation) {
-                    return false;
-                }
-                *self.session.lock() = Some(session);
-                return loaded.is_ok();
+                self.reload(session, now, generation)
             }
-
-            // Out of URLs and out of retries: leave the error up rather than looping over
-            // the same dead list. The next deliberate tune re-reads the order, by which
-            // time the failures just recorded will have moved the good one to the front.
-            *self.session.lock() = None;
-            return false;
+            failover::Next::RollTo(index) => {
+                session.current = index;
+                session.rollovers += 1;
+                // The next source has not failed yet, and must get its own retries
+                // rather than inheriting the exhausted count of the one before it.
+                session.retries = 0;
+                session.failed_at = None;
+                tracing::info!(
+                    "channel {} source {} failed, trying source {} of {}",
+                    session.channel_id,
+                    index,
+                    index + 1,
+                    session.candidates.len()
+                );
+                self.reload(session, now, generation)
+            }
         }
+    }
 
-        session.current = next;
-        session.rollovers += 1;
-        // The next source has not failed yet, and must get its own retries rather than
-        // inheriting the exhausted count of the one before it.
-        session.retries = 0;
-        session.failed_at = None;
-        tracing::info!(
-            "channel {} source {} failed, trying source {} of {}",
-            session.channel_id,
-            next,
-            next + 1,
-            session.candidates.len()
-        );
-
+    /// Load whatever `session` now points at and publish it, unless it has been
+    /// overtaken.
+    ///
+    /// A zap that arrived while this was loading owns the picture now; publishing this
+    /// session over it would put the viewer back on the channel they left.
+    fn reload(&self, session: LiveSession, now: i64, generation: u64) -> bool {
         let loaded = self.load_current(&session, now);
-        // A zap that arrived while this was loading owns the picture now; publishing
-        // this session over it would put the viewer back on the channel they left.
         if !self.is_current(generation) {
             return false;
         }

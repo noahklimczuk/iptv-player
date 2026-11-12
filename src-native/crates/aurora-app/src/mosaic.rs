@@ -30,9 +30,10 @@
 //! already is.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use aurora_core::failover;
 use aurora_core::mosaic::{Budget, Demand, Layout, Rect};
 use aurora_db::repo::{channels, mosaic as repo};
 use aurora_db::rusqlite::Connection;
@@ -61,6 +62,12 @@ pub struct TileView {
     /// Whether this is the tile with audio.
     pub focused: bool,
     pub status: PlayerStatus,
+    /// Whether this tile is the one holding the picture.
+    ///
+    /// Always true of a filled tile in an ordinary mosaic, where every tile has its own
+    /// stream. In a rotating one exactly one tile is showing and the rest draw their
+    /// channel's name, logo and what is on now -- so the screen needs to be told which.
+    pub showing: bool,
     /// Why this tile has no picture, in words a viewer can act on. A tile failing is
     /// ordinary — it is one stream of several — so it is reported per tile rather than
     /// failing the whole mosaic.
@@ -75,6 +82,15 @@ pub struct MosaicView {
     pub layout: Option<Layout>,
     pub tiles: Vec<TileView>,
     pub focused: usize,
+    /// Whether this mosaic is sharing one connection between its tiles.
+    pub rotating: bool,
+    /// Seconds until the picture moves to the next tile, or `null` when it is not going
+    /// to: an ordinary mosaic, or a rotation the viewer has pinned.
+    ///
+    /// Sent rather than computed in the UI because the clock that matters is the one
+    /// `tick` is deciding against, and a countdown drawn from a different one drifts
+    /// away from the thing it is counting down to.
+    pub next_in_secs: Option<i64>,
 }
 
 impl MosaicView {
@@ -84,6 +100,8 @@ impl MosaicView {
             layout: None,
             tiles: Vec::new(),
             focused: 0,
+            rotating: false,
+            next_in_secs: None,
         }
     }
 }
@@ -98,6 +116,10 @@ pub struct BudgetView {
     pub budget: Budget,
     /// The largest layout that would fit right now, or `null` when none does.
     pub largest_fitting: Option<Layout>,
+    /// Whether this layout can be had as a rotation instead: one stream, moved from
+    /// tile to tile. True exactly when the budget refuses, which is the only time it is
+    /// the better trade -- a line that can carry four tiles should give four pictures.
+    pub rotation_offered: bool,
     /// Recordings in flight, so the UI can say *why* the budget is tighter than the
     /// provider's own number.
     pub recordings: usize,
@@ -108,12 +130,94 @@ struct Tile {
     name: Option<String>,
     player: Option<Box<dyn PlayerBackend>>,
     error: Option<String>,
+    /// Every URL this tile's channel has, best bet first, with the source id each came
+    /// from so an outcome can be recorded against it.
+    ///
+    /// A tile used to take `sources.into_iter().next()` and keep nothing: one URL, and
+    /// if it would not load the tile said so on a channel the main player would have
+    /// tuned on its second source. The list is read once, at open, for the same reason
+    /// `play_live` reads it once — the order encodes what worked last time, and
+    /// re-reading it mid-session would reshuffle under a viewer who is watching.
+    candidates: Vec<(i64, String)>,
+    /// Where this tile has got to in `candidates`, and what it has already tried.
+    attempt: aurora_core::failover::Attempt,
+    /// What to hand `load`, kept so a reload does not have to re-derive it.
+    options: aurora_player::backend::LoadOptions,
+    /// Where this tile's surface goes, kept so recovery can build a new instance when
+    /// the old one is gone.
+    rect: Rect,
+}
+
+impl Tile {
+    /// An empty cell, and what a tile that could not even be planned looks like.
+    fn blank(channel_id: Option<i64>, name: Option<String>, error: Option<String>) -> Self {
+        Self {
+            channel_id,
+            name,
+            player: None,
+            error,
+            candidates: Vec::new(),
+            attempt: aurora_core::failover::Attempt::default(),
+            options: aurora_player::backend::LoadOptions::default(),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+        }
+    }
+}
+
+/// What one reload became: the tile it was for, and its new instance or why not.
+///
+/// Named because `tick` carries a vector of them across the gap where the session lock
+/// is released, and the tuple spelt out there is the sort of type nobody reads twice.
+type Opened = (usize, std::result::Result<Box<dyn PlayerBackend>, String>);
+
+/// One tile's reconnection: taken under the session lock, performed without it.
+struct Reload {
+    index: usize,
+    source: (i64, String),
+    options: aurora_player::backend::LoadOptions,
+    rect: Rect,
+}
+
+/// How long each tile holds the single stream, in seconds, when the mosaic is rotating.
+///
+/// Long enough to watch something -- a goal, a wicket, who is talking -- and short enough
+/// that a nine-tile wall comes round inside two minutes. Picked against the rhythm this
+/// is for: somebody watching several matches at once, who wants to know what is happening
+/// in all of them rather than to follow one.
+pub const DWELL_SECS: i64 = 12;
+
+/// One stream shared between the tiles, moved from one to the next on a dwell.
+///
+/// What a line that allows a single connection can actually have. Multi-view on such a
+/// line used to be refused outright and nothing else was offered, which is a correct
+/// answer to the wrong question: the viewer cannot have nine streams, but they can have
+/// nine channels -- one at a time, with the other eight showing what is on them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Rotation {
+    /// Which tile is holding the stream.
+    showing: usize,
+    /// When this tile's turn started, so `tick` knows when it is up.
+    since: i64,
+    /// Set while the viewer has pinned a tile by focusing it.
+    ///
+    /// Focus already means "the tile I am paying attention to", and on one stream that
+    /// has to mean "stop moving": a rotation that carried on would take the picture away
+    /// from the tile they had just asked for, which is the opposite of what pressing it
+    /// says.
+    pinned: bool,
 }
 
 struct Session {
     layout: Layout,
     tiles: Vec<Tile>,
     focused: usize,
+    /// `Some` when the whole mosaic is sharing one connection. See `Rotation`.
+    rotation: Option<Rotation>,
     /// Tiles whose stream is being opened right now.
     ///
     /// `set_tile` is `#[tauri::command(async)]`, so two clicks on different empty tiles
@@ -154,6 +258,16 @@ pub struct Mosaic {
     /// there. Clicking Close looked fine only because that path updates the screen's own
     /// state as well -- every other way of closing one did not.
     announced: AtomicBool,
+    /// Bumped by anything that changes which channels are in which tile.
+    ///
+    /// A tile reconnecting does its `load` with the session lock *released*, because a
+    /// load is a network round trip and holding the lock across one would make Close
+    /// wait out a dead provider's timeout. So the mosaic can be closed, reopened, or
+    /// have that tile pointed at another channel while the reload is in flight, and the
+    /// instance that comes back has to be thrown away rather than installed over
+    /// whatever the viewer asked for since. The same reasoning as
+    /// `Playback::generation`, for the same reason.
+    generation: AtomicU64,
     /// The main player, so its surface can be got out of the way.
     ///
     /// Not for playing anything — the tiles have their own backends. It is here because
@@ -217,6 +331,7 @@ impl Mosaic {
             size: Mutex::new((1280, 720)),
             data_dir,
             announced: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
             main,
         }
     }
@@ -245,16 +360,18 @@ impl Mosaic {
     pub fn check(&self, layout: Layout) -> BudgetView {
         let recordings = self.recordings();
         let limit = self.limit();
+        let budget = Budget::check(
+            Demand {
+                tiles: layout.tiles(),
+                recordings,
+            },
+            limit,
+        );
         BudgetView {
             layout,
             tiles: layout.tiles(),
-            budget: Budget::check(
-                Demand {
-                    tiles: layout.tiles(),
-                    recordings,
-                },
-                limit,
-            ),
+            rotation_offered: matches!(budget, Budget::Exceeds { .. }),
+            budget,
             // Only asked when the provider declared a limit: with none there is
             // nothing to promise, and `null` is what the UI already reads as "no
             // suggestion" (R-42).
@@ -280,6 +397,37 @@ impl Mosaic {
     /// `Playback`, which is the thing that would then have to depend on it to promote a
     /// tile back.
     pub fn open(&self, layout: Layout, channels: &[Option<i64>], now: i64) -> Result<MosaicView> {
+        self.open_sharing(layout, channels, now, false)
+    }
+
+    /// Open a mosaic that shares one connection between its tiles.
+    ///
+    /// For the line this project is measured against, which allows exactly one. The
+    /// budget is not checked: the whole point is that the demand is one stream whatever
+    /// the layout, so a nine-tile wall is as affordable as a single tile. Every tile is
+    /// planned -- name, logo, sources, rectangle -- and one is loaded; the rest draw
+    /// their channel and what is on it until their turn comes.
+    ///
+    /// Offered by the refusal rather than chosen up front: a viewer whose line can carry
+    /// four tiles should get four streams, not a rotation. See `refusal`.
+    pub fn open_rotating(
+        &self,
+        layout: Layout,
+        channels: &[Option<i64>],
+        now: i64,
+    ) -> Result<MosaicView> {
+        self.open_sharing(layout, channels, now, true)
+    }
+
+    fn open_sharing(
+        &self,
+        layout: Layout,
+        channels: &[Option<i64>],
+        now: i64,
+        rotating: bool,
+    ) -> Result<MosaicView> {
+        // Anything a tile was reconnecting towards belongs to the mosaic being replaced.
+        self.generation.fetch_add(1, Ordering::SeqCst);
         let mut wanted: Vec<Option<i64>> = channels.to_vec();
         wanted.truncate(layout.tiles());
         wanted.resize(layout.tiles(), None);
@@ -299,6 +447,9 @@ impl Mosaic {
             },
             self.limit(),
         );
+        // A rotation needs one connection whatever the layout, so there is nothing here
+        // to refuse. Checked anyway, and ignored deliberately: reaching this with a
+        // refusing budget is the ordinary way in.
         if let Budget::Exceeds {
             needed,
             limit,
@@ -306,7 +457,9 @@ impl Mosaic {
             recordings,
         } = budget
         {
-            return Err(AppError::Other(refusal(needed, limit, over, recordings)));
+            if !rotating {
+                return Err(AppError::Other(refusal(needed, limit, over, recordings)));
+            }
         }
 
         // Close whatever was open first. Opening a second mosaic over the first would
@@ -319,8 +472,26 @@ impl Mosaic {
 
         let mut tiles = Vec::with_capacity(layout.tiles());
         for (index, channel_id) in wanted.into_iter().enumerate() {
-            tiles.push(self.build_tile(index, channel_id, rects[index], parent, now));
+            // Rotating: plan the tile but do not open it. Opening nine and closing eight
+            // would ask the line for nine connections, which is the thing being avoided.
+            tiles.push(self.build_tile(index, channel_id, rects[index], parent, now, !rotating));
         }
+
+        // The one stream, on the first tile that has somewhere to get it from.
+        let rotation = rotating.then(|| {
+            let showing = tiles
+                .iter()
+                .position(|t| !t.candidates.is_empty())
+                .unwrap_or(0);
+            if let Some(tile) = tiles.get_mut(showing) {
+                self.give_stream_to(tile, parent, now);
+            }
+            Rotation {
+                showing,
+                since: now,
+                pinned: false,
+            }
+        });
 
         // Every tile has gone to the bottom of the z-order, so the main surface goes
         // under them. See `sink_main_surface` -- this is the line that makes a mosaic
@@ -332,6 +503,7 @@ impl Mosaic {
             layout,
             tiles,
             focused: 0,
+            rotation,
         };
         // Audio on the first tile that actually has a stream: focusing an empty tile
         // would mean a mosaic with a picture and no sound.
@@ -352,6 +524,11 @@ impl Mosaic {
     /// Every failure stays inside the tile. A channel that was deleted by a refresh, a
     /// channel with no sources, and a stream the provider refuses are three ordinary
     /// things, and one of them must not take the other eight tiles down with it.
+    ///
+    /// Tries every URL the channel has, in the order `live_sources` puts them — which is
+    /// the order that encodes what worked last time. It used to take the first and stop,
+    /// so a tile reported "this often means the line has hit its connection limit" on a
+    /// channel the main player would have tuned on its second source.
     fn build_tile(
         &self,
         index: usize,
@@ -359,14 +536,10 @@ impl Mosaic {
         rect: Rect,
         parent: isize,
         now: i64,
+        open_stream: bool,
     ) -> Tile {
         let Some(channel_id) = channel_id else {
-            return Tile {
-                channel_id: None,
-                name: None,
-                player: None,
-                error: None,
-            };
+            return Tile::blank(None, None, None);
         };
 
         let resolved = {
@@ -376,100 +549,187 @@ impl Mosaic {
         let (sources, mut options) = match resolved {
             Ok(pair) => pair,
             Err(e) => {
-                return Tile {
-                    channel_id: Some(channel_id),
-                    name: channel_name(&self.db.lock(), channel_id),
-                    player: None,
-                    error: Some(e.to_string()),
-                }
+                let name = channel_name(&self.db.lock(), channel_id);
+                return Tile::blank(Some(channel_id), name, Some(e.to_string()));
             }
         };
         let name = options.title.clone();
-
-        let Some(source) = sources.into_iter().next() else {
-            return Tile {
-                channel_id: Some(channel_id),
-                name,
-                player: None,
-                error: Some("Your provider listed this channel without a stream.".into()),
-            };
-        };
 
         // Tiles are not the main player: no timeshift buffer, because nine on-disk ring
         // buffers is a disk fire and nobody rewinds a tile; and muted by default, with
         // `apply_audio` turning exactly one back on.
         options.timeshift = None;
 
+        // Each candidate's address, rebuilt where the library holds a stream id instead
+        // of a URL (R-126). A source whose provider has no saved password is dropped
+        // rather than failing the tile, exactly as in `play_live`: the others may still
+        // play, and the refusal below says what happened when none of them can.
+        let (candidates, refusal) = {
+            let db = self.db.lock();
+            let mut access = std::collections::HashMap::new();
+            let mut out = Vec::new();
+            let mut refusal = None;
+            for s in sources {
+                match crate::streams::playable(
+                    &db,
+                    self.credentials.as_ref(),
+                    &mut access,
+                    aurora_core::model::MediaKind::Live,
+                    &crate::streams::StreamRef::from(&s),
+                ) {
+                    Ok(url) => out.push((s.id, url)),
+                    Err(e) => refusal = Some(e.to_string()),
+                }
+            }
+            (out, refusal)
+        };
+        if candidates.is_empty() {
+            return Tile::blank(
+                Some(channel_id),
+                name,
+                Some(refusal.unwrap_or_else(|| {
+                    "Your provider listed this channel without a stream.".into()
+                })),
+            );
+        }
+
+        let mut tile = Tile {
+            channel_id: Some(channel_id),
+            name,
+            player: None,
+            error: None,
+            attempt: aurora_core::failover::Attempt {
+                current: 0,
+                sources: candidates.len(),
+                ..Default::default()
+            },
+            candidates,
+            options,
+            rect,
+        };
+
+        if !open_stream {
+            // Planned, not opened: a rotating mosaic's tiles wait their turn. No error
+            // either -- there is nothing wrong with this tile, it simply has no picture
+            // yet, and `showing` is what the screen draws from.
+            return tile;
+        }
+
+        let mut last = None;
+        for which in 0..tile.candidates.len() {
+            tile.attempt.current = which;
+            match self.open_candidate(
+                &tile.candidates[which],
+                &tile.options,
+                tile.rect,
+                parent,
+                now,
+            ) {
+                Ok(player) => {
+                    tile.player = Some(player);
+                    return tile;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+
+        // Every URL refused. The index stays on the last one tried, and the rollovers
+        // spent getting here are the ones the heartbeat no longer has.
+        tile.attempt.rollovers = (tile.candidates.len() - 1) as u32;
+        tile.error = last;
+        tracing::info!(
+            "mosaic tile {index} could not open any of channel {channel_id}'s {} sources",
+            tile.candidates.len()
+        );
+        tile
+    }
+
+    /// Load one planned tile, so it becomes the tile with the picture.
+    ///
+    /// Used by a rotation at both ends: opening the mosaic, and handing the stream on.
+    /// Tries every URL the channel has, like `build_tile` does, because a rotation has
+    /// the same reason to: the order encodes what worked last time.
+    fn give_stream_to(&self, tile: &mut Tile, parent: isize, now: i64) {
+        let mut last = None;
+        for which in 0..tile.candidates.len() {
+            tile.attempt.current = which;
+            match self.open_candidate(
+                &tile.candidates[which],
+                &tile.options,
+                tile.rect,
+                parent,
+                now,
+            ) {
+                Ok(player) => {
+                    tile.player = Some(player);
+                    tile.error = None;
+                    tile.attempt.retries = 0;
+                    tile.attempt.failed_at = None;
+                    return;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        // Nothing would play. The tile says so and the rotation moves on at the next
+        // dwell rather than stopping here -- one dead channel in nine must not be the
+        // end of the wall.
+        tile.error = last;
+    }
+
+    /// Open the candidate `tile.attempt.current` points at, into a fresh instance.
+    ///
+    /// The instance is made here rather than reused, because a backend that failed to
+    /// load is not a backend worth asking again — and dropping the one that did not work
+    /// is what releases the connection it may be holding on the way to saying so.
+    ///
+    /// Records the outcome against the source, which a tile never used to do. The order
+    /// `live_sources` returns is built from `fail_count` and `last_ok_at`, so a mosaic
+    /// that learned nothing left the next tune — in the main player, on the same
+    /// channel — starting from a URL this tile had already found dead.
+    fn open_candidate(
+        &self,
+        source: &(i64, String),
+        options: &aurora_player::backend::LoadOptions,
+        rect: Rect,
+        parent: isize,
+        now: i64,
+    ) -> std::result::Result<Box<dyn PlayerBackend>, String> {
+        let (source_id, url) = source;
+
         let mut player = (self.factory)();
         if parent != 0 {
             if let Err(e) = player.attach(parent, rect.width.max(1), rect.height.max(1)) {
-                return Tile {
-                    channel_id: Some(channel_id),
-                    name,
-                    player: None,
-                    error: Some(format!("This tile has no video surface: {e}")),
-                };
+                return Err(format!("This tile has no video surface: {e}"));
             }
         }
         if let Err(e) = player.place(rect) {
-            tracing::warn!("tile {index} could not be placed: {e}");
+            tracing::warn!("a mosaic tile could not be placed: {e}");
         }
         let _ = player.set_muted(true);
 
-        // The tile's address, rebuilt where the library holds a stream id instead of a
-        // URL (R-126). A tile reports its own failure, so this does not fail the mosaic.
-        let url = {
-            let db = self.db.lock();
-            let mut access = std::collections::HashMap::new();
-            crate::streams::playable(
-                &db,
-                self.credentials.as_ref(),
-                &mut access,
-                aurora_core::model::MediaKind::Live,
-                &crate::streams::StreamRef::from(&source),
-            )
-        };
-        let url = match url {
-            Ok(url) => url,
-            Err(e) => {
-                return Tile {
-                    channel_id: Some(channel_id),
-                    name,
-                    player: None,
-                    error: Some(e.to_string()),
-                }
+        match player.load(url, options) {
+            Ok(()) => {
+                let db = self.db.lock();
+                let _ = aurora_db::repo::sources::record_ok(&db, *source_id, now);
+                Ok(player)
             }
-        };
-
-        match player.load(&url, &options) {
-            Ok(()) => Tile {
-                channel_id: Some(channel_id),
-                name,
-                player: Some(player),
-                error: None,
-            },
             Err(e) => {
-                // The instance is dropped with the `Tile` that does not hold it, which
-                // is the point: a tile that could not load must not keep a connection
-                // open on the way to saying so.
-                //
+                let db = self.db.lock();
+                let _ = aurora_db::repo::sources::record_failure(&db, *source_id, now);
+                drop(db);
                 // Classified rather than printed, because the commonest failure here is
                 // the one this module is about: a provider at its connection limit
                 // answers 403, and `NetFailure` already turns that into "This often
                 // means the line has hit its connection limit".
                 let failure = aurora_core::neterr::NetFailure::classify(&e.to_string());
-                Tile {
-                    channel_id: Some(channel_id),
-                    name,
-                    player: None,
-                    error: Some(format!("{}. {}", failure.message, failure.cause)),
-                }
+                Err(format!("{}. {}", failure.message, failure.cause))
             }
         }
     }
 
     /// Close the mosaic, dropping every instance and with them every connection.
     pub fn close(&self) -> MosaicView {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(mut session) = self.session.lock().take() {
             for tile in &mut session.tiles {
                 if let Some(player) = tile.player.as_mut() {
@@ -498,6 +758,36 @@ impl Mosaic {
                 index + 1
             )));
         }
+        // A rotating mosaic is the exception: focusing a tile that has no picture is
+        // exactly how a viewer asks for one. The stream comes to them.
+        if session.rotation.is_some() {
+            if session.tiles[index].candidates.is_empty() {
+                return Err(AppError::Other(
+                    "That tile has no channel in it to show.".into(),
+                ));
+            }
+            let parent = self.parent.load(Ordering::SeqCst);
+            let now = crate::now_unix();
+            let showing = session.rotation.map(|r| r.showing).unwrap_or(index);
+            if showing != index {
+                // Let go first. One connection means the tile being left has to release
+                // before the tile being chosen can ask.
+                let retired = session.tiles[showing].player.take();
+                drop(retired);
+                self.give_stream_to(&mut session.tiles[index], parent, now);
+            }
+            session.rotation = Some(Rotation {
+                showing: index,
+                since: now,
+                // Pressing a tile means "stay here". A rotation that carried on would
+                // take the picture away from the tile just asked for.
+                pinned: true,
+            });
+            session.focused = index;
+            apply_audio(session);
+            let rects = session.layout.rects_now(*self.size.lock());
+            return Ok(view_of(session, &rects));
+        }
         if session.tiles[index].player.is_none() {
             return Err(AppError::Other(
                 "That tile has no picture, so there is no sound to move to it.".into(),
@@ -509,11 +799,29 @@ impl Mosaic {
         Ok(view_of(session, &rects))
     }
 
+    /// Let a pinned rotation start moving again.
+    pub fn resume_rotation(&self) -> Result<MosaicView> {
+        let mut guard = self.session.lock();
+        let session = guard.as_mut().ok_or_else(not_open)?;
+        let Some(rotation) = session.rotation.as_mut() else {
+            return Err(AppError::Other(
+                "This mosaic is not sharing one stream, so there is nothing to resume.".into(),
+            ));
+        };
+        rotation.pinned = false;
+        rotation.since = crate::now_unix();
+        let rects = session.layout.rects_now(*self.size.lock());
+        Ok(view_of(session, &rects))
+    }
+
     /// Put a different channel in one tile, leaving the rest alone.
     ///
     /// The budget does not change when a tile is swapped — one stream out, one in — but
     /// filling a tile that was empty does, so that case is checked.
     pub fn set_tile(&self, index: usize, channel_id: Option<i64>, now: i64) -> Result<MosaicView> {
+        // This tile is about to be something else; a reload for what it used to be is
+        // no longer wanted.
+        self.generation.fetch_add(1, Ordering::SeqCst);
         let parent = self.parent.load(Ordering::SeqCst);
         let size = *self.size.lock();
 
@@ -524,7 +832,7 @@ impl Mosaic {
         // outgoing instance -- so the decision and the act were not under the same lock.
         // Two concurrent `mosaic.setTile` calls could each pass a budget the other
         // invalidated (R-129).
-        let (layout, claimed) = {
+        let (layout, claimed, open_stream) = {
             let mut guard = self.session.lock();
             let session = guard.as_mut().ok_or_else(not_open)?;
             if index >= session.tiles.len() {
@@ -570,12 +878,20 @@ impl Mosaic {
             if claimed {
                 session.pending += 1;
             }
-            (session.layout, claimed)
+            // In a rotating mosaic only the tile holding the stream gets one. Swapping
+            // the channel in a waiting tile changes what it says it will show, not what
+            // is playing, so opening it here would be a second connection on a line
+            // that allows one.
+            let open_stream = match session.rotation {
+                Some(rotation) => rotation.showing == index,
+                None => true,
+            };
+            (session.layout, claimed, open_stream)
         };
 
         let rects = layout.rects_now(size);
 
-        let tile = self.build_tile(index, channel_id, rects[index], parent, now);
+        let tile = self.build_tile(index, channel_id, rects[index], parent, now, open_stream);
         // The replacement tile went to the bottom like every other, so the main surface
         // goes under it too.
         self.sink_main_surface();
@@ -639,7 +955,7 @@ impl Mosaic {
     /// thing that turns a stream dying into something the UI can be told about, and a
     /// mosaic of nine frozen "playing" labels over nine black squares is precisely the
     /// bug F-30 was.
-    pub fn tick(&self) -> Option<MosaicView> {
+    pub fn tick(&self, now: i64) -> Option<MosaicView> {
         let mut guard = self.session.lock();
         let Some(session) = guard.as_mut() else {
             // No session. If the screen was last told there was one, tell it once that
@@ -650,20 +966,177 @@ impl Mosaic {
                 .swap(false, Ordering::SeqCst)
                 .then(MosaicView::closed);
         };
-        for tile in session.tiles.iter_mut() {
-            if let Some(player) = tile.player.as_mut() {
-                player.pump(0.0);
-                let state = player.state();
-                if state.status == PlayerStatus::Error && tile.error.is_none() {
-                    tile.error = Some(match state.error {
-                        Some(failure) => format!("{}. {}", failure.message, failure.cause),
-                        None => "This stream stopped.".into(),
+        // Phase one, under the lock: pump every tile, notice what died, and decide. All
+        // cheap -- no loads, no network, no instances made.
+        let mut reloads: Vec<Reload> = Vec::new();
+        let mut retired: Vec<Box<dyn PlayerBackend>> = Vec::new();
+        for (index, tile) in session.tiles.iter_mut().enumerate() {
+            let Some(player) = tile.player.as_mut() else {
+                continue;
+            };
+            player.pump(0.0);
+            let state = player.state();
+
+            if state.status != PlayerStatus::Error {
+                // Playing again. The error has to go, or a tile that recovered on its
+                // own keeps the sentence explaining why it has no picture for the life
+                // of the session -- which is what `tile.error.is_none()` used to
+                // guarantee, since nothing ever cleared it.
+                if state.status == PlayerStatus::Playing {
+                    tile.error = None;
+                    tile.attempt.retries = 0;
+                    tile.attempt.failed_at = None;
+                }
+                continue;
+            }
+
+            if tile.error.is_none() {
+                tile.error = Some(match state.error {
+                    Some(failure) => format!("{}. {}", failure.message, failure.cause),
+                    None => "This stream stopped.".into(),
+                });
+            }
+
+            tile.attempt.sources = tile.candidates.len();
+            let decision = failover::next(tile.attempt, now);
+
+            // One record per failure, not one per heartbeat -- `tick` runs four times a
+            // second and `Wait` is the common answer. Not on `Stop`, which never sets
+            // `failed_at`: every heartbeat afterwards would be a first sight again.
+            if tile.attempt.first_sight() && decision != failover::Next::Stop {
+                if let Some((source_id, _)) = tile.candidates.get(tile.attempt.current) {
+                    let db = self.db.lock();
+                    let _ = aurora_db::repo::sources::record_failure(&db, *source_id, now);
+                }
+            }
+
+            match decision {
+                // Nothing to do, and nothing to say that has not been said.
+                failover::Next::Stop | failover::Next::Wait => {}
+                failover::Next::StartClock => tile.attempt.failed_at = Some(now),
+                // Out of sources and out of retries. The instance goes, because a dead
+                // tile holding a connection open is the one thing this module cannot
+                // afford on a line that allows one.
+                failover::Next::Abandon => {
+                    if let Some(player) = tile.player.take() {
+                        retired.push(player);
+                    }
+                }
+                failover::Next::Retry | failover::Next::RollTo(_) => {
+                    if let failover::Next::RollTo(which) = decision {
+                        tile.attempt.current = which;
+                        tile.attempt.rollovers += 1;
+                        // The next source has not failed yet and gets its own retries.
+                        tile.attempt.retries = 0;
+                    } else {
+                        tile.attempt.retries += 1;
+                    }
+                    tile.attempt.failed_at = None;
+                    // Taken out *before* the replacement is opened, and dropped below
+                    // with the lock released. A tile that reconnects without letting go
+                    // of the stream it is replacing needs two connections to recover on
+                    // a line that allows one, which turns every reconnect into a 403.
+                    if let Some(player) = tile.player.take() {
+                        retired.push(player);
+                    }
+                    reloads.push(Reload {
+                        index,
+                        source: tile.candidates[tile.attempt.current].clone(),
+                        options: tile.options.clone(),
+                        rect: tile.rect,
                     });
                 }
             }
         }
+
+        // Still phase one: whose turn is it? A rotation hands the stream on by retiring
+        // the showing tile's instance and queueing the next tile as a reload, which is
+        // the machinery the failover above already built -- the dead stream is dropped
+        // and the replacement opened with the lock released.
+        if let Some(rotation) = session.rotation {
+            let due = !rotation.pinned && now.saturating_sub(rotation.since) >= DWELL_SECS;
+            if due {
+                if let Some(next) = next_in_rotation(session, rotation.showing) {
+                    if let Some(player) = session.tiles[rotation.showing].player.take() {
+                        retired.push(player);
+                    }
+                    // The tile being left keeps no error from its turn: it is not broken,
+                    // it is simply not on any more.
+                    session.tiles[rotation.showing].error = None;
+                    let tile = &session.tiles[next];
+                    reloads.push(Reload {
+                        index: next,
+                        source: tile.candidates
+                            [tile.attempt.current.min(tile.candidates.len() - 1)]
+                        .clone(),
+                        options: tile.options.clone(),
+                        rect: tile.rect,
+                    });
+                    session.rotation = Some(Rotation {
+                        showing: next,
+                        since: now,
+                        pinned: false,
+                    });
+                    // Sound follows the picture. On one stream they cannot be apart.
+                    session.focused = next;
+                }
+            }
+        }
+
         let rects = session.layout.rects_now(*self.size.lock());
         self.announced.store(true, Ordering::SeqCst);
+        if reloads.is_empty() && retired.is_empty() {
+            return Some(view_of(session, &rects));
+        }
+
+        let generation = self.generation.load(Ordering::SeqCst);
+        let parent = self.parent.load(Ordering::SeqCst);
+        drop(guard);
+
+        // Phase two, with the lock released: let go of the dead streams first, then open
+        // their replacements. A `load` is a network round trip, and holding the session
+        // lock across one would make Close wait out a dead provider's timeout.
+        drop(retired);
+        let opened: Vec<Opened> = reloads
+            .into_iter()
+            .map(|r| {
+                tracing::info!(
+                    "mosaic tile {} reconnecting to source {}",
+                    r.index,
+                    r.source.0
+                );
+                let outcome = self.open_candidate(&r.source, &r.options, r.rect, parent, now);
+                (r.index, outcome)
+            })
+            .collect();
+
+        // Phase three: install, unless the mosaic moved on while we were away.
+        let mut guard = self.session.lock();
+        let Some(session) = guard.as_mut() else {
+            return self
+                .announced
+                .swap(false, Ordering::SeqCst)
+                .then(MosaicView::closed);
+        };
+        if self.generation.load(Ordering::SeqCst) == generation {
+            for (index, outcome) in opened {
+                let Some(tile) = session.tiles.get_mut(index) else {
+                    continue;
+                };
+                match outcome {
+                    Ok(player) => {
+                        tile.player = Some(player);
+                        tile.error = None;
+                    }
+                    Err(e) => tile.error = Some(e),
+                }
+            }
+            // The tile with audio may have just been rebuilt, and a fresh instance is
+            // muted. Without this a mosaic that recovered came back silent.
+            apply_audio(session);
+        }
+
+        let rects = session.layout.rects_now(*self.size.lock());
         Some(view_of(session, &rects))
     }
 
@@ -694,6 +1167,18 @@ impl Mosaic {
 }
 
 /// Exactly one tile audible, and only if it has a stream.
+/// The next tile with a channel in it, wrapping, or `None` when only this one has.
+///
+/// Skips empty tiles and tiles whose channel has no playable URL at all: a rotation that
+/// stopped on them would show nothing for a dwell and take the stream away from the
+/// tiles that do work.
+fn next_in_rotation(session: &Session, from: usize) -> Option<usize> {
+    let n = session.tiles.len();
+    (1..=n)
+        .map(|step| (from + step) % n)
+        .find(|&i| i != from && !session.tiles[i].candidates.is_empty())
+}
+
 fn apply_audio(session: &mut Session) {
     let focused = session.focused;
     for (index, tile) in session.tiles.iter_mut().enumerate() {
@@ -704,10 +1189,19 @@ fn apply_audio(session: &mut Session) {
 }
 
 fn view_of(session: &Session, rects: &[Rect]) -> MosaicView {
+    let showing = session.rotation.map(|r| r.showing);
     MosaicView {
         open: true,
         layout: Some(session.layout),
         focused: session.focused,
+        rotating: session.rotation.is_some(),
+        next_in_secs: session.rotation.and_then(|r| {
+            (!r.pinned).then(|| {
+                // Against the same clock `tick` decides on, and never negative: a turn
+                // already overdue counts zero rather than counting backwards.
+                (r.since + DWELL_SECS - crate::now_unix()).max(0)
+            })
+        }),
         tiles: session
             .tiles
             .iter()
@@ -723,6 +1217,7 @@ fn view_of(session: &Session, rects: &[Rect]) -> MosaicView {
                 channel_id: tile.channel_id,
                 name: tile.name.clone(),
                 focused: index == session.focused,
+                showing: showing.map_or(tile.player.is_some(), |s| s == index),
                 status: tile.player.as_ref().map(|p| p.state().status).unwrap_or(
                     if tile.error.is_some() {
                         PlayerStatus::Error
@@ -760,6 +1255,15 @@ fn refusal(needed: usize, limit: usize, over: usize, recordings: usize) -> Strin
         msg.push_str(&format!(" — {r} using the line as well"));
     }
     msg.push('.');
+    // The offer, not just the refusal. "Remove 8 channels and try again" was a correct
+    // answer to the wrong question: the viewer cannot have nine streams, but they can
+    // have nine channels one at a time, and nothing told them so. The UI keys off
+    // `rotationOffered` in the budget rather than off this sentence; the sentence is for
+    // the viewer who reads the message and not the button.
+    msg.push_str(
+        " Or show them one at a time, each for a few seconds, on the single stream \
+         your line allows.",
+    );
     msg
 }
 
@@ -846,6 +1350,26 @@ pub fn mosaic_open(services: State<'_, Services>, args: OpenArgs) -> Result<Mosa
     services
         .mosaic
         .open(layout, &args.channel_ids, crate::now_unix())
+}
+
+/// Open a mosaic that shares one connection between its tiles.
+///
+/// Offered by `mosaic.check` when the budget refuses the layout outright. Stops the main
+/// player for the same reason `mosaic_open` does -- it holds a connection, and on a
+/// one-connection line that connection is the one the rotation needs.
+#[tauri::command(async)]
+pub fn mosaic_open_rotating(services: State<'_, Services>, args: OpenArgs) -> Result<MosaicView> {
+    let layout = layout_of(&args.layout)?;
+    let _ = services.playback.stop();
+    services
+        .mosaic
+        .open_rotating(layout, &args.channel_ids, crate::now_unix())
+}
+
+/// Let a rotation that a viewer pinned by focusing a tile start moving again.
+#[tauri::command(async)]
+pub fn mosaic_resume_rotation(services: State<'_, Services>) -> Result<MosaicView> {
+    services.mosaic.resume_rotation()
 }
 
 #[tauri::command(async)]
@@ -1102,6 +1626,619 @@ mod tests {
         }
     }
 
+    /// What every instance a test made was asked to load, and which URLs misbehave.
+    ///
+    /// Shared between the factory and the tiles it builds, so a test can say "this URL
+    /// dies" before or after the tile holding it exists, and can count instances that
+    /// have been let go of -- which on a one-connection line is the whole question.
+    #[derive(Default)]
+    struct Ledger {
+        /// Every URL loaded, in order, successes only.
+        loaded: Vec<String>,
+        /// URLs whose `load` is refused outright.
+        refuse: Vec<String>,
+        /// URLs whose instance reports `Error` once loaded: a stream that opens and then
+        /// dies, which is the only thing the heartbeat can see.
+        dying: Vec<String>,
+        /// Instances made, less instances dropped. A tile that reconnects without
+        /// letting go of the stream it is replacing needs two connections to recover.
+        live: i64,
+        /// The high-water mark of `live`, which is what a one-connection line cares
+        /// about: not how many are open now, but whether two were ever open at once.
+        peak: i64,
+    }
+
+    type Shared = Arc<Mutex<Ledger>>;
+
+    /// A tile backend that can be made to refuse, or to die after loading.
+    struct Flaky {
+        ledger: Shared,
+        /// What this instance loaded, so `state` can ask the ledger about it again --
+        /// which is how a test makes a tile recover without rebuilding it.
+        url: Option<String>,
+    }
+
+    impl Flaky {
+        fn factory(ledger: &Shared) -> TileFactory {
+            let ledger = Arc::clone(ledger);
+            Arc::new(move || {
+                let mut l = ledger.lock();
+                l.live += 1;
+                l.peak = l.peak.max(l.live);
+                drop(l);
+                Box::new(Flaky {
+                    ledger: Arc::clone(&ledger),
+                    url: None,
+                })
+            })
+        }
+    }
+
+    impl Drop for Flaky {
+        fn drop(&mut self) {
+            self.ledger.lock().live -= 1;
+        }
+    }
+
+    impl PlayerBackend for Flaky {
+        fn load(
+            &mut self,
+            url: &str,
+            _: &aurora_player::backend::LoadOptions,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            let mut l = self.ledger.lock();
+            if l.refuse.iter().any(|u| u == url) {
+                return Err(aurora_player::PlayerError::Command(format!(
+                    "refused {url}"
+                )));
+            }
+            l.loaded.push(url.to_string());
+            self.url = Some(url.to_string());
+            Ok(())
+        }
+        fn state(&self) -> aurora_player::PlayerState {
+            let status = match &self.url {
+                // Asked of the ledger on every call rather than cached at load time, so
+                // a test can let a stream come back without touching the tile.
+                Some(u) if self.ledger.lock().dying.iter().any(|d| d == u) => PlayerStatus::Error,
+                Some(_) => PlayerStatus::Playing,
+                None => PlayerStatus::Idle,
+            };
+            aurora_player::PlayerState {
+                status,
+                ..Default::default()
+            }
+        }
+        fn stop(&mut self) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_paused(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn seek(&mut self, _: f64, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_volume(&mut self, _: u32) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_muted(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_speed(&mut self, _: f64) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_audio_track(
+            &mut self,
+            _: Option<i64>,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_subtitle_track(
+            &mut self,
+            _: Option<i64>,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_aspect(
+            &mut self,
+            _: aurora_player::state::Aspect,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn pump(&mut self, _: f64) {}
+        fn chapters(&self) -> Vec<aurora_core::markers::Chapter> {
+            Vec::new()
+        }
+        fn resize(
+            &mut self,
+            _: u32,
+            _: u32,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn place(&mut self, _: Rect) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+    }
+
+    /// A mosaic whose tiles can be made to fail, plus the ledger they all report to.
+    fn mosaic_with_flaky_tiles(limit: Option<i64>) -> (Mosaic, Shared, Arc<Mutex<Connection>>) {
+        let (m, db) = mosaic(limit);
+        let ledger: Shared = Arc::new(Mutex::new(Ledger::default()));
+        let factory = Flaky::factory(&ledger);
+        (Mosaic { factory, ..m }, ledger, db)
+    }
+
+    /// A channel with `count` sources, so a tile has somewhere to roll to.
+    fn seed_channel_with_sources(db: &Arc<Mutex<Connection>>, id: i64, name: &str, count: usize) {
+        let db = db.lock();
+        db.execute(
+            "INSERT INTO channels (id, provider_id, provider_key, name, match_key, last_seen_at)
+             VALUES (?1, 1, ?2, ?3, ?4, 0)",
+            aurora_db::rusqlite::params![id, format!("c{id}"), name, name.to_lowercase()],
+        )
+        .unwrap();
+        for i in 0..count {
+            db.execute(
+                "INSERT INTO channel_sources (channel_id, url, priority) VALUES (?1, ?2, ?3)",
+                aurora_db::rusqlite::params![id, source_url(id, i), i as i64],
+            )
+            .unwrap();
+        }
+    }
+
+    /// The nth source of a channel, in the shape `seed_channel_with_sources` writes.
+    fn source_url(channel_id: i64, which: usize) -> String {
+        format!("http://example.com/live/{channel_id}-{which}.ts")
+    }
+
+    /// A tile whose stream dies rolls to the channel's next source.
+    ///
+    /// `tick` used to notice and do nothing: it set `tile.error` once and left the tile
+    /// dead for the life of the mosaic, while the main player on the same channel would
+    /// have rolled over within a second.
+    #[test]
+    fn a_tile_whose_stream_dies_rolls_over_to_the_next_source() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        assert_eq!(ledger.lock().loaded, vec![source_url(1, 0)]);
+
+        // First sight starts the clock; the roll comes on the next heartbeat.
+        m.tick(NOW);
+        m.tick(NOW);
+
+        assert_eq!(
+            ledger.lock().loaded,
+            vec![source_url(1, 0), source_url(1, 1)],
+            "the tile never rolled to the channel's second source"
+        );
+    }
+
+    /// And it lets go of the dead stream before opening the replacement.
+    ///
+    /// The line this is measured against allows **one** connection. A tile that
+    /// reconnects while still holding the stream it is replacing needs two to recover,
+    /// so every reconnect would be answered 403 and the mosaic could never heal.
+    #[test]
+    fn a_tile_releases_its_dead_stream_before_opening_the_next_one() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        // One lock, not two: `parking_lot::Mutex` is not reentrant, and
+        // `ledger.lock().peak = ledger.lock().live` hangs the test for ever.
+        {
+            let mut l = ledger.lock();
+            l.peak = l.live;
+        }
+
+        m.tick(NOW);
+        m.tick(NOW);
+
+        let l = ledger.lock();
+        assert_eq!(
+            l.peak, 1,
+            "two instances were open at once while one tile reconnected"
+        );
+    }
+
+    /// A tile that comes back on its own loses its error.
+    ///
+    /// Nothing ever cleared `tile.error`, which is what made the latch a bug rather than
+    /// a shortcut: the tile had a picture again and a sentence over it saying it did not.
+    #[test]
+    fn a_tile_that_recovers_loses_the_sentence_explaining_why_it_had_not() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        // One source: nothing to roll to, so the tile can only sit there and recover.
+        seed_channel_with_sources(&db, 1, "One", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        let view = m.tick(NOW).expect("a dead tile is news");
+        assert!(
+            view.tiles[0].error.is_some(),
+            "a tile with no picture said nothing about it"
+        );
+
+        // The provider comes back.
+        ledger.lock().dying.clear();
+        let view = m.tick(NOW).expect("a tile that recovered is news too");
+        assert!(
+            view.tiles[0].error.is_none(),
+            "the tile is playing with an error still on it: {:?}",
+            view.tiles[0].error
+        );
+    }
+
+    /// A tile that runs out of sources and retries gives up its connection.
+    ///
+    /// A dead tile holding a slot open is the one thing this module cannot afford on a
+    /// one-connection line: it is a tile showing nothing while preventing anything else
+    /// from showing something.
+    #[test]
+    fn a_tile_that_cannot_be_recovered_stops_holding_a_connection() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+
+        // Walk the clock past every retry and its backoff until the policy abandons it.
+        let mut at = NOW;
+        for _ in 0..40 {
+            m.tick(at);
+            at += 2;
+        }
+
+        assert_eq!(
+            ledger.lock().live,
+            0,
+            "a tile nothing would play still had an instance open"
+        );
+        let view = m.tick(at).or_else(|| m.tick(at + 1));
+        if let Some(view) = view {
+            assert!(
+                view.tiles[0].error.is_some(),
+                "the abandoned tile stopped saying why it is blank"
+            );
+        }
+    }
+
+    /// Rolling over is recorded against the source, so the next tune starts elsewhere.
+    ///
+    /// A mosaic that learned nothing left the next tune -- in the main player, on the
+    /// same channel -- starting from a URL this tile had already found dead.
+    #[test]
+    fn a_tile_records_what_it_learned_about_a_source() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        m.tick(NOW);
+        m.tick(NOW);
+
+        let failures: i64 = db
+            .lock()
+            .query_row(
+                "SELECT fail_count FROM channel_sources WHERE channel_id = 1 AND url = ?1",
+                aurora_db::rusqlite::params![source_url(1, 0)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            failures, 1,
+            "the dead source was not marked as having failed"
+        );
+    }
+
+    /// One failure per failure, not one per heartbeat.
+    ///
+    /// `tick` runs four times a second. Recording on every one of them would bury a
+    /// source's real history under a stall's worth of noise within a minute, and
+    /// `rank()` reads exactly that history to order the next tune's candidates.
+    #[test]
+    fn a_stalled_tile_is_one_failure_against_the_source_not_one_per_heartbeat() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        // Four heartbeats inside the same second, which is what 250ms ticks are.
+        for _ in 0..4 {
+            m.tick(NOW);
+        }
+
+        let failures: i64 = db
+            .lock()
+            .query_row(
+                "SELECT fail_count FROM channel_sources WHERE channel_id = 1 AND url = ?1",
+                aurora_db::rusqlite::params![source_url(1, 0)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            failures, 1,
+            "a single stall was recorded once per heartbeat rather than once"
+        );
+    }
+
+    /// A reload that lands after the mosaic moved on is discarded.
+    ///
+    /// Phase two of `tick` runs with the session lock released, which is what makes the
+    /// generation guard necessary rather than decorative: a close-and-reopen while a
+    /// tile was reconnecting would otherwise have the old reload install itself into the
+    /// new session's tile.
+    #[test]
+    fn a_reload_that_lands_after_a_reopen_is_thrown_away() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        seed_channel_with_sources(&db, 2, "Two", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        m.tick(NOW);
+
+        // The mosaic is replaced between the decision and the install. `open` bumps the
+        // generation, which is the thing being tested.
+        m.open(Layout::Grid2x2, &[Some(2), None, None, None], NOW)
+            .unwrap();
+        let view = m.tick(NOW).unwrap_or_else(|| m.tick(NOW + 1).unwrap());
+
+        assert_eq!(
+            view.tiles[0].channel_id,
+            Some(2),
+            "a stale reload replaced the tile the viewer had just asked for"
+        );
+    }
+
+    /// The whole point: nine channels on a line that allows one stream.
+    ///
+    /// `open` refuses this outright and offers nothing else, which is a correct answer
+    /// to the wrong question -- the viewer cannot have nine streams, but they can have
+    /// nine channels, one at a time.
+    #[test]
+    fn a_one_connection_line_can_have_a_nine_tile_wall_one_tile_at_a_time() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(1));
+        for id in 1..=9 {
+            seed_channel_with_sources(&db, id, &format!("Channel {id}"), 1);
+        }
+        let wanted: Vec<Option<i64>> = (1..=9).map(Some).collect();
+
+        // The ordinary way in is still refused, and now says what else is available.
+        let refused = m
+            .open(Layout::Grid3x3, &wanted, NOW)
+            .expect_err("nine streams on a one-connection line must still be refused");
+        assert!(
+            refused.to_string().contains("one at a time"),
+            "the refusal does not offer the rotation: {refused}"
+        );
+
+        let view = m
+            .open_rotating(Layout::Grid3x3, &wanted, NOW)
+            .expect("one stream is one stream whatever the layout");
+        assert!(view.rotating);
+        assert_eq!(view.tiles.len(), 9);
+        assert_eq!(
+            ledger.lock().live,
+            1,
+            "a rotation opened more than the single connection it is for"
+        );
+        assert_eq!(
+            view.tiles.iter().filter(|t| t.showing).count(),
+            1,
+            "exactly one tile holds the picture"
+        );
+        // And the other eight know which channel they are standing for, which is what
+        // the chrome is drawn from.
+        assert!(view.tiles.iter().all(|t| t.channel_id.is_some()));
+        assert!(view.tiles.iter().all(|t| t.name.is_some()));
+    }
+
+    /// The picture moves on when the dwell is up, and only then.
+    #[test]
+    fn the_stream_moves_to_the_next_tile_when_the_dwell_is_up() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(1));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        seed_channel_with_sources(&db, 2, "Two", 1);
+        m.open_rotating(Layout::Grid2x2, &[Some(1), Some(2), None, None], NOW)
+            .unwrap();
+        assert_eq!(ledger.lock().loaded, vec![source_url(1, 0)]);
+
+        // Not yet: a turn that ended early would make the wall unwatchable.
+        let view = m.tick(NOW + DWELL_SECS - 1).unwrap();
+        assert!(view.tiles[0].showing, "the turn ended early");
+        assert_eq!(ledger.lock().loaded.len(), 1);
+
+        let view = m.tick(NOW + DWELL_SECS).expect("the turn is up");
+        assert!(view.tiles[1].showing, "the picture did not move on");
+        assert!(!view.tiles[0].showing);
+        assert_eq!(
+            ledger.lock().loaded,
+            vec![source_url(1, 0), source_url(2, 0)],
+            "the next tile's channel was not opened"
+        );
+    }
+
+    /// And it is still one connection at the moment of the handover.
+    ///
+    /// This is the one that matters on this line: handing the stream on by opening the
+    /// next tile before releasing the last would need two connections for an instant,
+    /// and the provider answers the second one 403.
+    #[test]
+    fn handing_the_stream_on_never_needs_two_connections() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(1));
+        for id in 1..=4 {
+            seed_channel_with_sources(&db, id, &format!("Channel {id}"), 1);
+        }
+        m.open_rotating(Layout::Grid2x2, &[Some(1), Some(2), Some(3), Some(4)], NOW)
+            .unwrap();
+        {
+            let mut l = ledger.lock();
+            l.peak = l.live;
+        }
+
+        // All the way round the wall and back again.
+        let mut at = NOW;
+        for _ in 0..8 {
+            at += DWELL_SECS;
+            m.tick(at);
+        }
+
+        let l = ledger.lock();
+        assert_eq!(
+            l.peak, 1,
+            "the handover opened a second stream before letting the first go"
+        );
+        assert!(
+            l.loaded.len() >= 4,
+            "the rotation did not get round the wall: {:?}",
+            l.loaded
+        );
+    }
+
+    /// Focusing a tile brings the picture to it and stops the clock.
+    ///
+    /// Focus means "the tile I am paying attention to". On one stream that has to mean
+    /// "stop moving", or the rotation takes the picture away from the tile just asked
+    /// for -- the opposite of what pressing it says.
+    #[test]
+    fn focusing_a_tile_pins_the_rotation_to_it() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(1));
+        for id in 1..=4 {
+            seed_channel_with_sources(&db, id, &format!("Channel {id}"), 1);
+        }
+        m.open_rotating(Layout::Grid2x2, &[Some(1), Some(2), Some(3), Some(4)], NOW)
+            .unwrap();
+
+        let view = m
+            .focus(2)
+            .expect("a waiting tile is exactly what you focus");
+        assert!(view.tiles[2].showing, "the stream did not come to tile 3");
+        assert_eq!(
+            view.next_in_secs, None,
+            "a pinned rotation is still counting down to moving away"
+        );
+        assert_eq!(ledger.lock().live, 1, "focusing opened a second stream");
+
+        // And it stays there, however long the dwell would have been.
+        m.tick(NOW + DWELL_SECS * 5);
+        let view = m.state();
+        assert!(
+            view.tiles[2].showing,
+            "the rotation moved on from a tile the viewer had pinned"
+        );
+
+        // Until it is let go.
+        let view = m
+            .resume_rotation()
+            .expect("a pinned rotation can be resumed");
+        assert!(
+            view.next_in_secs.is_some(),
+            "resuming did not restart the clock"
+        );
+    }
+
+    /// A rotation skips tiles with nothing in them.
+    ///
+    /// Stopping on an empty cell would show nothing for a whole dwell and take the
+    /// stream away from the tiles that have a channel.
+    #[test]
+    fn the_rotation_skips_empty_tiles() {
+        let (m, _ledger, db) = mosaic_with_flaky_tiles(Some(1));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        seed_channel_with_sources(&db, 4, "Four", 1);
+        // Tiles 1 and 2 are empty.
+        m.open_rotating(Layout::Grid2x2, &[Some(1), None, None, Some(4)], NOW)
+            .unwrap();
+
+        let view = m.tick(NOW + DWELL_SECS).expect("the turn is up");
+        assert!(
+            view.tiles[3].showing,
+            "the rotation stopped on an empty tile rather than skipping to tile 4"
+        );
+    }
+
+    /// One channel in a rotation is not a rotation, and must not thrash.
+    ///
+    /// `next_in_rotation` returning the tile it was given would have the heartbeat
+    /// closing and reopening the same stream every dwell -- a connection dropped and
+    /// retaken every twelve seconds, on the one line that cannot spare it.
+    #[test]
+    fn a_rotation_with_one_channel_leaves_it_alone() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(1));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        m.open_rotating(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+
+        let mut at = NOW;
+        for _ in 0..5 {
+            at += DWELL_SECS;
+            m.tick(at);
+        }
+        assert_eq!(
+            ledger.lock().loaded,
+            vec![source_url(1, 0)],
+            "the only channel was reopened every dwell"
+        );
+    }
+
+    /// An ordinary mosaic is unchanged by any of this.
+    #[test]
+    fn a_mosaic_that_fits_is_not_a_rotation() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        seed_channel_with_sources(&db, 2, "Two", 1);
+        let view = m
+            .open(Layout::Grid2x2, &[Some(1), Some(2), None, None], NOW)
+            .unwrap();
+
+        assert!(!view.rotating);
+        assert_eq!(view.next_in_secs, None);
+        assert_eq!(ledger.lock().live, 2, "both tiles get their own stream");
+        // `showing` is what the screen draws the picture into, and in an ordinary mosaic
+        // that is every tile that has one.
+        assert!(view.tiles[0].showing && view.tiles[1].showing);
+        assert!(!view.tiles[2].showing && !view.tiles[3].showing);
+
+        // And the heartbeat leaves it alone.
+        m.tick(NOW + DWELL_SECS * 3);
+        assert_eq!(ledger.lock().loaded.len(), 2);
+    }
+
+    /// The check offers the rotation exactly when the budget refuses.
+    #[test]
+    fn the_rotation_is_offered_only_when_the_layout_does_not_fit() {
+        let (m, _ledger, _db) = mosaic_with_flaky_tiles(Some(1));
+        assert!(
+            m.check(Layout::Grid3x3).rotation_offered,
+            "nine tiles on one connection is exactly when to offer it"
+        );
+        // A line that can carry the layout should give every tile its own picture, so
+        // the offer is withheld: a rotation there would be a worse trade, not a kinder
+        // one.
+        let (m, _ledger, _db) = mosaic_with_flaky_tiles(Some(4));
+        assert!(!m.check(Layout::Grid2x2).rotation_offered);
+        assert!(
+            m.check(Layout::Grid3x3).rotation_offered,
+            "the same line still cannot carry nine"
+        );
+
+        let (m, _ledger, _db) = mosaic_with_flaky_tiles(Some(9));
+        assert!(!m.check(Layout::Grid3x3).rotation_offered);
+    }
+
     /// The bug this exists for: a mosaic you could hear and could not see.
     ///
     /// Every `place` goes to the bottom of the z-order, so the tiles land underneath the
@@ -1170,28 +2307,31 @@ mod tests {
             .unwrap();
 
         // While it is open the heartbeat reports it, which is what arms the announcement.
-        let open = m.tick().expect("an open mosaic has something to report");
+        let open = m.tick(NOW).expect("an open mosaic has something to report");
         assert!(open.open);
 
         m.close();
         let closed = m
-            .tick()
+            .tick(NOW)
             .expect("a mosaic that closed must be reported once");
         assert!(!closed.open, "the screen was told the mosaic is still open");
         assert!(closed.tiles.is_empty());
 
         // Once, and not on every heartbeat thereafter: an event per tick for a screen
         // with no mosaic on it is noise the UI would re-render for.
-        assert!(m.tick().is_none(), "the closed state is repeated for ever");
+        assert!(
+            m.tick(NOW).is_none(),
+            "the closed state is repeated for ever"
+        );
     }
 
     /// And nothing is announced for a mosaic that was never opened.
     #[test]
     fn a_mosaic_that_never_opened_says_nothing() {
         let (m, _placed, _db) = mosaic_watching_tiles(Some(8));
-        assert!(m.tick().is_none());
+        assert!(m.tick(NOW).is_none());
         m.close();
-        assert!(m.tick().is_none());
+        assert!(m.tick(NOW).is_none());
     }
 
     /// Opening and closing one must not touch the main surface's visibility at all --
@@ -1689,7 +2829,7 @@ mod tests {
         ] {
             assert!(err.contains("not open"), "{err}");
         }
-        assert!(m.tick().is_none());
+        assert!(m.tick(NOW).is_none());
         // And a resize with nothing open is a no-op rather than a panic.
         m.relayout(100, 100);
     }

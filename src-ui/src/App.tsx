@@ -932,7 +932,10 @@ export default function App() {
           onFocus={(index) =>
             invoke('mosaic.focus', { index })
               .then(setMosaic)
-              .catch(report('That tile has no sound to move to'))
+              // In a rotation, clicking a tile asks for its picture rather than only
+              // its sound -- so the refusal is worded by the host, which knows which
+              // kind of mosaic this is.
+              .catch(report('Could not move to that tile'))
           }
           onPromote={(index) =>
             invoke('mosaic.promote', { index })
@@ -944,6 +947,11 @@ export default function App() {
           }
           onClose={closeMosaic}
           onSave={() => setSavingLayout(true)}
+          onResumeRotation={() =>
+            invoke('mosaic.resumeRotation')
+              .then(setMosaic)
+              .catch(report('Could not start the rotation again'))
+          }
         />
       )}
 

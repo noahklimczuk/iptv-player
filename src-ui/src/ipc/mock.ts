@@ -1438,13 +1438,20 @@ function mosaicRefusal(b: Extract<MosaicBudget, { verdict: 'exceeds' }>): string
       ` — ${b.recordings === 1 ? '1 recording is' : `${b.recordings} recordings are`}` +
       ' using the line as well';
   }
-  return `${msg}.`;
+  return (
+    `${msg}.` +
+    ' Or show them one at a time, each for a few seconds, on the single stream' +
+    ' your line allows.'
+  );
 }
+
+/** How long a tile holds the one stream in a rotating mosaic. Mirrors `DWELL_SECS`. */
+const MOSAIC_DWELL_SECS = 12;
 
 const savedLayouts: SavedMosaicLayout[] = [];
 let nextLayoutId = 1;
 
-let mosaic: MosaicView = { open: false, layout: null, tiles: [], focused: 0 };
+let mosaic: MosaicView = { open: false, layout: null, tiles: [], focused: 0, rotating: false, nextInSecs: null };
 const mosaicListeners = new Set<(v: MosaicView) => void>();
 export function onMosaicState(fn: (v: MosaicView) => void) {
   mosaicListeners.add(fn);
@@ -1456,16 +1463,29 @@ function setMosaic(next: MosaicView) {
   return mosaic;
 }
 
-function buildMosaic(layout: MosaicLayout, channelIds: (number | null)[]): MosaicView {
+function buildMosaic(
+  layout: MosaicLayout,
+  channelIds: (number | null)[],
+  /**
+   * Which tile holds the single stream, for a rotating mosaic. `null` is an ordinary
+   * one, where every tile has its own and so every filled tile is showing.
+   */
+  showing: number | null = null,
+  /** A rotation the viewer pinned by focusing a tile is not counting down to anything. */
+  pinned = false,
+): MosaicView {
   const rects = mosaicRects(layout);
   const wanted: (number | null)[] = rects.map((_, i) => channelIds[i] ?? null);
-  let focused = wanted.findIndex((id) => id !== null && playableChannel(id));
+  // Sound follows the picture: on one stream they cannot be apart.
+  let focused = showing ?? wanted.findIndex((id) => id !== null && playableChannel(id));
   if (focused < 0) focused = 0;
 
   return {
     open: true,
     layout,
     focused,
+    rotating: showing !== null,
+    nextInSecs: showing !== null && !pinned ? MOSAIC_DWELL_SECS : null,
     tiles: rects.map((rect, index) => {
       const channelId = wanted[index] ?? null;
       const channel = channelId === null ? undefined : fx.channels.find((c) => c.id === channelId);
@@ -1476,7 +1496,17 @@ function buildMosaic(layout: MosaicLayout, channelIds: (number | null)[]): Mosai
         channelId,
         name: channel?.name ?? null,
         focused: index === focused,
-        status: channelId === null ? 'idle' : missing ? 'error' : 'playing',
+        showing: showing === null ? channelId !== null && !missing : showing === index,
+        // A tile waiting its turn in a rotation is idle rather than playing: it has no
+        // picture yet, and nothing is wrong with it.
+        status:
+          channelId === null
+            ? 'idle'
+            : missing
+              ? 'error'
+              : showing !== null && showing !== index
+                ? 'idle'
+                : 'playing',
         error: missing ? 'That channel is no longer in your library.' : null,
       };
     }),
@@ -2120,6 +2150,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       layout,
       tiles,
       largestFitting: fitting[0] ?? null,
+      rotationOffered: mosaicBudget(tiles).verdict === 'exceeds',
       recordings: inFlight,
     };
   },
@@ -2132,12 +2163,49 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     setPlayer({ status: 'idle', channelId: null, itemKind: null, itemId: null, title: null });
     return setMosaic(buildMosaic(layout, channelIds));
   },
-  'mosaic.close': () => setMosaic({ open: false, layout: null, tiles: [], focused: 0 }),
+  'mosaic.openRotating': ({ layout, channelIds }) => {
+    const filled = channelIds.slice(0, MOSAIC_TILES[layout]).filter((id) => id !== null).length;
+    if (filled === 0) throw new Error('Pick at least one channel to show in the mosaic.');
+    // No budget check: one stream is one stream whatever the layout, which is the point.
+    setPlayer({ status: 'idle', channelId: null, itemKind: null, itemId: null, title: null });
+    const wanted = mosaicRects(layout).map((_, i) => channelIds[i] ?? null);
+    const first = wanted.findIndex((id) => id !== null && playableChannel(id));
+    return setMosaic(buildMosaic(layout, channelIds, first < 0 ? 0 : first));
+  },
+  'mosaic.resumeRotation': () => {
+    if (!mosaic.open) throw new Error('The mosaic is not open.');
+    if (!mosaic.rotating) {
+      throw new Error(
+        'This mosaic is not sharing one stream, so there is nothing to resume.',
+      );
+    }
+    return setMosaic(
+      buildMosaic(
+        mosaic.layout!,
+        mosaic.tiles.map((t) => t.channelId),
+        mosaic.tiles.findIndex((t) => t.showing),
+      ),
+    );
+  },
+  'mosaic.close': () => setMosaic({ open: false, layout: null, tiles: [], focused: 0, rotating: false, nextInSecs: null }),
   'mosaic.state': () => mosaic,
   'mosaic.focus': ({ index }) => {
     if (!mosaic.open) throw new Error('The mosaic is not open.');
     const tile = mosaic.tiles[index];
     if (!tile) throw new Error(`There is no tile ${index + 1} in this layout.`);
+    if (mosaic.rotating) {
+      // Focusing a waiting tile is how a viewer asks for its picture, and asking for it
+      // means "stay here".
+      if (tile.channelId === null) throw new Error('That tile has no channel in it to show.');
+      return setMosaic(
+        buildMosaic(
+          mosaic.layout!,
+          mosaic.tiles.map((t) => t.channelId),
+          index,
+          true,
+        ),
+      );
+    }
     if (tile.channelId === null || tile.error) {
       throw new Error('That tile has no picture, so there is no sound to move to it.');
     }
@@ -2151,20 +2219,26 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (!mosaic.open) throw new Error('The mosaic is not open.');
     if (!mosaic.tiles[index]) throw new Error(`There is no tile ${index + 1} in this layout.`);
     const wasEmpty = mosaic.tiles[index]!.channelId === null;
-    if (wasEmpty && channelId !== null) {
+    if (wasEmpty && channelId !== null && !mosaic.rotating) {
       const filled = mosaic.tiles.filter((t) => t.channelId !== null).length;
       const budget = mosaicBudget(filled + 1);
       if (budget.verdict === 'exceeds') throw new Error(mosaicRefusal(budget));
     }
     const next = mosaic.tiles.map((t) => t.channelId);
     next[index] = channelId;
-    return setMosaic(buildMosaic(mosaic.layout!, next));
+    return setMosaic(
+      buildMosaic(
+        mosaic.layout!,
+        next,
+        mosaic.rotating ? mosaic.tiles.findIndex((t) => t.showing) : null,
+      ),
+    );
   },
   'mosaic.promote': ({ index }) => {
     if (!mosaic.open) throw new Error('The mosaic is not open.');
     const channelId = mosaic.tiles[index]?.channelId ?? null;
     if (channelId === null) throw new Error('That tile has no channel in it.');
-    setMosaic({ open: false, layout: null, tiles: [], focused: 0 });
+    setMosaic({ open: false, layout: null, tiles: [], focused: 0, rotating: false, nextInSecs: null });
     return handlers['player.play']({ kind: 'live', id: channelId });
   },
   'mosaic.save': ({ name }) => {

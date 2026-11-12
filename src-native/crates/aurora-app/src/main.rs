@@ -323,7 +323,7 @@ fn main() {
                     // the UI can be told about, and nine threads doing it four times a
                     // second would cost more than the mosaic does.
                     supervised("mosaic", || {
-                        if let Some(view) = mosaic.tick() {
+                        if let Some(view) = mosaic.tick(aurora_app::now_unix()) {
                             aurora_app::emit(&player_handle, "mosaic.state", &view);
                         }
                     });
@@ -530,6 +530,8 @@ fn main() {
             commands::progress_save,
             mosaic::mosaic_check,
             mosaic::mosaic_open,
+            mosaic::mosaic_open_rotating,
+            mosaic::mosaic_resume_rotation,
             mosaic::mosaic_close,
             mosaic::mosaic_state,
             mosaic::mosaic_focus,
