@@ -13,8 +13,9 @@
  * ones. On a 150% display those differ by half again, so a tile's border would sit a
  * third of the way into its neighbour without the `devicePixelRatio` divide below.
  */
-import { useEffect, useState } from 'react';
-import type { MosaicView } from '@shared/ipc';
+import { useEffect, useMemo, useState } from 'react';
+import type { MosaicView, Programme } from '@shared/ipc';
+import { invoke } from '@/ipc';
 import { Button } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 
@@ -36,20 +37,97 @@ function useDevicePixelRatio(): number {
   return dpr;
 }
 
+/**
+ * Now and next for every channel on the wall, for the tiles that have no picture.
+ *
+ * A rotating mosaic shows one stream and eight placeholders, and a placeholder with
+ * nothing but a channel name on it is a worse answer than the refusal it replaced: the
+ * viewer picked those channels to know what is on them. One batched request for the
+ * whole wall, refreshed on the quarter hour's worth of drift rather than on a timer,
+ * because programmes do not change faster than that.
+ *
+ * Only asked for a rotating mosaic. An ordinary one has a picture in every tile and
+ * nothing to fill in.
+ */
+function useWallGuide(channelIds: number[], enabled: boolean) {
+  type Slice = Record<number, { now: Programme | null; next: Programme | null }>;
+  const [guide, setGuide] = useState<Slice>({});
+  const key = channelIds.join(',');
+  useEffect(() => {
+    if (!enabled || channelIds.length === 0) {
+      setGuide({});
+      return;
+    }
+    let live = true;
+    const ask = () => {
+      invoke('epg.nowNextMany', { channelIds })
+        .then((reply: Slice) => {
+          if (live) setGuide(reply);
+        })
+        .catch(() => {
+          // A wall without programme names is still a usable wall. Nothing is said
+          // about it: the tiles fall back to the channel name, which is what they had.
+        });
+    };
+    ask();
+    const timer = window.setInterval(ask, 60_000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+    // `key` rather than the array: a new array with the same ids is the common case,
+    // and re-asking on every render of the parent would be a request a second.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, enabled]);
+  return guide;
+}
+
+/**
+ * The host's countdown, ticking between updates.
+ *
+ * `nextInSecs` arrives with each `mosaic.state` event, which is as often as the
+ * heartbeat reports a change rather than once a second. Shown without this, the number
+ * sat still and then jumped, which reads as broken rather than as a countdown.
+ * Re-seeded from the host every time it sends one, so this never drifts away from the
+ * clock that is actually deciding.
+ */
+function useCountdown(from: number | null): number | null {
+  const [left, setLeft] = useState(from);
+  useEffect(() => setLeft(from), [from]);
+  useEffect(() => {
+    if (from === null) return;
+    const timer = window.setInterval(
+      () => setLeft((n) => (n === null ? null : Math.max(0, n - 1))),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [from]);
+  return from === null ? null : left;
+}
+
 export function MosaicOverlay({
   view,
   onFocus,
   onPromote,
   onClose,
   onSave,
+  onResumeRotation,
 }: {
   view: MosaicView;
   onFocus: (index: number) => void;
   onPromote: (index: number) => void;
   onClose: () => void;
   onSave: () => void;
+  /** Let a rotation the viewer pinned by clicking a tile start moving again. */
+  onResumeRotation?: () => void;
 }) {
   const dpr = useDevicePixelRatio();
+  const wall = useMemo(
+    () => view.tiles.map((t) => t.channelId).filter((id): id is number => id !== null),
+    [view.tiles],
+  );
+  const guide = useWallGuide(wall, view.rotating);
+  const countdown = useCountdown(view.nextInSecs);
 
   if (!view.open) return null;
 
@@ -74,7 +152,9 @@ export function MosaicOverlay({
           data-focused={tile.focused ? 'true' : 'false'}
           aria-label={
             tile.name
-              ? `Tile ${tile.index + 1}: ${tile.name}${tile.focused ? ', has audio' : ''}`
+              ? `Tile ${tile.index + 1}: ${tile.name}${
+                  view.rotating && !tile.showing ? ', waiting its turn' : ''
+                }${tile.focused ? ', has audio' : ''}`
               : `Tile ${tile.index + 1}, empty`
           }
           onClick={() => onFocus(tile.index)}
@@ -98,9 +178,15 @@ export function MosaicOverlay({
             background:
               tile.error || tile.channelId === null
                 ? 'color-mix(in srgb, var(--bg) 92%, transparent)'
-                : tile.status === 'playing' || tile.status === 'paused'
-                  ? 'transparent'
-                  : '#000',
+                : view.rotating && !tile.showing
+                  // Waiting its turn. Opaque for the reason above -- the window is
+                  // transparent while a mosaic is open -- and a shade off black so the
+                  // wall reads as eight cards and one picture rather than as one
+                  // picture and eight failures.
+                  ? 'color-mix(in srgb, var(--bg) 94%, transparent)'
+                  : tile.status === 'playing' || tile.status === 'paused'
+                    ? 'transparent'
+                    : '#000',
             border: tile.focused
               ? '2px solid var(--accent)'
               : '1px solid color-mix(in srgb, var(--text) 22%, transparent)',
@@ -132,6 +218,66 @@ export function MosaicOverlay({
               <span style={{ fontSize: 12, opacity: 0.85, textAlign: 'center' }}>
                 {tile.error}
               </span>
+            </div>
+          )}
+
+          {/*
+            * A tile waiting its turn. The channel it is standing for, what is on it now
+            * and what is next -- which is the whole reason the viewer picked it.
+            */}
+          {!tile.error && tile.channelId !== null && view.rotating && !tile.showing && (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                justifyContent: 'center',
+                gap: 4,
+                padding: 'var(--sp-3)',
+                minWidth: 0,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tile.name}
+              </span>
+              {guide[tile.channelId]?.now && (
+                <span
+                  style={{
+                    fontSize: 12,
+                    opacity: 0.85,
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {guide[tile.channelId]!.now!.title}
+                </span>
+              )}
+              {guide[tile.channelId]?.next && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    opacity: 0.55,
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Next: {guide[tile.channelId]!.next!.title}
+                </span>
+              )}
             </div>
           )}
 
@@ -196,6 +342,39 @@ export function MosaicOverlay({
           pointerEvents: 'auto',
         }}
       >
+        {view.rotating && (
+          <div
+            data-testid="mosaic-rotation-status"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--sp-2)',
+              padding: '0 var(--sp-3)',
+              borderRadius: 'var(--radius-md)',
+              background: 'color-mix(in srgb, var(--bg) 70%, transparent)',
+              fontSize: 12,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            <Icon name="layers" size={14} />
+            {countdown === null ? (
+              <>
+                <span>Staying on {view.tiles[view.focused]?.name ?? 'this tile'}</span>
+                {onResumeRotation && (
+                  <Button
+                    size="sm"
+                    data-testid="mosaic-resume-rotation"
+                    onClick={onResumeRotation}
+                  >
+                    Resume
+                  </Button>
+                )}
+              </>
+            ) : (
+              <span>Next tile in {countdown}s</span>
+            )}
+          </div>
+        )}
         <Button icon="plus" onClick={onSave} data-testid="mosaic-save">
           Save layout
         </Button>

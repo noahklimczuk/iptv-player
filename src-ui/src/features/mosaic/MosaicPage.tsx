@@ -85,6 +85,14 @@ function LayoutThumb({ layout }: { layout: MosaicLayout }) {
   );
 }
 
+/**
+ * How long each channel holds the stream in a rotating mosaic.
+ *
+ * Mirrors `DWELL_SECS` in `mosaic.rs`. Only ever shown in prose -- the countdown the
+ * tiles draw is `nextInSecs` from the host, against the clock `tick` decides on.
+ */
+const ROTATION_DWELL_SECS = 12;
+
 /** What the host said about this layout, in a sentence. */
 function budgetLine(check: MosaicCheck | null): { text: string; blocked: boolean } {
   if (!check) return { text: '', blocked: false };
@@ -199,6 +207,25 @@ export function MosaicPage({
     setOpening(true);
     try {
       await invoke('mosaic.open', { layout, channelIds: picked });
+      onOpened();
+    } catch (e) {
+      notify('Could not open multi-view', e);
+    } finally {
+      setOpening(false);
+    }
+  }, [layout, picked, onOpened]);
+
+  /**
+   * Open the picked channels as a rotation instead, on the one stream the line allows.
+   *
+   * Offered beside the blocked Open button rather than instead of it: the viewer asked
+   * for nine pictures and is being told they can have nine channels, which is a
+   * different thing and should look like a choice.
+   */
+  const openRotating = useCallback(async () => {
+    setOpening(true);
+    try {
+      await invoke('mosaic.openRotating', { layout, channelIds: picked });
       onOpened();
     } catch (e) {
       notify('Could not open multi-view', e);
@@ -361,6 +388,50 @@ export function MosaicPage({
           </span>
         )}
       </div>
+
+      {/*
+        * The way out, where there used to be none.
+        *
+        * `rotationOffered` comes from the host and is true exactly when the budget
+        * refuses, so this appears only when the alternative is nothing at all — a line
+        * that can carry the layout should give every tile its own picture.
+        */}
+      {check?.rotationOffered && filled > 1 && (
+        <section
+          data-testid="mosaic-rotation-offer"
+          style={{
+            display: 'grid',
+            gap: 'var(--sp-2)',
+            padding: 'var(--sp-3)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border)',
+            background: 'var(--surface-2)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+            <Icon name="layers" size={16} />
+            <strong style={{ fontSize: 14 }}>Show them one at a time instead</strong>
+          </div>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
+            Your line allows one stream, so Aurora can move it around the wall — each
+            channel for {ROTATION_DWELL_SECS} seconds, with the rest showing what is on
+            now. Click a tile to stay on it.
+          </p>
+          <div>
+            <Button
+              variant="primary"
+              icon="layers"
+              data-testid="mosaic-open-rotating"
+              disabled={opening}
+              onClick={openRotating}
+            >
+              {opening
+                ? 'Opening…'
+                : `Rotate ${filled} channel${filled === 1 ? '' : 's'}`}
+            </Button>
+          </div>
+        </section>
+      )}
 
       {saved && saved.length > 0 && (
         <section style={{ display: 'grid', gap: 'var(--sp-3)' }}>
