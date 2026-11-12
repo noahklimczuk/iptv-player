@@ -530,6 +530,8 @@ fn main() {
             commands::progress_save,
             mosaic::mosaic_check,
             mosaic::mosaic_open,
+            mosaic::mosaic_open_rotating,
+            mosaic::mosaic_resume_rotation,
             mosaic::mosaic_close,
             mosaic::mosaic_state,
             mosaic::mosaic_focus,
