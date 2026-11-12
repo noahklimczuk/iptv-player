@@ -497,8 +497,13 @@ impl Mosaic {
         let mut last = None;
         for which in 0..tile.candidates.len() {
             tile.attempt.current = which;
-            match self.open_candidate(&tile.candidates[which], &tile.options, tile.rect, parent, now)
-            {
+            match self.open_candidate(
+                &tile.candidates[which],
+                &tile.options,
+                tile.rect,
+                parent,
+                now,
+            ) {
                 Ok(player) => {
                     tile.player = Some(player);
                     return tile;
@@ -1330,6 +1335,383 @@ mod tests {
         }
     }
 
+    /// What every instance a test made was asked to load, and which URLs misbehave.
+    ///
+    /// Shared between the factory and the tiles it builds, so a test can say "this URL
+    /// dies" before or after the tile holding it exists, and can count instances that
+    /// have been let go of -- which on a one-connection line is the whole question.
+    #[derive(Default)]
+    struct Ledger {
+        /// Every URL loaded, in order, successes only.
+        loaded: Vec<String>,
+        /// URLs whose `load` is refused outright.
+        refuse: Vec<String>,
+        /// URLs whose instance reports `Error` once loaded: a stream that opens and then
+        /// dies, which is the only thing the heartbeat can see.
+        dying: Vec<String>,
+        /// Instances made, less instances dropped. A tile that reconnects without
+        /// letting go of the stream it is replacing needs two connections to recover.
+        live: i64,
+        /// The high-water mark of `live`, which is what a one-connection line cares
+        /// about: not how many are open now, but whether two were ever open at once.
+        peak: i64,
+    }
+
+    type Shared = Arc<Mutex<Ledger>>;
+
+    /// A tile backend that can be made to refuse, or to die after loading.
+    struct Flaky {
+        ledger: Shared,
+        /// What this instance loaded, so `state` can ask the ledger about it again --
+        /// which is how a test makes a tile recover without rebuilding it.
+        url: Option<String>,
+    }
+
+    impl Flaky {
+        fn factory(ledger: &Shared) -> TileFactory {
+            let ledger = Arc::clone(ledger);
+            Arc::new(move || {
+                let mut l = ledger.lock();
+                l.live += 1;
+                l.peak = l.peak.max(l.live);
+                drop(l);
+                Box::new(Flaky {
+                    ledger: Arc::clone(&ledger),
+                    url: None,
+                })
+            })
+        }
+    }
+
+    impl Drop for Flaky {
+        fn drop(&mut self) {
+            self.ledger.lock().live -= 1;
+        }
+    }
+
+    impl PlayerBackend for Flaky {
+        fn load(
+            &mut self,
+            url: &str,
+            _: &aurora_player::backend::LoadOptions,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            let mut l = self.ledger.lock();
+            if l.refuse.iter().any(|u| u == url) {
+                return Err(aurora_player::PlayerError::Command(format!(
+                    "refused {url}"
+                )));
+            }
+            l.loaded.push(url.to_string());
+            self.url = Some(url.to_string());
+            Ok(())
+        }
+        fn state(&self) -> aurora_player::PlayerState {
+            let status = match &self.url {
+                // Asked of the ledger on every call rather than cached at load time, so
+                // a test can let a stream come back without touching the tile.
+                Some(u) if self.ledger.lock().dying.iter().any(|d| d == u) => PlayerStatus::Error,
+                Some(_) => PlayerStatus::Playing,
+                None => PlayerStatus::Idle,
+            };
+            aurora_player::PlayerState {
+                status,
+                ..Default::default()
+            }
+        }
+        fn stop(&mut self) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_paused(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn seek(&mut self, _: f64, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_volume(&mut self, _: u32) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_muted(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_speed(&mut self, _: f64) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_audio_track(
+            &mut self,
+            _: Option<i64>,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_subtitle_track(
+            &mut self,
+            _: Option<i64>,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_aspect(
+            &mut self,
+            _: aurora_player::state::Aspect,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn pump(&mut self, _: f64) {}
+        fn chapters(&self) -> Vec<aurora_core::markers::Chapter> {
+            Vec::new()
+        }
+        fn resize(
+            &mut self,
+            _: u32,
+            _: u32,
+        ) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn place(&mut self, _: Rect) -> std::result::Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+    }
+
+    /// A mosaic whose tiles can be made to fail, plus the ledger they all report to.
+    fn mosaic_with_flaky_tiles(limit: Option<i64>) -> (Mosaic, Shared, Arc<Mutex<Connection>>) {
+        let (m, db) = mosaic(limit);
+        let ledger: Shared = Arc::new(Mutex::new(Ledger::default()));
+        let factory = Flaky::factory(&ledger);
+        (Mosaic { factory, ..m }, ledger, db)
+    }
+
+    /// A channel with `count` sources, so a tile has somewhere to roll to.
+    fn seed_channel_with_sources(db: &Arc<Mutex<Connection>>, id: i64, name: &str, count: usize) {
+        let db = db.lock();
+        db.execute(
+            "INSERT INTO channels (id, provider_id, provider_key, name, match_key, last_seen_at)
+             VALUES (?1, 1, ?2, ?3, ?4, 0)",
+            aurora_db::rusqlite::params![id, format!("c{id}"), name, name.to_lowercase()],
+        )
+        .unwrap();
+        for i in 0..count {
+            db.execute(
+                "INSERT INTO channel_sources (channel_id, url, priority) VALUES (?1, ?2, ?3)",
+                aurora_db::rusqlite::params![id, source_url(id, i), i as i64],
+            )
+            .unwrap();
+        }
+    }
+
+    /// The nth source of a channel, in the shape `seed_channel_with_sources` writes.
+    fn source_url(channel_id: i64, which: usize) -> String {
+        format!("http://example.com/live/{channel_id}-{which}.ts")
+    }
+
+    /// A tile whose stream dies rolls to the channel's next source.
+    ///
+    /// `tick` used to notice and do nothing: it set `tile.error` once and left the tile
+    /// dead for the life of the mosaic, while the main player on the same channel would
+    /// have rolled over within a second.
+    #[test]
+    fn a_tile_whose_stream_dies_rolls_over_to_the_next_source() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        assert_eq!(ledger.lock().loaded, vec![source_url(1, 0)]);
+
+        // First sight starts the clock; the roll comes on the next heartbeat.
+        m.tick(NOW);
+        m.tick(NOW);
+
+        assert_eq!(
+            ledger.lock().loaded,
+            vec![source_url(1, 0), source_url(1, 1)],
+            "the tile never rolled to the channel's second source"
+        );
+    }
+
+    /// And it lets go of the dead stream before opening the replacement.
+    ///
+    /// The line this is measured against allows **one** connection. A tile that
+    /// reconnects while still holding the stream it is replacing needs two to recover,
+    /// so every reconnect would be answered 403 and the mosaic could never heal.
+    #[test]
+    fn a_tile_releases_its_dead_stream_before_opening_the_next_one() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        // One lock, not two: `parking_lot::Mutex` is not reentrant, and
+        // `ledger.lock().peak = ledger.lock().live` hangs the test for ever.
+        {
+            let mut l = ledger.lock();
+            l.peak = l.live;
+        }
+
+        m.tick(NOW);
+        m.tick(NOW);
+
+        let l = ledger.lock();
+        assert_eq!(
+            l.peak, 1,
+            "two instances were open at once while one tile reconnected"
+        );
+    }
+
+    /// A tile that comes back on its own loses its error.
+    ///
+    /// Nothing ever cleared `tile.error`, which is what made the latch a bug rather than
+    /// a shortcut: the tile had a picture again and a sentence over it saying it did not.
+    #[test]
+    fn a_tile_that_recovers_loses_the_sentence_explaining_why_it_had_not() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        // One source: nothing to roll to, so the tile can only sit there and recover.
+        seed_channel_with_sources(&db, 1, "One", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        let view = m.tick(NOW).expect("a dead tile is news");
+        assert!(
+            view.tiles[0].error.is_some(),
+            "a tile with no picture said nothing about it"
+        );
+
+        // The provider comes back.
+        ledger.lock().dying.clear();
+        let view = m.tick(NOW).expect("a tile that recovered is news too");
+        assert!(
+            view.tiles[0].error.is_none(),
+            "the tile is playing with an error still on it: {:?}",
+            view.tiles[0].error
+        );
+    }
+
+    /// A tile that runs out of sources and retries gives up its connection.
+    ///
+    /// A dead tile holding a slot open is the one thing this module cannot afford on a
+    /// one-connection line: it is a tile showing nothing while preventing anything else
+    /// from showing something.
+    #[test]
+    fn a_tile_that_cannot_be_recovered_stops_holding_a_connection() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+
+        // Walk the clock past every retry and its backoff until the policy abandons it.
+        let mut at = NOW;
+        for _ in 0..40 {
+            m.tick(at);
+            at += 2;
+        }
+
+        assert_eq!(
+            ledger.lock().live,
+            0,
+            "a tile nothing would play still had an instance open"
+        );
+        let view = m.tick(at).or_else(|| m.tick(at + 1));
+        if let Some(view) = view {
+            assert!(
+                view.tiles[0].error.is_some(),
+                "the abandoned tile stopped saying why it is blank"
+            );
+        }
+    }
+
+    /// Rolling over is recorded against the source, so the next tune starts elsewhere.
+    ///
+    /// A mosaic that learned nothing left the next tune -- in the main player, on the
+    /// same channel -- starting from a URL this tile had already found dead.
+    #[test]
+    fn a_tile_records_what_it_learned_about_a_source() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        m.tick(NOW);
+        m.tick(NOW);
+
+        let failures: i64 = db
+            .lock()
+            .query_row(
+                "SELECT fail_count FROM channel_sources WHERE channel_id = 1 AND url = ?1",
+                aurora_db::rusqlite::params![source_url(1, 0)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            failures, 1,
+            "the dead source was not marked as having failed"
+        );
+    }
+
+    /// One failure per failure, not one per heartbeat.
+    ///
+    /// `tick` runs four times a second. Recording on every one of them would bury a
+    /// source's real history under a stall's worth of noise within a minute, and
+    /// `rank()` reads exactly that history to order the next tune's candidates.
+    #[test]
+    fn a_stalled_tile_is_one_failure_against_the_source_not_one_per_heartbeat() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        // Four heartbeats inside the same second, which is what 250ms ticks are.
+        for _ in 0..4 {
+            m.tick(NOW);
+        }
+
+        let failures: i64 = db
+            .lock()
+            .query_row(
+                "SELECT fail_count FROM channel_sources WHERE channel_id = 1 AND url = ?1",
+                aurora_db::rusqlite::params![source_url(1, 0)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            failures, 1,
+            "a single stall was recorded once per heartbeat rather than once"
+        );
+    }
+
+    /// A reload that lands after the mosaic moved on is discarded.
+    ///
+    /// Phase two of `tick` runs with the session lock released, which is what makes the
+    /// generation guard necessary rather than decorative: a close-and-reopen while a
+    /// tile was reconnecting would otherwise have the old reload install itself into the
+    /// new session's tile.
+    #[test]
+    fn a_reload_that_lands_after_a_reopen_is_thrown_away() {
+        let (m, ledger, db) = mosaic_with_flaky_tiles(Some(8));
+        seed_channel_with_sources(&db, 1, "One", 2);
+        seed_channel_with_sources(&db, 2, "Two", 1);
+        ledger.lock().dying.push(source_url(1, 0));
+
+        m.open(Layout::Grid2x2, &[Some(1), None, None, None], NOW)
+            .unwrap();
+        m.tick(NOW);
+
+        // The mosaic is replaced between the decision and the install. `open` bumps the
+        // generation, which is the thing being tested.
+        m.open(Layout::Grid2x2, &[Some(2), None, None, None], NOW)
+            .unwrap();
+        let view = m.tick(NOW).unwrap_or_else(|| m.tick(NOW + 1).unwrap());
+
+        assert_eq!(
+            view.tiles[0].channel_id,
+            Some(2),
+            "a stale reload replaced the tile the viewer had just asked for"
+        );
+    }
+
     /// The bug this exists for: a mosaic you could hear and could not see.
     ///
     /// Every `place` goes to the bottom of the z-order, so the tiles land underneath the
@@ -1410,7 +1792,10 @@ mod tests {
 
         // Once, and not on every heartbeat thereafter: an event per tick for a screen
         // with no mosaic on it is noise the UI would re-render for.
-        assert!(m.tick(NOW).is_none(), "the closed state is repeated for ever");
+        assert!(
+            m.tick(NOW).is_none(),
+            "the closed state is repeated for ever"
+        );
     }
 
     /// And nothing is announced for a mosaic that was never opened.

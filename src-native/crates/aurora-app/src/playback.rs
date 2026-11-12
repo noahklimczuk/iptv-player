@@ -36,7 +36,7 @@ use crate::error::{AppError, Result};
 /// Re-exported from `aurora_core::failover`, which owns the live failover policy so the
 /// multi-view tiles get the same one. Kept named here because this is where a reader
 /// looking for it comes first.
-pub use aurora_core::failover::{MAX_ROLLOVERS, MAX_RETRIES as MAX_LIVE_RETRIES};
+pub use aurora_core::failover::{MAX_RETRIES as MAX_LIVE_RETRIES, MAX_ROLLOVERS};
 
 /// How many times a film or episode is reloaded after the stream dies before the error
 /// is left on screen.
