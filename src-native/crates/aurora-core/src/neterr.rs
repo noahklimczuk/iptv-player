@@ -446,10 +446,21 @@ impl NetFailure {
 ///
 /// `classify` works on the words mpv produced, and there is one important failure it
 /// cannot see: the request never reaches the provider. An Xtream panel redirects a VOD
-/// request to one of its streaming servers, and a DNS-level filter -- on the router, in
-/// the ISP, in a "safe browsing" service -- can take that second hop over and answer it
-/// with HTTP 200 and an HTML page. The player gets a successful download of a web page
-/// where a film should be, and says the file is broken. The file was never reached.
+/// request to one of its streaming servers, and something can take that second hop over
+/// and answer it with HTTP 200 and an HTML page. The player gets a successful download
+/// of a web page where a film should be, and says the file is broken. The file was never
+/// reached.
+///
+/// Where that something sits is worth not guessing at. Measured on 2026-11-12, the whole
+/// of `Riverdale` -- all 138 episodes, every season -- is pinned to one streaming server
+/// that answers *every* request, including `/` and a path that cannot exist, with a 302
+/// to a "security" interstitial; a TCP connect to it takes as long as an ICMP round trip
+/// does, so nothing on this side of the link is answering early, and six asks for the
+/// same episode never moved off that machine. Ten films sampled the same afternoon were
+/// spread over six other servers and nine of them served video. So the filter is as
+/// likely to be at the provider's end as on the viewer's network, and the sentence
+/// `diagnose_stream` returns says which to suspect from what else plays rather than
+/// sending everybody to their router.
 ///
 /// Returns `None` when the probe shows nothing a viewer could act on, so the caller
 /// keeps mpv's own classification. Deliberately quiet rather than guessing: a probe
@@ -480,14 +491,16 @@ pub fn diagnose_stream(
     if ok && served_page && hijacked {
         return Some(NetFailure {
             code: ErrorCode::Blocked,
-            message: "Something on this network blocked the stream".into(),
+            message: "A security filter answered instead of the stream".into(),
             cause: format!(
-                "The request for this title was redirected away from your provider to \
-                 {final_host}, which answered with a web page instead of video. That is \
-                 a filter between this device and the provider -- usually DNS on the \
-                 router, in the ISP, or a \"safe browsing\" service -- not a problem \
-                 with the title. Other titles on the same provider will play, because \
-                 the panel serves them from different machines."
+                "The request for this title ended at {final_host}, which returned a \
+                 warning page instead of video. The panel keeps each title on one \
+                 streaming server, and every request to this one gets that answer -- \
+                 so retrying, or trying another episode of the same show, lands on \
+                 it again. If the rest of your library plays, that machine is \
+                 blocked at the provider's end and only they can move the title; if \
+                 everything does this, the filter is on this network: a router web \
+                 protection, a DNS service, or one your ISP applies."
             ),
             actions: vec![ErrorAction::OpenSettings],
             // Every attempt lands on the same blocked machine: the panel pins a title to
@@ -969,6 +982,32 @@ mod tests {
         // button that cannot work.
         assert!(!f.retryable);
         assert!(!f.actions.contains(&ErrorAction::Retry));
+    }
+
+    /// The shape the real subscription produces, down to the status code.
+    ///
+    /// Riverdale, every episode of it: the panel 302s to one streaming server, and that
+    /// server answers the ranged request with `206` and an HTML warning page rather than
+    /// a `200`. A diagnosis that only looked for `200` would have let the whole show fall
+    /// through to mpv's "broken file", which is the sentence this exists to replace.
+    #[test]
+    fn a_ranged_request_answered_with_a_warning_page_is_diagnosed_too() {
+        let f = diagnose_stream(
+            206,
+            "text/html",
+            "64582429.max-jbnott.online",
+            "www.safebrowse.io",
+        )
+        .expect("206 plus a page is the same interception as 200 plus a page");
+        assert_eq!(f.code, ErrorCode::Blocked);
+        assert!(!f.retryable, "the server answers every request this way");
+        // The viewer is told how to tell a blocked server from a blocked network, which
+        // is the difference between reporting a title and reconfiguring a router.
+        assert!(
+            f.cause.contains("rest of your library"),
+            "the sentence does not say how to tell the two apart: {}",
+            f.cause
+        );
     }
 
     /// A provider redirecting between its own machines is not interception.
