@@ -14,7 +14,6 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { PlaylistEntry, PlaylistKind, PlaylistShow } from '@shared/ipc';
 import { Badge, Button, EmptyState, FIELD, Select, Skeleton } from '@/components/Primitives';
-import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
 import { notify } from '@/lib/errors';
@@ -117,25 +116,33 @@ export function PlaylistPage() {
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ padding: 'var(--sp-5) var(--sp-6) var(--sp-3)' }}>
-        <h1 style={{ margin: '0 0 var(--sp-4)', fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
-          Playlist
-        </h1>
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column',
+        // The top bar shares the scroller, so the table gets the rest of the window less
+        // the bar -- and its own scroller ends above the nav pill.
+        height: 'calc(100% - var(--topbar-h))',
+        paddingBottom: 16,
+      }}
+    >
+      <div style={{ padding: '4px 36px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+          <h1 className="dl-page-title">Playlist</h1>
 
-        <div role="tablist" aria-label="Which list" style={{ display: 'flex', gap: 6 }}>
-          {KINDS.map((k) => (
-            <Button
-              key={k.key}
-              role="tab"
-              aria-selected={kind === k.key}
-              size="sm"
-              variant={kind === k.key ? 'primary' : 'secondary'}
-              onClick={() => switchKind(k.key)}
-            >
-              {k.label}
-            </Button>
-          ))}
+          <div role="tablist" aria-label="Which list" className="dl-seg">
+            {KINDS.map((k) => (
+              <button
+                key={k.key}
+                type="button"
+                role="tab"
+                aria-selected={kind === k.key}
+                data-active={kind === k.key}
+                onClick={() => switchKind(k.key)}
+              >
+                {k.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div
@@ -171,7 +178,6 @@ export function PlaylistPage() {
             onChange={(v) => { setShow((v ?? 'all') as PlaylistShow); setLimit(PAGE); }}
           />
           <Button
-            size="sm"
             variant={duplicatesOnly ? 'primary' : 'secondary'}
             aria-pressed={duplicatesOnly}
             onClick={() => { setDuplicatesOnly((d) => !d); setLimit(PAGE); }}
@@ -179,7 +185,7 @@ export function PlaylistPage() {
             Duplicates only
           </Button>
 
-          <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: 'var(--fs-sm)', fontWeight: 600 }}>
             {total} {total === 1 ? 'entry' : 'entries'}
             {rows.length < total ? ` · showing ${rows.length}` : ''}
           </span>
@@ -192,7 +198,7 @@ export function PlaylistPage() {
             marginTop: 'var(--sp-3)', minHeight: 32,
           }}
         >
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-sm)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)', fontWeight: 600 }}>
             <input className="aurora-field"
               type="checkbox"
               checked={allOnPageSelected}
@@ -282,12 +288,20 @@ export function PlaylistPage() {
         )}
       </div>
 
+      {/* Daylight: the table is one white panel. */}
+      <div
+        className="dl-panel"
+        style={{
+          flex: 1, minHeight: 0, margin: '0 36px', display: 'flex', flexDirection: 'column',
+          overflow: 'hidden', padding: '6px 0',
+        }}
+      >
       <Header kind={kind} />
 
-      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '0 var(--sp-6)' }}>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '0 16px' }}>
         {page.loading && !page.data ? (
           <div style={{ display: 'grid', gap: 6, paddingTop: 8 }}>
-            {Array.from({ length: 12 }, (_, i) => <Skeleton key={i} h={ROW_H - 8} />)}
+            {Array.from({ length: 12 }, (_, i) => <Skeleton key={i} h={ROW_H - 8} r={12} />)}
           </div>
         ) : rows.length === 0 ? (
           <EmptyState
@@ -333,6 +347,7 @@ export function PlaylistPage() {
           </div>
         )}
       </div>
+      </div>
     </div>
   );
 }
@@ -342,16 +357,15 @@ function Header({ kind }: { kind: PlaylistKind }) {
     <div
       style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-        padding: '6px var(--sp-6)', borderBottom: '1px solid var(--border)',
-        background: 'var(--bg-elevated)', fontSize: 'var(--fs-xs)',
-        letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-faint)',
-        fontWeight: 700,
+        padding: '10px 16px', fontSize: 'var(--fs-sm)',
+        color: 'var(--text-muted)', fontWeight: 700,
       }}
     >
       <span style={{ width: 20 }} />
       {kind === 'live' && <span style={{ width: 64 }}>No.</span>}
       <span style={{ flex: 1 }}>Name</span>
       <span style={{ width: 160 }}>Group</span>
+      {kind === 'live' && <span style={{ width: 200 }}>Logo</span>}
       <span style={{ width: 120 }}>Quality</span>
       <span style={{ width: 110 }}>Language</span>
       <span style={{ width: 150, textAlign: 'right' }}>Shown</span>
@@ -376,7 +390,7 @@ function Row({
     <div
       style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: ROW_H,
-        borderBottom: '1px solid var(--border)', opacity: row.hidden ? 0.45 : 1,
+        borderBottom: '1px solid var(--border)', opacity: row.hidden ? 0.5 : 1,
       }}
     >
       <input className="aurora-field"
@@ -493,24 +507,17 @@ function Row({
           * only ones anyone is scanning for, as the faintest things on the screen. The
           * row already dims when it is hidden; this stops the switch arguing with it.
           */}
+        {/* Daylight's switch, blue when the entry is shown. The row dims when it is
+            hidden, which is what makes the handful of hidden rows easy to scan for. */}
         <button
-          className="aurora-switch"
+          type="button"
+          className="dl-switch"
           role="switch"
           aria-checked={!row.hidden}
           aria-label={`Show ${row.name}`}
+          title={row.hidden ? 'Hidden' : 'Shown'}
           onClick={() => onPatch({ hidden: !row.hidden })}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px',
-            borderRadius: 'var(--r-full)', cursor: 'pointer', fontSize: 'var(--fs-sm)',
-            border: `1px solid ${row.hidden ? 'transparent' : 'var(--border)'}`,
-            background: row.hidden ? 'var(--border-strong)' : 'transparent',
-            color: row.hidden ? 'var(--text)' : 'var(--text-muted)',
-            fontWeight: 600,
-          }}
-        >
-          <Icon name={row.hidden ? 'close' : 'check'} size={13} />
-          {row.hidden ? 'Hidden' : 'Shown'}
-        </button>
+        />
       </div>
     </div>
   );
@@ -540,6 +547,7 @@ function EditableCell({
         style={{
           width: width ?? '100%', textAlign: 'left', background: 'transparent',
           border: '1px solid transparent', borderRadius: 'var(--r-sm)', cursor: 'text',
+          fontSize: 'var(--fs-md)',
           color: 'inherit', padding: '3px 6px', font: 'inherit', fontWeight: weight,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}
@@ -575,4 +583,4 @@ function EditableCell({
 }
 
 /** One field, defined once. See `FIELD` in Primitives. */
-const inputStyle: React.CSSProperties = { ...FIELD, minWidth: 220 };
+const inputStyle: React.CSSProperties = { ...FIELD, minWidth: 240, background: 'var(--surface)' };
