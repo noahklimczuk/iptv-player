@@ -805,7 +805,8 @@ export default function App() {
               padding: '0 10px',
               borderRadius: 'calc(var(--r-pill) - 8px)',
               textDecoration: 'none',
-              fontSize: 11,
+              // 11px at desktop density, larger in TV mode.
+              fontSize: 'calc(var(--fs-xs) - 1px)',
               fontWeight: 750,
               letterSpacing: '0.01em',
               whiteSpace: 'nowrap',

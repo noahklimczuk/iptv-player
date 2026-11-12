@@ -836,7 +836,8 @@ function Episodes({
               <div
                 style={{
                   position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
-                  background: 'rgb(0 0 0 / 0.25)', color: '#fff',
+                  background: 'color-mix(in srgb, var(--player-bg) 30%, transparent)',
+                  color: 'var(--on-art)',
                 }}
               >
                 <Icon name="play" size={22} filled />

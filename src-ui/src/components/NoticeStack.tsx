@@ -71,7 +71,8 @@ export function NoticeStack() {
       aria-live="polite"
       data-testid="notices"
       style={{
-        position: 'fixed', right: 'var(--sp-5)', bottom: 'var(--sp-5)', zIndex: 400,
+        // Above the nav pill's band, so a notice never sits under the navigation.
+        position: 'fixed', right: 'var(--sp-5)', bottom: 'var(--navpill-space)', zIndex: 400,
         display: 'grid', gap: 'var(--sp-2)', maxWidth: 420,
       }}
     >
@@ -82,13 +83,13 @@ export function NoticeStack() {
             display: 'grid', gridTemplateColumns: '20px 1fr 24px', gap: 'var(--sp-3)',
             alignItems: 'start', padding: 'var(--sp-3) var(--sp-4)',
             background: 'var(--bg-elevated)', color: 'var(--text)',
-            border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-            boxShadow: '0 10px 30px rgb(0 0 0 / 0.35)',
+            border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+            boxShadow: 'var(--shadow-3)',
           }}
         >
           <Icon name="alert" size={18} style={{ color: 'var(--danger, #ff6b6b)' }} />
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 650, fontSize: 'var(--fs-sm)' }}>{n.title}</div>
+            <div style={{ fontWeight: 800, fontSize: 'var(--fs-sm)' }}>{n.title}</div>
             {n.detail && (
               <div
                 style={{

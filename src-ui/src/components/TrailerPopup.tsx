@@ -71,8 +71,8 @@ export function TrailerPopup({
         style={{
           width: `min(86vw, ${MAX_WIDTH_PX}px)`,
           aspectRatio: '16 / 9',
-          background: '#000',
-          borderRadius: 'var(--r-lg)',
+          background: 'var(--player-bg)',
+          borderRadius: 'var(--r-xl)',
           overflow: 'hidden',
           boxShadow: 'var(--shadow-3)',
         }}
