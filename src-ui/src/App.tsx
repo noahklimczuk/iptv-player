@@ -780,7 +780,7 @@ export default function App() {
            * apart -- ink on paper is its own boundary.
            */
           background: 'var(--nav-bg)',
-          border: '1px solid color-mix(in srgb, var(--nav-text) 14%, transparent)',
+          border: '1px solid var(--nav-border)',
           boxShadow: 'var(--shadow-3)',
           zIndex: 50,
           overflowX: 'auto',

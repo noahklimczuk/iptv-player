@@ -102,6 +102,7 @@
 
   /* The nav pill is a solid ink capsule in every Daylight theme. */
   --nav-bg:          #16161A;
+  --nav-border:      #2E2E36;
   --nav-text:        #C9C9CF;
   --nav-active-bg:   #F4F3EF;
   --nav-active-text: #16161A;
@@ -138,6 +139,7 @@
   --danger-border: #7A3626;
 
   --nav-bg:          #000000;
+  --nav-border:      #2E2E36;
   --nav-text:        #B5B5BD;
   --nav-active-bg:   #F4F3EF;
   --nav-active-text: #16161A;
@@ -170,6 +172,7 @@
   --danger-border: #6A2E20;
 
   --nav-bg:          #16161A;
+  --nav-border:      #34343C;
   --nav-text:        #B5B5BD;
   --nav-active-bg:   #F4F3EF;
   --nav-active-text: #16161A;
@@ -195,7 +198,7 @@
   --live: #ffffff; --live-text: #000000;
   --success: #ffffff; --success-text: #000000;
   --danger: #ffffff; --danger-soft: #000000; --danger-border: #ffffff;
-  --nav-bg: #000000; --nav-text: #ffffff;
+  --nav-bg: #000000; --nav-border: #ffffff; --nav-text: #ffffff;
   --nav-active-bg: #ffdd00; --nav-active-text: #000000;
   --shadow-1: 0 0 0 1px #ffffff; --shadow-2: 0 0 0 1px #ffffff;
   --shadow-3: 0 0 0 2px #ffffff; --shadow-4: 0 0 0 2px #ffffff;
