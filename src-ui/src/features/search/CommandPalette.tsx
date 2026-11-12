@@ -191,8 +191,8 @@ export function CommandPalette({
         transition={{ duration: 0.12 }}
         onClick={onClose}
         style={{
-          position: 'fixed', inset: 0, zIndex: 300, background: 'rgb(0 0 0 / 0.6)',
-          backdropFilter: 'blur(3px)', paddingTop: '12vh',
+          position: 'fixed', inset: 0, zIndex: 300, background: 'var(--scrim-dialog)',
+          paddingTop: '11vh',
         }}
       >
         <motion.div
@@ -203,18 +203,18 @@ export function CommandPalette({
           onClick={(e) => e.stopPropagation()}
           role="dialog" aria-modal="true" aria-label="Search"
           style={{
-            width: 'min(680px, 92vw)', margin: '0 auto', background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-strong)', borderRadius: 'var(--r-lg)',
+            width: 'min(640px, 92vw)', margin: '0 auto', background: 'var(--bg-elevated)',
+            borderRadius: 32, padding: '16px 10px 14px',
             boxShadow: 'var(--shadow-4)', overflow: 'hidden',
           }}
         >
           <div
             style={{
               display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-              padding: 'var(--sp-4)', borderBottom: '1px solid var(--border)',
+              padding: '0 8px 8px',
             }}
           >
-            <Icon name="search" size={20} style={{ color: 'var(--text-faint)' }} />
+            <Icon name="search" size={20} style={{ color: 'var(--text)' }} />
             <input
               ref={inputRef}
               value={text}
@@ -243,14 +243,18 @@ export function CommandPalette({
                 }
               }}
               style={{
-                flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                color: 'var(--text)', fontSize: 'var(--fs-lg)',
+                flex: 1, height: 52, padding: '0 18px', borderRadius: 16,
+                background: 'var(--bg)', border: 'none', outline: 'none',
+                // The caret and the dialog say where the focus is; a ring round the one
+                // field in a search dialog adds nothing.
+                boxShadow: 'none',
+                color: 'var(--text)', fontSize: 'var(--fs-xl)', fontWeight: 500,
               }}
             />
             <kbd
               style={{
-                fontSize: 'var(--fs-xs)', color: 'var(--text-faint)',
-                border: '1px solid var(--border-strong)', borderRadius: 4, padding: '2px 6px',
+                fontFamily: 'inherit', fontSize: 11, fontWeight: 800, color: 'var(--text)',
+                background: 'var(--surface-sunk)', borderRadius: 6, padding: '3px 7px',
               }}
             >
               Esc
@@ -261,7 +265,7 @@ export function CommandPalette({
             id="palette-results"
             role="listbox"
             aria-label="Results"
-            style={{ maxHeight: '52vh', overflowY: 'auto', padding: 'var(--sp-2)' }}
+            style={{ maxHeight: '52vh', overflowY: 'auto', padding: '4px 0 0' }}
           >
             {!text && (
               <div
@@ -310,9 +314,8 @@ export function CommandPalette({
                   <div
                     style={{
                       display: 'flex', alignItems: 'center', gap: 6,
-                      padding: 'var(--sp-2) var(--sp-3)', fontSize: 'var(--fs-xs)',
-                      color: 'var(--text-faint)', fontWeight: 700,
-                      letterSpacing: '0.06em', textTransform: 'uppercase',
+                      padding: '10px 14px 6px', fontSize: 'var(--fs-sm)',
+                      color: 'var(--text-muted)', fontWeight: 800,
                     }}
                   >
                     <Icon name={g.icon} size={13} />
@@ -331,15 +334,17 @@ export function CommandPalette({
                         onClick={() => { onPick(hit); onClose(); }}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-                          width: '100%', padding: 'var(--sp-2) var(--sp-3)',
-                          borderRadius: 'var(--r-md)', border: 'none', cursor: 'pointer',
+                          width: '100%', padding: '9px 14px',
+                          borderRadius: 14, border: 'none', cursor: 'pointer',
                           textAlign: 'left', color: 'inherit',
-                          background: cursor === idx ? 'var(--surface-hover)' : 'transparent',
+                          background: cursor === idx ? 'var(--bg)' : 'transparent',
                         }}
                       >
-                        <span style={{ flex: 1, fontSize: 'var(--fs-md)' }}>{hit.title}</span>
+                        <span style={{ flex: 1, fontSize: 'var(--fs-md)', fontWeight: 700 }}>
+                          {hit.title}
+                        </span>
                         {hit.subtitle && (
-                          <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+                          <span style={{ fontSize: 'var(--fs-xs)', fontWeight: 600, color: 'var(--text-muted)' }}>
                             {hit.subtitle}
                           </span>
                         )}
@@ -350,10 +355,10 @@ export function CommandPalette({
                     <button
                       onClick={() => setExpanded((e) => [...e, g.key])}
                       style={{
-                        width: '100%', padding: 'var(--sp-2) var(--sp-3)',
+                        width: '100%', padding: '8px 14px',
                         background: 'transparent', border: 'none', cursor: 'pointer',
-                        textAlign: 'left', color: 'var(--text-faint)',
-                        fontSize: 'var(--fs-sm)', borderRadius: 'var(--r-md)',
+                        textAlign: 'left', color: 'var(--accent)', fontWeight: 700,
+                        fontSize: 'var(--fs-sm)', borderRadius: 14,
                       }}
                     >
                       Show {folded} more {g.label.toLowerCase()}
@@ -363,6 +368,21 @@ export function CommandPalette({
               );
             })}
           </div>
+
+          {text && results && flat.length > 0 && (
+            <div
+              style={{
+                display: 'flex', justifyContent: 'space-between', gap: 12,
+                padding: '10px 14px 0', fontSize: 'var(--fs-xs)', fontWeight: 600,
+                color: 'var(--text-muted)',
+              }}
+            >
+              <span>↑↓ to move · Enter to open · Esc to close</span>
+              <span>
+                {GROUPS.reduce((n, g) => n + results[g.key].length, 0)} results
+              </span>
+            </div>
+          )}
         </motion.div>
       </motion.div>
       )}
