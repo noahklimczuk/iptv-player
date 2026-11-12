@@ -392,11 +392,13 @@ export function MosaicPage({
       {/*
         * The way out, where there used to be none.
         *
-        * `rotationOffered` comes from the host and is true exactly when the budget
-        * refuses, so this appears only when the alternative is nothing at all — a line
-        * that can carry the layout should give every tile its own picture.
+        * On `selectionBlocked`, not on `rotationOffered` alone: the host's flag is a fact
+        * about the layout -- nine tiles do not fit this line -- while what matters here
+        * is whether *these* channels fit, and two of a 2x2's four tiles on a
+        * two-connection line do. Offered only when the alternative is nothing at all,
+        * because a selection that can have a picture in every tile should have one.
         */}
-      {check?.rotationOffered && filled > 1 && (
+      {selectionBlocked && check?.rotationOffered && filled > 1 && (
         <section
           data-testid="mosaic-rotation-offer"
           style={{
