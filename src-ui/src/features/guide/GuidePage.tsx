@@ -39,7 +39,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, MosaicRect, Programme } from '@shared/ipc';
 import { useDvrMarks } from '@/features/dvr/useDvrMarks';
 import { useGuideSlice } from './useGuideSlice';
-import { Badge, Button, EmptyState, Select, Skeleton } from '@/components/Primitives';
+import {
+  Badge, Button, ChannelTile as LogoTile, EmptyState, Select, Skeleton,
+} from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { dayLabel, duration } from '@/lib/format';
@@ -50,8 +52,8 @@ import { useInlaidPicture } from '@/hooks/useInlaidPicture';
 const HALF_HOUR = 1800;
 const PX_PER_MIN = 6;
 const SLOT_W = (HALF_HOUR / 60) * PX_PER_MIN; // 180px per 30 min
-const CHANNEL_W = 220;
-const ROW_H = 64;
+const CHANNEL_W = 240;
+const ROW_H = 56;
 /**
  * How wide the preview column is.
  *
@@ -283,12 +285,25 @@ export function GuidePage({
       />
       </div>
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative', zIndex: 1 }}>
-        {/* The grid, on the side the channel column is indexed from. */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      <div
+        style={{
+          display: 'flex', flex: 1, minHeight: 0, position: 'relative', zIndex: 1,
+          gap: 16, padding: '0 36px var(--navpill-space)',
+        }}
+      >
+        {/* The grid, on the side the channel column is indexed from. Daylight puts it in
+            one white rounded panel; the preview column beside it is not inside this, so
+            the panel's paint never reaches the picture. */}
+        <div
+          className="dl-panel"
+          style={{
+            flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+            overflow: 'hidden', padding: '8px 0',
+          }}
+        >
           {loading && channels.length === 0 ? (
             <div style={{ padding: 'var(--sp-5)', display: 'grid', gap: 8 }}>
-              {Array.from({ length: 10 }, (_, i) => <Skeleton key={i} h={ROW_H - 6} />)}
+              {Array.from({ length: 10 }, (_, i) => <Skeleton key={i} h={ROW_H - 8} r={14} />)}
             </div>
           ) : channels.length === 0 ? (
             <EmptyState title="No channels in this category" />
@@ -383,7 +398,7 @@ export function GuidePage({
         {/* Preview + info, top right. */}
         <aside
           style={{
-            width: PREVIEW_W, flexShrink: 0, borderLeft: '1px solid var(--border)',
+            width: PREVIEW_W, flexShrink: 0, gap: 16,
             display: 'flex', flexDirection: 'column', minHeight: 0,
             // Deliberately no background. An opaque panel here would be painted over
             // the picture — see `SurfaceHole`. The panels inside it carry their own.
@@ -428,28 +443,31 @@ function GuideToolbar({
     <div
       style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', flexWrap: 'wrap',
-        padding: 'var(--sp-3) var(--sp-5)', borderBottom: '1px solid var(--border)',
-        background: 'var(--bg-elevated)',
+        padding: '4px 36px 16px',
       }}
     >
-      <h1 style={{ margin: 0, fontSize: 'var(--fs-lg)', fontWeight: 700 }}>TV Guide</h1>
-      <span style={{ color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+      {/* The board says "Guide"; the heading's name stays "TV Guide". */}
+      <h1 className="dl-page-title">
+        <span aria-hidden>Guide</span>
+        <span className="sr-only">TV Guide</span>
+      </h1>
+      <span style={{ color: 'var(--text-faint)', fontSize: 'var(--fs-md)', fontWeight: 700 }}>
         {dayLabel(from)}
       </span>
 
-      <div style={{ display: 'flex', gap: 4, marginLeft: 'var(--sp-3)' }}>
-        <Button size="sm" onClick={onNow} icon="clock">Now</Button>
-        <Button size="sm" onClick={() => onShift(-24)}>−24h</Button>
-        <Button size="sm" onClick={() => onShift(-1)}>−1h</Button>
-        <Button size="sm" onClick={() => onShift(1)}>+1h</Button>
-        <Button size="sm" onClick={() => onShift(24)}>+24h</Button>
-      </div>
-
-      <div style={{ display: 'flex', gap: 4 }}>
+      <div className="dl-seg" style={{ marginLeft: 'auto' }}>
+        <button type="button" onClick={() => onShift(-24)}>−24h</button>
+        <button type="button" onClick={() => onShift(-1)}>−1h</button>
+        <button type="button" data-active="true" onClick={onNow}>
+          <Icon name="clock" size={15} />
+          Now
+        </button>
+        <button type="button" onClick={() => onShift(1)}>+1h</button>
+        <button type="button" onClick={() => onShift(24)}>+24h</button>
         {[0, 1, 2].map((d) => (
-          <Button key={d} size="sm" variant="ghost" onClick={() => onPrimeTime(d)}>
+          <button key={d} type="button" onClick={() => onPrimeTime(d)}>
             {d === 0 ? 'Tonight 8pm' : `${dayLabel(Math.floor(Date.now() / 1000) + d * 86400)} 8pm`}
-          </Button>
+          </button>
         ))}
       </div>
 
@@ -461,7 +479,6 @@ function GuideToolbar({
         }))}
         value={group}
         onChange={setGroup}
-        style={{ marginLeft: 'auto' }}
       />
     </div>
   );
@@ -482,16 +499,16 @@ function TimeHeader({ slots }: { slots: number[] }) {
   return (
     <div
       style={{
-        position: 'sticky', top: 0, zIndex: 6, display: 'flex', height: 34,
-        background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)',
+        position: 'sticky', top: 0, zIndex: 6, display: 'flex', height: 36,
+        background: 'var(--surface)',
       }}
     >
       <div
         style={{
           width: CHANNEL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7,
-          background: 'var(--bg-elevated)', borderRight: '1px solid var(--border)',
-          display: 'flex', alignItems: 'center', padding: '0 var(--sp-3)',
-          fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', fontWeight: 700,
+          background: 'var(--surface)',
+          display: 'flex', alignItems: 'center', padding: '0 16px',
+          fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', fontWeight: 800,
           letterSpacing: '0.06em',
         }}
       >
@@ -501,9 +518,9 @@ function TimeHeader({ slots }: { slots: number[] }) {
         <div
           key={t}
           style={{
-            width: SLOT_W, flexShrink: 0, borderLeft: '1px solid var(--border)',
+            width: SLOT_W, flexShrink: 0,
             display: 'flex', alignItems: 'center', padding: '0 var(--sp-2)',
-            fontSize: 'var(--fs-xs)', color: 'var(--text-muted)',
+            fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text-muted)',
             fontVariantNumeric: 'tabular-nums',
           }}
         >
@@ -536,17 +553,15 @@ function ChannelCell({
       title={live ? `Watch ${channel.name} full screen` : `Preview ${channel.name}`}
       style={{
         width: CHANNEL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 4,
-        display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-        padding: '0 var(--sp-3)', textAlign: 'left', cursor: 'pointer',
-        background: active ? 'var(--surface-hover)' : 'var(--bg-elevated)',
-        borderRight: '1px solid var(--border)',
-        borderBottom: '1px solid var(--border)',
-        borderTop: 'none', borderLeft: 'none', color: 'inherit',
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '0 12px 0 8px', textAlign: 'left', cursor: 'pointer',
+        background: active ? 'var(--surface-hover)' : 'var(--surface)',
+        border: 'none', borderRadius: '0 var(--r-md) var(--r-md) 0', color: 'inherit',
       }}
     >
       <span
         style={{
-          width: 34, textAlign: 'right', fontSize: 'var(--fs-sm)',
+          width: 30, textAlign: 'right', fontSize: 'var(--fs-xs)',
           color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums', fontWeight: 700,
         }}
       >
@@ -562,18 +577,10 @@ function ChannelCell({
           }}
         />
       )}
-      {channel.logo && (
-        <img
-          src={channel.logo} alt=""
-          style={{
-            width: 30, height: 30, borderRadius: 'var(--r-sm)', objectFit: 'cover',
-            flexShrink: 0,
-          }}
-        />
-      )}
+      <LogoTile name={channel.name} number={channel.number} logo={channel.logo} size={40} />
       <span
         style={{
-          fontSize: 'var(--fs-sm)', fontWeight: 600, overflow: 'hidden',
+          fontSize: 'var(--fs-md)', fontWeight: 800, overflow: 'hidden',
           textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}
       >
@@ -623,17 +630,6 @@ function ChannelSources({
   );
 }
 
-/** Genre colour coding with a legend (README §7.1). */
-function genreTone(categories: string[]): string {
-  const c = categories.map((x) => x.toLowerCase()).join(' ');
-  if (c.includes('sport')) return 'color-mix(in srgb, #22c55e 18%, var(--surface))';
-  if (c.includes('movie') || c.includes('film')) return 'color-mix(in srgb, #a855f7 18%, var(--surface))';
-  if (c.includes('news')) return 'color-mix(in srgb, #3b82f6 18%, var(--surface))';
-  if (c.includes('kid')) return 'color-mix(in srgb, #f59e0b 18%, var(--surface))';
-  if (c.includes('document')) return 'color-mix(in srgb, #14b8a6 18%, var(--surface))';
-  return 'var(--surface)';
-}
-
 function ProgrammeRow({
   channel, programmes, from, to, now, selectedId, recordingKeys, onSelect, onTune,
 }: {
@@ -654,7 +650,6 @@ function ProgrammeRow({
     <div
       style={{
         position: 'relative', flex: 1, height: ROW_H,
-        borderBottom: '1px solid var(--border)',
       }}
     >
       {/* A channel with no guide for this window used to be an empty strip, and a
@@ -666,10 +661,10 @@ function ProgrammeRow({
       {visible.length === 0 && (
         <div
           style={{
-            position: 'absolute', inset: '3px 2px 6px 2px',
+            position: 'absolute', inset: '4px 4px 4px 2px',
             display: 'flex', alignItems: 'center', paddingLeft: 'var(--sp-3)',
-            borderRadius: 'var(--r-sm)',
-            border: '1px dashed var(--border)',
+            borderRadius: 'var(--r-md)',
+            border: '2px dashed var(--border)',
             color: 'var(--text-faint)', fontSize: 'var(--fs-sm)',
           }}
         >
@@ -693,20 +688,27 @@ function ProgrammeRow({
             onDoubleClick={onTune}
             title={`${p.title} · ${clockTime(p.start)}–${clockTime(p.stop)}`}
             style={{
-              position: 'absolute', left, width: width - 2, top: 3, height: ROW_H - 9,
+              position: 'absolute', left: left + 2, width: width - 4, top: 4,
+              height: ROW_H - 8,
               display: 'flex', flexDirection: 'column', justifyContent: 'center',
-              alignItems: 'flex-start', gap: 2, overflow: 'hidden',
-              padding: '0 var(--sp-3)', textAlign: 'left', cursor: 'pointer',
-              background: genreTone(p.categories),
-              border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
-              boxShadow: isSelected ? '0 0 0 1px var(--accent)' : 'none',
-              borderRadius: 'var(--r-sm)', color: 'var(--text)',
+              alignItems: 'flex-start', gap: 0, overflow: 'hidden',
+              padding: '0 12px', textAlign: 'left', cursor: 'pointer', lineHeight: 1.3,
+              // Daylight: the airing slot is white, everything else a sunk pill, and the
+              // selected programme is the accent.
+              background: isSelected
+                ? 'var(--accent)'
+                : airing ? 'var(--surface)' : 'var(--surface-sunk)',
+              border: 'none',
+              // The white slot needs an edge on the white panel.
+              boxShadow: airing && !isSelected ? 'inset 0 0 0 1.5px var(--border-strong)' : 'none',
+              borderRadius: 'var(--r-md)',
+              color: isSelected ? 'var(--accent-text)' : 'var(--text)',
               opacity: p.stop < now ? 0.45 : 1,
             }}
           >
             <span
               style={{
-                fontSize: 'var(--fs-sm)', fontWeight: 650, whiteSpace: 'nowrap',
+                fontSize: 'var(--fs-sm)', fontWeight: 800, whiteSpace: 'nowrap',
                 overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
                 display: 'flex', alignItems: 'center', gap: 5,
               }}
@@ -728,7 +730,9 @@ function ProgrammeRow({
             {width > 110 && (
               <span
                 style={{
-                  fontSize: 'var(--fs-xs)', color: 'var(--text-faint)',
+                  fontSize: 'var(--fs-xs)', fontWeight: 700,
+                  color: isSelected ? 'var(--accent-text)' : 'var(--text-faint)',
+                  opacity: isSelected ? 0.85 : 1,
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   maxWidth: '100%',
                 }}
@@ -741,9 +745,10 @@ function ProgrammeRow({
               <div
                 aria-hidden
                 style={{
-                  position: 'absolute', left: 0, bottom: 0, height: 2,
+                  position: 'absolute', left: 0, bottom: 0, height: 3,
                   width: `${((now - p.start) / (p.stop - p.start)) * 100}%`,
-                  background: 'var(--live)',
+                  background: isSelected ? 'var(--accent-text)' : 'var(--accent)',
+                  opacity: 0.6,
                 }}
               />
             )}
@@ -790,8 +795,9 @@ function PreviewPane({
   return (
     <div
       style={{
-        borderBottom: '1px solid var(--border)',
         background: 'var(--bg-elevated)',
+        borderRadius: 'var(--r-xl)', overflow: 'hidden',
+        boxShadow: 'var(--shadow-1)',
         // The panel's background stops at the picture: see the box below.
         display: 'grid',
       }}
@@ -806,7 +812,7 @@ function PreviewPane({
           // Transparent while the picture is live, because the surface is behind the
           // page and anything painted here is painted over it. Black otherwise, so an
           // empty box reads as a screen rather than as a gap in the layout.
-          background: live ? 'transparent' : '#000',
+          background: live ? 'transparent' : 'var(--player-bg)',
           overflow: 'hidden',
         }}
       >
@@ -853,13 +859,13 @@ function PreviewPane({
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-          padding: 'var(--sp-3)', minHeight: 56,
+          padding: '12px 16px', minHeight: 64,
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              fontWeight: 700, fontSize: 'var(--fs-sm)',
+              fontWeight: 800, fontSize: 'var(--fs-md)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}
           >
@@ -906,9 +912,10 @@ function InfoPane({
   if (!selected) {
     return (
       <div
+        className="dl-panel"
         style={{
-          padding: 'var(--sp-5)', color: 'var(--text-faint)',
-          fontSize: 'var(--fs-sm)', lineHeight: 1.6,
+          padding: 20, color: 'var(--text-muted)',
+          fontSize: 'var(--fs-sm)', lineHeight: 1.6, fontWeight: 600,
         }}
       >
         Select a programme to see details, or double-click it to watch that channel.
@@ -928,7 +935,10 @@ function InfoPane({
   const rule = dvr.ruleFor(prog);
 
   return (
-    <div style={{ padding: 'var(--sp-4)', overflowY: 'auto', flex: 1 }}>
+    <div
+      className="dl-panel"
+      style={{ padding: 20, overflowY: 'auto', flex: 1, minHeight: 0 }}
+    >
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 'var(--sp-3)' }}>
         {prog.isNew && <Badge tone="new">New</Badge>}
         {prog.isLive && <Badge tone="live">Live</Badge>}
@@ -937,7 +947,10 @@ function InfoPane({
         {ch.quality && <Badge tone="neutral">{ch.quality}</Badge>}
       </div>
 
-      <h2 style={{ margin: '0 0 4px', fontSize: 'var(--fs-lg)', fontWeight: 700 }}>
+      <h2
+        className="dl-display"
+        style={{ margin: '0 0 6px', fontSize: 'var(--fs-2xl)', color: 'var(--text)' }}
+      >
         {prog.title}
       </h2>
       {prog.subTitle && (
