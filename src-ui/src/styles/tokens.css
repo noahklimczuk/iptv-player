@@ -1,119 +1,223 @@
 /* Design tokens — README §12. One source of truth; themes redefine the same names.
    The page background is transparent by design: on Windows the mpv video surface sits
-   behind the WebView2 and must show through (docs/ARCHITECTURE.md). */
+   behind the WebView2 and must show through (docs/ARCHITECTURE.md).
+
+   Direction: Daylight — bold, light and tactile. Its values are the `light` theme,
+   which is the default for new installs; `dark` and `oled` are Daylight on ink, and
+   `contrast` stays black, white and a yellow focus ring. */
+
+@import '@fontsource-variable/manrope/wght.css';
+@import '@fontsource-variable/bricolage-grotesque/wght.css';
 
 :root {
   /* Spacing — 8px scale */
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
   --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
 
-  /* Type scale */
-  --fs-xs: 12px; --fs-sm: 14px; --fs-md: 16px; --fs-lg: 20px;
-  --fs-xl: 24px; --fs-2xl: 32px; --fs-3xl: 48px; --fs-4xl: 64px;
+  /* Type */
+  --font-ui: 'Manrope Variable', 'Manrope', 'Segoe UI Variable Text', 'Segoe UI',
+             system-ui, -apple-system, sans-serif;
+  --font-display: 'Bricolage Grotesque Variable', 'Bricolage Grotesque',
+                  'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  --tracking-display: -0.04em;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 15px; --fs-lg: 17px;
+  --fs-xl: 20px; --fs-2xl: 26px; --fs-3xl: 44px; --fs-4xl: 68px;
 
-  /* Radii */
-  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-xl: 20px; --r-full: 999px;
+  /* Radii — chips/inputs 14, buttons 18, cards 24, the nav pill 28 */
+  --r-sm: 8px; --r-md: 14px; --r-lg: 18px; --r-xl: 24px; --r-pill: 28px;
+  --r-full: 999px;
 
   /* Motion — nothing exceeds 320ms (README §12) */
   --t-fast: 120ms; --t-base: 200ms; --t-slow: 320ms; --t-slower: 500ms;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Presses only, and never past a 1.04 scale. */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  /* Elevation */
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-2: 0 4px 12px rgb(0 0 0 / 0.45);
-  --shadow-3: 0 12px 32px rgb(0 0 0 / 0.55);
-  --shadow-4: 0 24px 64px rgb(0 0 0 / 0.65);
+  /* Artwork hues — placeholders and channel tiles with no logo cycle through these. */
+  --art-1: #2B4BFF; --art-2: #FF5A36; --art-3: #14A37F;
+  --art-4: #FFB020; --art-5: #7B3FF2; --art-6: #E8417C; --art-7: #0F8BD6;
+  /* Type set on artwork hues. */
+  --on-art: #FFFFFF;
+  /* Ink type on a paper-coloured control that sits on artwork. */
+  --text-on-light: #16161A;
+
+  /* The player is always dark, whatever the theme: its chrome is fixed. */
+  --player-bg:        #141826;
+  --player-scrim-top: linear-gradient(to bottom, rgb(10 12 20 / 0.55), transparent);
+  --player-scrim-bottom: linear-gradient(to top, rgb(10 12 20 / 0.7), transparent);
+  --player-chip:      rgb(255 255 255 / 0.14);
+  --player-chip-text: #ffffff;
+  --dock-bg:          #ffffff;
+  --dock-text:        #16161A;
+  --dock-muted:       #5E5E66;
+  --dock-btn:         #F4F3EF;
+  --dock-btn-hover:   #E9E7E0;
+  --dock-ink:         #16161A;
+  --dock-track:       #ECEAE3;
+  --dock-buffer:      #C9D2FF;
+  --shadow-dock:      0 24px 60px rgb(0 0 0 / 0.35);
 
   /* Layout */
-  /* Height the floating nav pill occupies, plus the air under it: what the content
-     pane keeps clear so its last row is not hidden behind the nav. */
-  --navpill-space: 96px;
-  --topbar-h: 64px;
+  /* Height the floating nav pill occupies (72px) plus the 20px under it and a little
+     air: what every scroll container keeps clear so its last row is not hidden. */
+  --navpill-space: 104px;
+  --navpill-h: 72px;
+  --topbar-h: 76px;
   --guide-channel-w: 220px;
-  --guide-row-h: 64px;
+  --guide-row-h: 56px;
   --guide-px-per-min: 6px;
 }
 
-/* Dark (default) */
-:root, :root[data-theme='dark'] {
-  --bg:            #0b0b0f;
-  --bg-elevated:   #14141b;
-  --surface:       #1b1b24;
-  --surface-hover: #24242f;
-  --surface-sunk:  #0e0e13;
-  --border:        #2a2a36;
-  --border-strong: #3d3d4d;
+/* Daylight — light, and the default for new installs */
+:root, :root[data-theme='light'] {
+  --bg:            #F4F3EF;
+  --bg-elevated:   #FFFFFF;
+  --surface:       #FFFFFF;
+  --surface-hover: #F0EEE8;
+  --surface-sunk:  #E9E7E0;
+  --border:        #ECEAE3;
+  --border-strong: #D9D6CC;
 
-  --text:          #f4f4f6;
-  --text-muted:    #a1a1b0;
-  --text-faint:    #6e6e80;
-  --text-invert:   #0b0b0f;
+  --text:          #16161A;
+  --text-muted:    #5E5E66;
+  --text-faint:    #6A6A72;
+  --text-invert:   #FFFFFF;
 
-  --accent:        #7c5cff;
-  --accent-hover:  #9179ff;
-  --accent-sunk:   #5b3fe0;
-  --accent-text:   #ffffff;
-  --accent-2:      #2dd4bf;
+  --accent:        #2B4BFF;
+  --accent-hover:  #4561FF;
+  --accent-sunk:   #1F3AE0;
+  --accent-soft:   #E3E8FF;
+  --accent-text:   #FFFFFF;
+  --accent-2:      #14A37F;
 
-  --live:          #ef4444;
-  --success:       #34d399;
-  --warning:       #fbbf24;
-  --danger:        #f87171;
+  --live:          #FF5A36;
+  --live-text:     #FFFFFF;
+  --success:       #14A37F;
+  --success-text:  #FFFFFF;
+  --warning:       #FFB020;
+  --danger:        #E5482A;
+  --danger-soft:   #FFE9E3;
+  --danger-border: #FFC4B5;
 
-  --scrim: linear-gradient(to top, rgb(11 11 15) 0%, rgb(11 11 15 / 0.75) 30%, transparent 75%);
-  --scrim-side: linear-gradient(to right, rgb(11 11 15) 0%, rgb(11 11 15 / 0.85) 35%, transparent 80%);
+  /* The nav pill is a solid ink capsule in every Daylight theme. */
+  --nav-bg:          #16161A;
+  --nav-text:        #C9C9CF;
+  --nav-active-bg:   #F4F3EF;
+  --nav-active-text: #16161A;
+
+  --shadow-1: 0 1px 0 #E2E0D8;
+  --shadow-2: 0 1px 0 #E2E0D8, 0 8px 20px rgb(22 22 26 / 0.06);
+  --shadow-3: 0 18px 44px rgb(22 22 26 / 0.14);
+  --shadow-4: 0 30px 80px rgb(22 22 26 / 0.22);
+
+  /* Over artwork the scrim is always ink, so white type reads on any poster. */
+  --scrim: linear-gradient(to top, rgb(22 22 26 / 0.82) 0%, rgb(22 22 26 / 0.45) 35%, transparent 70%);
+  --scrim-side: linear-gradient(to right, rgb(22 22 26 / 0.85) 0%, rgb(22 22 26 / 0.5) 40%, transparent 80%);
+  --scrim-dialog: rgb(22 22 26 / 0.35);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--accent);
 }
 
-/* OLED true black */
+/* Daylight on ink */
+:root[data-theme='dark'] {
+  --bg:            #16161A;
+  --bg-elevated:   #202026;
+  --surface:       #202026;
+  --surface-hover: #2A2A31;
+  --surface-sunk:  #0F0F12;
+  --border:        #2C2C34;
+  --border-strong: #3E3E48;
+
+  --text:          #F4F3EF;
+  --text-muted:    #A9A9B2;
+  --text-faint:    #8B8B95;
+  --text-invert:   #16161A;
+
+  --accent-soft:   #232A55;
+  --danger-soft:   #3A1F19;
+  --danger-border: #7A3626;
+
+  --nav-bg:          #000000;
+  --nav-text:        #B5B5BD;
+  --nav-active-bg:   #F4F3EF;
+  --nav-active-text: #16161A;
+
+  --shadow-1: 0 1px 0 rgb(0 0 0 / 0.5);
+  --shadow-2: 0 1px 0 rgb(0 0 0 / 0.5), 0 8px 20px rgb(0 0 0 / 0.35);
+  --shadow-3: 0 18px 44px rgb(0 0 0 / 0.5);
+  --shadow-4: 0 30px 80px rgb(0 0 0 / 0.6);
+  --scrim-dialog: rgb(0 0 0 / 0.55);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--accent);
+}
+
+/* OLED — Daylight on true black */
 :root[data-theme='oled'] {
-  --bg: #000000; --bg-elevated: #0a0a0a; --surface: #101010;
-  --surface-hover: #1a1a1a; --surface-sunk: #000000;
-  --border: #222222; --border-strong: #333333;
-  --scrim: linear-gradient(to top, #000 0%, rgb(0 0 0 / 0.75) 30%, transparent 75%);
-  --scrim-side: linear-gradient(to right, #000 0%, rgb(0 0 0 / 0.85) 35%, transparent 80%);
-}
+  --bg:            #000000;
+  --bg-elevated:   #16161A;
+  --surface:       #16161A;
+  --surface-hover: #202026;
+  --surface-sunk:  #000000;
+  --border:        #222228;
+  --border-strong: #34343C;
 
-/* Light */
-:root[data-theme='light'] {
-  --bg:            #f7f7fa;
-  --bg-elevated:   #ffffff;
-  --surface:       #ffffff;
-  --surface-hover: #eeeef3;
-  --surface-sunk:  #e8e8ef;
-  --border:        #dcdce5;
-  --border-strong: #b9b9c8;
+  --text:          #F4F3EF;
+  --text-muted:    #A9A9B2;
+  --text-faint:    #8B8B95;
+  --text-invert:   #16161A;
 
-  --text:          #14141b;
-  --text-muted:    #55556a;
-  --text-faint:    #8a8a9e;
-  --text-invert:   #ffffff;
+  --accent-soft:   #1C2246;
+  --danger-soft:   #2E1712;
+  --danger-border: #6A2E20;
 
-  --accent:        #5b3fe0;
-  --accent-hover:  #4a31c4;
-  --accent-sunk:   #3d28a8;
+  --nav-bg:          #16161A;
+  --nav-text:        #B5B5BD;
+  --nav-active-bg:   #F4F3EF;
+  --nav-active-text: #16161A;
 
-  --scrim: linear-gradient(to top, rgb(247 247 250) 0%, rgb(247 247 250 / 0.8) 30%, transparent 75%);
-  --scrim-side: linear-gradient(to right, rgb(247 247 250) 0%, rgb(247 247 250 / 0.85) 35%, transparent 80%);
+  --shadow-1: 0 0 0 1px #222228;
+  --shadow-2: 0 0 0 1px #222228;
+  --shadow-3: 0 18px 44px rgb(0 0 0 / 0.7);
+  --shadow-4: 0 30px 80px rgb(0 0 0 / 0.8);
+  --scrim: linear-gradient(to top, #000 0%, rgb(0 0 0 / 0.6) 35%, transparent 70%);
+  --scrim-side: linear-gradient(to right, #000 0%, rgb(0 0 0 / 0.6) 40%, transparent 80%);
+  --scrim-dialog: rgb(0 0 0 / 0.7);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--accent);
 }
 
-/* High contrast */
+/* High contrast — pure black and white, a yellow focus ring (WCAG AAA-ish) */
 :root[data-theme='contrast'] {
   --bg: #000000; --bg-elevated: #000000; --surface: #000000;
-  --surface-hover: #1f1f1f; --border: #ffffff; --border-strong: #ffffff;
-  --text: #ffffff; --text-muted: #ffffff; --text-faint: #e0e0e0;
-  --accent: #ffdd00; --accent-hover: #ffe84d; --accent-text: #000000;
+  --surface-hover: #1f1f1f; --surface-sunk: #000000;
+  --border: #ffffff; --border-strong: #ffffff;
+  --text: #ffffff; --text-muted: #ffffff; --text-faint: #e0e0e0; --text-invert: #000000;
+  --accent: #ffdd00; --accent-hover: #ffe84d; --accent-sunk: #e6c700;
+  --accent-soft: #000000; --accent-text: #000000; --accent-2: #ffdd00;
+  --live: #ffffff; --live-text: #000000;
+  --success: #ffffff; --success-text: #000000;
+  --danger: #ffffff; --danger-soft: #000000; --danger-border: #ffffff;
+  --nav-bg: #000000; --nav-text: #ffffff;
+  --nav-active-bg: #ffdd00; --nav-active-text: #000000;
+  --shadow-1: 0 0 0 1px #ffffff; --shadow-2: 0 0 0 1px #ffffff;
+  --shadow-3: 0 0 0 2px #ffffff; --shadow-4: 0 0 0 2px #ffffff;
+  --scrim: linear-gradient(to top, #000 0%, rgb(0 0 0 / 0.85) 40%, transparent 80%);
+  --scrim-side: linear-gradient(to right, #000 0%, rgb(0 0 0 / 0.85) 40%, transparent 80%);
+  --scrim-dialog: rgb(0 0 0 / 0.85);
+  --dock-bg: #000000; --dock-text: #ffffff; --dock-muted: #ffffff;
+  --dock-btn: #000000; --dock-btn-hover: #1f1f1f; --dock-ink: #ffdd00;
+  --dock-track: #555555; --dock-buffer: #999999;
+  --shadow-dock: 0 0 0 2px #ffffff;
+  --player-chip: #000000;
+  --art-1: #1f1f1f; --art-2: #1f1f1f; --art-3: #1f1f1f; --art-4: #1f1f1f;
+  --art-5: #1f1f1f; --art-6: #1f1f1f; --art-7: #1f1f1f;
   --focus-ring: 0 0 0 3px #000, 0 0 0 7px #ffdd00;
 }
 
 /* TV mode — 10-foot UI (README §12). Scales the whole system up. */
 :root[data-density='tv'] {
-  --fs-xs: 15px; --fs-sm: 18px; --fs-md: 21px; --fs-lg: 26px;
-  --fs-xl: 32px; --fs-2xl: 42px; --fs-3xl: 60px; --fs-4xl: 80px;
-  --navpill-space: 124px; --topbar-h: 88px;
-  --guide-channel-w: 300px; --guide-row-h: 88px;
+  --fs-xs: 15px; --fs-sm: 17px; --fs-md: 19px; --fs-lg: 22px;
+  --fs-xl: 26px; --fs-2xl: 34px; --fs-3xl: 56px; --fs-4xl: 88px;
+  --navpill-space: 132px; --navpill-h: 92px; --topbar-h: 96px;
+  --guide-channel-w: 300px; --guide-row-h: 80px;
 }
 
 @media (prefers-reduced-motion: reduce) {

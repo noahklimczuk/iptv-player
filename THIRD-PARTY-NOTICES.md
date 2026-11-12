@@ -612,6 +612,17 @@ Only the runtime dependencies are listed: the build tooling is not shipped.
 | `react-router-dom` | MIT |
 | `zustand` | MIT |
 
+### Typefaces
+
+Bundled into the UI so the app renders the same offline. Both are under the **SIL Open
+Font License, version 1.1**; the full text ships with each package and is at
+`licenses/OFL-1.1.txt`.
+
+| Package | Copyright | Licence |
+|---|---|---|
+| `@fontsource-variable/manrope` | 2019 The Manrope Project Authors | OFL-1.1 |
+| `@fontsource-variable/bricolage-grotesque` | 2022 The Bricolage Grotesque Project Authors | OFL-1.1 |
+
 ---
 
 ## Regenerating this file

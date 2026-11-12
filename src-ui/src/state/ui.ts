@@ -133,7 +133,8 @@ const saved = loadAppearance();
 
 /** The initial appearance: what was chosen last time, or what the machine implies. */
 const initialAppearance: SavedAppearance = {
-  theme: saved.theme ?? 'dark',
+  // Daylight (`light`) for new installs; a viewer who chose a theme keeps it.
+  theme: saved.theme ?? 'light',
   density: saved.density ?? 'desktop',
   animations:
     saved.animations ?? !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,

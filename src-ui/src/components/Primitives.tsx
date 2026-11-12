@@ -10,13 +10,13 @@ import { Icon, type IconName } from './Icon';
 
 /* ── Button ───────────────────────────────────────────────────────────────── */
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type Variant = 'primary' | 'secondary' | 'ghost' | 'outline' | 'danger';
 type Size = 'sm' | 'md' | 'lg';
 
 const SIZES: Record<Size, CSSProperties> = {
-  sm: { height: 32, padding: '0 12px', fontSize: 'var(--fs-sm)', gap: 6 },
-  md: { height: 40, padding: '0 18px', fontSize: 'var(--fs-md)', gap: 8 },
-  lg: { height: 50, padding: '0 28px', fontSize: 'var(--fs-lg)', gap: 10 },
+  sm: { height: 36, padding: '0 14px', fontSize: 'var(--fs-sm)', gap: 6 },
+  md: { height: 44, padding: '0 20px', fontSize: 'var(--fs-md)', gap: 8 },
+  lg: { height: 52, padding: '0 26px', fontSize: 'var(--fs-lg)', gap: 10 },
 };
 
 export function Button({
@@ -31,8 +31,9 @@ export function Button({
   const base: CSSProperties = {
     ...SIZES[size],
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    border: '1px solid transparent', borderRadius: 'var(--r-md)',
-    fontWeight: 600, whiteSpace: 'nowrap',
+    border: '2px solid transparent',
+    borderRadius: size === 'lg' ? 'var(--r-lg)' : 'var(--r-md)',
+    fontWeight: 750, whiteSpace: 'nowrap',
     // A disabled control must not look clickable.
     cursor: rest.disabled ? 'not-allowed' : 'pointer',
     opacity: rest.disabled ? 0.45 : 1,
@@ -40,14 +41,14 @@ export function Button({
                  border-color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease)`,
   };
   const variants: Record<Variant, CSSProperties> = {
-    primary: { background: 'var(--text)', color: 'var(--text-invert)' },
+    primary: { background: 'var(--accent)', color: 'var(--accent-text)' },
     secondary: {
-      background: 'color-mix(in srgb, var(--surface) 78%, transparent)',
-      color: 'var(--text)', borderColor: 'var(--border)',
-      backdropFilter: 'blur(12px)',
+      background: 'var(--surface)', color: 'var(--text)',
+      boxShadow: 'var(--shadow-1)',
     },
     ghost: { background: 'transparent', color: 'var(--text-muted)' },
-    danger: { background: 'var(--danger)', color: '#fff' },
+    outline: { background: 'transparent', color: 'var(--text)', borderColor: 'var(--text)' },
+    danger: { background: 'var(--danger)', color: 'var(--text-invert)' },
   };
   return (
     <button
@@ -77,11 +78,9 @@ export function IconButton({
       title={label}
       style={{
         width: size, height: size, display: 'grid', placeItems: 'center',
-        borderRadius: 'var(--r-full)',
-        border: `1px solid ${active ? 'var(--text)' : 'var(--border-strong)'}`,
-        background: active
-          ? 'var(--text)'
-          : 'color-mix(in srgb, var(--surface) 70%, transparent)',
+        borderRadius: size >= 44 ? 'var(--r-md)' : 'var(--r-sm)',
+        border: 'none',
+        background: active ? 'var(--text)' : 'var(--surface-sunk)',
         color: active ? 'var(--text-invert)' : 'var(--text)',
         // The same treatment `Button` above gives it. This hardcoded `pointer` and full
         // opacity, so a disabled icon button looked and felt enabled while doing
@@ -89,7 +88,6 @@ export function IconButton({
         // and why the next one to need it would not have thought to check (R-116).
         cursor: rest.disabled ? 'not-allowed' : 'pointer',
         opacity: rest.disabled ? 0.45 : 1,
-        backdropFilter: 'blur(12px)',
         transition: 'all var(--t-fast) var(--ease)',
         ...rest.style,
       }}
@@ -109,22 +107,22 @@ export function Badge({
   style?: CSSProperties;
 }) {
   const tones: Record<string, CSSProperties> = {
-    neutral: { background: 'var(--surface)', color: 'var(--text-muted)' },
+    neutral: { background: 'var(--surface-sunk)', color: 'var(--text)' },
     accent: { background: 'var(--accent)', color: 'var(--accent-text)' },
-    live: { background: 'var(--live)', color: '#fff' },
-    new: { background: 'var(--success)', color: '#04140d' },
+    live: { background: 'var(--live)', color: 'var(--live-text)' },
+    new: { background: 'var(--success)', color: 'var(--success-text)' },
     outline: {
       background: 'transparent', color: 'var(--text-muted)',
-      border: '1px solid var(--border-strong)',
+      border: '1.5px solid var(--border-strong)',
     },
   };
   return (
     <span
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
-        padding: '2px 7px', borderRadius: 'var(--r-sm)',
-        fontSize: 'var(--fs-xs)', fontWeight: 700, letterSpacing: '0.03em',
-        lineHeight: 1.5, textTransform: 'uppercase',
+        padding: '3px 9px', borderRadius: 'var(--r-full)',
+        fontSize: 'var(--fs-xs)', fontWeight: 800, letterSpacing: '0.01em',
+        lineHeight: 1.4, textTransform: tone === 'live' ? 'uppercase' : 'none',
         ...tones[tone], ...style,
       }}
     >
@@ -148,7 +146,7 @@ export function Badge({
  * rather than an oversight.
  */
 export function ProgressBar({
-  percent, height = 3, label,
+  percent, height = 4, label,
 }: {
   percent: number;
   height?: number;
@@ -158,7 +156,7 @@ export function ProgressBar({
   return (
     <div
       style={{
-        height, width: '100%', background: 'color-mix(in srgb, var(--text) 22%, transparent)',
+        height, width: '100%', background: 'color-mix(in srgb, var(--text) 11%, transparent)',
         borderRadius: 'var(--r-full)', overflow: 'hidden',
       }}
       {...(label
@@ -200,13 +198,16 @@ export function EmptyState({
     >
       <div
         style={{
-          width: 56, height: 56, borderRadius: 'var(--r-full)', display: 'grid',
-          placeItems: 'center', background: 'var(--surface)', color: 'var(--accent)',
+          width: 64, height: 64, borderRadius: 'var(--r-lg)', display: 'grid',
+          placeItems: 'center', background: 'var(--accent-soft)', color: 'var(--accent)',
         }}
       >
         <Icon name={icon} size={26} />
       </div>
-      <div style={{ fontSize: 'var(--fs-lg)', fontWeight: 650, color: 'var(--text)' }}>
+      <div
+        className="dl-display"
+        style={{ fontSize: 'var(--fs-xl)', color: 'var(--text)' }}
+      >
         {title}
       </div>
       {body && <div style={{ maxWidth: 440, fontSize: 'var(--fs-sm)' }}>{body}</div>}
@@ -217,15 +218,17 @@ export function EmptyState({
 
 /** Artwork with a coloured placeholder and fade-in — no layout shift (README §12). */
 export function Poster({
-  src, alt, radius = 'var(--r-md)', ratio = 2 / 3,
+  src, alt, radius = 'var(--r-xl)', ratio = 2 / 3,
 }: { src: string | null; alt: string; radius?: string; ratio?: number }) {
   // From disk when the cache holds it, from the provider when it does not.
   const resolved = useAssetSrc(src);
+  const hue = artHue(alt);
   return (
     <div
       style={{
         position: 'relative', width: '100%', aspectRatio: String(ratio),
-        background: 'var(--surface)', borderRadius: radius, overflow: 'hidden',
+        background: resolved ? 'var(--surface-sunk)' : hue, borderRadius: radius,
+        overflow: 'hidden',
       }}
     >
       {resolved ? (
@@ -238,13 +241,62 @@ export function Poster({
         <div
           style={{
             display: 'grid', placeItems: 'center', height: '100%',
-            color: 'var(--text-faint)', fontSize: 'var(--fs-2xl)', fontWeight: 800,
+            color: 'var(--on-art)', fontSize: 'var(--fs-3xl)',
+            fontFamily: 'var(--font-display)', fontWeight: 800,
           }}
         >
           {alt.slice(0, 1).toUpperCase()}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * One of the Daylight artwork hues, picked stably from a name.
+ *
+ * What a poster, a channel tile or a placeholder shows while it has no artwork: the same
+ * title always gets the same colour, so a grid of missing posters is still a grid of
+ * different things rather than a wall of grey.
+ */
+export function artHue(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return `var(--art-${(Math.abs(h) % 7) + 1})`;
+}
+
+/**
+ * A channel's logo in a rounded square — Daylight's channel tile.
+ *
+ * With a logo, the artwork sits on a sunk tile so a transparent PNG keeps an edge; with
+ * none, the tile takes the channel's hue and carries its number, which is what a viewer
+ * zaps by anyway.
+ */
+export function ChannelTile({
+  name, number, logo, size = 48,
+}: { name: string; number: number | null; logo: string | null; size?: number }) {
+  const resolved = useAssetSrc(logo);
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: size, height: size, flexShrink: 0, display: 'grid', placeItems: 'center',
+        borderRadius: Math.round(size * 0.3), overflow: 'hidden',
+        background: resolved ? 'var(--surface-sunk)' : artHue(name),
+        color: 'var(--on-art)', fontWeight: 800,
+        fontSize: Math.round(size * 0.32), fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {resolved ? (
+        <img
+          src={resolved} alt="" loading="lazy" decoding="async"
+          onError={(e) => fallBackToRemote(e, logo)}
+          style={{ width: '78%', height: '78%', objectFit: 'contain' }}
+        />
+      ) : (
+        number ?? name.slice(0, 1).toUpperCase()
+      )}
+    </span>
   );
 }
 
@@ -271,12 +323,13 @@ export function Poster({
  * live.
  */
 export const FIELD: CSSProperties = {
-  padding: '7px 10px',
-  background: 'var(--surface)',
+  padding: '10px 14px',
+  background: 'var(--bg)',
   color: 'var(--text)',
-  border: '1px solid var(--border-strong)',
+  border: '1.5px solid transparent',
   borderRadius: 'var(--r-md)',
-  fontSize: 'var(--fs-sm)',
+  fontSize: 'var(--fs-md)',
+  fontWeight: 500,
   fontFamily: 'inherit',
   transition: 'border-color var(--t-fast) var(--ease)',
 };
@@ -297,7 +350,7 @@ export function TextField({
         <Icon
           name={icon} size={15}
           style={{
-            position: 'absolute', left: 10, color: 'var(--text-faint)',
+            position: 'absolute', left: 13, color: 'var(--text-faint)',
             pointerEvents: 'none',
           }}
         />
@@ -308,7 +361,7 @@ export function TextField({
         style={{
           ...FIELD,
           width: '100%',
-          padding: `7px ${clearable && hasValue ? 28 : 10}px 7px ${icon ? 30 : 10}px`,
+          padding: `10px ${clearable && hasValue ? 32 : 14}px 10px ${icon ? 36 : 14}px`,
           ...style,
         }}
       />
@@ -581,8 +634,8 @@ export function Select({
             position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 60,
             width, maxHeight: 340, overflowY: 'auto',
             background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-strong)',
-            borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-3)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-3)',
             padding: 'var(--sp-2)',
           }}
         >
@@ -693,14 +746,14 @@ function SelectRow({
         // current choice" can be true of different rows and both stay visible.
         boxShadow: cursored ? 'inset 0 0 0 2px var(--accent)' : 'none',
         display: 'flex', alignItems: 'center', width: '100%', textAlign: 'left',
-        padding: '7px 9px', borderRadius: 'var(--r-sm)', border: 'none',
+        padding: '9px 11px', borderRadius: 'var(--r-sm)', border: 'none',
         cursor: 'pointer', fontSize: 'var(--fs-sm)', whiteSpace: 'nowrap',
         background: active ? 'var(--surface-hover)' : 'transparent',
         color: active ? 'var(--text)' : 'var(--text-muted)',
         fontWeight: active ? 700 : 500,
         transition: 'background var(--t-fast) var(--ease)',
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg)'; }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = active ? 'var(--surface-hover)' : 'transparent';
       }}
