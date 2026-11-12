@@ -4,7 +4,7 @@
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import type { Channel } from '@shared/ipc';
-import { Badge } from '@/components/Primitives';
+import { Badge, ChannelTile, ProgressBar } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { progressPct } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
@@ -29,37 +29,45 @@ export function ChannelBanner({
       {channel && (
         <motion.div
           data-testid="channel-banner"
-          initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 30 }} transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+          initial={{ opacity: 0, y: liftForOsd ? -20 : 30 }} animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: liftForOsd ? -20 : 30 }}
+          transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
           style={{
-            position: 'fixed', left: 'var(--sp-6)', right: 'var(--sp-6)',
-            bottom: liftForOsd ? 148 : 'var(--sp-6)',
+            // Daylight: a white card like the player's own. Over the player it sits at
+            // the top centre, between the channel badge and the chips, where it cannot
+            // cover the On now card or the dock; elsewhere it is at the foot of the page.
+            position: 'fixed', left: 0, right: 0,
+            ...(liftForOsd ? { top: 24 } : { bottom: 'var(--sp-6)' }),
             zIndex: 160, pointerEvents: 'none',
-            background: 'rgb(8 8 12 / 0.9)', backdropFilter: 'blur(18px)',
-            border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
-            boxShadow: 'var(--shadow-4)', padding: 'var(--sp-4) var(--sp-5)',
-            display: 'grid', gridTemplateColumns: 'auto auto 1fr auto', gap: 'var(--sp-4)',
-            alignItems: 'center', maxWidth: 900, margin: '0 auto',
+            background: 'var(--dock-bg)', color: 'var(--dock-text)',
+            borderRadius: 26, boxShadow: 'var(--shadow-dock)',
+            padding: '14px 22px 14px 14px',
+            display: 'grid', gridTemplateColumns: 'auto auto 1fr auto', gap: 16,
+            alignItems: 'center', width: liftForOsd ? 'min(560px, 40vw)' : 'min(760px, 90vw)',
+            margin: '0 auto',
           }}
         >
+          <ChannelTile name={channel.name} number={channel.number} logo={channel.logo} size={52} />
           <div
+            className="dl-display"
             style={{
-              fontSize: 'var(--fs-2xl)', fontWeight: 900, color: 'var(--accent)',
+              fontSize: 'var(--fs-2xl)', color: 'var(--accent)',
               fontVariantNumeric: 'tabular-nums', lineHeight: 1,
             }}
           >
             {channel.number}
           </div>
-          {channel.logo && (
-            <img
-              src={channel.logo} alt=""
-              style={{ width: 52, height: 52, borderRadius: 'var(--r-md)', objectFit: 'cover' }}
-            />
-          )}
 
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-              <strong style={{ fontSize: 'var(--fs-lg)' }}>{channel.name}</strong>
+              <strong
+                style={{
+                  fontSize: 'var(--fs-lg)', fontWeight: 800, whiteSpace: 'nowrap',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                {channel.name}
+              </strong>
               {channel.quality && <Badge tone="neutral">{channel.quality}</Badge>}
               {data?.now?.isLive && <Badge tone="live">● Live</Badge>}
             </div>
@@ -81,25 +89,21 @@ export function ChannelBanner({
                 >
                   <span
                     style={{
-                      fontSize: 'var(--fs-xs)', color: 'var(--text-muted)',
+                      fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--dock-muted)',
                       fontVariantNumeric: 'tabular-nums',
                     }}
                   >
                     {clockTime(data.now.start)}–{clockTime(data.now.stop)}
                   </span>
-                  <div
-                    style={{
-                      flex: 1, maxWidth: 280, height: 3, background: 'var(--border)',
-                      borderRadius: 'var(--r-full)', overflow: 'hidden',
-                    }}
-                  >
-                    <div style={{ width: `${pct}%`, height: '100%', background: 'var(--live)' }} />
+                  <div style={{ flex: 1, maxWidth: 280 }}>
+                    <ProgressBar percent={pct} height={6} />
                   </div>
                 </div>
                 {data.next && (
                   <div
                     style={{
-                      marginTop: 5, fontSize: 'var(--fs-xs)', color: 'var(--text-faint)',
+                      marginTop: 5, fontSize: 'var(--fs-xs)', fontWeight: 700,
+                      color: 'var(--dock-muted)',
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                     }}
                   >
@@ -108,7 +112,7 @@ export function ChannelBanner({
                 )}
               </>
             ) : (
-              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
+              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--dock-muted)' }}>
                 No guide data for this channel
               </div>
             )}
@@ -116,7 +120,7 @@ export function ChannelBanner({
 
           <div
             style={{
-              fontSize: 'var(--fs-xl)', fontWeight: 700, color: 'var(--text-muted)',
+              fontSize: 'var(--fs-xl)', fontWeight: 800, color: 'var(--dock-text)',
               fontVariantNumeric: 'tabular-nums',
             }}
           >
@@ -141,10 +145,11 @@ export function DigitEntry({ digits }: { digits: string }) {
           aria-label={`Channel ${digits}`}
           style={{
             position: 'fixed', top: 'var(--sp-7)', right: 'var(--sp-7)', zIndex: 170,
-            background: 'rgb(8 8 12 / 0.92)', backdropFilter: 'blur(18px)',
-            border: '2px solid var(--accent)', borderRadius: 'var(--r-lg)',
-            padding: 'var(--sp-4) var(--sp-6)', boxShadow: 'var(--shadow-4)',
-            fontSize: 'var(--fs-3xl)', fontWeight: 900, letterSpacing: '0.12em',
+            background: 'var(--dock-bg)', color: 'var(--accent)',
+            border: 'none', borderRadius: 26,
+            padding: 'var(--sp-4) var(--sp-6)', boxShadow: 'var(--shadow-dock)',
+            fontFamily: 'var(--font-display)',
+            fontSize: 'var(--fs-3xl)', fontWeight: 800, letterSpacing: '0.12em',
             fontVariantNumeric: 'tabular-nums', pointerEvents: 'none',
           }}
         >

@@ -324,3 +324,28 @@ body {
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion='on']) .dl-press:active { transform: none; }
 }
+
+/* The dock's scrubber and volume: a 10px track, the played part blue, a pale strip for
+   what is buffered, and a white knob with a blue ring. `--fill` and `--buf` are set
+   inline from the value. */
+.dl-range {
+  -webkit-appearance: none; appearance: none;
+  height: 20px; margin: 0; background: transparent; cursor: pointer;
+  --fill: 0%; --buf: 0%;
+}
+.dl-range::-webkit-slider-runnable-track {
+  height: 10px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--accent) 0 var(--fill),
+    var(--dock-buffer) var(--fill) var(--buf),
+    var(--dock-track) var(--buf) 100%);
+}
+.dl-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; margin-top: -5px; border-radius: 50%;
+  background: var(--dock-bg); box-shadow: 0 0 0 4px var(--accent);
+  transition: transform var(--t-fast) var(--ease-spring);
+}
+.dl-range:active::-webkit-slider-thumb { transform: scale(1.04); }
+.dl-range:focus-visible { box-shadow: none; }
+.dl-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent), 0 0 0 7px var(--dock-buffer); }

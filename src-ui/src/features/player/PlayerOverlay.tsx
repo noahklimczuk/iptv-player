@@ -9,7 +9,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   Episode, PlayerState, SleepAfter, SleepState, TimeshiftWindow,
 } from '@shared/ipc';
-import { Badge, IconButton } from '@/components/Primitives';
+import { Badge, IconButton, artHue } from '@/components/Primitives';
+import { useCommand } from '@/hooks/useCommand';
+import type { NowNext } from '@/features/live/useNowNext';
 import { Icon } from '@/components/Icon';
 import { hasVideoSurface, invoke, onSleepState } from '@/ipc';
 import { notify, report } from '@/lib/errors';
@@ -323,6 +325,19 @@ export function PlayerOverlay({
   // `showingPicture`.
   const picture = showingPicture(player);
 
+  /*
+   * Now and next for the channel on screen, for the On now and Up next cards and the
+   * live scrubber's start and end. Asked again when the channel changes and once a
+   * minute, so a programme ending is noticed.
+   */
+  const minute = Math.floor(Date.now() / 60_000);
+  const { data: guide } = useCommand(
+    'epg.nowNext',
+    { channelId: player.channelId ?? 0 },
+    [player.channelId, minute],
+    player.isLive && player.channelId != null,
+  );
+
   return (
     // The keyboard half of this is the `keydown` listener above, on the window.
     //
@@ -351,7 +366,7 @@ export function PlayerOverlay({
         // The same held for a stream that failed, and for the moment after stopping.
         background: picture
           ? 'transparent'
-          : 'radial-gradient(ellipse at center, #10101a 0%, #05050a 100%)',
+          : 'var(--player-bg)',
         cursor: visible ? 'default' : 'none',
       }}
     >
@@ -377,7 +392,7 @@ export function PlayerOverlay({
         <div
           style={{
             position: 'absolute', top: '50%', left: '50%',
-            transform: 'translate(-50%, -50%)', color: 'var(--text)',
+            transform: 'translate(-50%, -50%)', color: 'var(--player-chip-text)',
           }}
         >
           Buffering…
@@ -424,43 +439,45 @@ export function PlayerOverlay({
       <AnimatePresence>
         {visible && (
           <>
+            {/* Daylight's player is always dark: the chrome sits on a scrim that is dark
+                at the top and bottom edges and clear in the middle, and fades with it. */}
+            <motion.div
+              aria-hidden
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              style={{
+                position: 'absolute', inset: 0, pointerEvents: 'none',
+                background: 'var(--player-scrim-top) top / 100% 28% no-repeat, var(--player-scrim-bottom) bottom / 100% 42% no-repeat',
+              }}
+            />
+
             <motion.div
               data-osd-chrome=""
               initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -16 }} transition={{ duration: 0.18 }}
               style={{
-                position: 'absolute', top: 0, left: 0, right: 0,
-                padding: 'var(--sp-4) var(--sp-5)',
+                position: 'absolute', top: 24, left: 28, right: 28,
                 display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-                background: 'linear-gradient(to bottom, rgb(0 0 0 / 0.75), transparent)',
               }}
             >
-              <IconButton icon="chevronLeft" label="Back" onClick={onClose} />
-              <div style={{ minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: 'var(--fs-lg)', fontWeight: 700, whiteSpace: 'nowrap',
-                    overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}
-                >
-                  {player.title ?? 'Nothing playing'}
-                </div>
-                {player.subtitle && (
-                  <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
-                    {player.subtitle}
-                  </div>
-                )}
-              </div>
-              {player.isLive && (
-                behind > 0
-                  ? <Badge tone="accent">↺ {duration(behind)} behind live</Badge>
-                  : <Badge tone="live">● Live</Badge>
-              )}
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              <IconButton
+                icon="chevronLeft" label="Back" onClick={onClose} size={48}
+                style={GLASS_BUTTON}
+              />
+              <ChannelBadge player={player} behind={behind} />
+              <div
+                style={{
+                  marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6,
+                  flexWrap: 'wrap', justifyContent: 'flex-end',
+                }}
+              >
+                <TrackChips player={player} />
                 <IconButton
                   icon="info" label="Playback stats"
                   active={showStats}
+                  size={34}
                   onClick={() => setShowStats((s) => !s)}
+                  style={showStats ? GLASS_ACTIVE : GLASS_BUTTON}
                 />
                 {/* Live only: there is nothing to schedule for a film, which is already
                     a file on the provider's disk rather than something going past. */}
@@ -468,7 +485,9 @@ export function PlayerOverlay({
                   <IconButton
                     icon="record"
                     label="Record what's on"
+                    size={34}
                     onClick={() => recordNow(player)}
+                    style={GLASS_BUTTON}
                   />
                 )}
               </div>
@@ -476,120 +495,132 @@ export function PlayerOverlay({
 
             {showStats && player.stats && <StatsOverlay stats={player.stats} />}
 
+            {player.isLive && player.channelId != null && (
+              <LiveCards channelId={player.channelId} title={player.title} guide={guide ?? null} />
+            )}
+
             <motion.div
               data-osd-chrome=""
               initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 24 }} transition={{ duration: 0.18 }}
               style={{
-                position: 'absolute', left: 0, right: 0, bottom: 0,
-                padding: 'var(--sp-5)',
-                background: 'linear-gradient(to top, rgb(0 0 0 / 0.9), transparent)',
+                // The dock: one white capsule, centred, with everything you press.
+                position: 'absolute', left: '50%', bottom: 28, translate: '-50% 0',
+                width: 'min(1040px, calc(100vw - 56px))',
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: 12, borderRadius: 30,
+                background: 'var(--dock-bg)', color: 'var(--dock-text)',
+                boxShadow: 'var(--shadow-dock)',
               }}
             >
-              <Scrubber player={player} />
-
-              <div
+              <IconButton
+                icon={playing ? 'pause' : 'play'} filled size={64}
+                label={playing ? 'Pause' : 'Play'}
+                onClick={() => invoke(playing ? 'player.pause' : 'player.resume')
+                  .catch(report('The player did not respond'))}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                  marginTop: 'var(--sp-3)',
+                  borderRadius: 22, background: 'var(--dock-ink)', color: 'var(--dock-bg)',
                 }}
-              >
-                <IconButton
-                  icon={playing ? 'pause' : 'play'} filled active size={46}
-                  label={playing ? 'Pause' : 'Play'}
-                  onClick={() => invoke(playing ? 'player.pause' : 'player.resume')
-                    .catch(report('The player did not respond'))}
-                />
-                {(!player.isLive || player.timeshift) && (
-                  <>
-                    <IconButton
-                      icon="back10" label="Back 10 seconds"
-                      onClick={() => invoke('player.seek', { positionSecs: -10, relative: true })
-                        .catch(report('Could not seek'))}
-                    />
-                    <IconButton
-                      icon="forward10" label="Forward 10 seconds"
-                      onClick={() => invoke('player.seek', { positionSecs: 10, relative: true })
-                        .catch(report('Could not seek'))}
-                    />
-                  </>
-                )}
-                {nextEpisode && onPlayNext && (
+              />
+              {(!player.isLive || player.timeshift) && (
+                <>
                   <IconButton
-                    icon="skip"
-                    label={`Next episode: S${nextEpisode.season} E${nextEpisode.episode}`}
-                    onClick={onPlayNext}
+                    icon="back10" label="Back 10 seconds" size={48}
+                    onClick={() => invoke('player.seek', { positionSecs: -10, relative: true })
+                      .catch(report('Could not seek'))}
+                    style={DOCK_BUTTON}
                   />
-                )}
+                  <IconButton
+                    icon="forward10" label="Forward 10 seconds" size={48}
+                    onClick={() => invoke('player.seek', { positionSecs: 10, relative: true })
+                      .catch(report('Could not seek'))}
+                    style={DOCK_BUTTON}
+                  />
+                </>
+              )}
+              {nextEpisode && onPlayNext && (
                 <IconButton
-                  icon={player.muted ? 'volumeOff' : 'volume'}
-                  label={player.muted ? 'Unmute' : 'Mute'}
-                  onClick={() => invoke('player.setMuted', { muted: !player.muted })
-                    .catch(report('Could not change the volume'))}
+                  icon="skip" size={48}
+                  label={`Next episode: S${nextEpisode.season} E${nextEpisode.episode}`}
+                  onClick={onPlayNext}
+                  style={DOCK_BUTTON}
                 />
-                <input
-                  type="range" min={0} max={200} value={player.volume}
-                  aria-label="Volume"
-                  onChange={(e) => invoke('player.setVolume', { volume: Number(e.target.value) })
-                    .catch(report('Could not change the volume'))}
-                  style={{ width: 110, accentColor: 'var(--accent)' }}
-                />
-                <span
-                  style={{
-                    fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', width: 38,
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {player.volume}%
-                </span>
+              )}
 
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                  {player.isLive && (
-                    <IconButton icon="grid" label="TV Guide" onClick={onGuide} />
-                  )}
-                  <IconButton
-                    icon="audio" label="Audio track"
-                    active={panel === 'audio'}
-                    onClick={() => setPanel((p) => (p === 'audio' ? null : 'audio'))}
-                  />
-                  <IconButton
-                    icon="subtitles" label="Subtitles"
-                    active={panel === 'subtitles'}
-                    onClick={() => setPanel((p) => (p === 'subtitles' ? null : 'subtitles'))}
-                  />
-                  <IconButton
-                    icon="settings" label="Playback settings"
-                    active={panel === 'playback'}
-                    onClick={() => setPanel((p) => (p === 'playback' ? null : 'playback'))}
-                  />
-                  <IconButton
-                    icon="fullscreen"
-                    label={fullscreen ? 'Leave fullscreen' : 'Fullscreen'}
-                    active={fullscreen}
-                    onClick={onFullscreen}
-                  />
-                </div>
+              <div style={{ flex: 1, minWidth: 0, padding: '0 8px' }}>
+                <Scrubber player={player} guide={guide ?? null} />
               </div>
 
-              <AnimatePresence>
-                {panel === 'playback' && <PlaybackPanel player={player} sleep={sleep} />}
-              </AnimatePresence>
-
-              <AnimatePresence>
-                {panel && panel !== 'playback' && (
-                  <TrackPanel
-                    kind={panel}
-                    player={player}
-                    onPick={(id) => {
-                      invoke(
-                        panel === 'audio' ? 'player.setAudioTrack' : 'player.setSubtitleTrack',
-                        { trackId: id as number },
-                      ).catch(report('Could not switch track'));
-                    }}
-                  />
-                )}
-              </AnimatePresence>
+              <IconButton
+                icon={player.muted ? 'volumeOff' : 'volume'} size={48}
+                label={player.muted ? 'Unmute' : 'Mute'}
+                onClick={() => invoke('player.setMuted', { muted: !player.muted })
+                  .catch(report('Could not change the volume'))}
+                style={DOCK_BUTTON}
+              />
+              <input
+                type="range" min={0} max={200} value={player.volume}
+                aria-label="Volume"
+                title={`${player.volume}%`}
+                className="dl-range"
+                onChange={(e) => invoke('player.setVolume', { volume: Number(e.target.value) })
+                  .catch(report('Could not change the volume'))}
+                style={{
+                  width: 84,
+                  ['--fill' as string]: `${(player.volume / 200) * 100}%`,
+                  ['--buf' as string]: `${(player.volume / 200) * 100}%`,
+                }}
+              />
+              {player.isLive && (
+                <IconButton icon="grid" label="TV Guide" size={48} onClick={onGuide} style={DOCK_BUTTON} />
+              )}
+              <IconButton
+                icon="subtitles" label="Subtitles" size={48}
+                active={panel === 'subtitles'}
+                onClick={() => setPanel((p) => (p === 'subtitles' ? null : 'subtitles'))}
+                style={panel === 'subtitles' ? DOCK_ACTIVE : DOCK_BUTTON}
+              />
+              <IconButton
+                icon="audio" label="Audio track" size={48}
+                active={panel === 'audio'}
+                onClick={() => setPanel((p) => (p === 'audio' ? null : 'audio'))}
+                style={panel === 'audio' ? DOCK_ACTIVE : DOCK_BUTTON}
+              />
+              <IconButton
+                icon="settings" label="Playback settings" size={48}
+                active={panel === 'playback'}
+                onClick={() => setPanel((p) => (p === 'playback' ? null : 'playback'))}
+                style={panel === 'playback' ? DOCK_ACTIVE : DOCK_BUTTON}
+              />
+              <IconButton
+                icon="fullscreen" size={48}
+                label={fullscreen ? 'Leave fullscreen' : 'Fullscreen'}
+                active={fullscreen}
+                onClick={onFullscreen}
+                style={fullscreen ? DOCK_ACTIVE : DOCK_BUTTON}
+              />
             </motion.div>
+
+            <AnimatePresence>
+              {panel && (
+                <WatchSheet panel={panel} onPanel={setPanel} onClose={() => setPanel(null)}>
+                  {panel === 'playback' ? (
+                    <PlaybackPanel player={player} sleep={sleep} />
+                  ) : (
+                    <TrackPanel
+                      kind={panel}
+                      player={player}
+                      onPick={(id) => {
+                        invoke(
+                          panel === 'audio' ? 'player.setAudioTrack' : 'player.setSubtitleTrack',
+                          { trackId: id as number },
+                        ).catch(report('Could not switch track'));
+                      }}
+                    />
+                  )}
+                </WatchSheet>
+              )}
+            </AnimatePresence>
           </>
         )}
       </AnimatePresence>
@@ -688,6 +719,9 @@ function SeekBar({
     return () => window.clearTimeout(giveUp);
   }, [value, dragged]);
 
+  const shown = dragged ?? value;
+  const fill = max > min ? ((shown - min) / (max - min)) * 100 : 0;
+
   const commit = () => {
     if (dragged === null || committedAt.current !== 0) return;
     committedAt.current = Date.now();
@@ -701,12 +735,16 @@ function SeekBar({
       max={max}
       value={dragged ?? value}
       aria-label={label}
+      className="dl-range"
       onChange={(e) => setDragged(Number(e.target.value))}
       onPointerUp={commit}
       onLostPointerCapture={commit}
       onKeyUp={commit}
       onBlur={commit}
-      style={{ flex: 1, accentColor: accent }}
+      style={{
+        flex: 1, width: '100%', accentColor: accent,
+        ['--fill' as string]: `${fill}%`, ['--buf' as string]: `${fill}%`,
+      }}
     />
   );
 }
@@ -716,7 +754,7 @@ const SEEK_SETTLED_SECS = 2;
 /** And how long to wait before believing it anyway. A seek can be refused. */
 const SEEK_SETTLE_TIMEOUT_MS = 4000;
 
-function Scrubber({ player }: { player: PlayerState }) {
+function Scrubber({ player, guide }: { player: PlayerState; guide: NowNext | null }) {
   // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
   const clockTime = useClockTime();
   // A buffered live stream has a real span to scrub through; an unbuffered one has
@@ -725,30 +763,47 @@ function Scrubber({ player }: { player: PlayerState }) {
     return <TimeshiftBar window={player.timeshift} />;
   }
   if (player.isLive) {
+    // Not seekable, so the track is the programme: how far through it live is.
+    const now = Math.floor(Date.now() / 1000);
+    const prog = guide?.now ?? null;
+    const pct = prog ? ((now - prog.start) / Math.max(1, prog.stop - prog.start)) * 100 : 100;
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-        <div
-          style={{
-            flex: 1, height: 4, borderRadius: 'var(--r-full)',
-            background: 'linear-gradient(to right, var(--live), var(--live))',
-          }}
+      <div>
+        <ScrubLabels
+          left={prog ? clockTime(prog.start) : ''}
+          middle={(
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--live)' }}>
+              <span aria-hidden style={DOT} />
+              <span>Live · {clockTime(now)}</span>
+            </span>
+          )}
+          right={prog ? clockTime(prog.stop) : ''}
         />
-        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-muted)' }}>
-          Live · {clockTime(Math.floor(Date.now() / 1000))}
-        </span>
+        <div
+          aria-hidden
+          style={{
+            height: 10, borderRadius: 'var(--r-full)', background: 'var(--dock-track)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              width: `${Math.max(0, Math.min(100, pct))}%`, height: '100%',
+              background: 'var(--accent)', borderRadius: 'var(--r-full)',
+            }}
+          />
+        </div>
       </div>
     );
   }
+  const left = Math.max(0, player.durationSecs - player.positionSecs);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-      <span
-        style={{
-          fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', width: 58,
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        {duration(player.positionSecs)}
-      </span>
+    <div>
+      <ScrubLabels
+        left={duration(player.positionSecs)}
+        middle={null}
+        right={player.durationSecs > 0 ? `−${duration(left)}` : ''}
+      />
       <SeekBar
         min={0}
         max={Math.max(1, player.durationSecs)}
@@ -758,17 +813,33 @@ function Scrubber({ player }: { player: PlayerState }) {
         onCommit={(positionSecs) =>
           void invoke('player.seek', { positionSecs }).catch(report('Could not seek'))}
       />
-      <span
-        style={{
-          fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', width: 58,
-          textAlign: 'right', fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        {duration(player.durationSecs)}
-      </span>
     </div>
   );
 }
+
+/** The three readouts above the dock's scrubber: start, where you are, end. */
+function ScrubLabels({
+  left, middle, right,
+}: { left: React.ReactNode; middle: React.ReactNode; right: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        marginBottom: 6, fontSize: 'var(--fs-sm)', fontWeight: 800,
+        fontVariantNumeric: 'tabular-nums', color: 'var(--dock-text)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span>{left}</span>
+      <span>{middle}</span>
+      <span style={{ color: 'var(--dock-muted)' }}>{right}</span>
+    </div>
+  );
+}
+
+const DOT: React.CSSProperties = {
+  width: 8, height: 8, borderRadius: '50%', background: 'var(--live)', flexShrink: 0,
+};
 
 /**
  * The live-edge scrub bar (README §7.6).
@@ -784,26 +855,53 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
   const span = Math.max(0, w.liveSecs - w.startSecs);
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-      <span
-        aria-label="Position relative to live"
+    <div>
+      <div
         style={{
-          fontSize: 'var(--fs-sm)', width: 74,
-          fontVariantNumeric: 'tabular-nums',
-          color: atLive ? 'var(--live)' : 'var(--text)',
-          fontWeight: atLive ? 700 : 600,
+          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6,
+          fontSize: 'var(--fs-sm)', fontWeight: 800, whiteSpace: 'nowrap',
         }}
       >
-        {atLive ? 'Live' : `−${duration(delay)}`}
-      </span>
+        <span
+          aria-label="Position relative to live"
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            fontVariantNumeric: 'tabular-nums', color: 'var(--live)',
+          }}
+        >
+          {atLive && <span aria-hidden style={DOT} />}
+          {atLive ? 'Live' : `−${duration(delay)}`}
+        </span>
+        {!atLive && (
+          <button
+            onClick={() => invoke('player.backToLive')
+              .catch(report('Could not return to live'))}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4, padding: 0,
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              color: 'var(--live)', fontWeight: 800, fontSize: 'var(--fs-sm)',
+            }}
+          >
+            · Back to live
+          </button>
+        )}
+        <span
+          style={{
+            marginLeft: 'auto', fontSize: 'var(--fs-xs)', color: 'var(--dock-muted)',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {span > 0 ? `${duration(span)} buffered` : 'buffering…'}
+        </span>
+      </div>
 
-      <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
         <SeekBar
           min={Math.floor(w.startSecs)}
           max={Math.ceil(w.liveSecs)}
           value={w.positionSecs}
           label="Timeshift"
-          accent={atLive ? 'var(--live)' : 'var(--accent)'}
+          accent="var(--accent)"
           onCommit={(positionSecs) =>
             void invoke('player.seek', { positionSecs }).catch(report('Could not seek'))}
         />
@@ -814,37 +912,287 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
           title="Live edge"
           style={{
             position: 'absolute', right: -1, top: '50%', transform: 'translateY(-50%)',
-            width: 3, height: 14, borderRadius: 2, background: 'var(--live)',
+            width: 4, height: 16, borderRadius: 2, background: 'var(--live)',
             pointerEvents: 'none',
           }}
         />
       </div>
+    </div>
+  );
+}
 
+/* ── Dock chrome ─────────────────────────────────────────────────────────── */
+
+/** Translucent buttons that sit straight on the picture. */
+const GLASS_BUTTON: React.CSSProperties = {
+  background: 'var(--player-chip)', color: 'var(--player-chip-text)',
+  backdropFilter: 'blur(14px)', borderRadius: 14,
+};
+const GLASS_ACTIVE: React.CSSProperties = {
+  background: 'var(--dock-bg)', color: 'var(--dock-text)', borderRadius: 14,
+};
+/** Paper-coloured buttons inside the white dock. */
+const DOCK_BUTTON: React.CSSProperties = {
+  background: 'var(--dock-btn)', color: 'var(--dock-text)', borderRadius: 16,
+};
+const DOCK_ACTIVE: React.CSSProperties = {
+  background: 'var(--dock-ink)', color: 'var(--dock-bg)', borderRadius: 16,
+};
+
+/**
+ * The white channel badge at the top left: a tile in the channel's colour, its name,
+ * what it is, and whether it is live or how far behind.
+ */
+function ChannelBadge({ player, behind }: { player: PlayerState; behind: number }) {
+  const name = player.title ?? 'Nothing playing';
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, maxWidth: '52vw',
+        padding: '8px 18px 8px 8px', borderRadius: 20,
+        background: 'var(--dock-bg)', color: 'var(--dock-text)',
+      }}
+    >
       <span
+        aria-hidden
         style={{
-          fontSize: 'var(--fs-xs)', color: 'var(--text-faint)',
-          fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+          width: 44, height: 44, borderRadius: 14, flexShrink: 0, display: 'grid',
+          placeItems: 'center', background: artHue(name), color: 'var(--on-art)',
+          fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18,
         }}
       >
-        {span > 0 ? `${duration(span)} buffered` : 'buffering…'}
+        {name.slice(0, 1).toUpperCase()}
       </span>
-
-      {!atLive && (
-        <button
-          onClick={() => invoke('player.backToLive')
-            .catch(report('Could not return to live'))}
+      <div style={{ minWidth: 0 }}>
+        <div
           style={{
-            display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px',
-            borderRadius: 'var(--r-full)', cursor: 'pointer', whiteSpace: 'nowrap',
-            border: '1px solid var(--live)', background: 'transparent',
-            color: 'var(--live)', fontWeight: 700, fontSize: 'var(--fs-xs)',
+            fontSize: 'var(--fs-lg)', fontWeight: 800, whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25,
           }}
         >
-          <Icon name="skip" size={13} />
-          Back to live
-        </button>
+          {name}
+        </div>
+        {player.subtitle && (
+          <div
+            style={{
+              fontSize: 'var(--fs-sm)', fontWeight: 700, color: 'var(--dock-muted)',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >
+            {player.subtitle}
+          </div>
+        )}
+      </div>
+      {player.isLive && (
+        behind > 0
+          ? <Badge tone="accent">↺ {duration(behind)} behind live</Badge>
+          : <Badge tone="live">● Live</Badge>
       )}
     </div>
+  );
+}
+
+/** Subtitles, audio and picture, as the small chips at the top right. */
+function TrackChips({ player }: { player: PlayerState }) {
+  const sub = player.subtitleTracks.find((t) => t.id === player.activeSubtitleTrack);
+  const audio = player.audioTracks.find((t) => t.id === player.activeAudioTrack);
+  const s = player.stats;
+  const chips = [
+    sub ? `CC ${sub.language ?? sub.title ?? 'On'}` : 'CC Off',
+    audio ? [audio.title ?? audio.language, audio.channels].filter(Boolean).join(' ') : null,
+    s?.resolution ? [s.resolution, s.fps ? `${Math.round(s.fps)}fps` : null].filter(Boolean).join(' · ') : null,
+  ].filter((c): c is string => Boolean(c));
+  return (
+    <>
+      {chips.map((c) => (
+        <span
+          key={c}
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 'var(--r-full)',
+            display: 'inline-flex', alignItems: 'center',
+            background: 'var(--player-chip)', color: 'var(--player-chip-text)',
+            backdropFilter: 'blur(14px)', fontSize: 'var(--fs-xs)', fontWeight: 800,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {c}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Live only: "On now" at the bottom left and "Up next" at the bottom right, with a
+ * Record button that schedules the next programme through the same DVR command the
+ * guide uses.
+ */
+function LiveCards({
+  channelId, title, guide,
+}: { channelId: number; title: string | null; guide: NowNext | null }) {
+  const clockTime = useClockTime();
+  const now = guide?.now ?? null;
+  const next = guide?.next ?? null;
+
+  const recordNext = () => {
+    if (!next) return;
+    invoke('dvr.schedule', {
+      channelId,
+      title: next.title,
+      subTitle: next.subTitle ?? null,
+      airStart: next.start,
+      airStop: next.stop,
+    })
+      .then((id) => notify(id == null
+        ? 'That is already being recorded'
+        : `Recording ${next.title} at ${clockTime(next.start)}`))
+      .catch(report('Could not schedule the recording'));
+  };
+
+  return (
+    <>
+      {now && (
+        <motion.div
+          data-osd-chrome=""
+          initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.18 }}
+          style={{
+            position: 'absolute', left: 28, bottom: 132, width: 'min(440px, 36vw)',
+            padding: '20px 22px', borderRadius: 26,
+            background: 'var(--dock-bg)', color: 'var(--dock-text)',
+            boxShadow: 'var(--shadow-dock)',
+          }}
+        >
+          <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--accent)' }}>
+            On now · {clockTime(now.start)}–{clockTime(now.stop)}
+          </div>
+          <div
+            className="dl-display"
+            style={{
+              fontSize: 36, margin: '6px 0 8px', whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {now.title}
+          </div>
+          {(now.description ?? now.subTitle) && (
+            <div
+              style={{
+                fontSize: 'var(--fs-md)', color: 'var(--dock-muted)', lineHeight: 1.45,
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}
+            >
+              {now.description ?? now.subTitle}
+            </div>
+          )}
+        </motion.div>
+      )}
+      {next && (
+        <motion.div
+          data-osd-chrome=""
+          initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.18 }}
+          aria-label={`After ${title ?? 'this'}`}
+          role="group"
+          style={{
+            position: 'absolute', right: 28, bottom: 132, width: 'min(336px, 30vw)',
+            display: 'flex', alignItems: 'center', gap: 12,
+            padding: '14px 14px 14px 18px', borderRadius: 22,
+            background: 'var(--player-chip)', color: 'var(--player-chip-text)',
+            backdropFilter: 'blur(18px)',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 800, opacity: 0.8, letterSpacing: '0.04em' }}>
+              NEXT · {clockTime(next.start)}
+            </div>
+            <div
+              style={{
+                fontSize: 'var(--fs-lg)', fontWeight: 800, whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+            >
+              {next.title}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={recordNext}
+            aria-label={`Record ${next.title}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, height: 40,
+              padding: '0 14px', borderRadius: 14, border: 'none', cursor: 'pointer',
+              background: 'var(--dock-bg)', color: 'var(--dock-text)',
+              fontWeight: 800, fontSize: 'var(--fs-sm)',
+            }}
+          >
+            <Icon name="record" size={14} />
+            Record
+          </button>
+        </motion.div>
+      )}
+    </>
+  );
+}
+
+/**
+ * The white "Watch settings" sheet over the dock: Subtitles, Audio and Picture tabs over
+ * the same three panels the dock's buttons open.
+ */
+function WatchSheet({
+  panel, onPanel, onClose, children,
+}: {
+  panel: 'audio' | 'subtitles' | 'playback';
+  onPanel: (p: 'audio' | 'subtitles' | 'playback') => void;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const tabs: ['subtitles' | 'audio' | 'playback', string][] = [
+    ['subtitles', 'Subtitles'], ['audio', 'Audio'], ['playback', 'Picture'],
+  ];
+  return (
+    <motion.div
+      data-osd-chrome=""
+      initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}
+      transition={{ duration: 0.16 }}
+      style={{
+        position: 'absolute', right: 28, bottom: 128, width: 420,
+        maxHeight: 'calc(100vh - 220px)', overflowY: 'auto',
+        padding: 20, borderRadius: 32,
+        background: 'var(--dock-bg)', color: 'var(--dock-text)',
+        boxShadow: 'var(--shadow-dock)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
+        <div className="dl-display" style={{ fontSize: 'var(--fs-2xl)' }}>Watch settings</div>
+        <IconButton
+          icon="close" label="Close watch settings" size={40} onClick={onClose}
+          style={{ ...DOCK_BUTTON, marginLeft: 'auto', borderRadius: 14 }}
+        />
+      </div>
+      <div
+        className="dl-seg"
+        role="tablist"
+        aria-label="Watch settings"
+        style={{ display: 'flex', marginBottom: 14, background: 'var(--dock-btn-hover)' }}
+      >
+        {tabs.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={panel === key}
+            data-active={panel === key}
+            onClick={() => onPanel(key)}
+            style={{ flex: 1 }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {children}
+    </motion.div>
   );
 }
 
@@ -862,20 +1210,8 @@ function TrackPanel({
     <motion.div
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
       transition={{ duration: 0.15 }}
-      style={{
-        position: 'absolute', right: 'var(--sp-5)', bottom: 84, width: 300,
-        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-        borderRadius: 'var(--r-lg)', padding: 'var(--sp-3)', boxShadow: 'var(--shadow-3)',
-      }}
+      style={{ display: 'grid', gap: 2 }}
     >
-      <div
-        style={{
-          fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', fontWeight: 700,
-          letterSpacing: '0.06em', marginBottom: 'var(--sp-2)', textTransform: 'uppercase',
-        }}
-      >
-        {kind === 'audio' ? 'Audio track' : 'Subtitles'}
-      </div>
 
       {kind === 'subtitles' && (
         <TrackOption
@@ -911,12 +1247,7 @@ function PlaybackPanel({
       data-testid="playback-panel"
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
       transition={{ duration: 0.15 }}
-      style={{
-        position: 'absolute', right: 'var(--sp-5)', bottom: 84, width: 300,
-        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-        borderRadius: 'var(--r-lg)', padding: 'var(--sp-3)', boxShadow: 'var(--shadow-3)',
-        maxHeight: '60vh', overflowY: 'auto',
-      }}
+      style={{ display: 'block' }}
     >
       {/* Live TV has no speed worth changing: the stream arrives at the rate it arrives,
           and playing it at 1.5x means running out of buffer and rebuffering for ever. */}
@@ -1098,8 +1429,8 @@ function PanelHeading({ children }: { children: React.ReactNode }) {
   return (
     <div
       style={{
-        fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', fontWeight: 700,
-        letterSpacing: '0.06em', marginBottom: 'var(--sp-2)', textTransform: 'uppercase',
+        fontSize: 'var(--fs-xs)', color: 'var(--dock-muted)', fontWeight: 800,
+        letterSpacing: '0.04em', margin: '4px 0 var(--sp-2)', textTransform: 'uppercase',
       }}
     >
       {children}
@@ -1114,25 +1445,31 @@ function TrackOption({
     <button
       onClick={onClick}
       style={{
-        display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', width: '100%',
-        padding: 'var(--sp-2) var(--sp-3)', borderRadius: 'var(--r-md)', border: 'none',
-        background: active ? 'var(--surface-hover)' : 'transparent',
+        display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', width: '100%',
+        padding: '12px 14px', borderRadius: 'var(--r-md)', border: 'none',
+        background: active ? 'var(--dock-btn)' : 'transparent',
         color: 'inherit', cursor: 'pointer', textAlign: 'left',
       }}
     >
-      <Icon
-        name="check" size={15}
-        style={{ opacity: active ? 1 : 0, color: 'var(--accent)' }}
-      />
       <span style={{ flex: 1 }}>
-        <span style={{ display: 'block', fontSize: 'var(--fs-sm)', fontWeight: 600 }}>
+        <span style={{ display: 'block', fontSize: 'var(--fs-md)', fontWeight: 800 }}>
           {label}
         </span>
         {detail && (
-          <span style={{ display: 'block', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+          <span style={{ display: 'block', fontSize: 'var(--fs-xs)', fontWeight: 600, color: 'var(--dock-muted)' }}>
             {detail}
           </span>
         )}
+      </span>
+      <span
+        aria-hidden
+        style={{
+          width: 26, height: 26, borderRadius: '50%', display: 'grid', placeItems: 'center',
+          background: 'var(--accent)', color: 'var(--accent-text)',
+          opacity: active ? 1 : 0,
+        }}
+      >
+        <Icon name="check" size={14} />
       </span>
     </button>
   );
@@ -1153,9 +1490,9 @@ function StatsOverlay({ stats }: { stats: NonNullable<PlayerState['stats']> }) {
   return (
     <div
       style={{
-        position: 'absolute', top: 88, left: 'var(--sp-5)',
-        background: 'rgb(0 0 0 / 0.78)', border: '1px solid var(--border)',
-        borderRadius: 'var(--r-md)', padding: 'var(--sp-3) var(--sp-4)',
+        position: 'absolute', top: 92, right: 28, color: 'var(--player-chip-text)',
+        background: 'var(--player-chip)', backdropFilter: 'blur(18px)',
+        borderRadius: 18, padding: 'var(--sp-3) var(--sp-4)',
         fontFamily: 'ui-monospace, "Cascadia Code", Consolas, monospace',
         fontSize: 'var(--fs-xs)', display: 'grid',
         gridTemplateColumns: 'auto auto', gap: '3px var(--sp-4)',
@@ -1163,8 +1500,8 @@ function StatsOverlay({ stats }: { stats: NonNullable<PlayerState['stats']> }) {
     >
       {rows.map(([k, v]) => (
         <div key={k} style={{ display: 'contents' }}>
-          <span style={{ color: 'var(--text-faint)' }}>{k}</span>
-          <span style={{ color: 'var(--text)' }}>{v}</span>
+          <span style={{ opacity: 0.7 }}>{k}</span>
+          <span>{v}</span>
         </div>
       ))}
     </div>
