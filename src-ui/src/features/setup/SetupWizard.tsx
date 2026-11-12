@@ -189,7 +189,14 @@ export function SetupWizard({
         overflowY: 'auto',
       }}
     >
-      <div style={{ width: 'min(620px, 100%)' }}>
+      <div style={{ width: 'min(800px, 100%)' }}>
+      {/* Daylight: one centred white card holds the whole wizard. */}
+      <div
+        style={{
+          background: 'var(--bg-elevated)', borderRadius: 40, padding: '36px 40px 40px',
+          boxShadow: 'var(--shadow-2)',
+        }}
+      >
         <Header step={step} additional={additional} />
 
         <AnimatePresence mode="wait">
@@ -225,15 +232,16 @@ export function SetupWizard({
           <div
             role="alert"
             style={{
-              marginTop: 'var(--sp-4)', padding: 'var(--sp-3) var(--sp-4)',
-              border: '1px solid var(--danger)', borderRadius: 'var(--r-md)',
-              background: 'color-mix(in srgb, var(--danger) 12%, transparent)',
-              fontSize: 'var(--fs-sm)',
+              marginTop: 'var(--sp-4)', padding: '14px 18px',
+              border: '1px solid var(--danger-border)', borderRadius: 'var(--r-lg)',
+              background: 'var(--danger-soft)', color: 'var(--text)',
+              fontSize: 'var(--fs-sm)', fontWeight: 600,
             }}
           >
             {error}
           </div>
         )}
+      </div>
 
         {/*
           * Not during the import. By then a provider has been saved and a refresh is
@@ -252,7 +260,7 @@ export function SetupWizard({
             onClick={onSkip}
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--text-faint)', fontSize: 'var(--fs-sm)',
+              color: 'var(--text-muted)', fontSize: 'var(--fs-sm)', fontWeight: 700,
             }}
           >
             Skip for now
@@ -272,47 +280,79 @@ function hostOf(url: string): string {
 }
 
 function Header({ step, additional }: { step: Step; additional: boolean }) {
-  const steps: Step[] = ['source', 'content', 'importing', 'done'];
-  const index = steps.indexOf(step);
+  const steps: [Step, string][] = [
+    ['source', 'Provider'], ['content', 'Content'], ['importing', 'Import'], ['done', 'Done'],
+  ];
+  const index = steps.findIndex(([s]) => s === step);
   return (
-    <div style={{ textAlign: 'center', marginBottom: 'var(--sp-6)' }}>
+    <div style={{ marginBottom: 'var(--sp-5)' }}>
       <div
         style={{
-          width: 52, height: 52, borderRadius: 'var(--r-lg)', margin: '0 auto var(--sp-4)',
-          display: 'grid', placeItems: 'center', fontWeight: 900, fontSize: 24, color: '#fff',
-          background: 'linear-gradient(135deg, var(--accent), var(--accent-2))',
+          display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+          marginBottom: 'var(--sp-5)',
         }}
       >
-        A
+        <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ width: 14, height: 14, borderRadius: '50%', background: 'var(--accent)' }} />
+          <span className="dl-display" style={{ fontSize: 'var(--fs-2xl)', letterSpacing: '-0.03em' }}>
+            aurora
+          </span>
+        </span>
+        {/* The numbered step row. Decorative: the step is announced by its content. */}
+        <ol
+          aria-hidden
+          style={{
+            listStyle: 'none', margin: '0 0 0 auto', padding: 0, display: 'flex', gap: 14,
+          }}
+        >
+          {steps.map(([s, label], i) => (
+            <li
+              key={s}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)',
+                fontWeight: i === index ? 800 : 600,
+                color: i === index ? 'var(--text)' : 'var(--text-muted)',
+              }}
+            >
+              <span
+                style={{
+                  width: 26, height: 26, borderRadius: 8, display: 'grid', placeItems: 'center',
+                  fontSize: 'var(--fs-xs)', fontWeight: 800,
+                  background: i <= index ? 'var(--accent)' : 'transparent',
+                  color: i <= index ? 'var(--accent-text)' : 'var(--text-muted)',
+                  border: i <= index ? 'none' : '1.5px solid var(--border-strong)',
+                }}
+              >
+                {i + 1}
+              </span>
+              {label}
+            </li>
+          ))}
+        </ol>
       </div>
-      <h1 style={{ margin: '0 0 var(--sp-2)', fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
-        {additional ? 'Add another provider' : 'Welcome to Aurora TV'}
+      <h1
+        className="dl-display"
+        style={{ margin: '0 0 var(--sp-2)', fontSize: 'clamp(36px, 4vw, 52px)', color: 'var(--text)' }}
+      >
+        {additional ? 'Add another provider' : (
+          // The board's words on screen; the heading's name stays "Welcome to Aurora TV".
+          <>
+            <span aria-hidden>Connect your provider</span>
+            <span className="sr-only">Welcome to Aurora TV</span>
+          </>
+        )}
       </h1>
-      <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 'var(--fs-sm)' }}>
+      <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 'var(--fs-md)', fontWeight: 500 }}>
         {additional
           ? 'Its channels and titles join the library you already have.'
           : 'Aurora is a player. Bring your own subscription and it will do the rest.'}
       </p>
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 'var(--sp-4)' }}>
-        {steps.map((s, i) => (
-          <div
-            key={s}
-            style={{
-              width: i === index ? 26 : 8, height: 4, borderRadius: 'var(--r-full)',
-              background: i <= index ? 'var(--accent)' : 'var(--border)',
-              transition: 'all var(--t-base) var(--ease)',
-            }}
-          />
-        ))}
-      </div>
     </div>
   );
 }
 
-const card = {
-  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-  borderRadius: 'var(--r-lg)', padding: 'var(--sp-5)',
-} as const;
+/** Each step sits straight in the wizard's white card, so it draws no frame of its own. */
+const card = {} as const;
 
 /** One field, defined once. See `FIELD` in Primitives. */
 const input: React.CSSProperties = { ...FIELD, width: '100%', padding: '11px 14px', fontSize: 'var(--fs-md)' };
@@ -322,8 +362,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <label style={{ display: 'block', marginBottom: 'var(--sp-3)' }}>
       <span
         style={{
-          display: 'block', marginBottom: 5, fontSize: 'var(--fs-sm)',
-          fontWeight: 600, color: 'var(--text-muted)',
+          display: 'block', marginBottom: 6, fontSize: 'var(--fs-sm)',
+          fontWeight: 800, color: 'var(--text-muted)',
         }}
       >
         {label}
@@ -419,26 +459,27 @@ function SourceStep({
       <div role="group" aria-label="Provider type" style={{ marginBottom: 'var(--sp-3)' }}>
         <span
           style={{
-            display: 'block', marginBottom: 5, fontSize: 'var(--fs-sm)',
-            fontWeight: 600, color: 'var(--text-muted)',
+            display: 'block', marginBottom: 6, fontSize: 'var(--fs-sm)',
+            fontWeight: 800, color: 'var(--text-muted)',
           }}
         >
           Provider type
         </span>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div className="dl-seg">
           {([
             ['xtream', 'Xtream / panel login'],
             ['m3u', 'M3U playlist URL'],
           ] as const).map(([value, label]) => (
-            <Button
+            <button
               key={value}
-              size="sm"
-              variant={draft.kind === value ? 'primary' : 'secondary'}
+              type="button"
+              data-active={draft.kind === value}
+              data-variant={draft.kind === value ? 'primary' : 'secondary'}
               aria-pressed={draft.kind === value}
               onClick={() => setDraft((d) => ({ ...d, kind: value }))}
             >
               {label}
-            </Button>
+            </button>
           ))}
         </div>
       </div>
@@ -479,17 +520,20 @@ function SourceStep({
         <div
           role="status"
           style={{
-            display: 'flex', alignItems: 'flex-start', gap: 10, padding: 'var(--sp-3)',
-            borderRadius: 'var(--r-md)', marginBottom: 'var(--sp-3)',
+            display: 'flex', alignItems: 'flex-start', gap: 10, padding: '14px 18px',
+            borderRadius: 'var(--r-lg)', marginBottom: 'var(--sp-3)',
+            // Daylight's inline errors: a soft coral panel; success the same in green.
             background: validation.ok
-              ? 'color-mix(in srgb, var(--success) 12%, transparent)'
-              : 'color-mix(in srgb, var(--danger) 12%, transparent)',
-            border: `1px solid ${validation.ok ? 'var(--success)' : 'var(--danger)'}`,
+              ? 'color-mix(in srgb, var(--success) 10%, var(--surface))'
+              : 'var(--danger-soft)',
+            border: `1px solid ${validation.ok
+              ? 'color-mix(in srgb, var(--success) 40%, transparent)'
+              : 'var(--danger-border)'}`,
           }}
         >
           <Icon
             name={validation.ok ? 'check' : 'info'} size={17}
-            style={{ color: validation.ok ? 'var(--success)' : 'var(--danger)', marginTop: 2 }}
+            style={{ color: validation.ok ? 'var(--success)' : 'var(--text)', marginTop: 2 }}
           />
           <div style={{ fontSize: 'var(--fs-sm)' }}>
             <strong>{validation.message}</strong>
@@ -556,12 +600,13 @@ function SourceStep({
 
           The button says which it is doing, so continuing past a failure is a decision
           rather than something that happened. */}
-      <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end' }}>
-        <Button onClick={() => onCheck()} disabled={checking || !draft.url}>
+      <div style={{ display: 'flex', gap: 'var(--sp-3)', justifyContent: 'flex-end', marginTop: 'var(--sp-2)' }}>
+        <Button size="lg" onClick={() => onCheck()} disabled={checking || !draft.url}>
           {checking ? 'Checking…' : 'Check connection'}
         </Button>
         <Button
           variant="primary"
+          size="lg"
           onClick={onNext}
           disabled={checking || !draft.url || !canContinue(draft)}
         >
@@ -601,12 +646,10 @@ function ContentStep({
           onClick={() => setContent((c) => ({ ...c, [key]: !c[key] }))}
           style={{
             display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', width: '100%',
-            padding: 'var(--sp-3)', marginBottom: 'var(--sp-2)', textAlign: 'left',
-            borderRadius: 'var(--r-md)', cursor: 'pointer', color: 'inherit',
-            border: `1px solid ${content[key] ? 'var(--accent)' : 'var(--border)'}`,
-            background: content[key]
-              ? 'color-mix(in srgb, var(--accent) 10%, transparent)'
-              : 'transparent',
+            padding: '14px 16px', marginBottom: 'var(--sp-2)', textAlign: 'left',
+            borderRadius: 'var(--r-lg)', cursor: 'pointer', color: 'inherit',
+            border: `1.5px solid ${content[key] ? 'var(--accent)' : 'transparent'}`,
+            background: content[key] ? 'var(--accent-soft)' : 'var(--bg)',
           }}
         >
           <div
@@ -619,7 +662,7 @@ function ContentStep({
             {content[key] && <Icon name="check" size={14} strokeWidth={3} />}
           </div>
           <div>
-            <div style={{ fontWeight: 650 }}>{title}</div>
+            <div style={{ fontWeight: 800 }}>{title}</div>
             <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>{hint}</div>
           </div>
         </button>
