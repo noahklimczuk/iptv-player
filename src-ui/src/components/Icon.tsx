@@ -47,6 +47,11 @@ export const ICON_PATHS: Record<string, string> = {
   person: 'M12 11a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0',
   keyboard: 'M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10',
   alert: 'M12 9v5M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
+  // The top bar's light/dark toggle: a sun with eight rays, and a crescent.
+  sun:
+    'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M2 12h2M20 12h2' +
+    'M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4',
+  moon: 'M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z',
 };
 
 /**

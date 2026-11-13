@@ -1053,6 +1053,36 @@ export default function App() {
   );
 }
 
+/**
+ * The top bar's quick light/dark switch. Dark and OLED count as dark; flipping from
+ * either (or from high contrast) lands on Daylight, and from Daylight on Dark. The full
+ * choice of four themes stays in Settings, and this writes the same saved preference.
+ */
+function ThemeToggle() {
+  const theme = useUi((s) => s.theme);
+  const setTheme = useUi((s) => s.setTheme);
+  const dark = theme === 'dark' || theme === 'oled';
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={dark}
+      aria-label="Dark mode"
+      title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      data-testid="theme-toggle"
+      className="dl-press"
+      onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+      style={{
+        width: 44, height: 44, borderRadius: 'var(--r-full)', cursor: 'pointer',
+        display: 'grid', placeItems: 'center', border: 'none',
+        background: 'var(--surface)', boxShadow: 'var(--shadow-1)', color: 'var(--text)',
+      }}
+    >
+      <Icon name={dark ? 'sun' : 'moon'} size={19} />
+    </button>
+  );
+}
+
 function titleFor(path: string): string {
   const hit = NAV.find((n) => (n.to === '/' ? path === '/' : path.startsWith(n.to)));
   return hit?.label ?? 'Aurora TV';
@@ -1144,6 +1174,7 @@ function TopBar({
             Ctrl K
           </kbd>
         </button>
+        <ThemeToggle />
         <span
           data-testid="topbar-clock"
           style={{
