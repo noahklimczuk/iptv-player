@@ -15,7 +15,9 @@ import { useIsLiked, useMarks, useOnMyList } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { report } from '@/lib/errors';
 import { duration, progressPct, runtime } from '@/lib/format';
-import { Badge, Button, IconButton, ProgressBar, Select, Skeleton } from './Primitives';
+import {
+  Badge, Button, IconButton, Poster, ProgressBar, Select, Skeleton, artHue,
+} from './Primitives';
 import { Icon } from './Icon';
 import { TrailerFrame } from './TrailerFrame';
 
@@ -73,7 +75,7 @@ export function DetailModal({
           onClick={onClose}
           style={{
             position: 'fixed', inset: 0, zIndex: 200, overflowY: 'auto',
-            background: 'rgb(0 0 0 / 0.72)', backdropFilter: 'blur(4px)',
+            background: 'var(--scrim-dialog)', backdropFilter: 'blur(4px)',
             padding: 'var(--sp-7) var(--sp-4)',
           }}
         >
@@ -88,15 +90,24 @@ export function DetailModal({
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
             onClick={(e) => e.stopPropagation()}
             style={{
-              maxWidth: 940, margin: '0 auto', background: 'var(--bg-elevated)',
-              borderRadius: 'var(--r-xl)', overflow: 'hidden', boxShadow: 'var(--shadow-4)',
+              // Daylight: a big rounded dialog, a tall poster tile on the left and the
+              // title, actions and everything else on the right.
+              maxWidth: 1140, margin: '0 auto', background: 'var(--bg-elevated)',
+              borderRadius: 40, overflow: 'hidden', boxShadow: 'var(--shadow-4)',
+              display: 'grid', gridTemplateColumns: 'minmax(0, 400px) minmax(0, 1fr)',
+              gap: 32, padding: 20,
             }}
           >
-            <Hero item={item} onClose={onClose} onPlay={onPlay} watch={watch} />
-            <Body
-              item={item} tab={tab} setTab={setTab}
-              season={season} setSeason={setSeason} onPlay={onPlay} watch={watch}
-            />
+            <div style={{ alignSelf: 'start' }}>
+              <Poster src={item.poster} alt={item.title} radius="var(--r-xl)" />
+            </div>
+            <div style={{ minWidth: 0, padding: '12px 12px 8px 0' }}>
+              <Hero item={item} onClose={onClose} onPlay={onPlay} watch={watch} />
+              <Body
+                item={item} tab={tab} setTab={setTab}
+                season={season} setSeason={setSeason} onPlay={onPlay} watch={watch}
+              />
+            </div>
           </motion.div>
         </motion.div>
       )}
@@ -226,15 +237,14 @@ function Hero({
   const toggleLiked = useMarks((s) => s.toggleLiked);
 
   return (
-    <div style={{ position: 'relative', aspectRatio: '16 / 8', background: 'var(--surface)' }}>
-      {item.backdrop && (
-        <img
-          src={item.backdrop} alt=""
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-        />
-      )}
+    <div style={{ position: 'relative', paddingRight: 64 }}>
       {playingTrailer && item.trailerKey && (
-        <div style={{ position: 'absolute', inset: 0, background: '#000' }}>
+        <div
+          style={{
+            position: 'relative', aspectRatio: '16 / 9', marginBottom: 'var(--sp-4)',
+            borderRadius: 'var(--r-lg)', overflow: 'hidden', background: 'var(--player-bg)',
+          }}
+        >
           <TrailerFrame
             trailerKey={item.trailerKey}
             muted={false}
@@ -244,16 +254,9 @@ function Hero({
           />
         </div>
       )}
-      {/* The scrim is what the title and the buttons are legible against, and it has to
-          go when the trailer is the subject — a gradient over a video somebody chose to
-          watch is just a dark video. */}
-      {!playingTrailer && (
-        <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }} />
-      )}
-
       <IconButton
-        icon="close" label="Close" onClick={onClose}
-        style={{ position: 'absolute', top: 14, right: 14 }}
+        icon="close" label="Close" onClick={onClose} size={44}
+        style={{ position: 'absolute', top: 0, right: -8 }}
       />
 
       {playingTrailer ? (
@@ -262,17 +265,22 @@ function Hero({
           variant="secondary"
           icon="close"
           onClick={() => setPlayingTrailer(false)}
-          style={{ position: 'absolute', left: 'var(--sp-6)', top: 'var(--sp-5)' }}
         >
           Stop trailer
         </Button>
       ) : (
-      <div style={{ position: 'absolute', left: 'var(--sp-6)', right: 'var(--sp-6)', bottom: 'var(--sp-5)' }}>
+      <div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+          {item.genres.slice(0, 2).map((g) => <span key={g} className="dl-chip">{g}</span>)}
+          {item.rating != null && (
+            <span className="dl-chip" data-tone="accent">{item.rating.toFixed(1)}</span>
+          )}
+        </div>
         <h1
-          className="text-shadow-hero"
+          className="dl-display"
           style={{
-            margin: '0 0 var(--sp-3)', fontSize: 'var(--fs-2xl)', fontWeight: 800,
-            letterSpacing: '-0.02em', maxWidth: '70%',
+            margin: '0 0 var(--sp-4)', fontSize: 'clamp(36px, 4vw, 56px)',
+            lineHeight: 1, color: 'var(--text)',
           }}
         >
           {item.title}
@@ -281,7 +289,7 @@ function Hero({
         {pct > 0 && prog && (
           <div style={{ maxWidth: 320, marginBottom: 'var(--sp-3)' }}>
             <ProgressBar percent={pct} height={4} />
-            <div style={{ marginTop: 5, fontSize: 'var(--fs-xs)', color: 'var(--text-muted)' }}>
+            <div style={{ marginTop: 6, fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--text-muted)' }}>
               {duration(prog.positionSecs)} of {duration(prog.durationSecs)}
             </div>
           </div>
@@ -310,7 +318,7 @@ function Hero({
             label={onMyList ? `Remove ${item.title} from My List` : `Add ${item.title} to My List`}
             aria-pressed={onMyList}
             active={onMyList}
-            size={46}
+            size={52}
             onClick={() => toggleMyList(item)}
           />
           <IconButton
@@ -319,7 +327,7 @@ function Hero({
             label={liked ? `Undo liking ${item.title}` : `I like ${item.title}`}
             aria-pressed={liked}
             active={liked}
-            size={46}
+            size={52}
             onClick={() => toggleLiked(item)}
           />
         </div>
@@ -391,18 +399,19 @@ function Body({
   const episodes = useEpisodes(item, isSeries);
 
   return (
-    <div style={{ padding: 'var(--sp-5) var(--sp-6) var(--sp-6)' }}>
+    <div style={{ paddingTop: 'var(--sp-5)' }}>
       <div
         style={{
-          display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
-          gap: 'var(--sp-6)', marginBottom: 'var(--sp-5)',
+          display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)',
+          gap: 'var(--sp-5)', marginBottom: 'var(--sp-5)',
         }}
       >
         <div>
           <div
             style={{
               display: 'flex', gap: 'var(--sp-3)', alignItems: 'center',
-              flexWrap: 'wrap', marginBottom: 'var(--sp-3)', fontSize: 'var(--fs-sm)',
+              flexWrap: 'wrap', marginBottom: 'var(--sp-3)', fontSize: 'var(--fs-md)',
+              fontWeight: 700,
             }}
           >
             {/* No "% match" here any more. It was a documented feature that existed
@@ -454,8 +463,8 @@ function Body({
       <div
         role="tablist"
         style={{
-          display: 'flex', gap: 'var(--sp-5)', borderBottom: '1px solid var(--border)',
-          marginBottom: 'var(--sp-4)',
+          display: 'inline-flex', gap: 2, padding: 4, borderRadius: 'var(--r-md)',
+          background: 'var(--surface-sunk)', marginBottom: 'var(--sp-4)',
         }}
       >
         {tabs.map((t) => (
@@ -465,11 +474,12 @@ function Body({
             aria-selected={tab === t}
             onClick={() => setTab(t)}
             style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              padding: '0 0 var(--sp-3)', fontSize: 'var(--fs-md)', fontWeight: 650,
-              color: tab === t ? 'var(--text)' : 'var(--text-faint)',
-              borderBottom: `2px solid ${tab === t ? 'var(--accent)' : 'transparent'}`,
-              marginBottom: -1, textTransform: 'capitalize',
+              border: 'none', cursor: 'pointer', height: 36, padding: '0 14px',
+              borderRadius: 'calc(var(--r-md) - 4px)', fontSize: 'var(--fs-sm)',
+              fontWeight: 750, textTransform: 'capitalize',
+              background: tab === t ? 'var(--surface)' : 'transparent',
+              color: tab === t ? 'var(--text)' : 'var(--text-muted)',
+              boxShadow: tab === t ? 'var(--shadow-1)' : 'none',
             }}
           >
             {t === 'similar' ? 'More Like This' : t}
@@ -826,7 +836,8 @@ function Episodes({
               <div
                 style={{
                   position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
-                  background: 'rgb(0 0 0 / 0.25)', color: '#fff',
+                  background: 'color-mix(in srgb, var(--player-bg) 30%, transparent)',
+                  color: 'var(--on-art)',
                 }}
               >
                 <Icon name="play" size={22} filled />
@@ -940,20 +951,27 @@ function Similar({ item }: { item: CatalogItem }) {
     <div
       data-testid="similar-grid"
       style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-        gap: 'var(--sp-3)',
+        display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+        gap: 12,
       }}
     >
       {loading && similar.length === 0
-        && [0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} h={160} />)}
+        && [0, 1, 2, 3].map((i) => <Skeleton key={i} h={150} r={20} />)}
       {similar.map((m) => (
-        <div key={m.id} data-testid="similar-card" style={{ borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--surface)' }}>
-          {m.backdrop && (
-            <img src={m.backdrop} alt="" style={{ width: '100%', aspectRatio: '16/9', objectFit: 'cover', display: 'block' }} />
-          )}
-          <div style={{ padding: 'var(--sp-3)' }}>
-            <div data-testid="similar-title" style={{ fontWeight: 650, fontSize: 'var(--fs-sm)', marginBottom: 4 }}>{m.title}</div>
-            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+        <div key={m.id} data-testid="similar-card" style={{ minWidth: 0 }}>
+          <div
+            style={{
+              aspectRatio: '1', borderRadius: 'var(--r-lg)', overflow: 'hidden',
+              background: artHue(m.title),
+            }}
+          >
+            {m.backdrop && (
+              <img src={m.backdrop} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+            )}
+          </div>
+          <div style={{ padding: '8px 2px 0' }}>
+            <div data-testid="similar-title" style={{ fontWeight: 800, fontSize: 'var(--fs-sm)', marginBottom: 2 }}>{m.title}</div>
+            <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--text-faint)' }}>
               {m.year} · {'runtimeMins' in m ? runtime(m.runtimeMins) : seasons(m.seasons)}
             </div>
           </div>

@@ -19,7 +19,10 @@ import {
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Channel } from '@shared/ipc';
-import { Badge, Button, EmptyState, IconButton, Skeleton, TextField } from '@/components/Primitives';
+import {
+  Badge, Button, ChannelTile as LogoTile, EmptyState, IconButton, ProgressBar, Skeleton,
+  TextField,
+} from '@/components/Primitives';
 import { GroupSidebar } from '@/components/GroupSidebar';
 import { Icon } from '@/components/Icon';
 import { LetterBar } from '@/components/LetterBar';
@@ -32,10 +35,11 @@ import { activeProfileId } from '@/state/profile';
 import { type NowNext, useNowNext } from './useNowNext';
 
 /** Row height and grid tile height, which the virtualiser needs up front. */
-const ROW_H = 72;
-const TILE_H = 150;
-/** Tiles per row in the grid view, at the 150px minimum the template sets. */
-const TILE_MIN_W = 150;
+const ROW_H = 76;
+/** A Daylight channel card plus the gap under it. */
+const TILE_H = 192;
+/** Tiles per row in the grid view: four across at a desktop width. */
+const TILE_MIN_W = 250;
 
 export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   const [group, setGroup] = useState<string | undefined>(undefined);
@@ -256,9 +260,9 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
   return (
     <div
       style={{
-        padding: 'var(--sp-5) var(--sp-6)',
+        padding: '4px 36px 0',
         display: 'flex',
-        gap: 'var(--sp-5)',
+        gap: 20,
         alignItems: 'flex-start',
       }}
     >
@@ -319,14 +323,26 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
           marginBottom: 'var(--sp-4)', flexWrap: 'wrap',
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
+        <h1 className="dl-page-title">
           {/* Which list this is. "Live TV" over one group of 482 left nothing on screen
-              saying which group, once the strip had scrolled away. */}
-          {favoritesOnly ? favoritesList ?? 'Favourites' : group ?? 'Live TV'}
+              saying which group, once the strip had scrolled away.
+
+              With no group chosen the board says "All channels"; the heading's name
+              stays "Live TV", which is what the journeys and a screen reader rely on. */}
+          {favoritesOnly ? favoritesList ?? 'Favourites' : group ?? (
+            <>
+              <span aria-hidden>All channels</span>
+              <span className="sr-only">Live TV</span>
+            </>
+          )}
         </h1>
         <span
           data-testid="channel-count"
-          style={{ color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums' }}
+          className="dl-display"
+          style={{
+            color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums',
+            fontSize: 'var(--fs-3xl)', opacity: 0.6, marginLeft: -4,
+          }}
         >
           {loading ? '' : NUMBER.format(visible.length)}
         </span>
@@ -340,47 +356,53 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
           placeholder="Search channels…"
           aria-label="Search channels"
           data-testid="channel-search"
-          style={{ width: 200 }}
+          style={{ width: 220, background: 'var(--surface)' }}
         />
 
-        <div style={{ display: 'flex', gap: 4 }}>
-          <Button
-            size="sm"
-            variant={order === 'number' ? 'primary' : 'ghost'}
+        <div className="dl-seg">
+          <button
+            type="button"
+            data-active={order === 'number'}
+            data-variant={order === 'number' ? 'primary' : 'ghost'}
             onClick={() => chooseOrder('number')}
           >
             Number
-          </Button>
-          <Button
-            size="sm"
-            variant={order === 'name' ? 'primary' : 'ghost'}
+          </button>
+          <button
+            type="button"
+            data-active={order === 'name'}
+            data-variant={order === 'name' ? 'primary' : 'ghost'}
             onClick={() => chooseOrder('name')}
           >
             A–Z
-          </Button>
+          </button>
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-          <Button
-            size="sm" icon="stack"
-            variant={view === 'list' ? 'primary' : 'ghost'}
+        <div className="dl-seg" style={{ marginLeft: 'auto' }}>
+          {/* The board calls the tile view "Cards"; the button keeps its name, Grid. */}
+          <button
+            type="button"
+            data-active={view === 'grid'}
+            data-variant={view === 'grid' ? 'primary' : 'ghost'}
+            onClick={() => setView('grid')}
+          >
+            <span aria-hidden>Cards</span>
+            <span className="sr-only">Grid</span>
+          </button>
+          <button
+            type="button"
+            data-active={view === 'list'}
+            data-variant={view === 'list' ? 'primary' : 'ghost'}
             onClick={() => setView('list')}
           >
             List
-          </Button>
-          <Button
-            size="sm" icon="grid"
-            variant={view === 'grid' ? 'primary' : 'ghost'}
-            onClick={() => setView('grid')}
-          >
-            Grid
-          </Button>
+          </button>
         </div>
       </div>
 
       {loading && (
         <div style={{ display: 'grid', gap: 8 }}>
-          {Array.from({ length: 8 }, (_, i) => <Skeleton key={i} h={68} />)}
+          {Array.from({ length: 8 }, (_, i) => <Skeleton key={i} h={68} r={18} />)}
         </div>
       )}
 
@@ -434,6 +456,9 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
           // screen was the one that was missed.
           style={{
             height: 'calc(100vh - 220px)', overflowY: 'auto', overflowX: 'hidden',
+            // Its own scroller, so it keeps clear of the nav pill itself.
+            paddingBottom: 'var(--navpill-space)',
+            scrollPaddingBottom: 'var(--navpill-space)',
             // It is a flex item now, beside the A–Z bar. Without this it sizes to its
             // content — and its content is absolutely positioned, so it has none: the
             // scroller collapsed to 26px, every row with it, and the rows became a
@@ -456,11 +481,11 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
                     transform: `translateY(${row.start}px)`,
                     ...(view === 'grid'
                       ? {
-                        display: 'grid', gap: 'var(--sp-3)',
+                        display: 'grid', gap: 16,
                         gridTemplateColumns: `repeat(${perRow}, minmax(0, 1fr))`,
-                        paddingBottom: 'var(--sp-3)',
+                        paddingBottom: 16,
                       }
-                      : { paddingBottom: 4 }),
+                      : { paddingBottom: 8 }),
                   }}
                 >
                   {items.map((c) => (view === 'list' ? (
@@ -555,10 +580,10 @@ function ChannelRow({
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTune(channel); }
       }}
       style={{
-        display: 'grid', gridTemplateColumns: '44px 44px 1fr auto', gap: 'var(--sp-3)',
-        alignItems: 'center', padding: 'var(--sp-3)', textAlign: 'left',
-        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-        borderRadius: 'var(--r-md)', color: 'inherit',
+        display: 'grid', gridTemplateColumns: '40px 48px 1fr auto', gap: 14,
+        alignItems: 'center', padding: '0 16px', textAlign: 'left',
+        background: 'var(--surface)', boxShadow: 'var(--shadow-1)',
+        borderRadius: 'var(--r-lg)', color: 'inherit',
         // `grab` only where there is something to grab: a move cursor on a list that
         // cannot be reordered promises something that does not happen.
         cursor: draggable ? 'grab' : 'pointer',
@@ -570,7 +595,7 @@ function ChannelRow({
         // that is drawn *over* the row below — and the row below, being later in the DOM,
         // then swallows its clicks. Which is what happened the moment the group sidebar
         // took 250px off this column and the longer channel names began to wrap.
-        height: ROW_H - 4,
+        height: ROW_H - 8,
         boxSizing: 'border-box',
         overflow: 'hidden',
       }}
@@ -583,12 +608,7 @@ function ChannelRow({
       >
         {channel.number}
       </span>
-      {channel.logo ? (
-        <img
-          src={channel.logo} alt=""
-          style={{ width: 40, height: 40, borderRadius: 'var(--r-sm)', objectFit: 'cover' }}
-        />
-      ) : <div style={{ width: 40 }} />}
+      <LogoTile name={channel.name} number={channel.number} logo={channel.logo} size={44} />
 
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, minWidth: 0 }}>
@@ -596,15 +616,15 @@ function ChannelRow({
               (1080p)", which wrapped as soon as this column narrowed. */}
           <strong
             style={{
-              fontSize: 'var(--fs-md)', whiteSpace: 'nowrap', overflow: 'hidden',
-              textOverflow: 'ellipsis', minWidth: 0,
+              fontSize: 'var(--fs-lg)', fontWeight: 800, whiteSpace: 'nowrap',
+              overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
             }}
           >
             {channel.name}
           </strong>
           {channel.quality && (
             <span style={{ flexShrink: 0 }}>
-              <Badge tone={channel.quality === '4K' ? 'accent' : 'neutral'}>
+              <Badge tone="neutral">
                 {channel.quality}
               </Badge>
             </span>
@@ -626,13 +646,8 @@ function ChannelRow({
           )}
         </div>
         {pct > 0 && (
-          <div
-            style={{
-              marginTop: 5, height: 2, background: 'var(--border)',
-              borderRadius: 'var(--r-full)', overflow: 'hidden', maxWidth: 260,
-            }}
-          >
-            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--live)' }} />
+          <div style={{ marginTop: 6, maxWidth: 260 }}>
+            <ProgressBar percent={pct} height={4} />
           </div>
         )}
       </div>
@@ -655,7 +670,7 @@ function ChannelRow({
             <span title="Your provider no longer lists this channel">Dropped</span>
           </Badge>
         )}
-        {channel.hasCatchup && <Badge tone="outline">Catch-up</Badge>}
+        {channel.hasCatchup && <Badge tone="new">Catch-up</Badge>}
         <button
           type="button"
           aria-label={
@@ -693,7 +708,15 @@ function ChannelRow({
             <Icon name="plus" size={14} />
           </button>
         )}
-        <Icon name="play" size={18} filled style={{ color: 'var(--text-faint)' }} />
+        <span
+          aria-hidden
+          style={{
+            width: 36, height: 36, borderRadius: 'var(--r-sm)', display: 'grid',
+            placeItems: 'center', background: 'var(--surface-sunk)', color: 'var(--text)',
+          }}
+        >
+          <Icon name="play" size={15} filled />
+        </span>
       </div>
     </div>
   );
@@ -720,6 +743,10 @@ function ChannelTile({
   onToggleFavorite: (c: Channel) => void;
 }) {
   const data = guide;
+  const now = Math.floor(Date.now() / 1000);
+  const pct = data?.now
+    ? progressPct(now - data.now.start, data.now.stop - data.now.start)
+    : 0;
   return (
     <div
       data-testid="channel-tile"
@@ -727,47 +754,59 @@ function ChannelTile({
     >
     <button
       onClick={() => onTune(channel)}
+      className="dl-press"
       style={{
-        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-        borderRadius: 'var(--r-md)', padding: 'var(--sp-3)', cursor: 'pointer',
-        textAlign: 'left', color: 'inherit', display: 'grid', gap: 'var(--sp-2)',
+        background: 'var(--surface)', border: 'none', boxShadow: 'var(--shadow-1)',
+        borderRadius: 'var(--r-xl)', padding: 14, cursor: 'pointer',
+        textAlign: 'left', color: 'inherit', display: 'flex', flexDirection: 'column',
+        gap: 2, height: TILE_H - 16, overflow: 'hidden', lineHeight: 1.35,
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        {channel.logo && (
-          <img
-            src={channel.logo} alt=""
-            style={{ width: 42, height: 42, borderRadius: 'var(--r-sm)', objectFit: 'cover' }}
-          />
-        )}
+      <div
+        style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+          marginBottom: 8, flexShrink: 0,
+        }}
+      >
+        <LogoTile name={channel.name} number={channel.number} logo={channel.logo} size={52} />
         {/*
           * Beside the number rather than on their own lines: the grid's rows are
           * absolutely positioned at multiples of `TILE_H`, so a tile that grows taller
           * than the estimate overlaps the row below it -- which is what the
           * re-measurement journey caught when these first went in (R-114).
           */}
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 14 }}>
           {channel.stale && (
             <span
+              className="dl-chip"
               title="Your provider no longer lists this channel"
-              style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--warning)' }}
+              style={{ background: 'var(--warning)', color: 'var(--text-on-light)' }}
             >
               Dropped
             </span>
           )}
           {channel.hasCatchup && (
-            <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
-              Catch-up
-            </span>
+            <span className="dl-chip" data-tone="success">Catch-up</span>
           )}
-          <span style={{ color: 'var(--text-faint)', fontWeight: 800 }}>{channel.number}</span>
+          {channel.quality && <span className="dl-chip">{channel.quality}</span>}
+          {/* The number, for the tile that has a logo and so is not showing it. */}
+          {channel.logo && (
+            <span style={{ color: 'var(--text-faint)', fontWeight: 800 }}>{channel.number}</span>
+          )}
         </span>
       </div>
-      <strong style={{ fontSize: 'var(--fs-sm)' }}>{channel.name}</strong>
+      <strong
+        style={{
+          fontSize: 'var(--fs-lg)', fontWeight: 800, whiteSpace: 'nowrap', flexShrink: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 30,
+        }}
+      >
+        {channel.name}
+      </strong>
       <span
         style={{
-          fontSize: 'var(--fs-xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap',
-          overflow: 'hidden', textOverflow: 'ellipsis',
+          fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 8,
         }}
       >
         {/*
@@ -778,10 +817,20 @@ function ChannelTile({
           */}
         {data?.now?.title ?? 'No guide data'}
       </span>
+      <ProgressBar percent={pct} height={6} />
+      <span
+        style={{
+          marginTop: 10, fontSize: 'var(--fs-sm)', fontWeight: 700,
+          color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden',
+          textOverflow: 'ellipsis', paddingRight: 34,
+        }}
+      >
+        {data?.next ? `Next · ${data.next.title}` : '\u00a0'}
+      </span>
     </button>
       {/* Outside the tune button, because a button cannot contain a button. */}
       <IconButton
-        size={28}
+        size={30}
         icon="heart"
         filled={channel.favorite}
         active={channel.favorite}
@@ -795,8 +844,8 @@ function ChannelTile({
         onClick={() => onToggleFavorite(channel)}
         style={{
           position: 'absolute',
-          top: 'var(--sp-2)',
-          right: 'var(--sp-2)',
+          bottom: 12,
+          right: 12,
           color: channel.favorite ? 'var(--accent)' : 'var(--text-faint)',
         }}
       />

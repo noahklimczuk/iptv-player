@@ -37,7 +37,7 @@ export interface PinnedGroup {
   onSelect?: () => void;
 }
 
-const ROW_H = 34;
+const ROW_H = 39;
 
 /**
  * Thousands separators without depending on the container's locale — a WebView with no
@@ -84,20 +84,20 @@ export function GroupSidebar({
   return (
     <nav
       aria-label={label}
+      className="dl-panel"
       style={{
-        width: 248,
+        width: 230,
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
-        gap: 'var(--sp-3)',
+        gap: 'var(--sp-2)',
+        padding: 12,
         // Its own scroll region, so the content beside it scrolls independently and the
         // group you are in stays on screen however far down the films you are.
         position: 'sticky',
         top: 0,
         alignSelf: 'flex-start',
-        maxHeight: 'calc(100vh - var(--topbar-h))',
-        borderRight: '1px solid var(--border)',
-        paddingRight: 'var(--sp-4)',
+        maxHeight: 'calc(100vh - var(--topbar-h) - var(--navpill-space))',
       }}
     >
       {/* Only worth showing when there is enough to search. Below that it is a control
@@ -131,7 +131,7 @@ export function GroupSidebar({
       )}
 
       {pinned.length > 0 && groups.length > 0 && (
-        <div style={{ height: 1, background: 'var(--border)', flexShrink: 0 }} />
+        <div style={{ height: 1, background: 'var(--border)', flexShrink: 0, margin: '2px 6px' }} />
       )}
 
       <div
@@ -203,15 +203,16 @@ function Row({
         gap: 8,
         width: '100%',
         height: ROW_H - 2,
-        padding: '0 10px',
+        padding: '0 14px',
         border: 'none',
         borderRadius: 'var(--r-md)',
         cursor: 'pointer',
         textAlign: 'left',
-        fontSize: 'var(--fs-sm)',
-        fontWeight: active ? 700 : 500,
-        background: active ? 'var(--surface-hover)' : 'transparent',
-        color: active ? 'var(--text)' : 'var(--text-muted)',
+        fontSize: 'var(--fs-md)',
+        fontWeight: 700,
+        // The active group is an ink pill, as in every Daylight index.
+        background: active ? 'var(--text)' : 'transparent',
+        color: active ? 'var(--bg)' : 'var(--text)',
         transition: 'background var(--t-fast) var(--ease), color var(--t-fast) var(--ease)',
       }}
     >
@@ -232,7 +233,9 @@ function Row({
         <span
           style={{
             fontSize: 'var(--fs-xs)',
-            color: 'var(--text-faint)',
+            fontWeight: 700,
+            color: active ? 'var(--bg)' : 'var(--text-faint)',
+            opacity: active ? 0.8 : 1,
             fontVariantNumeric: 'tabular-nums',
             flexShrink: 0,
           }}

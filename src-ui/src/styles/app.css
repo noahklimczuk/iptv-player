@@ -61,8 +61,8 @@ body {
      paints its own opaque background wherever video should NOT be visible. */
   background: transparent;
   color: var(--text);
-  font-family: 'Inter var', 'Inter', 'Segoe UI Variable Display', 'Segoe UI',
-               system-ui, -apple-system, sans-serif;
+  font-family: var(--font-ui);
+  font-weight: 500;
   font-size: var(--fs-md);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -91,13 +91,16 @@ body {
    also the only affordance saying which thing is under the pointer. */
 
 .aurora-btn:hover:not(:disabled) { transform: translateY(-1px); }
-.aurora-btn:active:not(:disabled) { transform: translateY(0) scale(0.97); }
+.aurora-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-timing-function: var(--ease-spring);
+}
 
 /* Per variant, because one rule cannot serve all four. A primary button's background
    is `--text`, which is nearly white in every theme — brightening it does nothing,
    so it darkens instead. Ghost and secondary have little or no background to change,
    so they grow one. */
-.aurora-btn[data-variant='primary']:hover:not(:disabled) { filter: brightness(0.92); }
+.aurora-btn[data-variant='primary']:hover:not(:disabled) { filter: brightness(1.08); }
 .aurora-btn[data-variant='danger']:hover:not(:disabled) { filter: brightness(1.1); }
 .aurora-btn[data-variant='secondary']:hover:not(:disabled),
 .aurora-btn[data-variant='ghost']:hover:not(:disabled) {
@@ -201,3 +204,148 @@ body {
 }
 .aurora-switch:hover { border-color: var(--text-faint); color: var(--text); }
 .aurora-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Daylight building blocks ──────────────────────────────────────────────
+   Shared shapes every screen draws from, so a segmented control or a switch looks the
+   same everywhere by construction rather than by copying. Colours come from tokens. */
+
+/* Visually hidden, still the accessible name. Used where the board shows display copy
+   ("Ask Aurora", "Guide") but the heading's tested name is something else. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.dl-display {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: var(--tracking-display);
+  line-height: 1.02;
+}
+
+.dl-page-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--fs-3xl);
+  letter-spacing: var(--tracking-display);
+  line-height: 1.05;
+  color: var(--text);
+}
+
+.dl-panel {
+  background: var(--surface);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-1);
+}
+
+/* Segmented control: a sunk track with a raised selected segment. */
+.dl-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 4px;
+  background: var(--surface-sunk);
+  border-radius: var(--r-md);
+}
+.dl-seg > button,
+.dl-seg > a {
+  height: 36px; padding: 0 14px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: none; border-radius: calc(var(--r-md) - 4px);
+  background: transparent; color: var(--text-muted);
+  font-size: var(--fs-sm); font-weight: 700; white-space: nowrap;
+  cursor: pointer; text-decoration: none;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.dl-seg > button:hover:not([data-active='true']),
+.dl-seg > a:hover:not([data-active='true']) { color: var(--text); }
+.dl-seg > [data-active='true'] {
+  background: var(--surface); color: var(--text);
+  box-shadow: 0 1px 2px rgb(22 22 26 / 0.08);
+}
+:root[data-theme='contrast'] .dl-seg > [data-active='true'] {
+  background: var(--accent); color: var(--accent-text);
+}
+
+/* iOS-style switch. The element is a real `role="switch"` button; this only draws it. */
+.dl-switch {
+  position: relative; flex-shrink: 0;
+  width: 46px; height: 28px; padding: 0;
+  border: none; border-radius: var(--r-full);
+  background: var(--surface-sunk);
+  cursor: pointer;
+  transition: background var(--t-base) var(--ease);
+}
+.dl-switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgb(22 22 26 / 0.25);
+  transition: transform var(--t-base) var(--ease-spring);
+}
+.dl-switch[aria-checked='true'],
+.dl-switch[aria-pressed='true'] { background: var(--accent); }
+.dl-switch[aria-checked='true']::after,
+.dl-switch[aria-pressed='true']::after { transform: translateX(18px); }
+:root[data-theme='contrast'] .dl-switch { box-shadow: inset 0 0 0 2px #fff; }
+:root[data-theme='contrast'] .dl-switch::after { background: #fff; }
+:root[data-theme='contrast'] .dl-switch[aria-checked='true']::after,
+:root[data-theme='contrast'] .dl-switch[aria-pressed='true']::after { background: #000; }
+
+/* Solid rounded chip. */
+.dl-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 10px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-xs); font-weight: 800; line-height: 1;
+  white-space: nowrap;
+  background: var(--surface-sunk); color: var(--text);
+}
+.dl-chip[data-tone='live'] { background: var(--live); color: var(--live-text); }
+.dl-chip[data-tone='success'] { background: var(--success); color: var(--success-text); }
+.dl-chip[data-tone='accent'] { background: var(--accent); color: var(--accent-text); }
+
+/* Filter chips: white, the active one blue. */
+.dl-filter {
+  height: 40px; padding: 0 16px;
+  border: none; border-radius: var(--r-md);
+  background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow-1);
+  font-size: var(--fs-sm); font-weight: 700; white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.dl-filter:hover:not([aria-pressed='true']):not([aria-current]) { background: var(--surface-hover); }
+.dl-filter[aria-pressed='true'],
+.dl-filter[aria-current] { background: var(--accent); color: var(--accent-text); }
+
+/* A card you can press: a small, springy give. */
+.dl-press { transition: transform var(--t-base) var(--ease-spring); }
+.dl-press:active { transform: scale(0.98); }
+:root[data-motion='off'] .dl-press:active { transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='on']) .dl-press:active { transform: none; }
+}
+
+/* The dock's scrubber and volume: a 10px track, the played part blue, a pale strip for
+   what is buffered, and a white knob with a blue ring. `--fill` and `--buf` are set
+   inline from the value. */
+.dl-range {
+  -webkit-appearance: none; appearance: none;
+  height: 20px; margin: 0; background: transparent; cursor: pointer;
+  --fill: 0%; --buf: 0%;
+}
+.dl-range::-webkit-slider-runnable-track {
+  height: 10px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--accent) 0 var(--fill),
+    var(--dock-buffer) var(--fill) var(--buf),
+    var(--dock-track) var(--buf) 100%);
+}
+.dl-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; margin-top: -5px; border-radius: 50%;
+  background: var(--dock-bg); box-shadow: 0 0 0 4px var(--accent);
+  transition: transform var(--t-fast) var(--ease-spring);
+}
+.dl-range:active::-webkit-slider-thumb { transform: scale(1.04); }
+.dl-range:focus-visible { box-shadow: none; }
+.dl-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent), 0 0 0 7px var(--dock-buffer); }

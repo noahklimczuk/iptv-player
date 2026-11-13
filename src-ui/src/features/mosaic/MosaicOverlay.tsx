@@ -177,19 +177,24 @@ export function MosaicOverlay({
             // picture gets an opaque black screen to wait on.
             background:
               tile.error || tile.channelId === null
-                ? 'color-mix(in srgb, var(--bg) 92%, transparent)'
+                ? 'var(--surface-sunk)'
                 : view.rotating && !tile.showing
                   // Waiting its turn. Opaque for the reason above -- the window is
-                  // transparent while a mosaic is open -- and a shade off black so the
-                  // wall reads as eight cards and one picture rather than as one
-                  // picture and eight failures.
-                  ? 'color-mix(in srgb, var(--bg) 94%, transparent)'
+                  // transparent while a mosaic is open -- and a shade off the player's
+                  // ink so the wall reads as eight cards and one picture rather than as
+                  // one picture and eight failures.
+                  ? 'color-mix(in srgb, var(--player-bg) 94%, var(--on-art))'
                   : tile.status === 'playing' || tile.status === 'paused'
                     ? 'transparent'
-                    : '#000',
-            border: tile.focused
-              ? '2px solid var(--accent)'
-              : '1px solid color-mix(in srgb, var(--text) 22%, transparent)',
+                    : 'var(--player-bg)',
+            // Square corners: the picture under a tile is the host's rectangle, and a
+            // rounded tile would leave its corners showing past the frame. The sound tile
+            // carries Daylight's 4px blue ring, drawn inside so it never covers a
+            // neighbour.
+            border: tile.channelId === null && !tile.error
+              ? '2px dashed var(--border-strong)'
+              : 'none',
+            boxShadow: tile.focused ? 'inset 0 0 0 4px var(--accent)' : 'none',
             borderRadius: 0,
             padding: 0,
             display: 'flex',
@@ -197,7 +202,7 @@ export function MosaicOverlay({
             justifyContent: 'flex-end',
             alignItems: 'stretch',
             cursor: 'pointer',
-            color: 'var(--text)',
+            color: tile.channelId === null && !tile.error ? 'var(--text)' : 'var(--on-art)',
             textAlign: 'left',
             overflow: 'hidden',
           }}
@@ -288,8 +293,9 @@ export function MosaicOverlay({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: 12,
-                opacity: 0.6,
+                fontSize: 'var(--fs-sm)',
+                fontWeight: 700,
+                color: 'var(--text-muted)',
               }}
             >
               Empty
@@ -303,16 +309,19 @@ export function MosaicOverlay({
               display: 'flex',
               alignItems: 'center',
               gap: 'var(--sp-2)',
-              padding: '4px 8px',
-              background: 'color-mix(in srgb, var(--bg) 70%, transparent)',
-              fontSize: 12,
+              padding: '18px 14px 10px',
+              background: tile.channelId === null && !tile.error
+                ? 'transparent'
+                : 'linear-gradient(to top, rgb(10 12 20 / 0.75), transparent)',
+              fontSize: 'var(--fs-sm)',
+              fontWeight: 600,
             }}
           >
             <span
               style={{
                 fontVariantNumeric: 'tabular-nums',
-                fontWeight: 600,
-                opacity: tile.index < 9 ? 0.9 : 0.4,
+                fontWeight: 800,
+                opacity: tile.index < 9 ? 1 : 0.4,
               }}
             >
               {tile.index + 1}
@@ -338,10 +347,22 @@ export function MosaicOverlay({
           top: 'var(--sp-4)',
           right: 'var(--sp-4)',
           display: 'flex',
+          alignItems: 'center',
           gap: 'var(--sp-2)',
+          padding: 6,
+          borderRadius: 'var(--r-lg)',
+          background: 'var(--dock-bg)',
+          color: 'var(--dock-text)',
+          boxShadow: 'var(--shadow-dock)',
           pointerEvents: 'auto',
         }}
       >
+        <span
+          className="dl-display"
+          style={{ fontSize: 'var(--fs-xl)', padding: '0 10px 0 8px' }}
+        >
+          Multi-view
+        </span>
         {view.rotating && (
           <div
             data-testid="mosaic-rotation-status"
@@ -350,9 +371,11 @@ export function MosaicOverlay({
               alignItems: 'center',
               gap: 'var(--sp-2)',
               padding: '0 var(--sp-3)',
-              borderRadius: 'var(--radius-md)',
-              background: 'color-mix(in srgb, var(--bg) 70%, transparent)',
-              fontSize: 12,
+              height: 36,
+              borderRadius: 'var(--r-md)',
+              background: 'var(--dock-btn)',
+              fontSize: 'var(--fs-xs)',
+              fontWeight: 700,
               fontVariantNumeric: 'tabular-nums',
             }}
           >

@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, MosaicCheck, MosaicLayout, SavedMosaicLayout } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
 import { useFocusTrap } from '@/hooks/useFocusTrap';
-import { Button, EmptyState, Select, TextField } from '@/components/Primitives';
+import { Button, EmptyState, Select, TextField, artHue } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
@@ -30,7 +30,7 @@ const LAYOUTS: { id: MosaicLayout; label: string; hint: string }[] = [
 ];
 
 /** A miniature of the arrangement, built from the same cell logic as the host. */
-function LayoutThumb({ layout }: { layout: MosaicLayout }) {
+function LayoutThumb({ layout, small = false }: { layout: MosaicLayout; small?: boolean }) {
   const cells: { gridArea: string }[] =
     layout === 'grid2x2'
       ? [1, 2, 3, 4].map((_, i) => ({
@@ -67,8 +67,8 @@ function LayoutThumb({ layout }: { layout: MosaicLayout }) {
         gridTemplateColumns: `repeat(${cols}, 1fr)`,
         gridTemplateRows: `repeat(${rows}, 1fr)`,
         gap: 2,
-        width: 64,
-        height: 44,
+        width: small ? 24 : 64,
+        height: small ? 16 : 44,
       }}
     >
       {cells.map((cell, i) => (
@@ -266,53 +266,37 @@ export function MosaicPage({
   }
 
   return (
-    <div style={{ padding: 'var(--sp-6)', display: 'grid', gap: 'var(--sp-6)' }}>
-      <header style={{ display: 'grid', gap: 'var(--sp-2)' }}>
-        <h1 style={{ margin: 0, fontSize: 24 }}>Multi-view</h1>
-        <p style={{ margin: 0, color: 'var(--text-muted)', maxWidth: '60ch' }}>
-          Watch several channels at once. One tile has sound — press <kbd>1</kbd>–
-          <kbd>9</kbd> or click a tile to move it, and double-click to open that channel
-          on its own.
-        </p>
-      </header>
-
-      <section style={{ display: 'grid', gap: 'var(--sp-3)' }}>
-        <h2 style={{ margin: 0, fontSize: 14, color: 'var(--text-muted)' }}>Arrangement</h2>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-3)' }}>
+    <div style={{ padding: '4px 36px var(--sp-6)', display: 'grid', gap: 20 }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+        <div style={{ display: 'grid', gap: 6, flex: 1, minWidth: 320 }}>
+          <h1 className="dl-page-title">Multi-view</h1>
+          <p style={{ margin: 0, color: 'var(--text-muted)', maxWidth: '64ch', fontWeight: 500 }}>
+            Watch several channels at once. One tile has sound — press <kbd>1</kbd>–
+            <kbd>9</kbd> or click a tile to move it, and double-click to open that channel
+            on its own.
+          </p>
+        </div>
+        {/* The arrangement, as Daylight's segmented track. */}
+        <div role="group" aria-label="Arrangement" className="dl-seg">
           {LAYOUTS.map((l) => (
             <button
               key={l.id}
               type="button"
               data-testid={`mosaic-layout-${l.id}`}
               aria-pressed={layout === l.id}
+              data-active={layout === l.id}
+              title={`${l.hint} · ${MOSAIC_TILES[l.id]} tiles`}
               onClick={() => setLayout(l.id)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--sp-3)',
-                padding: 'var(--sp-3)',
-                borderRadius: 'var(--r-md)',
-                background:
-                  layout === l.id
-                    ? 'color-mix(in srgb, var(--accent) 18%, transparent)'
-                    : 'color-mix(in srgb, var(--surface) 78%, transparent)',
-                border: `1px solid ${layout === l.id ? 'var(--accent)' : 'var(--border)'}`,
-                color: 'var(--text)',
-                cursor: 'pointer',
-                textAlign: 'left',
-              }}
+              style={{ height: 44, padding: '0 16px' }}
             >
-              <LayoutThumb layout={l.id} />
-              <span style={{ display: 'grid', gap: 2 }}>
-                <span style={{ fontWeight: 600 }}>{l.label}</span>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{l.hint}</span>
-                <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-                  {MOSAIC_TILES[l.id]} tiles
-                </span>
-              </span>
+              <LayoutThumb layout={l.id} small />
+              {l.label}
             </button>
           ))}
         </div>
+      </header>
+
+      <section style={{ display: 'grid', gap: 'var(--sp-3)' }}>
 
         {check && (
           <div
@@ -322,6 +306,11 @@ export function MosaicPage({
               alignItems: 'center',
               gap: 'var(--sp-2)',
               fontSize: 13,
+              fontWeight: 600,
+              padding: '10px 14px',
+              borderRadius: 'var(--r-md)',
+              background: line.blocked ? 'var(--danger-soft)' : 'var(--surface)',
+              border: `1px solid ${line.blocked ? 'var(--danger-border)' : 'var(--border)'}`,
               color: line.blocked ? 'var(--danger)' : 'var(--text-muted)',
             }}
           >
@@ -342,28 +331,71 @@ export function MosaicPage({
       </section>
 
       <section style={{ display: 'grid', gap: 'var(--sp-3)' }}>
-        <h2 style={{ margin: 0, fontSize: 14, color: 'var(--text-muted)' }}>
+        <h2 style={{ margin: 0, fontSize: 'var(--fs-sm)', fontWeight: 700, color: 'var(--text-muted)' }}>
           Channels — leave a tile empty to open fewer streams
         </h2>
+        {/* The wall as it will open: rounded tiles on the sunk ground, the sound tile
+            ringed in blue, and each empty slot a dashed "Add a channel". */}
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: 'var(--sp-3)',
+            gridTemplateColumns: `repeat(${tiles >= 9 ? 3 : 2}, minmax(0, 1fr))`,
+            gap: 16, padding: 16, borderRadius: 'var(--r-xl)',
+            background: 'var(--surface-sunk)',
           }}
         >
-          {Array.from({ length: tiles }, (_, index) => (
-            <div key={index} data-testid={`mosaic-pick-${index}`}>
-              <Select
-                label={`Tile ${index + 1}${index === 0 ? ' — starts with sound' : ''}`}
-                placeholder="Empty"
-                options={channelOptions}
-                value={picked[index] == null ? undefined : String(picked[index])}
-                onChange={(v) => setTile(index, v)}
-                width={240}
-              />
-            </div>
-          ))}
+          {Array.from({ length: tiles }, (_, index) => {
+            const id = picked[index];
+            const name = id == null
+              ? null
+              : channelOptions.find((o) => o.value === String(id))?.label ?? null;
+            return (
+              <div
+                key={index}
+                data-testid={`mosaic-pick-${index}`}
+                style={{
+                  position: 'relative', minHeight: tiles >= 9 ? 120 : 150,
+                  borderRadius: 22, padding: 14,
+                  display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+                  gap: 10,
+                  background: name ? artHue(name) : 'transparent',
+                  color: name ? 'var(--on-art)' : 'var(--text)',
+                  border: name ? 'none' : '2px dashed var(--border-strong)',
+                  boxShadow: name && index === 0 ? '0 0 0 4px var(--accent)' : 'none',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    fontWeight: 800, fontSize: 'var(--fs-md)',
+                  }}
+                >
+                  {name ? (
+                    <>
+                      <span style={{ opacity: 0.8 }}>{index + 1}</span>
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {name}
+                      </span>
+                      {index === 0 && <Icon name="volume" size={15} style={{ marginLeft: 'auto' }} />}
+                    </>
+                  ) : (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)' }}>
+                      <Icon name="plus" size={16} />
+                      Add a channel
+                    </span>
+                  )}
+                </div>
+                <Select
+                  label={`Tile ${index + 1}${index === 0 ? ' — starts with sound' : ''}`}
+                  placeholder="Empty"
+                  options={channelOptions}
+                  value={id == null ? undefined : String(id)}
+                  onChange={(v) => setTile(index, v)}
+                  width={260}
+                />
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -404,10 +436,10 @@ export function MosaicPage({
           style={{
             display: 'grid',
             gap: 'var(--sp-2)',
-            padding: 'var(--sp-3)',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border)',
-            background: 'var(--surface-2)',
+            padding: 'var(--sp-4)',
+            borderRadius: 'var(--r-xl)',
+            background: 'var(--surface)',
+            boxShadow: 'var(--shadow-1)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
@@ -437,7 +469,7 @@ export function MosaicPage({
 
       {saved && saved.length > 0 && (
         <section style={{ display: 'grid', gap: 'var(--sp-3)' }}>
-          <h2 style={{ margin: 0, fontSize: 14, color: 'var(--text-muted)' }}>Saved layouts</h2>
+          <h2 className="dl-display" style={{ margin: 0, fontSize: 'var(--fs-2xl)' }}>Saved layouts</h2>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 'var(--sp-2)' }}>
             {saved.map((row) => (
               <li
@@ -447,10 +479,10 @@ export function MosaicPage({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 'var(--sp-3)',
-                  padding: 'var(--sp-3)',
-                  borderRadius: 'var(--r-md)',
-                  background: 'color-mix(in srgb, var(--surface) 78%, transparent)',
-                  border: '1px solid var(--border)',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--r-lg)',
+                  background: 'var(--surface)',
+                  boxShadow: 'var(--shadow-1)',
                 }}
               >
                 <LayoutThumb layout={row.layout} />

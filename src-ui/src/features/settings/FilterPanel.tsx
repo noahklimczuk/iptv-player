@@ -9,7 +9,6 @@
 import { useCallback, useState } from 'react';
 import type { LibraryFilters, PlaylistKind } from '@shared/ipc';
 import { Badge } from '@/components/Primitives';
-import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
 
@@ -119,8 +118,8 @@ function Toggle({
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-4)', padding: 'var(--sp-2) 0' }}>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600 }}>{label}</div>
-        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)', maxWidth: 560 }}>
+        <div style={{ fontWeight: 800, fontSize: 'var(--fs-lg)' }}>{label}</div>
+        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', maxWidth: 560 }}>
           {hint}
         </div>
       </div>
@@ -130,19 +129,11 @@ function Toggle({
         aria-label={label}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
-          padding: '7px 14px', borderRadius: 'var(--r-full)',
-          cursor: disabled ? 'progress' : 'pointer',
-          fontSize: 'var(--fs-sm)', fontWeight: 600,
-          border: `1px solid ${checked ? 'transparent' : 'var(--border-strong)'}`,
-          background: checked ? 'var(--accent)' : 'transparent',
-          color: checked ? 'var(--accent-text)' : 'var(--text-muted)',
-        }}
-      >
-        <Icon name={checked ? 'check' : 'close'} size={14} />
-        {checked ? 'On' : 'Off'}
-      </button>
+        type="button"
+        className="dl-switch"
+        title={checked ? 'On' : 'Off'}
+        style={{ cursor: disabled ? 'progress' : 'pointer', marginTop: 4 }}
+      />
     </div>
   );
 }

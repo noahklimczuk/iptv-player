@@ -83,13 +83,14 @@ export function BootScreen({ label = 'Starting Aurora…' }: { label?: string })
         style={{
           width: 56,
           height: 56,
-          borderRadius: 13,
+          borderRadius: 18,
           display: 'grid',
           placeItems: 'center',
+          fontFamily: 'var(--font-display)',
           fontWeight: 800,
           fontSize: 26,
-          color: '#fff',
-          background: 'linear-gradient(135deg, var(--accent), var(--accent-2))',
+          color: 'var(--accent-text)',
+          background: 'var(--accent)',
           boxShadow: 'var(--shadow-3)',
         }}
       >

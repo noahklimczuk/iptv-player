@@ -5,17 +5,18 @@
 import { motion } from 'framer-motion';
 import { useEffect, useMemo, useState } from 'react';
 import type { PinOutcome, Profile } from '@shared/ipc';
-import { Button } from '@/components/Primitives';
+import { Button, artHue } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { useProfile } from '@/state/profile';
 
-/** Deterministic avatar colour, so a profile looks the same every launch. */
+/**
+ * Deterministic avatar colour, so a profile looks the same every launch -- and the same
+ * Daylight hue as the profile tile in the top bar, which picks it the same way.
+ */
 function avatarColor(profile: Profile): string {
-  let n = 0;
-  for (const c of profile.name) n = (n * 31 + c.charCodeAt(0)) >>> 0;
-  return `hsl(${n % 360} 55% 42%)`;
+  return artHue(profile.name);
 }
 
 export function ProfilePicker() {
@@ -30,20 +31,24 @@ export function ProfilePicker() {
 
   return (
     <div style={shell}>
-      <h1 style={{ margin: '0 0 var(--sp-7)', fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
+      <h1
+        className="dl-display"
+        style={{ margin: '0 0 56px', fontSize: 'var(--fs-4xl)', color: 'var(--text)' }}
+      >
         Who's watching?
       </h1>
 
       <div
         style={{
-          display: 'flex', gap: 'var(--sp-5)', flexWrap: 'wrap', justifyContent: 'center',
+          display: 'flex', gap: 40, flexWrap: 'wrap', justifyContent: 'center',
+          alignItems: 'flex-start',
         }}
       >
         {profiles.map((profile) => (
           <motion.button
             key={profile.id}
-            whileHover={{ scale: 1.06 }}
-            whileFocus={{ scale: 1.06 }}
+            whileHover={{ scale: 1.04 }}
+            whileFocus={{ scale: 1.04 }}
             transition={{ duration: 0.16 }}
             onClick={() => (profile.hasPin ? setLocked(profile) : activate(profile))}
             aria-label={`${profile.name}${profile.hasPin ? ', PIN required' : ''}`}
@@ -54,33 +59,29 @@ export function ProfilePicker() {
           >
             <div
               style={{
-                width: 118, height: 118, borderRadius: 'var(--r-lg)', display: 'grid',
+                // A squircle: Daylight's 150px profile tile.
+                width: 150, height: 150, borderRadius: 44, display: 'grid',
                 placeItems: 'center', position: 'relative',
-                background: avatarColor(profile), fontSize: 46, fontWeight: 800, color: '#fff',
+                background: avatarColor(profile), color: 'var(--on-art)',
+                fontFamily: 'var(--font-display)', fontSize: 64, fontWeight: 800,
               }}
             >
               {profile.name.slice(0, 1).toUpperCase()}
-              {profile.hasPin && (
-                <span
-                  aria-hidden
-                  style={{
-                    position: 'absolute', right: 8, bottom: 8, width: 26, height: 26,
-                    borderRadius: '50%', background: 'rgb(0 0 0 / 0.55)',
-                    display: 'grid', placeItems: 'center',
-                  }}
-                >
-                  <Icon name="settings" size={14} />
-                </span>
-              )}
             </div>
-            <span style={{ fontSize: 'var(--fs-md)', fontWeight: 600 }}>
+            <span style={{ fontSize: 'var(--fs-lg)', fontWeight: 800 }}>
               {profile.name}
-              {profile.isKids && (
-                <span style={{ marginLeft: 6, fontSize: 'var(--fs-xs)', color: 'var(--accent-2)' }}>
-                  KIDS
-                </span>
-              )}
             </span>
+            {(profile.hasPin || profile.isKids) && (
+              <span style={{ display: 'flex', gap: 6, marginTop: -4 }}>
+                {profile.hasPin && (
+                  <span className="dl-chip">
+                    <Icon name="settings" size={11} />
+                    PIN
+                  </span>
+                )}
+                {profile.isKids && <span className="dl-chip" data-tone="success">KIDS</span>}
+              </span>
+            )}
           </motion.button>
         ))}
       </div>
@@ -178,7 +179,20 @@ function PinPad({
 
   return (
     <div style={shell}>
-      <h1 style={{ margin: '0 0 var(--sp-3)', fontSize: 'var(--fs-xl)', fontWeight: 700 }}>
+      <div
+        aria-hidden
+        style={{
+          width: 96, height: 96, borderRadius: 30, display: 'grid', placeItems: 'center',
+          background: avatarColor(profile), color: 'var(--on-art)', marginBottom: 20,
+          fontFamily: 'var(--font-display)', fontSize: 40, fontWeight: 800,
+        }}
+      >
+        {profile.name.slice(0, 1).toUpperCase()}
+      </div>
+      <h1
+        className="dl-display"
+        style={{ margin: '0 0 var(--sp-3)', fontSize: 'var(--fs-2xl)', color: 'var(--text)' }}
+      >
         Enter {profile.name}'s PIN
       </h1>
 
@@ -193,15 +207,22 @@ function PinPad({
             key={i}
             style={{
               width: 18, height: 18, borderRadius: '50%',
-              border: '2px solid var(--border-strong)',
-              background: i < digits.length ? 'var(--text)' : 'transparent',
+              border: `2px solid ${i < digits.length ? 'var(--accent)' : 'var(--border-strong)'}`,
+              background: i < digits.length ? 'var(--accent)' : 'transparent',
             }}
           />
         ))}
       </div>
 
       {message && (
-        <div role="alert" style={{ color: 'var(--danger)', marginBottom: 'var(--sp-4)' }}>
+        <div
+          role="alert"
+          style={{
+            color: 'var(--danger)', marginBottom: 'var(--sp-4)', fontWeight: 700,
+            padding: '10px 16px', borderRadius: 'var(--r-md)',
+            background: 'var(--danger-soft)', border: '1px solid var(--danger-border)',
+          }}
+        >
           {message}
           {isLocked && (
             <span data-testid="pin-countdown"> {secondsLeft}s</span>
@@ -226,7 +247,7 @@ function PinPad({
         />
       </div>
 
-      <Button variant="ghost" onClick={onCancel} style={{ marginTop: 'var(--sp-5)' }}>
+      <Button variant="outline" onClick={onCancel} style={{ marginTop: 'var(--sp-6)' }}>
         Back
       </Button>
     </div>
@@ -242,8 +263,9 @@ function PinKey({
       disabled={disabled}
       aria-label={label === '⌫' ? 'Delete' : label}
       style={{
-        height: 76, borderRadius: 'var(--r-lg)', fontSize: 'var(--fs-xl)', fontWeight: 600,
-        border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
+        height: 76, borderRadius: 24, fontSize: 'var(--fs-2xl)', fontWeight: 800,
+        border: 'none', background: 'var(--surface)', color: 'var(--text)',
+        boxShadow: 'var(--shadow-1)',
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
       }}
     >

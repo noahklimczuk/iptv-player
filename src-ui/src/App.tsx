@@ -4,6 +4,7 @@ import type { CatalogItem, MosaicRect, MosaicView, PipView, Recording, SearchHit
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
 import { Icon, type IconName } from '@/components/Icon';
+import { artHue } from '@/components/Primitives';
 import { BootScreen } from '@/components/BootScreen';
 import { ConnectionBudget } from '@/components/ConnectionBudget';
 import { HomePage } from '@/features/home/HomePage';
@@ -748,15 +749,16 @@ export default function App() {
         data-testid="nav-pill"
         style={{
           position: 'fixed',
-          bottom: 'var(--sp-5)',
+          bottom: 20,
           left: '50%',
           transform: 'translateX(-50%)',
           maxWidth: 'calc(100vw - var(--sp-6) * 2)',
+          height: 'var(--navpill-h)',
           display: videoBehind ? 'none' : 'flex',
           alignItems: 'center',
-          gap: 2,
-          padding: 7,
-          borderRadius: 'var(--r-full)',
+          gap: 0,
+          padding: 8,
+          borderRadius: 'var(--r-pill)',
           /*
            * Still translucent — that is what makes it read as floating rather than as a
            * bar stuck to the bottom — but considerably more present than it was.
@@ -772,12 +774,14 @@ export default function App() {
            *     translucent panel a definite boundary at its top edge;
            *   - the resting label colour to `--text-muted`, up from `--text-faint`.
            */
-          background: 'color-mix(in srgb, var(--bg-elevated) 94%, transparent)',
-          backdropFilter: 'blur(28px) saturate(150%)',
-          WebkitBackdropFilter: 'blur(28px) saturate(150%)',
-          border: '1px solid var(--border-strong)',
-          boxShadow:
-            'var(--shadow-4), inset 0 1px 0 color-mix(in srgb, var(--text) 12%, transparent)',
+          /*
+           * Daylight: a solid ink capsule with light labels, in every theme. Solid rather
+           * than translucent because it no longer needs the page behind it to tell it
+           * apart -- ink on paper is its own boundary.
+           */
+          background: 'var(--nav-bg)',
+          border: '1px solid var(--nav-border)',
+          boxShadow: 'var(--shadow-3)',
           zIndex: 50,
           overflowX: 'auto',
           scrollbarWidth: 'none',
@@ -793,26 +797,27 @@ export default function App() {
             style={({ isActive }) => ({
               display: 'grid',
               placeItems: 'center',
-              gap: 2,
-              // Wide enough for the longest label at this size without the row
-              // reflowing when the active item changes.
-              minWidth: 66,
-              padding: '8px 12px 7px',
-              borderRadius: 'var(--r-full)',
+              alignContent: 'center',
+              gap: 3,
+              height: '100%',
+              // The active item is a wider paper-coloured tab; the rest stay compact.
+              minWidth: isActive ? 96 : 68,
+              padding: '0 10px',
+              borderRadius: 'calc(var(--r-pill) - 8px)',
               textDecoration: 'none',
-              // 11 rather than 10. At 10 the labels were decoration under the icons
-              // rather than something you read, which is most of why the bar was easy
-              // to miss.
-              fontSize: 11,
-              fontWeight: 650,
+              // 11px at desktop density, larger in TV mode.
+              fontSize: 'calc(var(--fs-xs) - 1px)',
+              fontWeight: 750,
               letterSpacing: '0.01em',
               whiteSpace: 'nowrap',
-              color: isActive ? 'var(--accent-text)' : 'var(--text-muted)',
-              background: isActive ? 'var(--accent)' : 'transparent',
-              transition: 'background var(--t-fast) var(--ease), color var(--t-fast) var(--ease)',
+              color: isActive ? 'var(--nav-active-text)' : 'var(--nav-text)',
+              background: isActive ? 'var(--nav-active-bg)' : 'transparent',
+              transition: `background var(--t-base) var(--ease),
+                           color var(--t-fast) var(--ease),
+                           min-width var(--t-base) var(--ease-spring)`,
             })}
           >
-            <Icon name={n.icon} size={21} strokeWidth={2} />
+            <Icon name={n.icon} size={19} strokeWidth={2} />
             {n.label}
           </NavLink>
         ))}
@@ -856,7 +861,7 @@ export default function App() {
         <div key={location.pathname} className="aurora-page" style={{ height: '100%' }}>
         <Suspense fallback={<BootScreen label="Opening…" />}>
         <Routes>
-          <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} />} />
+          <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} onTune={tune} />} />
           <Route path="/live" element={<LivePage onTune={tune} />} />
           <Route
             path="/guide"
@@ -1048,6 +1053,36 @@ export default function App() {
   );
 }
 
+/**
+ * The top bar's quick light/dark switch. Dark and OLED count as dark; flipping from
+ * either (or from high contrast) lands on Daylight, and from Daylight on Dark. The full
+ * choice of four themes stays in Settings, and this writes the same saved preference.
+ */
+function ThemeToggle() {
+  const theme = useUi((s) => s.theme);
+  const setTheme = useUi((s) => s.setTheme);
+  const dark = theme === 'dark' || theme === 'oled';
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={dark}
+      aria-label="Dark mode"
+      title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      data-testid="theme-toggle"
+      className="dl-press"
+      onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+      style={{
+        width: 44, height: 44, borderRadius: 'var(--r-full)', cursor: 'pointer',
+        display: 'grid', placeItems: 'center', border: 'none',
+        background: 'var(--surface)', boxShadow: 'var(--shadow-1)', color: 'var(--text)',
+      }}
+    >
+      <Icon name={dark ? 'sun' : 'moon'} size={19} />
+    </button>
+  );
+}
+
 function titleFor(path: string): string {
   const hit = NAV.find((n) => (n.to === '/' ? path === '/' : path.startsWith(n.to)));
   return hit?.label ?? 'Aurora TV';
@@ -1076,44 +1111,74 @@ function TopBar({
       style={{
         position: 'sticky', top: 0, zIndex: 40, height: 'var(--topbar-h)',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-4)',
-        padding: '0 var(--sp-6)',
-        background: 'linear-gradient(to bottom, var(--bg) 40%, transparent)',
+        padding: '0 36px',
+        background: 'var(--bg)',
         pointerEvents: 'none',
       }}
     >
-      <div
+      <span
         title="Aurora TV"
-        aria-hidden
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexShrink: 0 }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 14, height: 14, borderRadius: '50%', background: 'var(--accent)',
+          }}
+        />
+        <span
+          aria-hidden
+          className="dl-display"
+          style={{ fontSize: 'var(--fs-2xl)', color: 'var(--text)', letterSpacing: '-0.03em' }}
+        >
+          aurora
+        </span>
+      </span>
+      <span
+        className="dl-display"
         style={{
-          width: 30, height: 30, borderRadius: 'var(--r-md)', display: 'grid',
-          placeItems: 'center', flexShrink: 0,
-          background: 'linear-gradient(135deg, var(--accent), var(--accent-2))',
-          color: '#fff', fontWeight: 900, fontSize: 15,
+          fontSize: 'var(--fs-2xl)', color: 'var(--text-faint)', opacity: 0.75,
+          letterSpacing: '-0.03em', marginLeft: 6,
         }}
       >
-        A
-      </div>
-      <span style={{ fontWeight: 700, fontSize: 'var(--fs-md)', opacity: 0.85 }}>{title}</span>
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', pointerEvents: 'auto' }}>
+        {title}
+      </span>
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-4)', pointerEvents: 'auto' }}>
         <button
           onClick={onSearch}
           aria-label="Search"
           style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px',
+            display: 'flex', alignItems: 'center', gap: 10, height: 44,
+            width: 310, padding: '0 8px 0 16px',
             borderRadius: 'var(--r-full)', cursor: 'pointer',
-            background: 'color-mix(in srgb, var(--surface) 75%, transparent)',
-            border: '1px solid var(--border)', color: 'var(--text-muted)',
-            backdropFilter: 'blur(12px)', fontSize: 'var(--fs-sm)',
+            background: 'var(--surface)', border: 'none', boxShadow: 'var(--shadow-1)',
+            color: 'var(--text-muted)', fontSize: 'var(--fs-md)', fontWeight: 500,
           }}
         >
-          <Icon name="search" size={15} />
-          Search
-          <kbd style={{ fontSize: 10, opacity: 0.7 }}>Ctrl K</kbd>
+          <Icon name="search" size={16} />
+          <span
+            aria-hidden
+            style={{
+              flex: 1, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            Search channels, films, series
+          </span>
+          <kbd
+            style={{
+              fontFamily: 'inherit', fontSize: 11, fontWeight: 800, padding: '3px 7px',
+              borderRadius: 6, background: 'var(--surface-sunk)', color: 'var(--text-muted)',
+            }}
+          >
+            Ctrl K
+          </kbd>
         </button>
+        <ThemeToggle />
         <span
           data-testid="topbar-clock"
           style={{
-            fontSize: 'var(--fs-sm)', color: 'var(--text-muted)',
+            fontSize: 'var(--fs-lg)', fontWeight: 800, color: 'var(--text)',
             fontVariantNumeric: 'tabular-nums',
           }}
         >
@@ -1124,9 +1189,10 @@ function TopBar({
           aria-label={`Switch profile (currently ${profileName})`}
           title={`Switch profile (currently ${profileName})`}
           style={{
-            width: 32, height: 32, borderRadius: 'var(--r-md)', cursor: 'pointer',
-            border: '1px solid var(--border)', background: 'var(--surface)',
-            color: 'var(--text)', fontWeight: 700, fontSize: 'var(--fs-sm)',
+            width: 44, height: 44, borderRadius: 'var(--r-md)', cursor: 'pointer',
+            border: 'none', background: artHue(profileName),
+            color: 'var(--on-art)', fontWeight: 800, fontSize: 'var(--fs-xl)',
+            fontFamily: 'var(--font-display)',
           }}
         >
           {profileName.slice(0, 1).toUpperCase()}

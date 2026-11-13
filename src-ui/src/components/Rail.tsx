@@ -9,7 +9,7 @@ import { CatalogCard } from './CatalogCard';
 import { Icon } from './Icon';
 
 const CARD_W = 168;
-const GAP = 10;
+const GAP = 16;
 
 /**
  * How far an expanded card reaches past its own box, and therefore how much room the
@@ -91,8 +91,12 @@ export function Rail({
   return (
     <section
       aria-label={rail.title}
+      className="dl-panel"
       style={{
-        marginBottom: 'var(--sp-6)',
+        // Daylight: every shelf is a full-width white tile in Home's bento grid.
+        gridColumn: '1 / -1',
+        minWidth: 0,
+        padding: '22px 0 24px',
         // Lifted above the rails below it while a card is open.
         //
         // An expanded card grows downward, past the bottom of this section and over the
@@ -110,8 +114,8 @@ export function Rail({
     >
       <div
         style={{
-          display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
-          padding: '0 var(--sp-6)', marginBottom: 'var(--sp-3)',
+          display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+          padding: '0 24px', marginBottom: 'var(--sp-4)',
           // Above the scroller below it, which is not as redundant as it looks: that
           // scroller carries a large top padding to make room for an expanded card
           // (`RAIL_EXPANSION_PAD`), and the padding overhangs *upward* across this row.
@@ -122,14 +126,14 @@ export function Rail({
         }}
       >
         <h2
-          style={{
-            margin: 0, fontSize: 'var(--fs-lg)', fontWeight: 700,
-            letterSpacing: '-0.01em',
-          }}
+          className="dl-display"
+          style={{ margin: 0, fontSize: 'var(--fs-2xl)', color: 'var(--text)' }}
         >
           {rail.title}
         </h2>
-        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>
+        <span
+          style={{ fontSize: 'var(--fs-sm)', fontWeight: 700, color: 'var(--text-faint)' }}
+        >
           {rail.items.length}
         </span>
         {action}
@@ -161,7 +165,7 @@ export function Rail({
             // So the padding is the whole mechanism, and it is derived rather than
             // guessed: see `RAIL_EXPANSION_PAD`. The negative margin cancels it, so the
             // rail still occupies the height it looks like it occupies.
-            padding: `${RAIL_EXPANSION_PAD}px var(--sp-6)`,
+            padding: `${RAIL_EXPANSION_PAD}px 24px`,
             margin: `-${RAIL_EXPANSION_PAD}px 0`,
             overflowX: 'auto', overflowY: 'auto',
             scrollSnapType: 'x proximity',
@@ -213,13 +217,14 @@ function RailArrow({ dir, onClick }: { dir: 'left' | 'right'; onClick: () => voi
       aria-label={dir === 'left' ? 'Scroll left' : 'Scroll right'}
       onClick={onClick}
       style={{
-        position: 'absolute', top: 28, bottom: 28, [dir]: 0, width: 46, zIndex: 20,
+        position: 'absolute', top: 28, bottom: 28, [dir]: 0, width: 56, zIndex: 20,
         display: 'grid', placeItems: 'center', border: 'none', cursor: 'pointer',
         color: 'var(--text)',
+        borderRadius: dir === 'left' ? 'var(--r-xl) 0 0 var(--r-xl)' : '0 var(--r-xl) var(--r-xl) 0',
         background:
           dir === 'left'
-            ? 'linear-gradient(to right, var(--bg) 25%, transparent)'
-            : 'linear-gradient(to left, var(--bg) 25%, transparent)',
+            ? 'linear-gradient(to right, var(--surface) 35%, transparent)'
+            : 'linear-gradient(to left, var(--surface) 35%, transparent)',
       }}
     >
       <Icon name={dir === 'left' ? 'chevronLeft' : 'chevronRight'} size={28} strokeWidth={2.4} />

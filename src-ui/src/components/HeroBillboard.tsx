@@ -32,6 +32,16 @@ const ROTATE_MS = 12000;
  */
 const ROTATE_WITH_TRAILER_MS = 32000;
 
+/** Buttons on artwork: one solid paper button, the rest frosted. */
+const ON_ART_SOLID: React.CSSProperties = {
+  background: 'var(--on-art)', color: 'var(--text-on-light)',
+};
+const ON_ART_GLASS: React.CSSProperties = {
+  background: 'color-mix(in srgb, var(--on-art) 20%, transparent)',
+  color: 'var(--on-art)', boxShadow: 'none',
+  backdropFilter: 'blur(12px)',
+};
+
 export function HeroBillboard({
   items, onOpen, onPlay,
 }: {
@@ -105,8 +115,11 @@ export function HeroBillboard({
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
       style={{
-        position: 'relative', height: '62vh', minHeight: 420,
-        marginBottom: 'var(--sp-5)',
+        // Daylight: a bento tile rather than a full-bleed band. It fills the grid cell
+        // Home gives it, in the accent blue whenever there is no artwork to show.
+        position: 'relative', flex: 1, minHeight: 320, width: '100%',
+        borderRadius: 'var(--r-xl)', background: 'var(--art-1)',
+        color: 'var(--on-art)',
         // The trailer frame is scaled up to hide its letterboxing; this is what keeps
         // the overscan inside the billboard.
         overflow: 'hidden',
@@ -156,13 +169,13 @@ export function HeroBillboard({
               }}
             />
           ) : (
-            // Nothing at all to show. A flat panel rather than a hole: the layout
-            // below it assumes something is here.
+            // Nothing at all to show: the tile's own colour, with Daylight's big soft
+            // circle so it reads as designed rather than as missing.
             <div
               style={{
                 width: '100%', height: '100%',
                 background:
-                  'radial-gradient(120% 90% at 20% 0%, var(--surface) 0%, var(--bg) 70%)',
+                  'radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--on-art) 14%, transparent) 0 46%, transparent 46.2%)',
               }}
             />
           )}
@@ -199,15 +212,30 @@ export function HeroBillboard({
         </div>
       )}
 
-      <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }} />
-      <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim-side)' }} />
+      {(backdrop || poster || trailer) && (
+        <>
+          <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }} />
+          <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim-side)' }} />
+        </>
+      )}
 
       <div
         style={{
-          position: 'absolute', left: 'var(--sp-6)', bottom: 'var(--sp-6)',
-          maxWidth: 'min(560px, 52%)',
+          position: 'absolute', left: 32, right: 32, top: 28, bottom: 32,
+          maxWidth: 'min(640px, 86%)',
+          display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
+          alignItems: 'flex-start', overflow: 'hidden',
         }}
       >
+        <span
+          className="dl-chip"
+          style={{
+            background: 'var(--on-art)', color: 'var(--text-on-light)',
+            marginBottom: 14,
+          }}
+        >
+          {item.kind === 'series' ? 'Featured series' : 'Featured film'}
+        </span>
         {/* Only with a key, so the claim is never made about a title that has no
             trailer. `trailer` cannot be set without one, and saying so here keeps the
             two from drifting apart. */}
@@ -215,22 +243,24 @@ export function HeroBillboard({
           <div
             style={{
               display: 'flex', alignItems: 'center', gap: 6, marginBottom: 'var(--sp-2)',
-              fontSize: 'var(--fs-xs)', color: 'var(--accent-2)', fontWeight: 700,
+              fontSize: 'var(--fs-xs)', color: 'var(--on-art)', fontWeight: 800,
               letterSpacing: '0.06em',
             }}
           >
             <span
-              style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-2)' }}
+              style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--live)' }}
             />
             NOW PLAYING TRAILER
           </div>
         )}
 
         <h1
-          className="text-shadow-hero"
+          className="dl-display"
           style={{
-            margin: '0 0 var(--sp-3)', fontSize: 'var(--fs-3xl)', fontWeight: 900,
-            letterSpacing: '-0.03em', lineHeight: 1.05,
+            margin: '0 0 10px', fontSize: 'clamp(34px, 3.8vw, 60px)',
+            lineHeight: 0.98, color: 'var(--on-art)',
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
           }}
         >
           {item.title}
@@ -238,15 +268,16 @@ export function HeroBillboard({
 
         <div
           style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', flexWrap: 'wrap',
-            marginBottom: 'var(--sp-3)', fontSize: 'var(--fs-sm)',
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            marginBottom: 'var(--sp-3)', fontSize: 'var(--fs-sm)', fontWeight: 700,
+            color: 'color-mix(in srgb, var(--on-art) 88%, transparent)',
           }}
         >
           {/* "% match" was here too, and was mock-only in the same way -- `match` was
               assigned in `fixtures.ts` and by nothing on the host, so this branch never
               ran outside a browser (R-99). */}
           {item.year && <span>{item.year}</span>}
-          {item.certification && <Badge tone="outline">{item.certification}</Badge>}
+          {item.certification && <span>· {item.certification}</span>}
           {/* See `CatalogCard`: unknown until the listing is fetched, and "0
               seasons" is worse than saying nothing. */}
           {item.kind === 'series' && item.seasons.length > 0 && (
@@ -254,15 +285,15 @@ export function HeroBillboard({
               {item.seasons.length} season{item.seasons.length === 1 ? '' : 's'}
             </span>
           )}
-          {item.kind !== 'series' && <span>{runtime(item.runtimeMins)}</span>}
+          {item.kind !== 'series' && <span>· {runtime(item.runtimeMins)}</span>}
           {item.quality === '4K' && <Badge tone="accent">4K</Badge>}
         </div>
 
         <p
-          className="text-shadow-hero"
           style={{
-            margin: '0 0 var(--sp-5)', color: 'var(--text)', fontSize: 'var(--fs-md)',
-            lineHeight: 1.55, display: '-webkit-box', WebkitLineClamp: 2,
+            margin: '0 0 20px', fontSize: 'var(--fs-md)', maxWidth: 520,
+            color: 'color-mix(in srgb, var(--on-art) 85%, transparent)',
+            lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2,
             WebkitBoxOrient: 'vertical', overflow: 'hidden',
           }}
         >
@@ -270,7 +301,10 @@ export function HeroBillboard({
         </p>
 
         <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'center' }}>
-          <Button variant="primary" size="lg" icon="play" iconFilled onClick={() => onPlay(item)}>
+          <Button
+            variant="primary" size="lg" icon="play" iconFilled onClick={() => onPlay(item)}
+            style={ON_ART_SOLID}
+          >
             Play
           </Button>
           {/* Was a button with no handler at all, on the most prominent surface in the
@@ -282,10 +316,14 @@ export function HeroBillboard({
             icon={myList.has(`${item.kind === 'series' ? 'series' : 'movie'}:${item.id}`) ? 'check' : 'plus'}
             aria-pressed={myList.has(`${item.kind === 'series' ? 'series' : 'movie'}:${item.id}`)}
             onClick={() => toggleMyList(item)}
+            style={ON_ART_GLASS}
           >
             My List
           </Button>
-          <Button variant="secondary" size="lg" icon="info" onClick={() => onOpen(item)}>
+          <Button
+            variant="secondary" size="lg" icon="info" onClick={() => onOpen(item)}
+            style={ON_ART_GLASS}
+          >
             More Info
           </Button>
         </div>
@@ -293,7 +331,7 @@ export function HeroBillboard({
 
       <div
         style={{
-          position: 'absolute', right: 'var(--sp-6)', bottom: 'var(--sp-6)',
+          position: 'absolute', right: 28, top: 28,
           display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         }}
       >
@@ -311,9 +349,11 @@ export function HeroBillboard({
               aria-label={`Show ${it.title}`}
               onClick={() => setIndex(i)}
               style={{
-                width: i === index ? 22 : 7, height: 3, borderRadius: 'var(--r-full)',
+                width: i === index ? 22 : 8, height: 8, borderRadius: 'var(--r-full)',
                 border: 'none', cursor: 'pointer', padding: 0,
-                background: i === index ? 'var(--text)' : 'var(--text-faint)',
+                background: i === index
+                  ? 'var(--on-art)'
+                  : 'color-mix(in srgb, var(--on-art) 40%, transparent)',
                 transition: 'width var(--t-base) var(--ease)',
               }}
             />

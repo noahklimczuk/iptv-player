@@ -58,15 +58,14 @@ export function UpNextCard({
           aria-label="Up next"
           style={{
             width: 380,
-            borderRadius: 'var(--r-lg)',
+            borderRadius: 26,
             overflow: 'hidden',
-            background: 'rgb(8 8 12 / 0.94)',
-            backdropFilter: 'blur(18px)',
-            border: '1px solid var(--border-strong)',
-            boxShadow: 'var(--shadow-4)',
+            background: 'var(--dock-bg)',
+            color: 'var(--dock-text)',
+            boxShadow: 'var(--shadow-dock)',
           }}
         >
-          <div style={{ display: 'flex', gap: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+          <div style={{ display: 'flex', gap: 'var(--sp-3)', padding: 14 }}>
             {episode.still && (
               <img
                 src={episode.still}
@@ -75,7 +74,7 @@ export function UpNextCard({
                   width: 132,
                   aspectRatio: '16/9',
                   objectFit: 'cover',
-                  borderRadius: 'var(--r-sm)',
+                  borderRadius: 14,
                   flexShrink: 0,
                 }}
               />
@@ -84,10 +83,10 @@ export function UpNextCard({
               <div
                 style={{
                   fontSize: 'var(--fs-xs)',
-                  fontWeight: 700,
-                  letterSpacing: '0.07em',
+                  fontWeight: 800,
+                  letterSpacing: '0.05em',
                   textTransform: 'uppercase',
-                  color: 'var(--text-faint)',
+                  color: 'var(--accent)',
                   marginBottom: 3,
                 }}
               >
@@ -95,8 +94,8 @@ export function UpNextCard({
               </div>
               <div
                 style={{
-                  fontWeight: 700,
-                  fontSize: 'var(--fs-md)',
+                  fontWeight: 800,
+                  fontSize: 'var(--fs-lg)',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -104,7 +103,7 @@ export function UpNextCard({
               >
                 {episode.title ?? `Episode ${episode.episode}`}
               </div>
-              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--dock-muted)' }}>
                 S{episode.season} E{episode.episode}
                 {episode.runtimeMins ? ` · ${runtime(episode.runtimeMins)}` : ''}
               </div>
@@ -115,18 +114,20 @@ export function UpNextCard({
             style={{
               display: 'flex',
               gap: 'var(--sp-2)',
-              padding: '0 var(--sp-3) var(--sp-3)',
+              padding: '0 14px 14px',
             }}
           >
             <Button variant="primary" size="sm" icon="play" iconFilled onClick={onPlay}>
               Play now
             </Button>
-            <Button size="sm" onClick={onCancel}>Cancel</Button>
+            <Button size="sm" onClick={onCancel} style={{ background: 'var(--dock-btn)', color: 'var(--dock-text)', boxShadow: 'none' }}>
+              Cancel
+            </Button>
           </div>
 
           {autoplay && (
             <div
-              style={{ height: 3, background: 'var(--border)' }}
+              style={{ height: 4, background: 'var(--dock-track)' }}
               role="progressbar"
               aria-valuenow={Math.round(progress)}
               aria-valuemin={0}

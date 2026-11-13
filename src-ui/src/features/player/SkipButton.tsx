@@ -52,16 +52,16 @@ export function SkipButton({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 'var(--sp-2)',
-            padding: '12px 22px',
-            borderRadius: 'var(--r-md)',
-            border: '2px solid var(--text)',
-            background: 'color-mix(in srgb, var(--bg) 78%, transparent)',
-            backdropFilter: 'blur(14px)',
-            color: 'var(--text)',
+            // Daylight: a white pill just above the dock.
+            padding: '13px 24px',
+            borderRadius: 'var(--r-full)',
+            border: 'none',
+            background: 'var(--dock-bg)',
+            color: 'var(--dock-text)',
             fontSize: 'var(--fs-md)',
-            fontWeight: 700,
+            fontWeight: 800,
             cursor: 'pointer',
-            boxShadow: 'var(--shadow-3)',
+            boxShadow: 'var(--shadow-dock)',
           }}
         >
           <Icon name="skip" size={18} filled />
@@ -72,7 +72,7 @@ export function SkipButton({
               style={{
                 fontSize: 'var(--fs-xs)',
                 fontWeight: 600,
-                color: 'var(--accent-2)',
+                color: 'var(--accent)',
                 opacity: 0.9,
               }}
             >

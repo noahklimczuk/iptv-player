@@ -103,18 +103,17 @@ export function GeminiPanel() {
                 : 'Off. Nothing is sent to Google, including by the key built into this build.'}
             </div>
           </div>
-          <Button
-            size="sm"
+          <button
+            type="button"
+            className="dl-switch"
             role="switch"
             aria-checked={status.enabled}
             aria-label="Suggestions and the assistant"
-            variant={status.enabled ? 'primary' : 'secondary'}
+            title={status.enabled ? 'On' : 'Off'}
             disabled={busy}
             data-testid="gemini-enabled"
             onClick={() => void setEnabled(!status.enabled)}
-          >
-            {status.enabled ? 'On' : 'Off'}
-          </Button>
+          />
         </div>
       )}
 

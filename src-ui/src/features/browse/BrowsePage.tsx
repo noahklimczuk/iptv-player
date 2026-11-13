@@ -193,9 +193,9 @@ export function BrowsePage({
   return (
     <div
       style={{
-        padding: 'var(--sp-5) var(--sp-6) var(--sp-8)',
+        padding: '4px 36px var(--sp-6)',
         display: 'flex',
-        gap: 'var(--sp-5)',
+        gap: 20,
         alignItems: 'flex-start',
       }}
     >
@@ -215,8 +215,8 @@ export function BrowsePage({
       />
 
       <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)' }}>
-        <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 800 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', flexWrap: 'wrap' }}>
+        <h1 className="dl-page-title">
           {/* The category, where one is chosen: a heading reading "Movies" while the grid
               shows one shelf of them leaves nothing on screen saying which. */}
           {category ?? (mode === 'movies' ? 'Movies' : 'Series')}
@@ -226,11 +226,60 @@ export function BrowsePage({
             was a number that climbed while you scrolled. */}
         <span
           data-testid="browse-count"
-          style={{ color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums' }}
+          className="dl-display"
+          style={{
+            color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums',
+            fontSize: 'var(--fs-3xl)', opacity: 0.6, marginLeft: -4,
+          }}
         >
           {total === undefined ? '' : NUMBER.format(total)}
         </span>
+
+        <div className="dl-seg" style={{ marginLeft: 'auto' }}>
+          {SORTS.map((s) => (
+            <button
+              key={s.value}
+              type="button"
+              data-active={sort === s.value}
+              data-variant={sort === s.value ? 'primary' : 'ghost'}
+              onClick={() => setSort(s.value)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {/* Daylight's genre chips: the commonest few, one tap each, blue when chosen. The
+          full list stays in the Genre menu after them, since a provider can send
+          hundreds. */}
+      {(facets?.genres.length ?? 0) > 0 && (
+        <div
+          role="group"
+          aria-label="Popular genres"
+          style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 'var(--sp-4)' }}
+        >
+          <button
+            type="button"
+            className="dl-filter"
+            aria-pressed={!genre}
+            onClick={() => setGenre(undefined)}
+          >
+            All
+          </button>
+          {facets!.genres.slice(0, CHIP_GENRES).map((g) => (
+            <button
+              key={g.name}
+              type="button"
+              className="dl-filter"
+              aria-pressed={genre === g.name}
+              onClick={() => setGenre(genre === g.name ? undefined : g.name)}
+            >
+              {g.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div
         style={{
@@ -247,7 +296,7 @@ export function BrowsePage({
           placeholder={mode === 'movies' ? 'Search films…' : 'Search series…'}
           aria-label={mode === 'movies' ? 'Search films' : 'Search series'}
           data-testid="browse-search"
-          style={{ width: 220 }}
+          style={{ width: 240, background: 'var(--surface)' }}
         />
 
         {/* The active letter, where it can be cleared. The bar itself is at the far edge
@@ -278,17 +327,6 @@ export function BrowsePage({
           />
         )}
 
-        <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
-          {SORTS.map((s) => (
-            <Button
-              key={s.value} size="sm"
-              variant={sort === s.value ? 'primary' : 'ghost'}
-              onClick={() => setSort(s.value)}
-            >
-              {s.label}
-            </Button>
-          ))}
-        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start' }}>
@@ -297,7 +335,7 @@ export function BrowsePage({
               every time another page arrives would make scrolling flicker. */}
           {loading && items.length === 0 && (
             <div style={gridStyle}>
-              {Array.from({ length: 24 }, (_, i) => <Skeleton key={i} h={CARD_H} />)}
+              {Array.from({ length: 24 }, (_, i) => <Skeleton key={i} h={CARD_H} r={18} />)}
             </div>
           )}
 
@@ -343,7 +381,7 @@ export function BrowsePage({
                     transform: `translateY(${row.start - rows.options.scrollMargin}px)`,
                     display: 'grid',
                     gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-                    columnGap: 'var(--sp-3)',
+                    columnGap: COL_GAP,
                     // Fixed height, so a two-line title does not push the row below it
                     // out of alignment — which is what made a grid of a hundred posters
                     // look broken.
@@ -394,7 +432,7 @@ export function BrowsePage({
  * The grid used to size each cell to its content, so a row whose titles all fitted on
  * one line was shorter than the row above it and the whole page stepped up and down.
  */
-const CARD_H = 300;
+const CARD_H = 318;
 
 /**
  * The two halves of `gap: var(--sp-5) var(--sp-3)` and the `minmax` floor, as numbers.
@@ -403,9 +441,12 @@ const CARD_H = 300;
  * does -- so these have to agree with `gridStyle` below. Kept adjacent for that reason;
  * `--sp-5` is 24px and `--sp-3` is 12px in `tokens.css`.
  */
-const ROW_GAP = 24;
-const COL_GAP = 12;
-const MIN_CARD_W = 158;
+const ROW_GAP = 20;
+const COL_GAP = 18;
+const MIN_CARD_W = 150;
+
+/** How many genres get a chip of their own before the rest go in the menu. */
+const CHIP_GENRES = 7;
 
 /** Still used for the first-page skeletons, which are a fixed two dozen. */
 const gridStyle = {
