@@ -69,6 +69,11 @@ pub struct LoadOptions {
     pub title: Option<String>,
 }
 
+/// The User-Agent a stream is opened with when the playlist names none. Matches the one
+/// `aurora-ingest` sends to `player_api.php`, so the player and the catalogue look like
+/// the same client to the provider.
+pub const DEFAULT_USER_AGENT: &str = concat!("AuroraTV/", env!("CARGO_PKG_VERSION"));
+
 impl LoadOptions {
     /// README §6.1: fast channel zapping needs small probe sizes on live TS, while VOD
     /// benefits from a deeper probe for correct track detection.
@@ -80,10 +85,19 @@ impl LoadOptions {
         // pushed only when it has a value leaves the *previous* file's value in force.
         // That is one provider's User-Agent, Referer and auth headers being sent to
         // another provider's host on the next thing played -- and the empty string is
-        // mpv's own default for all three, so saying it is how you take it back.
+        // mpv's own default for referrer and headers, so saying it is how you take it back.
+        //
+        // Not for the User-Agent. Empty is *not* mpv's default there: the libmpv shipped
+        // with 1.0.59 opens HTTP through its curl stream, and an empty `user-agent` sends
+        // no User-Agent header at all. This provider answers that with 403 on every
+        // stream, so every film, episode and channel failed with "loading failed"
+        // (Raw(-13)). The fallback is the agent the catalogue requests already send.
         o.push((
             "user-agent".into(),
-            self.user_agent.clone().unwrap_or_default(),
+            self.user_agent
+                .clone()
+                .filter(|ua| !ua.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_USER_AGENT.to_string()),
         ));
         o.push(("referrer".into(), self.referrer.clone().unwrap_or_default()));
         o.push((
@@ -642,6 +656,29 @@ mod tests {
                 keys(&full),
                 "is_live={is_live}: these keys are only sent when they have a value, so                  the last file's value stands until something else overwrites it"
             );
+        }
+    }
+
+    /// A load with no User-Agent of its own still sends one.
+    ///
+    /// An empty `user-agent` makes libmpv's curl stream omit the header, and the
+    /// provider refuses every such request with 403 -- which made 1.0.59 unable to play
+    /// anything at all.
+    #[test]
+    fn a_load_without_a_user_agent_still_sends_one() {
+        for user_agent in [None, Some(String::new()), Some("   ".into())] {
+            let o = LoadOptions {
+                user_agent,
+                ..Default::default()
+            };
+            let ua = o
+                .mpv_options()
+                .into_iter()
+                .find(|(k, _)| k == "user-agent")
+                .unwrap()
+                .1;
+            assert_eq!(ua, DEFAULT_USER_AGENT);
+            assert!(ua.starts_with("AuroraTV/"));
         }
     }
 

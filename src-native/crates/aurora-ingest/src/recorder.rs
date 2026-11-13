@@ -270,9 +270,15 @@ fn build_client(request: &RecordRequest) -> Result<reqwest::blocking::Client, Ne
         // Never gzip: this is a transport stream, and asking would only invite a
         // provider to hand back something the file can't be cut from.
         .no_gzip();
-    if let Some(ua) = &request.user_agent {
-        builder = builder.user_agent(ua.clone());
-    }
+    // Always a User-Agent. reqwest sends none unless told to, and the provider refuses a
+    // stream request without one (403) -- the DVR passes `None`, so every recording would
+    // fail the way playback did in 1.0.59. Same fallback as the catalogue client.
+    let ua = request
+        .user_agent
+        .clone()
+        .filter(|ua| !ua.trim().is_empty())
+        .unwrap_or_else(|| concat!("AuroraTV/", env!("CARGO_PKG_VERSION")).to_string());
+    builder = builder.user_agent(ua);
     builder
         // The shared classifier here too, which is the rest of R-36: `e.to_string()` is
         // the top-level `Display` only, and a client that will not build fails for a
@@ -538,6 +544,21 @@ mod tests {
         assert_eq!(requests[0].header("user-agent"), Some("AuroraTV/test"));
         // A transport stream must never be asked for gzipped.
         assert_ne!(requests[0].header("accept-encoding"), Some("gzip"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The DVR names no User-Agent, and a request without one is refused with 403.
+    #[test]
+    fn a_recording_without_a_user_agent_still_sends_one() {
+        let server = TestServer::always(Reply::ok(b"x".to_vec()));
+        let dir = tempdir();
+        let mut req = request(server.url("/live"), dir.join("no-ua.ts"));
+        req.user_agent = None;
+        StreamRecorder.start(req).unwrap().wait();
+
+        let requests = server.requests();
+        let ua = requests[0].header("user-agent").unwrap_or_default();
+        assert!(ua.starts_with("AuroraTV/"), "sent {ua:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 }
