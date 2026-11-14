@@ -79,12 +79,12 @@ export function NoticeStack() {
       {notices.map((n) => (
         <div
           key={n.id}
+          // Glass: a notice floats over whatever is on screen (styles/glass.css).
+          className="glass-strong"
           style={{
             display: 'grid', gridTemplateColumns: '20px 1fr 24px', gap: 'var(--sp-3)',
             alignItems: 'start', padding: 'var(--sp-3) var(--sp-4)',
-            background: 'var(--bg-elevated)', color: 'var(--text)',
-            border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
-            boxShadow: 'var(--shadow-3)',
+            color: 'var(--text)', borderRadius: 'var(--r-lg)',
           }}
         >
           <Icon name="alert" size={18} style={{ color: 'var(--danger, #ff6b6b)' }} />

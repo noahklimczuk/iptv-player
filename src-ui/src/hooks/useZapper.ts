@@ -87,7 +87,11 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
       intent.current += 1;
       if (current && current.id !== ch.id) previous.current = current;
       setCurrent(ch);
-      showBanner(ch.id);
+      // The banner is the player's way of saying what was tuned. A preview -- the guide's
+      // box, which already names the channel beside the picture -- does not want it: the
+      // guide's arrow keys preview as the selection rests, and a banner raised on every
+      // stop covered the tab bar for five seconds at a time.
+      if (reveal) showBanner(ch.id);
       // A channel whose every source is dead used to fail into an unhandled
       // rejection: the banner appeared, the player opened, and nothing ever said
       // why the picture was black.

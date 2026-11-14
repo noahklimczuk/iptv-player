@@ -760,33 +760,17 @@ export default function App() {
           padding: 8,
           borderRadius: 'var(--r-pill)',
           /*
-           * Still translucent — that is what makes it read as floating rather than as a
-           * bar stuck to the bottom — but considerably more present than it was.
-           *
-           * At 82% over a dark page, against a 10%-of-text border and `--text-faint`
-           * labels, the whole thing receded into the background: on a page with a bright
-           * rail behind it there was nothing to tell you where the navigation was. Three
-           * things changed together, because raising any one alone just moves which part
-           * disappears:
-           *
-           *   - the fill to 94%, so it is a surface rather than a tint;
-           *   - the edge to a real border plus an inner highlight, which is what gives a
-           *     translucent panel a definite boundary at its top edge;
-           *   - the resting label colour to `--text-muted`, up from `--text-faint`.
+           * Glass, from `styles/glass.css`: the page beneath it blurred and tinted, a
+           * sheen and a specular edge along the top, a hairline and a shadow. The tab bar
+           * is the most-seen piece of floating chrome, which is why it is the one the
+           * material was designed around; its colours come from the material too, so the
+           * labels stay legible on the light theme's frosted white as on the dark one.
            */
-          /*
-           * Daylight: a solid ink capsule with light labels, in every theme. Solid rather
-           * than translucent because it no longer needs the page behind it to tell it
-           * apart -- ink on paper is its own boundary.
-           */
-          background: 'var(--nav-bg)',
-          border: '1px solid var(--nav-border)',
-          boxShadow: 'var(--shadow-3)',
           zIndex: 50,
           overflowX: 'auto',
           scrollbarWidth: 'none',
         }}
-        className="no-scrollbar"
+        className="no-scrollbar glass nav-glass"
       >
         {NAV.map((n) => (
           <NavLink
@@ -810,8 +794,7 @@ export default function App() {
               fontWeight: 750,
               letterSpacing: '0.01em',
               whiteSpace: 'nowrap',
-              color: isActive ? 'var(--nav-active-text)' : 'var(--nav-text)',
-              background: isActive ? 'var(--nav-active-bg)' : 'transparent',
+              // Colours are `.nav-glass` in styles/glass.css, keyed on `aria-current`.
               transition: `background var(--t-base) var(--ease),
                            color var(--t-fast) var(--ease),
                            min-width var(--t-base) var(--ease-spring)`,
@@ -1112,9 +1095,11 @@ function TopBar({
         position: 'sticky', top: 0, zIndex: 40, height: 'var(--topbar-h)',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-4)',
         padding: '0 36px',
-        background: 'var(--bg)',
+        // Frosted rather than opaque: the page's own colour at rest, and what scrolls
+        // beneath it blurs instead of being cut off at a hard edge.
         pointerEvents: 'none',
       }}
+      className="glass-bar"
     >
       <span
         title="Aurora TV"

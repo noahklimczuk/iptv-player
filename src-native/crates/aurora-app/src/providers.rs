@@ -813,6 +813,24 @@ pub fn providers_delete(services: State<'_, Services>, args: ProviderIdArgs) -> 
 /// Settings keys rather than provider columns: the choice is about the library, the
 /// nightly sweep has to honour the same answer as the button, and a key/value row needs
 /// no migration.
+/// Public guides fetched beside the provider's own, matched like any other.
+///
+/// The provider's guide has nothing for Pluto TV: on the real line 415 Pluto channels
+/// had no guide at all. Matt Huisman's i.mjh.nz publishes Pluto TV's own schedule as
+/// XMLTV, refreshed several times a day. Scoped to channels that say "Pluto" in their
+/// name or group, because its names ("Cheers", "Bar Rescue") are also the names of a
+/// provider's own 24/7 loops, which are different streams. Measured with the real
+/// matcher on the real line: 274 more channels with a guide, no existing match
+/// moved, and 39 provider 24/7 loops refused. Nothing about the viewer is sent: it
+/// is a plain download of a public file. A guide that fails to load costs a warning, not the refresh
+/// (`a_failing_epg_source_does_not_fail_the_whole_refresh`).
+pub const FREE_GUIDES: &[&str] = &[
+    "https://i.mjh.nz/PlutoTV/us.xml.gz",
+    "https://i.mjh.nz/PlutoTV/ca.xml.gz",
+];
+/// Whether to fetch [`FREE_GUIDES`]. On unless somebody turns it off.
+pub const FREE_GUIDES_KEY: &str = "guide.free_sources";
+
 pub const IMPORT_LIVE_KEY: &str = "import.live";
 pub const IMPORT_VOD_KEY: &str = "import.vod";
 pub const IMPORT_SERIES_KEY: &str = "import.series";
@@ -936,6 +954,15 @@ pub fn refresh_provider(
         options.import_live = aurora_db::repo::settings::get_or(&db, IMPORT_LIVE_KEY, true)?;
         options.import_vod = aurora_db::repo::settings::get_or(&db, IMPORT_VOD_KEY, true)?;
         options.import_series = aurora_db::repo::settings::get_or(&db, IMPORT_SERIES_KEY, true)?;
+        if aurora_db::repo::settings::get_or(&db, FREE_GUIDES_KEY, true)? {
+            options.scoped_epg = FREE_GUIDES
+                .iter()
+                .map(|url| aurora_ingest::sync::ScopedGuide {
+                    url: (*url).to_string(),
+                    only_where: "pluto".into(),
+                })
+                .collect();
+        }
         // XMLTV allows one `<title>` per language and ranks them not at all, so picking
         // between them needs a preference from outside the document. The only statement
         // this app has about language is the English-only filter, so that is the one

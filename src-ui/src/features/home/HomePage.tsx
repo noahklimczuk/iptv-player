@@ -256,7 +256,9 @@ export function HomePage({
 
   return (
     <div style={BENTO}>
-      <div style={{ gridColumn: 'span 7', minHeight: 320, display: 'flex' }}>
+      {/* 400 rather than 320: asked for a little taller, and it is the room a two-line
+          title and a synopsis need together (HeroBillboard measures the rest). */}
+      <div style={{ gridColumn: 'span 7', minHeight: 400, display: 'flex' }}>
         <HeroBillboard items={heroItems} onOpen={onOpen} onPlay={onPlay} />
       </div>
       <div style={{ gridColumn: 'span 5', display: 'flex', flexDirection: 'column' }}>

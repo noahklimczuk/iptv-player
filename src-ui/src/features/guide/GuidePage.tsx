@@ -39,8 +39,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, MosaicRect, Programme } from '@shared/ipc';
 import { useDvrMarks } from '@/features/dvr/useDvrMarks';
 import { useGuideSlice } from './useGuideSlice';
+import { nameGuide } from './nameGuide';
 import {
-  Badge, Button, ChannelTile as LogoTile, EmptyState, Select, Skeleton,
+  Badge, Button, ChannelTile as LogoTile, EmptyState, Skeleton,
 } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
@@ -48,11 +49,12 @@ import { dayLabel, duration } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
 import { SurfaceHole } from '@/components/SurfaceHole';
 import { useInlaidPicture } from '@/hooks/useInlaidPicture';
+import { isTyping } from '@/hooks/useHotkeys';
 
 const HALF_HOUR = 1800;
 const PX_PER_MIN = 6;
 const SLOT_W = (HALF_HOUR / 60) * PX_PER_MIN; // 180px per 30 min
-const CHANNEL_W = 240;
+const CHANNEL_W = 264;
 const ROW_H = 56;
 /**
  * How wide the preview column is.
@@ -68,6 +70,12 @@ const ROW_H = 56;
 const PREVIEW_W = 460;
 /** How much time the grid holds in memory at once. */
 const WINDOW_HOURS = 24;
+/**
+ * How long the keyboard selection has to rest on a channel before it is previewed.
+ * Long enough that running down the list opens nothing on the way, short enough that
+ * stopping feels like the preview simply follows.
+ */
+const PREVIEW_SETTLE_MS = 600;
 
 const floorToSlot = (t: number) => Math.floor(t / HALF_HOUR) * HALF_HOUR;
 const xFor = (t: number, from: number) => ((t - from) / 60) * PX_PER_MIN;
@@ -112,8 +120,11 @@ export function GuidePage({
   onSearch: (query: string) => void;
 }) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  const [from, setFrom] = useState(() => floorToSlot(Math.floor(Date.now() / 1000)));
+  // Half an hour back, as the Now button does: opening on the current slot put the
+  // "now" line over the first letter of every title.
+  const [from, setFrom] = useState(() => floorToSlot(Math.floor(Date.now() / 1000) - HALF_HOUR));
   const [group, setGroup] = useState<string | undefined>(undefined);
+  const [withListings, setWithListings] = useState(readWithListings);
   const [selected, setSelected] = useState<{ ch: Channel; prog: Programme } | null>(null);
   const dvr = useDvrMarks();
   const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
@@ -154,7 +165,18 @@ export function GuidePage({
     [group],
   );
 
-  const channels = useMemo(() => channelRows ?? [], [channelRows]);
+  /**
+   * Narrowed to channels with a real schedule when the viewer asks for that.
+   *
+   * On a real line more than half the channels have no guide anywhere, and browsing for
+   * something to watch through 3,600 rows of event slots and loops is the slow way.
+   * Client-side, because the list is already here whole and `epgChannelId` is what
+   * says it -- a refresh now clears matches whose guide schedules nothing.
+   */
+  const channels = useMemo(() => {
+    const all = channelRows ?? [];
+    return withListings ? all.filter((c) => c.epgChannelId != null) : all;
+  }, [channelRows, withListings]);
 
   useEffect(() => {
     if (!previewChannel && channels.length) setPreviewChannel(channels[0]!);
@@ -236,6 +258,102 @@ export function GuidePage({
     jumpTo(Math.floor(d.getTime() / 1000) - HALF_HOUR);
   }, [jumpTo]);
 
+  /**
+   * The keyboard: arrows walk the guide, and resting on a channel previews it.
+   *
+   * Up and Down move between channels, PageUp and PageDown a screenful at a time, Left
+   * and Right through the selected channel's programmes, and Enter goes full screen.
+   * The preview follows the selection on its own, but only once the viewer stops on a
+   * channel (`PREVIEW_SETTLE_MS`): this line allows one connection, and opening a
+   * stream on every keypress while someone runs down the list would cost each of them
+   * a connect-and-close the panel is slow to forget.
+   *
+   * Captured on the window ahead of the app-wide hotkeys, which give these keys to
+   * volume, seeking and channel up/down -- right for the player, wrong here. Only while
+   * the guide is actually on screen: it stays mounted under a full-screen player, where
+   * the arrows belong to the player again.
+   */
+  const rootRef = useRef<HTMLDivElement>(null);
+  const settle = useRef<number | undefined>(undefined);
+  const previewSoon = useCallback(
+    (ch: Channel) => {
+      window.clearTimeout(settle.current);
+      settle.current = window.setTimeout(() => {
+        if (playingRef.current === ch.id) return;
+        playingRef.current = ch.id;
+        setPlayingId(ch.id);
+        onPreview(ch);
+      }, PREVIEW_SETTLE_MS);
+    },
+    [onPreview],
+  );
+  const playingRef = useRef<number | null>(playingId);
+  playingRef.current = playingId;
+  useEffect(() => () => window.clearTimeout(settle.current), []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Enter']
+        .includes(e.key)) return;
+      // Not under a full-screen player, a dialog, or the command palette.
+      const root = rootRef.current;
+      if (!root || root.offsetParent === null) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (channels.length === 0) return;
+
+      const at = Math.max(0, channels.findIndex((c) => c.id === previewChannel?.id));
+      const page = Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 560) / ROW_H) - 1);
+      const moveTo = (i: number) => {
+        const next = channels[Math.min(channels.length - 1, Math.max(0, i))]!;
+        setPreviewChannel(next);
+        setSelected(null);
+        rowVirt.scrollToIndex(channels.indexOf(next), { align: 'auto' });
+        previewSoon(next);
+      };
+
+      const ch = channels[at]!;
+      const stepProgramme = (dir: 1 | -1) => {
+        const list = ch.epgChannelId ? (guide.byEpgId[ch.epgChannelId] ?? []) : [];
+        if (list.length === 0) return;
+        const sorted = [...list].sort((a, b) => a.start - b.start);
+        const cur = selected?.ch.id === ch.id ? selected.prog : null;
+        const base = cur
+          ? sorted.findIndex((p) => p.id === cur.id)
+          // From nothing selected, start on what is on now.
+          : sorted.findIndex((p) => p.start <= now && p.stop > now) - (dir === 1 ? 1 : -1);
+        const prog = sorted[Math.min(sorted.length - 1, Math.max(0, base + dir))];
+        if (!prog) return;
+        setSelected({ ch, prog });
+        const el = scrollRef.current;
+        if (el) {
+          const x = xFor(Math.max(prog.start, from), from);
+          const visibleW = el.clientWidth - CHANNEL_W;
+          if (x < el.scrollLeft || x + 120 > el.scrollLeft + visibleW) {
+            el.scrollLeft = Math.max(0, x - 24);
+          }
+        }
+      };
+
+      e.preventDefault();
+      e.stopPropagation();
+      switch (e.key) {
+        case 'ArrowUp': moveTo(at - 1); break;
+        case 'ArrowDown': moveTo(at + 1); break;
+        case 'PageUp': moveTo(at - page); break;
+        case 'PageDown': moveTo(at + page); break;
+        case 'ArrowLeft': stepProgramme(-1); break;
+        case 'ArrowRight': stepProgramme(1); break;
+        case 'Enter':
+          window.clearTimeout(settle.current);
+          onTune(ch);
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [channels, previewChannel, selected, guide.byEpgId, now, from, rowVirt, previewSoon, onTune]);
+
   const timeSlots = useMemo(() => {
     const out: number[] = [];
     for (let t = from; t < to; t += HALF_HOUR) out.push(t);
@@ -244,6 +362,7 @@ export function GuidePage({
 
   return (
     <div
+      ref={rootRef}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -279,6 +398,11 @@ export function GuidePage({
         groups={groups ?? []}
         group={group}
         setGroup={setGroup}
+        withListings={withListings}
+        setWithListings={(on) => {
+          setWithListings(on);
+          writeWithListings(on);
+        }}
         onNow={scrollToNow}
         onShift={(hours) => jumpTo(from + hours * 3600)}
         onPrimeTime={primeTime}
@@ -306,13 +430,20 @@ export function GuidePage({
               {Array.from({ length: 10 }, (_, i) => <Skeleton key={i} h={ROW_H - 8} r={14} />)}
             </div>
           ) : channels.length === 0 ? (
-            <EmptyState title="No channels in this category" />
+            <EmptyState
+              title={withListings ? 'No channels with listings here' : 'No channels in this category'}
+            />
           ) : (
             <div
               ref={scrollRef}
               style={{ flex: 1, overflow: 'auto', position: 'relative' }}
             >
-              <div style={{ width: CHANNEL_W + totalWidth, position: 'relative' }}>
+              <div
+                style={{
+                  width: CHANNEL_W + totalWidth, position: 'relative',
+                  ['--guide-channel-w' as string]: `${CHANNEL_W}px`,
+                }}
+              >
                 <TimeHeader slots={timeSlots} />
 
                 {/* Moving "now" line. */}
@@ -429,59 +560,104 @@ export function GuidePage({
 }
 
 function GuideToolbar({
-  from, groups, group, setGroup, onNow, onShift, onPrimeTime,
+  from, groups, group, setGroup, withListings, setWithListings, onNow, onShift, onPrimeTime,
 }: {
   from: number;
   groups: { name: string; count: number }[];
   group: string | undefined;
   setGroup: (g: string | undefined) => void;
+  withListings: boolean;
+  setWithListings: (on: boolean) => void;
   onNow: () => void;
   onShift: (hours: number) => void;
   onPrimeTime: (offsetDays: number) => void;
 }) {
   return (
-    <div
-      style={{
-        display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', flexWrap: 'wrap',
-        padding: '4px 36px 16px',
-      }}
-    >
-      {/* The board says "Guide"; the heading's name stays "TV Guide". */}
-      <h1 className="dl-page-title">
-        <span aria-hidden>Guide</span>
-        <span className="sr-only">TV Guide</span>
-      </h1>
-      <span style={{ color: 'var(--text-faint)', fontSize: 'var(--fs-md)', fontWeight: 700 }}>
-        {dayLabel(from)}
-      </span>
-
-      <div className="dl-seg" style={{ marginLeft: 'auto' }}>
-        <button type="button" onClick={() => onShift(-24)}>−24h</button>
-        <button type="button" onClick={() => onShift(-1)}>−1h</button>
-        <button type="button" data-active="true" onClick={onNow}>
-          <Icon name="clock" size={15} />
-          Now
-        </button>
-        <button type="button" onClick={() => onShift(1)}>+1h</button>
-        <button type="button" onClick={() => onShift(24)}>+24h</button>
-        {[0, 1, 2].map((d) => (
-          <button key={d} type="button" onClick={() => onPrimeTime(d)}>
-            {d === 0 ? 'Tonight 8pm' : `${dayLabel(Math.floor(Date.now() / 1000) + d * 86400)} 8pm`}
+    <div style={{ padding: '4px 36px 14px', display: 'grid', gap: 12 }}>
+      {/* The top bar already says "Guide" on screen; the heading is for assistive
+          technology, and its name stays "TV Guide". */}
+      <h1 className="sr-only">TV Guide</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span className="dl-display" style={{ fontSize: 'var(--fs-2xl)', color: 'var(--text)' }}>
+          {dayLabel(from)}
+        </span>
+        <div className="dl-seg" style={{ marginLeft: 'auto' }}>
+          <button type="button" onClick={() => onShift(-24)}>−24h</button>
+          <button type="button" onClick={() => onShift(-1)}>−1h</button>
+          <button type="button" data-active="true" onClick={onNow}>
+            <Icon name="clock" size={15} />
+            Now
           </button>
-        ))}
+          <button type="button" onClick={() => onShift(1)}>+1h</button>
+          <button type="button" onClick={() => onShift(24)}>+24h</button>
+        </div>
+        <div className="dl-seg">
+          <button type="button" onClick={() => onPrimeTime(0)}>
+            <Icon name="moon" size={15} />
+            Tonight 8pm
+          </button>
+        </div>
       </div>
 
-      <Select
-        label="Category"
-        placeholder="All channels"
-        options={groups.map((g) => ({
-          value: g.name, label: g.name, hint: String(g.count),
-        }))}
-        value={group}
-        onChange={setGroup}
-      />
+      {/* Groups as chips rather than a dropdown: browsing is choosing between them, and
+          a list you have to open to see is a list nobody reads. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <div className="guide-chips" role="group" aria-label="Category">
+          <button
+            type="button"
+            className="dl-filter"
+            aria-pressed={group === undefined}
+            onClick={() => setGroup(undefined)}
+          >
+            All channels
+          </button>
+          {groups.map((g) => (
+            <button
+              key={g.name}
+              type="button"
+              className="dl-filter"
+              data-testid="guide-group"
+              aria-pressed={group === g.name}
+              onClick={() => setGroup(group === g.name ? undefined : g.name)}
+            >
+              {g.name}
+              <span className="guide-chip-count">{g.count}</span>
+            </button>
+          ))}
+        </div>
+        <div className="guide-listings">
+          <button
+            type="button"
+            role="switch"
+            className="dl-switch"
+            aria-checked={withListings}
+            aria-label="Only channels with listings"
+            onClick={() => setWithListings(!withListings)}
+          />
+          <span aria-hidden>With listings</span>
+        </div>
+      </div>
     </div>
   );
+}
+
+const WITH_LISTINGS_KEY = 'aurora.guide.withListings';
+
+/** A per-viewer convenience, so it lives in this browser profile and may be absent. */
+function readWithListings(): boolean {
+  try {
+    return window.localStorage.getItem(WITH_LISTINGS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeWithListings(on: boolean) {
+  try {
+    window.localStorage.setItem(WITH_LISTINGS_KEY, on ? '1' : '0');
+  } catch {
+    // Storage refused (a private window, a policy): the choice lasts this visit.
+  }
 }
 
 /**
@@ -580,8 +756,9 @@ function ChannelCell({
       <LogoTile name={channel.name} number={channel.number} logo={channel.logo} size={40} />
       <span
         style={{
-          fontSize: 'var(--fs-md)', fontWeight: 800, overflow: 'hidden',
-          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontSize: 'var(--fs-sm)', fontWeight: 800, lineHeight: 1.2, overflow: 'hidden',
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+          wordBreak: 'break-word',
         }}
       >
         {channel.name}
@@ -658,19 +835,7 @@ function ProgrammeRow({
           this was built against, so whichever end of the list you open is likely to
           be blank. Saying so is the difference between "nothing is on" and "nothing
           is known". */}
-      {visible.length === 0 && (
-        <div
-          style={{
-            position: 'absolute', inset: '4px 4px 4px 2px',
-            display: 'flex', alignItems: 'center', paddingLeft: 'var(--sp-3)',
-            borderRadius: 'var(--r-md)',
-            border: '2px dashed var(--border)',
-            color: 'var(--text-faint)', fontSize: 'var(--fs-sm)',
-          }}
-        >
-          No guide data for this channel
-        </div>
-      )}
+      {visible.length === 0 && <FromTheName channel={channel} />}
 
       {visible.map((p) => {
         const left = Math.max(0, xFor(p.start, from));
@@ -695,12 +860,17 @@ function ProgrammeRow({
               padding: '0 12px', textAlign: 'left', cursor: 'pointer', lineHeight: 1.3,
               // Daylight: the airing slot is white, everything else a sunk pill, and the
               // selected programme is the accent.
+              // What is on now is what somebody browsing is looking for, so it is the
+              // one that stands out: accent-tinted, with its progress along the foot.
               background: isSelected
                 ? 'var(--accent)'
-                : airing ? 'var(--surface)' : 'var(--surface-sunk)',
+                : airing
+                  ? 'color-mix(in srgb, var(--accent) 16%, var(--surface-sunk))'
+                  : 'var(--surface-sunk)',
               border: 'none',
-              // The white slot needs an edge on the white panel.
-              boxShadow: airing && !isSelected ? 'inset 0 0 0 1.5px var(--border-strong)' : 'none',
+              boxShadow: airing && !isSelected
+                ? 'inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent)'
+                : 'none',
               borderRadius: 'var(--r-md)',
               color: isSelected ? 'var(--accent-text)' : 'var(--text)',
               opacity: p.stop < now ? 0.45 : 1,
@@ -748,13 +918,49 @@ function ProgrammeRow({
                   position: 'absolute', left: 0, bottom: 0, height: 3,
                   width: `${((now - p.start) / (p.stop - p.start)) * 100}%`,
                   background: isSelected ? 'var(--accent-text)' : 'var(--accent)',
-                  opacity: 0.6,
                 }}
               />
             )}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * The row for a channel the guide knows nothing about, read from its name.
+ *
+ * It was a dashed strip saying "No guide data for this channel", and on a real line that
+ * was more than half the guide. Most of those channels say what is on in their name --
+ * a fixture, a 24/7 loop -- so the row says that, marked as coming from the name so it
+ * is never mistaken for a schedule. Not a button: there is no programme to select, set a
+ * reminder on or record.
+ */
+function FromTheName({ channel }: { channel: Channel }) {
+  const g = useMemo(() => nameGuide(channel.name), [channel.name]);
+  const clockTime = useClockTime();
+  const when =
+    g.kind === 'event'
+      ? g.at != null
+        ? `${dayLabel(g.at)} ${clockTime(g.at)}`
+        : g.detail
+      : g.kind === 'loop'
+        ? 'All day'
+        : null;
+  return (
+    <div
+      data-testid="guide-from-name"
+      data-kind={g.kind}
+      className="guide-from-name"
+      title={`From the channel name: ${channel.name}`}
+    >
+      <div className="guide-from-name-body">
+        <Icon name={g.kind === 'event' ? 'star' : g.kind === 'loop' ? 'refresh' : 'tv'} size={14} />
+        <span className="guide-from-name-title">{g.title}</span>
+        {when && <span className="guide-from-name-when">{when}</span>}
+        <span className="guide-from-name-tag">from channel name</span>
+      </div>
     </div>
   );
 }

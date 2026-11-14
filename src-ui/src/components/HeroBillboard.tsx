@@ -10,7 +10,7 @@
  * sweep has not run.
  */
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CatalogItem } from '@shared/ipc';
 import { runtime } from '@/lib/format';
 import { useUi } from '@/state/ui';
@@ -91,6 +91,44 @@ export function HeroBillboard({
     return () => window.clearTimeout(t);
   }, [index, paused, animations, items.length, trailer]);
 
+  /**
+   * As much synopsis as fits, in whole lines: two, one, or none.
+   *
+   * The column is bottom-aligned in a box of fixed height. A long title (two lines at
+   * display size) and a two-line synopsis did not fit a 320px billboard, and every block
+   * was squeezed and cut mid-line. Now nothing shrinks (styles/hero.css) and this gives
+   * the synopsis up a line at a time until the column's first child is inside the box.
+   * Measured, not guessed: the title scales with the window, so no fixed breakpoint is
+   * right for every width. Re-measured when the title, the trailer line or the size
+   * changes.
+   */
+  const textRef = useRef<HTMLDivElement>(null);
+  const [overviewLines, setOverviewLines] = useState(2);
+  // Bumped when the box changes size, which is a reason to start again from two lines.
+  const [resized, setResized] = useState(0);
+  useLayoutEffect(() => {
+    setOverviewLines(2);
+  }, [item?.id, trailer, resized]);
+  useLayoutEffect(() => {
+    const box = textRef.current;
+    const first = box?.firstElementChild as HTMLElement | null | undefined;
+    if (!box || !first) return;
+    const overflows = first.getBoundingClientRect().top < box.getBoundingClientRect().top - 0.5;
+    if (overflows && overviewLines > 0) setOverviewLines(overviewLines - 1);
+  }, [overviewLines, item?.id, trailer, resized]);
+  useEffect(() => {
+    const box = textRef.current;
+    if (!box || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setResized((n) => n + 1));
+    ro.observe(box);
+    // The title too: its height changes when the display font arrives after the first
+    // paint, or the text changes, and either can make a column that fitted stop fitting.
+    // Not the synopsis -- its height is what this adjusts, and watching it would loop.
+    const title = box.querySelector('h1');
+    if (title) ro.observe(title);
+    return () => ro.disconnect();
+  }, [item?.id]);
+
   if (!item) return null;
 
   return (
@@ -117,7 +155,7 @@ export function HeroBillboard({
       style={{
         // Daylight: a bento tile rather than a full-bleed band. It fills the grid cell
         // Home gives it, in the accent blue whenever there is no artwork to show.
-        position: 'relative', flex: 1, minHeight: 320, width: '100%',
+        position: 'relative', flex: 1, minHeight: 400, width: '100%',
         borderRadius: 'var(--r-xl)', background: 'var(--art-1)',
         color: 'var(--on-art)',
         // The trailer frame is scaled up to hide its letterboxing; this is what keeps
@@ -226,6 +264,8 @@ export function HeroBillboard({
           display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
           alignItems: 'flex-start', overflow: 'hidden',
         }}
+        ref={textRef}
+        className="hero-text"
       >
         <span
           className="dl-chip"
@@ -258,7 +298,9 @@ export function HeroBillboard({
           className="dl-display"
           style={{
             margin: '0 0 10px', fontSize: 'clamp(34px, 3.8vw, 60px)',
-            lineHeight: 0.98, color: 'var(--on-art)',
+            // Not under ~1.05: with `overflow: hidden` for the clamp, a tighter line box
+            // cuts the descenders off the last line (the tail of a "g").
+            lineHeight: 1.06, color: 'var(--on-art)',
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
           }}
@@ -290,10 +332,12 @@ export function HeroBillboard({
         </div>
 
         <p
+          className="hero-overview"
           style={{
             margin: '0 0 20px', fontSize: 'var(--fs-md)', maxWidth: 520,
             color: 'color-mix(in srgb, var(--on-art) 85%, transparent)',
-            lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2,
+            lineHeight: 1.5, WebkitLineClamp: overviewLines,
+            display: overviewLines > 0 ? '-webkit-box' : 'none',
             WebkitBoxOrient: 'vertical', overflow: 'hidden',
           }}
         >

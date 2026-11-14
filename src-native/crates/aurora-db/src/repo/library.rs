@@ -695,14 +695,19 @@ pub fn stats(conn: &Connection) -> Result<LibraryStats> {
     let count = |sql: &str| -> Result<i64> { Ok(conn.query_row(sql, [], |r| r.get(0))?) };
 
     let total = count("SELECT COUNT(*) FROM channels WHERE hidden = 0")?;
+    // Covered means the guide has something for it, not that a match was recorded: on
+    // the real line 868 matched channels pointed at guide entries with no programmes,
+    // and the percentage counted every one of them as covered.
     let matched = count(
-        "SELECT COUNT(*) FROM channels
-         WHERE hidden = 0 AND epg_channel_id IS NOT NULL AND epg_channel_id <> ''",
+        "SELECT COUNT(*) FROM channels c
+         WHERE c.hidden = 0 AND c.epg_channel_id IS NOT NULL AND c.epg_channel_id <> ''
+           AND EXISTS (SELECT 1 FROM epg_programmes p WHERE p.channel_id = c.epg_channel_id)",
     )?;
 
     let mut stmt = conn.prepare(
-        "SELECT COALESCE(custom_name, name) FROM channels
-         WHERE hidden = 0 AND (epg_channel_id IS NULL OR epg_channel_id = '')
+        "SELECT COALESCE(custom_name, name) FROM channels c
+         WHERE hidden = 0
+           AND NOT EXISTS (SELECT 1 FROM epg_programmes p WHERE p.channel_id = c.epg_channel_id)
          ORDER BY COALESCE(custom_number, number), id
          LIMIT ?1",
     )?;
@@ -1901,7 +1906,13 @@ mod tests {
             [],
         )
         .unwrap();
-        for (key, epg) in [("a", Some("one")), ("b", None), ("c", None)] {
+        // `d` is matched to a guide entry that schedules nothing, which is no guide.
+        for (key, epg) in [
+            ("a", Some("one")),
+            ("b", None),
+            ("c", None),
+            ("d", Some("empty")),
+        ] {
             conn.execute(
                 "INSERT INTO channels (provider_id, provider_key, name, match_key,
                                        epg_channel_id, last_seen_at)
@@ -1910,12 +1921,21 @@ mod tests {
             )
             .unwrap();
         }
+        // Ten programmes on one channel still count as one channel covered.
+        for i in 0..10 {
+            conn.execute(
+                "INSERT INTO epg_programmes (channel_id, start, stop, title)
+                 VALUES ('one', ?1, ?1 + 60, 'News')",
+                [i * 60],
+            )
+            .unwrap();
+        }
 
         let s = stats(&conn).unwrap();
-        assert_eq!(s.channels, 3);
-        assert_eq!(s.epg_coverage.total, 3);
+        assert_eq!(s.channels, 4);
+        assert_eq!(s.epg_coverage.total, 4);
         assert_eq!(s.epg_coverage.matched, 1);
-        assert_eq!(s.epg_coverage.unmatched, vec!["b", "c"]);
+        assert_eq!(s.epg_coverage.unmatched, vec!["b", "c", "d"]);
     }
 
     #[test]

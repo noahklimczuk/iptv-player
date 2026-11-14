@@ -10,6 +10,9 @@ import {
 } from './ipc';
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
+import './styles/guide.css';
+import './styles/glass.css';
+import './styles/hero.css';
 
 // Before the first render, so a failure during mount has somewhere to go too.
 installGlobalErrorHandlers();
