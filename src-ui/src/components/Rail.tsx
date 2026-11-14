@@ -191,6 +191,10 @@ export function Rail({
                 item={item}
                 index={i}
                 rank={showRank ? i + 1 : undefined}
+                // Titled here too, as asked: posters alone left the home screen a row of
+                // artwork to recognise, and a film whose art carries no name was a
+                // guess.
+                showTitle
                 progress={rail.progress?.[`${item.kind}:${item.id}`] ?? null}
                 reason={rail.reasons?.[`${item.kind}:${item.id}`]}
                 onOpen={onOpen}
