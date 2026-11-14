@@ -261,6 +261,20 @@ jobs:
     # for a commit that is actually on main. The ref test is belt and braces: `push` is
     # already limited to main above, and this keeps it true if that ever widens.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # One release build at a time. The version is worked out from the last release tag
+    # before anything compiles, so two builds running side by side both read the same
+    # tag and pick the same number. That happened: #152, #153 and #154 merged within
+    # thirty seconds, all three built as 1.0.64, #153's installer replaced #152's under
+    # #152's tag, and #154 never published at all.
+    #
+    # Queued, a build starts only once the one before it has tagged, so it counts on
+    # from there. GitHub keeps one waiting build per group and cancels an older waiting
+    # one when a newer merge arrives -- which loses nothing, since the newer commit
+    # contains it. `cancel-in-progress` stays off: a build half way through publishing
+    # is never cut short.
+    concurrency:
+      group: release-build
+      cancel-in-progress: false
     permissions:
       # To publish the installer to Releases at the end of the job.
       contents: write
@@ -625,9 +639,18 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
 
           if ($exists) {
-            # Only reachable by re-running this same workflow run: a later merge always
-            # computes a higher version. So this is a build refreshing its own release,
-            # never one build overwriting another.
+            # Meant to be reachable only by re-running this same workflow run, so a
+            # build refreshes its own release. Checked rather than assumed: when two
+            # builds raced to the same number, this branch let the second one replace
+            # the first one's installer under the first one's tag. A release made from
+            # another commit is never touched -- fail, and say which commit holds it.
+            $PSNativeCommandUseErrorActionPreference = $false
+            git fetch --quiet --force origin "refs/tags/${tag}:refs/tags/${tag}"
+            $owner = (git rev-list -n 1 "refs/tags/$tag")
+            $PSNativeCommandUseErrorActionPreference = $true
+            if ($owner -ne $full) {
+              throw "$tag already belongs to $owner, not this commit ($full). Re-run this job to build it as the next version."
+            }
             gh release edit $tag --notes $notes --latest
           } else {
             gh release create $tag --target $full --latest `
