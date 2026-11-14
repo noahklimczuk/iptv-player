@@ -116,6 +116,21 @@ const FOREIGN_CHANNELS = [
   { name: 'IT | Rai 1', group: 'Italia', lang: 'it', base: 705 },
 ] as const;
 
+/**
+ * Channels no guide describes, named the way a real line names them.
+ *
+ * More than half of a real line is this: event slots that carry the fixture in the
+ * name, idle slots, and 24/7 loops. Without any here the guide's rows for them could not
+ * be seen or tested. Appended last and drawing nothing from `rand()`, so the rest of the
+ * fixture world is unchanged.
+ */
+const UNGUIDED_CHANNELS = [
+  { name: 'US | Flo 564 : [Hockey:2025 Des Moines Buccaneers vs Fargo Force] (2025-10-18 19:05:30', group: 'Events', base: 801 },
+  { name: 'US | NHL GAME 06: LIGHTNING @ BLUE JACKETS 7PM ET', group: 'Events', base: 802 },
+  { name: 'US | Flo 068 : ', group: 'Events', base: 803 },
+  { name: '24/7 | The Kardashians', group: '24/7', base: 811 },
+] as const;
+
 /** Channels the provider lists more than once. The best copy is the one to keep. */
 const QUALITY_VARIANTS = ['Meridian News', 'Apex Sports 1', 'Lantern Cinema'] as const;
 
@@ -188,6 +203,24 @@ export const channels: Channel[] = (() => {
       hasCatchup: false,
       favorite: false,
       lang: f.lang,
+      stale: false,
+    });
+  }
+  for (const u of UNGUIDED_CHANNELS) {
+    out.push({
+      id: id++,
+      name: u.name,
+      number: u.base,
+      logo: null,
+      group: u.group,
+      epgChannelId: null,
+      tvgId: null,
+      quality: 'HD',
+      hidden: false,
+      isRadio: false,
+      hasCatchup: false,
+      favorite: false,
+      lang: 'en',
       stale: false,
     });
   }

@@ -12,17 +12,17 @@
  * trigger, so the arrow keys had nowhere to arrive; closing left it nowhere at all, so
  * Tab from a closed Select started again at the top of the page.
  *
- * Driven on the guide's category filter because it has groups, a placeholder row and more
- * options than fit, which is the shape every other caller is a simplification of.
+ * Driven on the Movies genre filter: a placeholder row and more options than fit. It was
+ * the guide's category filter until that became a row of chips.
  */
 import { expect, test } from '@playwright/test';
 
 async function openCategory(page: import('@playwright/test').Page) {
-  await page.goto('/#/guide');
-  const trigger = page.getByTestId('select-category');
+  await page.goto('/#/movies');
+  const trigger = page.getByTestId('select-genre');
   await expect(trigger).toBeVisible();
   await trigger.click();
-  const list = page.getByRole('listbox', { name: 'Category' });
+  const list = page.getByRole('listbox', { name: 'Genre' });
   await expect(list).toBeVisible();
   return { trigger, list };
 }

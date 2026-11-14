@@ -85,12 +85,11 @@ test('choosing a category narrows the query, not just the drawing', async ({ pag
     () => (window as unknown as { __auroraClearCalls: () => void }).__auroraClearCalls(),
   );
 
-  // The guide's own category filter, which used to be applied to the answer.
-  await page.getByTestId('select-category').click();
-  const row = page.getByRole('listbox', { name: 'Category' }).getByTestId('select-row');
-  // The first row is the "All channels" placeholder; the second is a real group.
-  const chosen = (await row.nth(1).innerText()).split('\n')[0]!.trim();
-  await row.nth(1).click();
+  // The guide's own category filter, which used to be applied to the answer. A row of
+  // chips now; each chip is the group's name followed by its count.
+  const chip = page.getByRole('group', { name: 'Category' }).getByTestId('guide-group').first();
+  const chosen = (await chip.innerText()).replace(/\s*\d+\s*$/, '').trim();
+  await chip.click();
   await page.waitForTimeout(300);
 
   const lists = await calls(page, 'channels.list');

@@ -1,0 +1,54 @@
+/* The Guide's browsing controls and its rows for channels without a schedule.
+   Kept apart from app.css so the guide's rules are found where the guide is. */
+
+/* Groups as a single scrolling row of chips. */
+.guide-chips {
+  flex: 1; min-width: 0;
+  display: flex; gap: 8px;
+  overflow-x: auto; scrollbar-width: none;
+  /* Fade the overflow so a cut-off chip reads as "more this way". */
+  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+  padding: 2px 48px 2px 0;
+}
+.guide-chips::-webkit-scrollbar { display: none; }
+.guide-chips .dl-filter { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; }
+.guide-chip-count {
+  font-size: var(--fs-xs); font-weight: 700; opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-listings {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  font-size: var(--fs-sm); font-weight: 700; color: var(--text-muted);
+}
+
+/* A channel the guide knows nothing about, described from its name. The strip spans
+   the whole window; its words stay pinned beside the channel column while the grid
+   scrolls sideways, so they are never off-screen. */
+.guide-from-name {
+  position: absolute; inset: 4px 4px 4px 2px;
+  border-radius: var(--r-md);
+  border: 1.5px dashed var(--border-strong);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.guide-from-name-body {
+  position: sticky; left: calc(var(--guide-channel-w) + 4px);
+  display: inline-flex; align-items: center; gap: 10px;
+  height: 100%; padding: 0 14px;
+  max-width: 640px; white-space: nowrap;
+}
+.guide-from-name-body > svg { flex-shrink: 0; opacity: 0.7; }
+.guide-from-name-title {
+  font-weight: 800; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.guide-from-name[data-kind='idle'] .guide-from-name-title,
+.guide-from-name[data-kind='name'] .guide-from-name-title { font-weight: 700; color: var(--text-muted); }
+.guide-from-name-when { font-weight: 700; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.guide-from-name-tag {
+  flex-shrink: 0; padding: 2px 8px; border-radius: var(--r-full);
+  background: var(--surface-sunk);
+  font-size: var(--fs-xs); font-weight: 700; color: var(--text-faint);
+}

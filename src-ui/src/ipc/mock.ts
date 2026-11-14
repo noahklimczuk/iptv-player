@@ -955,6 +955,11 @@ function buildRails(): Rail[] {
 
 const progCache = new Map<string, Programme[]>();
 function programmes(ch: Channel, from: number, to: number): Programme[] {
+  // A channel with no guide has no programmes, as on the host. The fixtures used to
+  // invent a schedule for every channel, keyed by row id when there was no guide id --
+  // the fallback R-89 removed from the guide -- so no journey could see a channel
+  // without one.
+  if (ch.epgChannelId == null) return [];
   const key = `${ch.id}:${from}:${to}`;
   let v = progCache.get(key);
   if (!v) {
@@ -1767,8 +1772,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     programmes: fx.channels.length * 48 * 7,
     epgCoverage: {
       total: fx.channels.length,
-      matched: fx.channels.length - 2,
-      unmatched: fx.channels.slice(-2).map((c) => c.name),
+      matched: fx.channels.filter((c) => c.epgChannelId != null).length,
+      unmatched: fx.channels.filter((c) => c.epgChannelId == null).map((c) => c.name),
     },
   }),
   'metadata.setConcurrency': ({ concurrency }) => {
