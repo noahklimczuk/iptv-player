@@ -1,0 +1,9 @@
+/* The Home billboard's text column.
+
+   A flex column aligned to the bottom of a fixed-height box. Flex items shrink by
+   default, so when a long title and a long synopsis did not fit, every block was
+   squeezed below its own height and the box's `overflow: hidden` cut each one through
+   the middle of a line -- half of "Black Girl Missing", half a sentence of synopsis.
+   Nothing here shrinks; `HeroBillboard` gives up synopsis lines instead until the
+   whole column fits. */
+.hero-text > * { flex-shrink: 0; }

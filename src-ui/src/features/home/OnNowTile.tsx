@@ -13,7 +13,8 @@ import { useClockTime } from '@/hooks/useClockTime';
 import { useNowNext } from '@/features/live/useNowNext';
 import { useProfile } from '@/state/profile';
 
-const SHOWN = 5;
+/** Six, to fill the taller row beside the billboard rather than leave a gap under it. */
+const SHOWN = 6;
 
 export function OnNowTile({ onTune }: { onTune?: (channel: Channel) => void }) {
   const profileId = useProfile((s) => s.active?.id ?? 1);
@@ -37,7 +38,11 @@ export function OnNowTile({ onTune }: { onTune?: (channel: Channel) => void }) {
     <section
       aria-labelledby="home-on-now"
       className="dl-panel"
-      style={{ padding: '24px 24px 20px', display: 'flex', flexDirection: 'column', minWidth: 0 }}
+      // `flex: 1` to stand as tall as the billboard beside it; it stopped short of it.
+      style={{
+        padding: '24px 24px 20px', display: 'flex', flexDirection: 'column', minWidth: 0,
+        flex: 1,
+      }}
     >
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
         <h2
@@ -62,7 +67,9 @@ export function OnNowTile({ onTune }: { onTune?: (channel: Channel) => void }) {
         </p>
       )}
 
-      <div style={{ display: 'grid', gap: 10 }}>
+      {/* The rows share the tile's height evenly, so a taller tile is spaced rather than
+          left with an empty band under its last row. */}
+      <div style={{ display: 'grid', gap: 10, flex: 1, alignContent: 'space-evenly' }}>
         {shown.map((channel) => {
           const prog = guide.get(channel.id)?.now ?? null;
           const pct = prog
