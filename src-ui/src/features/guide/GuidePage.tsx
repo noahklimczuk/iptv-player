@@ -49,6 +49,7 @@ import { dayLabel, duration } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
 import { SurfaceHole } from '@/components/SurfaceHole';
 import { useInlaidPicture } from '@/hooks/useInlaidPicture';
+import { isTyping } from '@/hooks/useHotkeys';
 
 const HALF_HOUR = 1800;
 const PX_PER_MIN = 6;
@@ -69,6 +70,12 @@ const ROW_H = 56;
 const PREVIEW_W = 460;
 /** How much time the grid holds in memory at once. */
 const WINDOW_HOURS = 24;
+/**
+ * How long the keyboard selection has to rest on a channel before it is previewed.
+ * Long enough that running down the list opens nothing on the way, short enough that
+ * stopping feels like the preview simply follows.
+ */
+const PREVIEW_SETTLE_MS = 600;
 
 const floorToSlot = (t: number) => Math.floor(t / HALF_HOUR) * HALF_HOUR;
 const xFor = (t: number, from: number) => ((t - from) / 60) * PX_PER_MIN;
@@ -251,6 +258,102 @@ export function GuidePage({
     jumpTo(Math.floor(d.getTime() / 1000) - HALF_HOUR);
   }, [jumpTo]);
 
+  /**
+   * The keyboard: arrows walk the guide, and resting on a channel previews it.
+   *
+   * Up and Down move between channels, PageUp and PageDown a screenful at a time, Left
+   * and Right through the selected channel's programmes, and Enter goes full screen.
+   * The preview follows the selection on its own, but only once the viewer stops on a
+   * channel (`PREVIEW_SETTLE_MS`): this line allows one connection, and opening a
+   * stream on every keypress while someone runs down the list would cost each of them
+   * a connect-and-close the panel is slow to forget.
+   *
+   * Captured on the window ahead of the app-wide hotkeys, which give these keys to
+   * volume, seeking and channel up/down -- right for the player, wrong here. Only while
+   * the guide is actually on screen: it stays mounted under a full-screen player, where
+   * the arrows belong to the player again.
+   */
+  const rootRef = useRef<HTMLDivElement>(null);
+  const settle = useRef<number | undefined>(undefined);
+  const previewSoon = useCallback(
+    (ch: Channel) => {
+      window.clearTimeout(settle.current);
+      settle.current = window.setTimeout(() => {
+        if (playingRef.current === ch.id) return;
+        playingRef.current = ch.id;
+        setPlayingId(ch.id);
+        onPreview(ch);
+      }, PREVIEW_SETTLE_MS);
+    },
+    [onPreview],
+  );
+  const playingRef = useRef<number | null>(playingId);
+  playingRef.current = playingId;
+  useEffect(() => () => window.clearTimeout(settle.current), []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Enter']
+        .includes(e.key)) return;
+      // Not under a full-screen player, a dialog, or the command palette.
+      const root = rootRef.current;
+      if (!root || root.offsetParent === null) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (channels.length === 0) return;
+
+      const at = Math.max(0, channels.findIndex((c) => c.id === previewChannel?.id));
+      const page = Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 560) / ROW_H) - 1);
+      const moveTo = (i: number) => {
+        const next = channels[Math.min(channels.length - 1, Math.max(0, i))]!;
+        setPreviewChannel(next);
+        setSelected(null);
+        rowVirt.scrollToIndex(channels.indexOf(next), { align: 'auto' });
+        previewSoon(next);
+      };
+
+      const ch = channels[at]!;
+      const stepProgramme = (dir: 1 | -1) => {
+        const list = ch.epgChannelId ? (guide.byEpgId[ch.epgChannelId] ?? []) : [];
+        if (list.length === 0) return;
+        const sorted = [...list].sort((a, b) => a.start - b.start);
+        const cur = selected?.ch.id === ch.id ? selected.prog : null;
+        const base = cur
+          ? sorted.findIndex((p) => p.id === cur.id)
+          // From nothing selected, start on what is on now.
+          : sorted.findIndex((p) => p.start <= now && p.stop > now) - (dir === 1 ? 1 : -1);
+        const prog = sorted[Math.min(sorted.length - 1, Math.max(0, base + dir))];
+        if (!prog) return;
+        setSelected({ ch, prog });
+        const el = scrollRef.current;
+        if (el) {
+          const x = xFor(Math.max(prog.start, from), from);
+          const visibleW = el.clientWidth - CHANNEL_W;
+          if (x < el.scrollLeft || x + 120 > el.scrollLeft + visibleW) {
+            el.scrollLeft = Math.max(0, x - 24);
+          }
+        }
+      };
+
+      e.preventDefault();
+      e.stopPropagation();
+      switch (e.key) {
+        case 'ArrowUp': moveTo(at - 1); break;
+        case 'ArrowDown': moveTo(at + 1); break;
+        case 'PageUp': moveTo(at - page); break;
+        case 'PageDown': moveTo(at + page); break;
+        case 'ArrowLeft': stepProgramme(-1); break;
+        case 'ArrowRight': stepProgramme(1); break;
+        case 'Enter':
+          window.clearTimeout(settle.current);
+          onTune(ch);
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [channels, previewChannel, selected, guide.byEpgId, now, from, rowVirt, previewSoon, onTune]);
+
   const timeSlots = useMemo(() => {
     const out: number[] = [];
     for (let t = from; t < to; t += HALF_HOUR) out.push(t);
@@ -259,6 +362,7 @@ export function GuidePage({
 
   return (
     <div
+      ref={rootRef}
       style={{
         display: 'flex',
         flexDirection: 'column',
