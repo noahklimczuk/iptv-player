@@ -103,6 +103,21 @@ impl Dropped {
     }
 }
 
+/// A guide that describes one service's channels and nobody else's.
+///
+/// Pluto TV's public XMLTV names its channels "Cheers", "Pokémon", "Bar Rescue" -- and
+/// a provider's own 24/7 loops carry exactly those names. Matched like any other guide,
+/// "Cheers FHD" from a provider's CINEMANIA group was handed Pluto's Cheers schedule,
+/// which is a different stream showing different episodes: wrong programmes, which is
+/// worse than none. So a match into a scoped guide counts only for a channel whose name
+/// or group mentions `only_where` (case-insensitive), and a scoped guide is offered to
+/// the matcher after every unscoped one, so it never displaces the provider's own.
+#[derive(Debug, Clone)]
+pub struct ScopedGuide {
+    pub url: String,
+    pub only_where: String,
+}
+
 pub struct SyncOptions {
     pub provider_id: i64,
     pub source: SourceKind,
@@ -110,6 +125,8 @@ pub struct SyncOptions {
     pub password: Option<String>,
     /// Extra XMLTV URLs beyond whatever the source advertises.
     pub extra_epg_urls: Vec<String>,
+    /// Guides that may only describe some of the channels: see [`ScopedGuide`].
+    pub scoped_epg: Vec<ScopedGuide>,
     pub import_live: bool,
     pub import_vod: bool,
     pub import_series: bool,
@@ -127,6 +144,7 @@ impl SyncOptions {
             source,
             password: None,
             extra_epg_urls: Vec::new(),
+            scoped_epg: Vec::new(),
             import_live: true,
             import_vod: true,
             import_series: true,
@@ -204,6 +222,8 @@ struct FetchedSeries {
 #[derive(Debug, Default)]
 struct FetchedEpg {
     channels: Vec<EpgChannel>,
+    /// Set for a [`ScopedGuide`]: the word a channel must carry to use this guide.
+    scope: Option<String>,
     /// Batched exactly as they will be inserted, so `apply` does no regrouping -- and
     /// spilled to a file rather than kept, because a real guide does not fit in the
     /// memory budget. See `spill` for the measurement (R-64).
@@ -298,14 +318,26 @@ pub fn fetch(
 
     epg_urls.sort();
     epg_urls.dedup();
-    for url in &epg_urls {
+    let scoped = options
+        .scoped_epg
+        .iter()
+        .map(|g| (g.url.clone(), Some(g.only_where.to_lowercase())));
+    let all: Vec<(String, Option<String>)> = epg_urls
+        .into_iter()
+        .map(|u| (u, None))
+        .chain(scoped)
+        .collect();
+    for (url, scope) in &all {
         on_progress(Progress {
             phase: Phase::FetchingEpg,
             done: 0,
             total: 0,
         });
         match fetch_epg(http, url, &options.epg_title_langs) {
-            Ok(epg) => out.epg.push(epg),
+            Ok(mut epg) => {
+                epg.scope = scope.clone();
+                out.epg.push(epg)
+            }
             // A missing guide must not fail the whole refresh — the library is still
             // usable without it.
             Err(e) => out.warnings.push(format!(
@@ -513,7 +545,16 @@ pub fn apply(
 
     // ── EPG ─────────────────────────────────────────────────────────────────────
     let mut epg_channels: Vec<EpgChannel> = Vec::new();
+    let mut scoped_ids: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for source in fetched.epg {
+        if let Some(scope) = &source.scope {
+            for c in &source.channels {
+                scoped_ids
+                    .entry(c.id.clone())
+                    .or_insert_with(|| scope.clone());
+            }
+        }
         epg_repo::upsert_channels(db, &source.channels).map_err(db_failure)?;
 
         // Everything this source is about to write, removed first.
@@ -615,11 +656,21 @@ pub fn apply(
 
         let manual = manual_mappings(db).map_err(db_failure)?;
         for row in &rows {
-            let hit = index.resolve(
-                row.tvg_id.as_deref(),
-                &row.name,
-                manual.get(&row.id).map(String::as_str),
-            );
+            let manual_id = manual.get(&row.id).map(String::as_str);
+            let hit = index
+                .resolve(row.tvg_id.as_deref(), &row.name, manual_id)
+                .filter(|m| {
+                    // A scoped guide describes its own service only; see `ScopedGuide`.
+                    // A manual mapping is the viewer's word and is never second-guessed.
+                    manual_id.is_some()
+                        || scoped_ids.get(&m.epg_channel_id).is_none_or(|word| {
+                            row.name.to_lowercase().contains(word.as_str())
+                                || row
+                                    .group
+                                    .as_deref()
+                                    .is_some_and(|g| g.to_lowercase().contains(word.as_str()))
+                        })
+                });
             match hit {
                 Some(m) => {
                     channels::set_epg_mapping(
@@ -632,6 +683,15 @@ pub fn apply(
                     report.epg_matched += 1;
                 }
                 None => {
+                    // Forget a match the matcher no longer makes. Only `Some` used to be
+                    // written, so a pairing from an older, looser matcher outlived every
+                    // refresh after it: on the real line 629 of 678 fuzzy matches put
+                    // several channels on one guide (DAZN 20-25 all showing DAZN 2's
+                    // schedule, ESPN+ 201-205 on ESPN+ 20) -- the wrong programmes, which
+                    // is worse than none. Today's matcher refuses every one of them.
+                    if row.epg_channel_id.is_some() {
+                        channels::set_epg_mapping(db, row.id, None, None).map_err(db_failure)?;
+                    }
                     report.epg_unmatched_total += 1;
                     if report.epg_unmatched.len() < 200 {
                         report.epg_unmatched.push(row.name.clone());
@@ -875,6 +935,7 @@ fn fetch_epg(
     touched.dedup();
 
     Ok(FetchedEpg {
+        scope: None,
         channels: channel_buf,
         programmes: spill.finish().map_err(|e| NetFailure::classify(&e))?,
         touched,
@@ -1750,6 +1811,89 @@ mod tests {
         assert_eq!(
             bbc.epg_channel_id, None,
             "a channel with no programmes is worse than no match: the guide draws an              empty row and the diagnostics say it is fine"
+        );
+    }
+
+    /// A match the matcher no longer makes is forgotten on the next refresh.
+    ///
+    /// Only hits were ever written, so a pairing from an older, looser matcher stayed for
+    /// good: on the real line DAZN 20-25 all showed DAZN 2's schedule, long after the
+    /// matcher stopped making those matches.
+    #[test]
+    fn a_stale_guide_match_is_cleared_by_the_next_refresh() {
+        let server = combined_server();
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        // What an older matcher left behind: BBC One on CNN's guide.
+        let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
+        let bbc = rows.iter().find(|r| r.name == "BBC One").unwrap().id;
+        channels::set_epg_mapping(&conn, bbc, Some("cnn.us"), Some("fuzzy")).unwrap();
+        // ...and a guide that no longer offers BBC One anything.
+        let server = TestServer::start(|_, req| {
+            if req.path.starts_with("/epg") {
+                Reply::ok(
+                    r#"<tv><channel id="cnn.us"><display-name>CNN</display-name></channel>
+                    <programme start="20240115120000 +0000" stop="20240115130000 +0000"
+                      channel="cnn.us"><title>World News</title></programme></tv>"#,
+                )
+            } else {
+                Reply::ok(PLAYLIST)
+            }
+        });
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
+        let bbc = rows.iter().find(|r| r.name == "BBC One").unwrap();
+        assert_eq!(
+            bbc.epg_channel_id, None,
+            "the stale pairing must not survive"
+        );
+        let cnn = rows.iter().find(|r| r.name == "CNN HD").unwrap();
+        assert_eq!(cnn.epg_channel_id.as_deref(), Some("cnn.us"));
+    }
+
+    /// A scoped guide describes its own service's channels and no others.
+    ///
+    /// Pluto TV's guide has a "Cheers"; so does a provider's 24/7 group, as a different
+    /// stream. Only the Pluto channel may use Pluto's schedule.
+    #[test]
+    fn a_scoped_guide_only_matches_channels_that_name_its_service() {
+        const LIST: &str = "#EXTM3U\n\
+            #EXTINF:-1 group-title=\"US | PLUTO TV\",US | Cheers\n\
+            http://example.com/live/u/p/1.ts\n\
+            #EXTINF:-1 group-title=\"US | 24-7\",Cheers FHD\n\
+            http://example.com/live/u/p/2.ts\n";
+        let server = TestServer::start(|_, req| {
+            if req.path.starts_with("/pluto") {
+                Reply::ok(
+                    r#"<tv><channel id="abc123"><display-name>Cheers</display-name></channel>
+                    <programme start="20240115120000 +0000" stop="20240115130000 +0000"
+                      channel="abc123"><title>Cheers</title></programme></tv>"#,
+                )
+            } else {
+                Reply::ok(LIST)
+            }
+        });
+        let mut conn = db();
+        let mut opts = options(&server);
+        opts.scoped_epg = vec![ScopedGuide {
+            url: server.url("/pluto.xml"),
+            only_where: "Pluto".into(),
+        }];
+        run(&mut conn, &http(), &opts, &no_rules(), |_| {}).unwrap();
+
+        let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
+        let pluto = rows.iter().find(|r| r.name == "US | Cheers").unwrap();
+        let loop_ = rows.iter().find(|r| r.name == "Cheers FHD").unwrap();
+        assert_eq!(pluto.epg_channel_id.as_deref(), Some("abc123"));
+        assert_eq!(
+            loop_.epg_channel_id, None,
+            "a provider's own loop is not Pluto's"
         );
     }
 
