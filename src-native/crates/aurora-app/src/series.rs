@@ -41,6 +41,33 @@ pub const LISTING_RETRY_AFTER_SECS: i64 = 6 * 3600;
 /// background nicety into something that competes with playback.
 pub const SWEEP_CONCURRENCY: usize = 4;
 
+/// How long a stored episode listing is trusted before opening the show asks again.
+///
+/// Opening a show used to fetch its episodes only when *none* were stored, so the first
+/// listing a show ever got was the last: MobLand stayed at four episodes of season 2
+/// while the provider went on to list nine. A running series gains an episode a week,
+/// and `get_series` says nothing about episodes, so the listing has to be asked for again.
+///
+/// Kept in memory rather than in the library: the cost of forgetting it is one ~0.3s
+/// request the next time the app opens the show, which is when a viewer coming back for
+/// the new episode would want it asked anyway.
+pub const LISTING_FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+static LISTED_AT: std::sync::OnceLock<Mutex<std::collections::HashMap<i64, std::time::Instant>>> =
+    std::sync::OnceLock::new();
+
+fn listed_at() -> &'static Mutex<std::collections::HashMap<i64, std::time::Instant>> {
+    LISTED_AT.get_or_init(Default::default)
+}
+
+/// Whether this show's stored listing was fetched recently enough to show as it is.
+pub fn listing_is_fresh(series_id: i64) -> bool {
+    listed_at()
+        .lock()
+        .get(&series_id)
+        .is_some_and(|at| at.elapsed() < LISTING_FRESH_FOR)
+}
+
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SweepReport {
@@ -195,6 +222,12 @@ pub fn fetch_episodes(services: &Services, series_id: i64) -> Result<usize> {
     let info = client
         .series_info(show.stream_id)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
+    // The panel answered, so what is stored is now its current listing -- including when
+    // that listing is empty, which is not worth asking about again before
+    // `LISTING_FRESH_FOR` is up.
+    listed_at()
+        .lock()
+        .insert(series_id, std::time::Instant::now());
 
     let mut episodes = Vec::with_capacity(info.episodes.len());
     for ep in &info.episodes {
@@ -334,6 +367,7 @@ fn look_up(services: &Services, series_id: i64) -> Result<Option<Show>> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /// The key an import writes is `series:1234`; anything else is not a panel show.
     #[test]
@@ -348,5 +382,25 @@ mod tests {
         assert_eq!(read("movie:1234"), None);
         assert_eq!(read("series:"), None);
         assert_eq!(read("series:abc"), None);
+    }
+    /// A show with episodes stored is still asked again, once its listing is old.
+    ///
+    /// MobLand: the first listing had four episodes of season 2, the provider went on to
+    /// nine, and opening the show never asked again because something was stored.
+    #[test]
+    fn a_stored_listing_goes_stale() {
+        let id = -4853;
+        assert!(!listing_is_fresh(id), "never listed this session, so ask");
+
+        listed_at().lock().insert(id, std::time::Instant::now());
+        assert!(listing_is_fresh(id), "just listed, so do not ask again");
+
+        let long_ago =
+            std::time::Instant::now() - LISTING_FRESH_FOR - std::time::Duration::from_secs(1);
+        listed_at().lock().insert(id, long_ago);
+        assert!(
+            !listing_is_fresh(id),
+            "older than LISTING_FRESH_FOR, so ask again"
+        );
     }
 }
