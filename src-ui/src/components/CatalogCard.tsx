@@ -63,10 +63,8 @@ export const CatalogCard = memo(function CatalogCard({
   /**
    * Print the title under the poster.
    *
-   * On for the browse grids, off for the home rails. A rail is a short row you read by
-   * its artwork; a grid is hundreds of posters you are looking *through*, and a
-   * library of films whose artwork is in a script you cannot read is unusable without
-   * the names — which is what it was.
+   * On for the browse grids and the home rails. A library of films whose artwork is
+   * in a script you cannot read, or carries no name at all, is unusable without them.
    */
   showTitle?: boolean;
   /** Set for the Top 10 rail's numeral treatment (README §8.2). */
