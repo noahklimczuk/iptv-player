@@ -3,7 +3,7 @@
    behind the WebView2 and must show through (docs/ARCHITECTURE.md).
 
    Direction: Daylight — bold, light and tactile. Its values are the `light` theme,
-   which is the default for new installs; `dark` and `oled` are Daylight on ink, and
+   `dark` (the default for new installs) and `oled` are Daylight on ink, and
    `contrast` stays black, white and a yellow focus ring. */
 
 @import '@fontsource-variable/manrope/wght.css';
@@ -69,7 +69,7 @@
   --guide-px-per-min: 6px;
 }
 
-/* Daylight — light, and the default for new installs */
+/* Daylight — light */
 :root, :root[data-theme='light'] {
   --bg:            #F4F3EF;
   --bg-elevated:   #FFFFFF;
