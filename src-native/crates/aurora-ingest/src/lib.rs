@@ -5,6 +5,7 @@ pub mod enrich;
 pub mod epg;
 pub mod gemini;
 pub mod http;
+pub mod introdb;
 pub mod playlist;
 pub mod recorder;
 pub mod selfupdate;

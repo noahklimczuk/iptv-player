@@ -99,6 +99,12 @@ pub enum MarkerSource {
     Seek,
     /// From the episode's own duration and nothing else. Only ever the credits.
     Convention,
+    /// TheIntroDB's community-verified timestamps for this episode.
+    ///
+    /// Episode-specific and accepted by people who checked it, so it outranks anything
+    /// inferred from *other* episodes. Below chapters and the viewer's own press,
+    /// because a provider's file can be a different cut from the one submitted.
+    Community,
 }
 
 impl MarkerSource {
@@ -109,6 +115,7 @@ impl MarkerSource {
             MarkerSource::Learned => "learned",
             MarkerSource::Seek => "seek",
             MarkerSource::Convention => "convention",
+            MarkerSource::Community => "community",
         }
     }
 
@@ -119,6 +126,7 @@ impl MarkerSource {
             "learned" => Some(MarkerSource::Learned),
             "seek" => Some(MarkerSource::Seek),
             "convention" => Some(MarkerSource::Convention),
+            "community" => Some(MarkerSource::Community),
             _ => None,
         }
     }
@@ -126,8 +134,9 @@ impl MarkerSource {
     /// Higher wins when two sources describe the same region.
     pub fn trust(self) -> u8 {
         match self {
-            MarkerSource::Chapters => 5,
-            MarkerSource::User => 4,
+            MarkerSource::Chapters => 6,
+            MarkerSource::User => 5,
+            MarkerSource::Community => 4,
             MarkerSource::Learned => 3,
             // Below `Learned` deliberately. A median that several episodes agree on is
             // better evidence than one jump nothing has corroborated, and this used to be
@@ -150,7 +159,10 @@ impl MarkerSource {
     pub fn may_auto_skip(self) -> bool {
         matches!(
             self,
-            MarkerSource::Chapters | MarkerSource::User | MarkerSource::Learned
+            MarkerSource::Chapters
+                | MarkerSource::User
+                | MarkerSource::Community
+                | MarkerSource::Learned
         )
     }
 }

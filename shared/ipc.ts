@@ -176,7 +176,9 @@ export type MarkerSource =
   /** A forward jump the viewer made that nothing has corroborated yet. */
   | 'seek'
   | 'learned'
-  | 'convention';
+  | 'convention'
+  /** TheIntroDB's community-verified timestamps for this episode. */
+  | 'community';
 
 export interface SkipMarker {
   kind: MarkerKind;
