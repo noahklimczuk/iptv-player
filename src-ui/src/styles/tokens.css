@@ -43,7 +43,7 @@
   --text-on-light: #16161A;
 
   /* The player is always dark, whatever the theme: its chrome is fixed. */
-  --player-bg:        #141826;
+  --player-bg:        #000000; /* black while a stream opens, in every theme */
   --player-scrim-top: linear-gradient(to bottom, rgb(10 12 20 / 0.55), transparent);
   --player-scrim-bottom: linear-gradient(to top, rgb(10 12 20 / 0.7), transparent);
   --player-chip:      rgb(255 255 255 / 0.14);

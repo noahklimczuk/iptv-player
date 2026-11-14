@@ -275,7 +275,7 @@ impl MpvBackend {
         unsafe {
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
-                windows::core::w!("STATIC"),
+                video_surface_class(),
                 windows::core::w!(""),
                 WS_CHILD | WS_VISIBLE,
                 0,
@@ -913,5 +913,47 @@ impl Drop for MpvBackend {
                 let _ = DestroyWindow(hwnd);
             }
         }
+    }
+}
+
+/// The window class mpv draws into: a plain child window that paints itself black.
+///
+/// It was a `STATIC` control, which paints the system's light dialog colour. That is what
+/// a viewer saw whenever mpv had no frame on the surface -- while a stream opened, while
+/// it buffered before its first picture, between one episode and the next -- a white
+/// screen behind the controls, where a player should be black.
+///
+/// Falls back to `STATIC` if the class will not register, which is the old behaviour
+/// rather than no video at all.
+fn video_surface_class() -> windows::core::PCWSTR {
+    use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, RegisterClassW, WNDCLASSW};
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        DefWindowProcW(hwnd, msg, w, l)
+    }
+
+    static REGISTERED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let name = windows::core::w!("AuroraVideoSurface");
+    let ok = *REGISTERED.get_or_init(|| unsafe {
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(proc),
+            hInstance: GetModuleHandleW(None).map(Into::into).unwrap_or_default(),
+            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+            lpszClassName: name,
+            ..Default::default()
+        };
+        let atom = RegisterClassW(&class);
+        if atom == 0 {
+            tracing::warn!("the black video surface class would not register; using STATIC");
+        }
+        atom != 0
+    });
+    if ok {
+        name
+    } else {
+        windows::core::w!("STATIC")
     }
 }
