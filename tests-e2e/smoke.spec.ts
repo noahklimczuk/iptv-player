@@ -349,7 +349,7 @@ test('settings exposes providers, themes and library stats', async ({ page }) =>
   await page.goto('/#/settings');
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await expect(page.getByText(/connections/)).toBeVisible();
-  await expect(page.getByText('EPG coverage')).toBeVisible();
+  await expect(page.getByText('Guide coverage')).toBeVisible();
   await settle(page, 400);
   await page.screenshot({ path: `${SHOTS}/12-settings.png` });
 });

@@ -116,12 +116,10 @@ function Toggle({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-4)', padding: 'var(--sp-2) 0' }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 800, fontSize: 'var(--fs-lg)' }}>{label}</div>
-        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', maxWidth: 560 }}>
-          {hint}
-        </div>
+    <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="settings-row-label">{label}</div>
+        <div className="settings-row-hint">{hint}</div>
       </div>
       <button
         role="switch"

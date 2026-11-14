@@ -349,3 +349,76 @@ body {
 .dl-range:active::-webkit-slider-thumb { transform: scale(1.04); }
 .dl-range:focus-visible { box-shadow: none; }
 .dl-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent), 0 0 0 7px var(--dock-buffer); }
+
+/* ---- Settings ------------------------------------------------------------------
+   One card per section, headed the way a home rail is, with rows that share one
+   rhythm. Built from the same tokens as everything else so every theme carries it. */
+.settings-card {
+  padding: 26px 30px 18px;
+  scroll-margin-top: calc(var(--topbar-h) + 8px);
+}
+.settings-card-head { margin-bottom: 14px; }
+.settings-card-head h2 {
+  margin: 0;
+  font-size: var(--fs-2xl);
+  color: var(--text);
+}
+.settings-card-head p {
+  margin: 6px 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.settings-row {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: 16px 0;
+}
+.settings-row + .settings-row { border-top: 1px solid var(--border); }
+.settings-row-label { font-weight: 800; font-size: var(--fs-md); color: var(--text); }
+.settings-row-hint {
+  margin-top: 2px;
+  font-size: var(--fs-sm); line-height: 1.45; color: var(--text-muted);
+  max-width: 62ch;
+}
+
+.settings-nav-link {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-radius: var(--r-md);
+  text-decoration: none; font-weight: 700; font-size: var(--fs-md);
+  color: var(--text-muted);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.settings-nav-link:hover:not([aria-current]) { background: var(--surface-hover); color: var(--text); }
+.settings-nav-link[aria-current] { background: var(--text); color: var(--bg); }
+
+.settings-tiles {
+  margin: 0 0 6px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+}
+.settings-tile {
+  padding: 16px 18px; border-radius: var(--r-lg);
+  background: var(--surface-sunk);
+}
+.settings-tile dt { font-size: var(--fs-sm); font-weight: 700; color: var(--text-muted); }
+.settings-tile dd { margin: 6px 0 0; font-size: var(--fs-2xl); color: var(--text); }
+.settings-meter {
+  margin-top: 10px; height: 8px; border-radius: var(--r-full);
+  background: var(--surface-sunk); overflow: hidden;
+}
+.settings-meter > div { height: 100%; border-radius: inherit; background: var(--accent); }
+
+.settings-keys {
+  margin: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 24px;
+}
+.settings-keys > div {
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.settings-keys dt { flex: 0 0 auto; min-width: 112px; }
+.settings-keys dd { margin: 0; font-size: var(--fs-sm); color: var(--text-muted); }
+.settings-keys kbd {
+  display: inline-block; padding: 3px 9px; border-radius: 7px;
+  background: var(--surface-sunk); color: var(--text);
+  font: inherit; font-size: var(--fs-xs); font-weight: 800; white-space: nowrap;
+}
+.dl-seg > button:disabled { opacity: 0.45; cursor: not-allowed; }
