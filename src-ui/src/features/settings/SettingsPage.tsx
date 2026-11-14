@@ -1,7 +1,8 @@
 /** A working slice of README §15 — enough to prove the settings architecture. */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Theme } from '@/state/ui';
 import { Badge, Button } from '@/components/Primitives';
+import { Icon, type IconName } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
 import { isNativeHost } from '@/ipc';
 import { AboutPanel } from '@/features/settings/AboutPanel';
@@ -49,16 +50,17 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
   const [editing, setEditing] = useState<number | null>(null);
   const { data: stats } = useCommand('library.stats', undefined, []);
   const [current, setCurrent] = useState(SECTIONS[0]!);
+  useCurrentSection(setCurrent);
 
   return (
     <div
       style={{
         padding: '4px 36px var(--sp-6)',
         display: 'grid',
-        gridTemplateColumns: '240px minmax(0, 1fr)',
-        gap: 24,
+        gridTemplateColumns: '248px minmax(0, 1fr)',
+        gap: 28,
         alignItems: 'start',
-        maxWidth: 1240,
+        maxWidth: 1180,
         // Centred in the space the page has, like the single column it replaces.
         margin: '0 auto',
         position: 'relative',
@@ -88,26 +90,22 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
               document.getElementById(sectionId(title))
                 ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }}
-            style={{
-              display: 'block', padding: '9px 14px', borderRadius: 'var(--r-md)',
-              textDecoration: 'none', fontWeight: 700, fontSize: 'var(--fs-md)',
-              background: current === title ? 'var(--text)' : 'transparent',
-              color: current === title ? 'var(--bg)' : 'var(--text)',
-            }}
+            className="settings-nav-link"
           >
+            <Icon name={SECTION_ICONS[title] ?? 'settings'} size={17} />
             {title}
           </a>
         ))}
       </nav>
 
-      <div className="dl-panel" style={{ padding: '24px 28px', minWidth: 0 }}>
+      <div style={{ display: 'grid', gap: 20, minWidth: 0 }}>
 
       {!isNativeHost() && (
         <div
           style={{
-            marginBottom: 'var(--sp-5)', padding: '12px 16px',
+            padding: '14px 20px',
             border: '1px solid color-mix(in srgb, var(--warning) 50%, transparent)',
-            borderRadius: 'var(--r-md)',
+            borderRadius: 'var(--r-xl)',
             background: 'color-mix(in srgb, var(--warning) 14%, var(--surface))',
             fontSize: 'var(--fs-sm)',
           }}
@@ -249,22 +247,38 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
 
       <Section title="Library">
         {stats && (
-          <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '220px 1fr', gap: 8 }}>
-            <dt style={dtStyle}>Channels</dt><dd style={ddStyle}>{stats.channels}</dd>
-            <dt style={dtStyle}>Movies</dt><dd style={ddStyle}>{stats.movies}</dd>
-            <dt style={dtStyle}>Series</dt><dd style={ddStyle}>{stats.series}</dd>
-            <dt style={dtStyle}>Episodes</dt><dd style={ddStyle}>{stats.episodes}</dd>
-            <dt style={dtStyle}>EPG coverage</dt>
-            <dd style={ddStyle}>
-              {stats.epgCoverage.matched} of {stats.epgCoverage.total} channels
-              {' '}({Math.round((stats.epgCoverage.matched / stats.epgCoverage.total) * 100)}%)
+          <>
+            <dl className="settings-tiles">
+              {([
+                ['Channels', stats.channels],
+                ['Movies', stats.movies],
+                ['Series', stats.series],
+                ['Episodes', stats.episodes],
+              ] as const).map(([label, value]) => (
+                <div key={label} className="settings-tile">
+                  <dt>{label}</dt>
+                  <dd className="dl-display">{value.toLocaleString()}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="settings-row" style={{ display: 'block' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+                <span className="settings-row-label">Guide coverage</span>
+                <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>
+                  {stats.epgCoverage.matched} of {stats.epgCoverage.total} channels
+                  {' '}({epgPercent(stats.epgCoverage)}%)
+                </span>
+              </div>
+              <div className="settings-meter" aria-hidden>
+                <div style={{ width: `${epgPercent(stats.epgCoverage)}%` }} />
+              </div>
               {stats.epgCoverage.unmatched.length > 0 && (
-                <div style={{ color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
-                  Unmatched: {stats.epgCoverage.unmatched.join(', ')}
+                <div className="settings-row-hint">
+                  No guide for: {stats.epgCoverage.unmatched.join(', ')}
                 </div>
               )}
-            </dd>
-          </dl>
+            </div>
+          </>
         )}
       </Section>
 
@@ -291,7 +305,7 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
           * trace was the source. README §14.1 promises a sheet that `?` opens and a
           * `docs/SHORTCUTS.md`; neither exists, so this panel is the sheet (R-143).
           */}
-        <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: '220px 1fr', gap: 8 }}>
+        <dl className="settings-keys">
           {[
             ['Ctrl+K  /', 'Search and command palette'],
             ['Escape', 'Back · close a dialog'],
@@ -310,9 +324,9 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             ['I', 'Info · the channel banner, or a title’s details'],
             ['Alt+1…5', 'Home, Live, Guide, Movies, Series'],
           ].map(([k, v]) => (
-            <div key={k} style={{ display: 'contents' }}>
-              <dt style={dtStyle}><kbd style={kbdStyle}>{k}</kbd></dt>
-              <dd style={ddStyle}>{v}</dd>
+            <div key={k}>
+              <dt><kbd>{k}</kbd></dt>
+              <dd>{v}</dd>
             </div>
           ))}
         </dl>
@@ -327,6 +341,68 @@ const SECTIONS = [
   'Providers', 'Appearance', 'Artwork and metadata', 'Recommendations', 'Filtering',
   'Pause live TV', 'Library', 'Updates', 'About', 'Diagnostics', 'Keyboard',
 ];
+
+/** The side index's icons, matching the bottom bar's line-icon style. */
+const SECTION_ICONS: Record<string, IconName> = {
+  Providers: 'layers',
+  Appearance: 'sun',
+  'Artwork and metadata': 'film',
+  Recommendations: 'sparkle',
+  Filtering: 'grid',
+  'Pause live TV': 'pause',
+  Library: 'stack',
+  Updates: 'refresh',
+  About: 'info',
+  Diagnostics: 'alert',
+  Keyboard: 'keyboard',
+};
+
+/**
+ * One line under each section's heading, saying what it is for. Absent where the
+ * section's own first paragraph already says it.
+ */
+const SECTION_BLURBS: Record<string, string> = {
+  Providers: 'The playlists and Xtream lines your library is built from.',
+  Appearance: 'How Aurora looks and moves.',
+  Filtering: 'What your library shows, and what it hides.',
+  'Pause live TV': 'Rewind and pause the channel you are watching.',
+  Library: 'What your providers have given you.',
+  Updates: 'New versions of Aurora.',
+  About: 'This copy of Aurora, and the work it is built on.',
+  Diagnostics: 'For when something is not working.',
+  Keyboard: 'Every shortcut, in one place.',
+};
+
+function epgPercent(c: { matched: number; total: number }): number {
+  return c.total > 0 ? Math.round((c.matched / c.total) * 100) : 0;
+}
+
+/**
+ * Keep the side index on the section being read.
+ *
+ * It only moved when clicked, so after scrolling it went on claiming "Providers" while
+ * the Keyboard section was on screen. Watches which section crosses a line a third of
+ * the way down the scroller -- the one somebody is reading -- and names that one.
+ */
+function useCurrentSection(setCurrent: (title: string) => void) {
+  useEffect(() => {
+    const root = document.querySelector<HTMLElement>('[data-scroll-root]');
+    if (typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const hit = entries.find((e) => e.isIntersecting);
+        const title = hit && SECTIONS.find((t) => `${sectionId(t)}-card` === hit.target.id);
+        if (title) setCurrent(title);
+      },
+      { root, rootMargin: '-30% 0px -65% 0px' },
+    );
+    for (const title of SECTIONS) {
+      const el = document.getElementById(`${sectionId(title)}-card`);
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [setCurrent]);
+}
 
 function sectionId(title: string): string {
   return `settings-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
@@ -347,18 +423,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   const headingId = sectionId(title);
   return (
     <section
+      id={`${headingId}-card`}
       aria-labelledby={headingId}
-      style={{ marginBottom: 'var(--sp-6)', scrollMarginTop: 'calc(var(--topbar-h) + 8px)' }}
+      className="dl-panel settings-card"
     >
-      <h2
-        id={headingId}
-        style={{
-          margin: '0 0 var(--sp-2)', fontSize: 'var(--fs-sm)', fontWeight: 800,
-          color: 'var(--text-muted)',
-        }}
-      >
-        {title}
-      </h2>
+      <header className="settings-card-head">
+        <h2 id={headingId} className="dl-display">{title}</h2>
+        {SECTION_BLURBS[title] && <p>{SECTION_BLURBS[title]}</p>}
+      </header>
       <div>{children}</div>
     </section>
   );
@@ -393,17 +465,10 @@ function Field({
   label, hint, children,
 }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div
-      style={{
-        display: 'flex', alignItems: 'center', gap: 'var(--sp-4)',
-        padding: '16px 0', borderBottom: '1px solid var(--border)',
-      }}
-    >
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 800, fontSize: 'var(--fs-lg)' }}>{label}</div>
-        {hint && (
-          <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>{hint}</div>
-        )}
+    <div className="settings-row">
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="settings-row-label">{label}</div>
+        {hint && <div className="settings-row-hint">{hint}</div>}
       </div>
       {children}
     </div>
@@ -414,14 +479,8 @@ const rowStyle = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
   gap: 'var(--sp-4)', padding: 'var(--sp-2) 0', flexWrap: 'wrap',
 } as const;
-/** A provider is its own card inside the panel, as on the board. */
+/** A provider is a sunk tile inside its section's card. */
 const providerCard = {
-  padding: '10px 18px', marginBottom: 10, borderRadius: 'var(--r-lg)',
-  border: '1px solid var(--border)', boxShadow: 'var(--shadow-1)',
-} as const;
-const dtStyle = { color: 'var(--text-faint)' } as const;
-const ddStyle = { margin: 0, color: 'var(--text-muted)' } as const;
-const kbdStyle = {
-  background: 'var(--surface-sunk)', borderRadius: 6, padding: '2px 8px',
-  fontSize: 'var(--fs-xs)', fontWeight: 800, fontFamily: 'inherit',
+  padding: '12px 18px', marginBottom: 10, borderRadius: 'var(--r-lg)',
+  background: 'var(--surface-sunk)',
 } as const;

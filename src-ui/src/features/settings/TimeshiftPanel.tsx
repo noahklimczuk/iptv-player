@@ -41,7 +41,7 @@ export function TimeshiftPanel() {
   if (!settings) return <div style={{ color: 'var(--text-faint)' }}>Loading…</div>;
 
   return (
-    <div style={{ display: 'grid', gap: 'var(--sp-4)' }}>
+    <div>
       <Row
         label="Pause live TV"
         hint="Keeps the channel you are watching on disk so it can be paused and rewound."
@@ -57,16 +57,18 @@ export function TimeshiftPanel() {
       </Row>
 
       <Row label="Buffer size" hint="The disk it may use.">
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div className="dl-seg">
           {SIZES.map((gb) => (
-            <Button
-              key={gb} size="sm"
-              variant={settings.bytes === gb * GIB ? 'primary' : 'secondary'}
+            <button
+              key={gb}
+              type="button"
+              data-active={settings.bytes === gb * GIB}
+              data-variant={settings.bytes === gb * GIB ? 'primary' : 'secondary'}
               disabled={!settings.enabled}
               onClick={() => void apply({ bytes: gb * GIB })}
             >
               {gb} GB
-            </Button>
+            </button>
           ))}
         </div>
       </Row>
@@ -75,16 +77,18 @@ export function TimeshiftPanel() {
         label="Rewind limit"
         hint="How far back to offer. A gigabyte is eighteen minutes of HD and seven of 4K, so the shorter of the two is what you get."
       >
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div className="dl-seg">
           {MINUTES.map((m) => (
-            <Button
-              key={m} size="sm"
-              variant={settings.secs === m * 60 ? 'primary' : 'secondary'}
+            <button
+              key={m}
+              type="button"
+              data-active={settings.secs === m * 60}
+              data-variant={settings.secs === m * 60 ? 'primary' : 'secondary'}
               disabled={!settings.enabled}
               onClick={() => void apply({ secs: m * 60 })}
             >
               {limitLabel(m * 60)}
-            </Button>
+            </button>
           ))}
         </div>
       </Row>
@@ -170,12 +174,10 @@ function Row({
   label, hint, children,
 }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-4)' }}>
+    <div className="settings-row">
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600 }}>{label}</div>
-        {hint && (
-          <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>{hint}</div>
-        )}
+        <div className="settings-row-label">{label}</div>
+        {hint && <div className="settings-row-hint">{hint}</div>}
       </div>
       {children}
     </div>
