@@ -627,15 +627,15 @@ export function Select({
           tabIndex={-1}
           aria-activedescendant={rows.length > 0 ? optionId(at) : undefined}
           onKeyDown={onKeys}
+          // Glass, as every transient surface is: styles/glass.css.
+          className="glass-strong"
           style={{
             // No ring on the box itself: the highlighted row answers "where am I", and
             // an outline around the whole popover would compete with it.
             outline: 'none',
             position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 60,
             width, maxHeight: 340, overflowY: 'auto',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-3)',
+            borderRadius: 'var(--r-lg)',
             padding: 'var(--sp-2)',
           }}
         >

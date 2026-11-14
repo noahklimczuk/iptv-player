@@ -129,7 +129,17 @@ body {
   to   { opacity: 1; }
 }
 
-.aurora-page { animation: aurora-page-in var(--t-base) var(--ease-out) both; }
+/* `backwards`, not `both`: a fill that outlasts the animation leaves opacity animated on
+   the page for good, which makes it a backdrop root -- and then glass inside a page
+   (a Select's popover) cannot blur the page it floats over; it showed the posters
+   behind it sharp through the tint. `backwards` still starts the fade at 0. */
+/* `isolation` keeps the one useful thing the old fill did by accident: a page is its own stacking
+   context, so a full-screen fallback inside it (`BootScreen`, z-index 100) stays under
+   the top bar and the tab bar. Unlike opacity, isolation is not a backdrop root. */
+.aurora-page {
+  animation: aurora-page-in var(--t-base) var(--ease-out) backwards;
+  isolation: isolate;
+}
 
 /* The boot screen's indeterminate bar. A sweep rather than a fill: there is no
    percentage to be honest about, and this reads as "working" without claiming progress

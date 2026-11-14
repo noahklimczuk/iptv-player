@@ -202,10 +202,11 @@ export function CommandPalette({
           transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
           onClick={(e) => e.stopPropagation()}
           role="dialog" aria-modal="true" aria-label="Search"
+          // Glass over the dimmed page: styles/glass.css.
+          className="glass-strong"
           style={{
-            width: 'min(640px, 92vw)', margin: '0 auto', background: 'var(--bg-elevated)',
-            borderRadius: 32, padding: '16px 10px 14px',
-            boxShadow: 'var(--shadow-4)', overflow: 'hidden',
+            width: 'min(640px, 92vw)', margin: '0 auto',
+            borderRadius: 32, padding: '16px 10px 14px', overflow: 'hidden',
           }}
         >
           <div

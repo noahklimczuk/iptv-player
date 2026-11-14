@@ -11,6 +11,7 @@ import {
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
 import './styles/guide.css';
+import './styles/glass.css';
 
 // Before the first render, so a failure during mount has somewhere to go too.
 installGlobalErrorHandlers();
