@@ -527,11 +527,12 @@ pub fn library_episodes(
 ) -> Result<Vec<library::EpisodeRow>> {
     // Which rows this show is standing for, and which of them have nothing stored yet.
     // Both asked under one lock, and the lock dropped before the network below.
-    let (group, missing) = {
+    let (group, missing, stale) = {
         let db = services.db.lock();
         let filter = filtering::LibraryFilter::load(&db)?;
         let group = filter.group_of(&db, filtering::Kind::Series, args.series_id)?;
         let mut missing = Vec::new();
+        let mut stale = Vec::new();
         for id in &group {
             // Whether to go and ask the panel is a question about the *show*, not about
             // the season being displayed. Asking per season looks the same for a show
@@ -540,9 +541,14 @@ pub fn library_episodes(
             // would then filter them all away, every time, for good.
             if library::episodes_for(&db, *id, None)?.is_empty() {
                 missing.push(*id);
+            } else if !crate::series::listing_is_fresh(*id) {
+                // Something stored is not the same as everything: a running show gains
+                // episodes after its first listing, and that first listing used to be
+                // the last one ever asked for.
+                stale.push(*id);
             }
         }
-        (group, missing)
+        (group, missing, stale)
     };
 
     // An import writes the series row but not its episodes — one request per show would
@@ -566,6 +572,18 @@ pub fn library_episodes(
             tracing::warn!(
                 series = id,
                 "a duplicate copy of this show would not list its episodes ({e});                  merging what the others have"
+            );
+        }
+    }
+
+    // Brought up to date, but never at the cost of what is already there: a provider
+    // that will not answer right now leaves the stored episodes on screen rather than
+    // replacing them with an error.
+    for id in &stale {
+        if let Err(e) = crate::series::fetch_episodes(&services, *id) {
+            tracing::warn!(
+                series = id,
+                "could not refresh episodes ({e}); showing those stored"
             );
         }
     }
