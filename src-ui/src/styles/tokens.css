@@ -3,7 +3,7 @@
    behind the WebView2 and must show through (docs/ARCHITECTURE.md).
 
    Direction: Daylight — bold, light and tactile. Its values are the `light` theme,
-   which is the default for new installs; `dark` and `oled` are Daylight on ink, and
+   `dark` (the default for new installs) and `oled` are Daylight on ink, and
    `contrast` stays black, white and a yellow focus ring. */
 
 @import '@fontsource-variable/manrope/wght.css';
@@ -43,7 +43,7 @@
   --text-on-light: #16161A;
 
   /* The player is always dark, whatever the theme: its chrome is fixed. */
-  --player-bg:        #141826;
+  --player-bg:        #000000; /* black while a stream opens, in every theme */
   --player-scrim-top: linear-gradient(to bottom, rgb(10 12 20 / 0.55), transparent);
   --player-scrim-bottom: linear-gradient(to top, rgb(10 12 20 / 0.7), transparent);
   --player-chip:      rgb(255 255 255 / 0.14);
@@ -69,7 +69,7 @@
   --guide-px-per-min: 6px;
 }
 
-/* Daylight — light, and the default for new installs */
+/* Daylight — light */
 :root, :root[data-theme='light'] {
   --bg:            #F4F3EF;
   --bg-elevated:   #FFFFFF;

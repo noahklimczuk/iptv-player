@@ -1025,6 +1025,19 @@ pub fn library_playback_aids(
     services: State<'_, Services>,
     args: AidsArgs,
 ) -> Result<EpisodePlaybackAids> {
+    // TheIntroDB first, and outside the lock: it may go to the network, and holding the
+    // database across a request is what used to freeze the DVR scheduler. Without it a
+    // file with no chapters -- most of them -- had no Skip Intro or Skip Recap until the
+    // viewer had skipped by hand on several episodes, with no button to do it with.
+    let community_key = {
+        let db = services.db.lock();
+        crate::community_markers::key_for(&db, args.episode_id)?
+    };
+    let community_duration = (args.duration_secs > 0.0).then_some(args.duration_secs);
+    let community = community_key
+        .map(|key| crate::community_markers::markers(key, community_duration))
+        .unwrap_or_default();
+
     let db = services.db.lock();
 
     // How long this episode is, which decides whether Up Next and Skip Credits exist at
@@ -1042,7 +1055,12 @@ pub fn library_playback_aids(
         library::episode_runtime_secs(&db, args.episode_id)?
     };
 
-    let resolved = markers::resolve(&db, args.episode_id, markers::DEFAULT_MIN_SAMPLES, duration)?;
+    // The file's chapters and the viewer's own presses still win; TheIntroDB outranks
+    // anything inferred from other episodes and the clock (`MarkerSource::trust`).
+    let resolved = aurora_core::markers::merge(&[
+        markers::resolve(&db, args.episode_id, markers::DEFAULT_MIN_SAMPLES, duration)?,
+        community,
+    ]);
     let series = markers::series_id_of(&db, args.episode_id)?;
     let prefs = match series {
         Some(series_id) => markers::prefs(&db, args.profile_id, series_id)?,

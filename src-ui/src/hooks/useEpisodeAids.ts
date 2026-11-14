@@ -52,6 +52,7 @@ const MAY_AUTO_SKIP: Record<SkipMarker['source'], boolean> = {
   seek: false,
   // Placed by the clock rather than by evidence. See the comment on `autoSkip`.
   convention: false,
+  community: true,
 };
 
 export function useEpisodeAids(

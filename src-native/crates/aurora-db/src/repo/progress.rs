@@ -160,20 +160,31 @@ pub fn continue_watching(conn: &Connection, profile_id: i64, limit: u32) -> Resu
              LEFT JOIN movies m
                ON w.item_kind = 'movie' AND m.id = w.item_id
             WHERE w.profile_id = ?1
-              AND w.completed = 0
-              AND w.position_secs > 60
-              AND w.duration_secs > 0
               AND w.item_kind IN ('movie','episode')
               AND CASE w.item_kind
                     WHEN 'episode' THEN e.id IS NOT NULL
                     ELSE m.id IS NOT NULL
                   END
          )
+         -- Ranked over *every* row of a show, finished ones included, and only then
+         -- filtered: the question is what the viewer did last with this show. Filtering
+         -- first is what made a show vanish from the rail the moment an episode
+         -- finished -- its only unfinished row was gone, so it had no row at all.
          WHERE rank_in_show = 1
+           AND CASE item_kind
+                 -- A film: started, not finished, with a duration to draw a bar from.
+                 WHEN 'movie' THEN completed = 0 AND position_secs > 60
+                                   AND duration_secs > 0
+                 -- An episode, finished or not: the show stays. A finished one is
+                 -- swapped for the next episode below, or dropped if there is none.
+                 ELSE 1
+               END
          ORDER BY updated_at DESC LIMIT ?2",
     )?;
+    // Asked for with room to spare, because a finished show with nothing after it is
+    // dropped below and must not leave the rail a card short.
     let rows = stmt
-        .query_map(params![profile_id, limit], |r| {
+        .query_map(params![profile_id, limit.saturating_mul(3)], |r| {
             let kind: String = r.get(0)?;
             Ok(Progress {
                 item_kind: match kind.as_str() {
@@ -190,18 +201,72 @@ pub fn continue_watching(conn: &Connection, profile_id: i64, limit: u32) -> Resu
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(rows)
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if out.len() >= limit as usize {
+            break;
+        }
+        if row.item_kind == ItemKind::Episode && row.completed {
+            // Finished the last thing watched: the card is for the next episode, from
+            // the start. Nothing next means the show is done, and it leaves the rail.
+            let series_id: Option<i64> = conn
+                .query_row(
+                    "SELECT series_id FROM episodes WHERE id = ?1",
+                    params![row.item_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(series_id) = series_id else { continue };
+            let Some(next) = next_episode(conn, profile_id, series_id)? else {
+                continue;
+            };
+            out.push(Progress {
+                item_id: next,
+                position_secs: 0,
+                duration_secs: 0,
+                completed: false,
+                ..row
+            });
+        } else {
+            out.push(row);
+        }
+    }
+    Ok(out)
 }
 
-/// README §9: the next unwatched episode of a show the user is partway through.
+/// README §9: the next episode to watch of a show the user is partway through.
+///
+/// Counted on from the episode they touched last, not from the top of the show. "The
+/// first unwatched episode" sent somebody who started a show at season 2 -- or skipped
+/// an episode -- back to season 1 episode 1 every time they finished one. The episode
+/// they touched last is itself the answer while it is unfinished; past the end of the
+/// listing it falls back to the earliest unwatched episode, so nothing is lost.
 pub fn next_episode(conn: &Connection, profile_id: i64, series_id: i64) -> Result<Option<i64>> {
     Ok(conn
         .query_row(
-            r#"SELECT e.id FROM episodes e
+            r#"WITH last AS (
+                 SELECT e.season, e.episode
+                   FROM watch_progress w
+                   JOIN episodes e ON e.id = w.item_id
+                  WHERE w.profile_id = ?1 AND w.item_kind = 'episode'
+                    AND e.series_id = ?2
+                    -- Forty seconds in is a mis-click, not a place in the show.
+                    AND (w.completed = 1 OR w.position_secs > 60)
+                  ORDER BY w.updated_at DESC LIMIT 1
+               )
+               SELECT e.id FROM episodes e
                LEFT JOIN watch_progress w
                  ON w.item_id = e.id AND w.item_kind = 'episode' AND w.profile_id = ?1
                WHERE e.series_id = ?2 AND COALESCE(w.completed, 0) = 0
-               ORDER BY e.season, e.episode LIMIT 1"#,
+               ORDER BY CASE
+                          WHEN NOT EXISTS (SELECT 1 FROM last) THEN 0
+                          WHEN (e.season, e.episode) >= (SELECT season, episode FROM last)
+                            THEN 0
+                          ELSE 1
+                        END,
+                        e.season, e.episode
+               LIMIT 1"#,
             params![profile_id, series_id],
             |r| r.get(0),
         )
@@ -769,5 +834,53 @@ mod tests {
         assert!(rows[0].completed, "7001 was marked watched");
         assert_eq!(rows[1].position_secs, 1200);
         assert!(!rows[1].completed);
+    }
+
+    /// Finishing an episode keeps the show on the rail, pointing at the next one.
+    ///
+    /// The rail only counted unfinished rows, so the moment an episode finished the show
+    /// had none and dropped off -- reported as "it gets rid of a series after an episode".
+    #[test]
+    fn finishing_an_episode_keeps_the_show_on_the_rail() {
+        let conn = db();
+        seeded_series(&conn, 7, 3);
+        mark_watched(&conn, 1, ItemKind::Episode, 7001, true, 10).unwrap();
+
+        let rail = continue_watching(&conn, 1, 10).unwrap();
+        assert_eq!(rail.len(), 1, "the show stays");
+        assert_eq!(rail[0].item_id, 7002, "and offers the next episode");
+        assert_eq!(rail[0].position_secs, 0);
+
+        // The last one finished: nothing left, so it goes.
+        mark_watched(&conn, 1, ItemKind::Episode, 7002, true, 20).unwrap();
+        mark_watched(&conn, 1, ItemKind::Episode, 7003, true, 30).unwrap();
+        assert!(continue_watching(&conn, 1, 10).unwrap().is_empty());
+    }
+
+    /// Next means after where the viewer is, not the first unwatched episode of the show.
+    ///
+    /// Somebody who started at season 2 was sent back to season 1 episode 1 every time
+    /// they finished an episode.
+    #[test]
+    fn the_next_episode_follows_on_from_the_last_one_watched() {
+        let conn = db();
+        seeded_series(&conn, 7, 2);
+        for e in 1..=3 {
+            conn.execute(
+                "INSERT INTO episodes (id, series_id, season, episode, url, added_at)
+                 VALUES (?1, 7, 2, ?2, 'https://example.com/e.mkv', 0)",
+                params![7100 + e, e],
+            )
+            .unwrap();
+        }
+        mark_watched(&conn, 1, ItemKind::Episode, 7101, true, 10).unwrap();
+
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7102, 0)));
+        assert_eq!(continue_watching(&conn, 1, 10).unwrap()[0].item_id, 7102);
+
+        // Past the end of the show, the season-1 episodes they skipped are still offered.
+        mark_watched(&conn, 1, ItemKind::Episode, 7102, true, 20).unwrap();
+        mark_watched(&conn, 1, ItemKind::Episode, 7103, true, 30).unwrap();
+        assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7001, 0)));
     }
 }

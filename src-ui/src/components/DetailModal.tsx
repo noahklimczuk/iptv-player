@@ -397,6 +397,7 @@ function Body({
   const isSeries = item.kind === 'series';
   const tabs: Tab[] = isSeries ? ['episodes', 'similar', 'details'] : ['similar', 'details'];
   const episodes = useEpisodes(item, isSeries);
+  useOpenOnResumeSeason(item, isSeries, episodes, setSeason);
 
   return (
     <div style={{ paddingTop: 'var(--sp-5)' }}>
@@ -655,6 +656,42 @@ function useEpisodes(item: CatalogItem, isSeries: boolean): Episodes {
     [all],
   );
   return { all, seasons, loading: isSeries && loading };
+}
+
+/**
+ * Open a show on the season the viewer is in, not on season 1.
+ *
+ * The modal starts on the first season, which meant somebody halfway through season 3
+ * had to find their place again every time. The host already knows where they are --
+ * `progress.resumePoint` is what the Play button names -- so the season tab follows it
+ * once the listing is in. Once per show opened: a season the viewer picks afterwards is
+ * theirs to keep.
+ */
+function useOpenOnResumeSeason(
+  item: CatalogItem,
+  isSeries: boolean,
+  episodes: Episodes,
+  setSeason: (s: number) => void,
+) {
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  const placed = useRef<number | null>(null);
+  const ready = isSeries && !episodes.loading && episodes.all.length > 0;
+  useEffect(() => {
+    if (!ready || placed.current === item.id) return;
+    let live = true;
+    void (async () => {
+      try {
+        const point = await invoke('progress.resumePoint', { profileId, seriesId: item.id });
+        if (!live) return;
+        placed.current = item.id;
+        const ep = point && episodes.all.find((e) => e.id === point.episodeId);
+        if (ep) setSeason(ep.season);
+      } catch {
+        // Not knowing where they are leaves the first season, as before.
+      }
+    })();
+    return () => { live = false; };
+  }, [ready, item.id, profileId, episodes.all, setSeason]);
 }
 
 /** "S02E04", for a label that has to say which episode without the row around it. */
