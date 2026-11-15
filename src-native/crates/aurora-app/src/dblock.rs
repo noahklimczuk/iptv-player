@@ -51,6 +51,18 @@ impl<T> TimedMutex<T> {
         TimedGuard { guard, at, got }
     }
 
+    /// The lock if it is free right now, without waiting.
+    #[track_caller]
+    pub fn try_lock(&self) -> Option<TimedGuard<'_, T>> {
+        let at = Location::caller();
+        let guard = self.inner.try_lock()?;
+        Some(TimedGuard {
+            guard,
+            at,
+            got: Instant::now(),
+        })
+    }
+
     /// For tests that need to see whether the lock is free without hanging on it.
     #[track_caller]
     pub fn try_lock_for(&self, timeout: Duration) -> Option<TimedGuard<'_, T>> {
