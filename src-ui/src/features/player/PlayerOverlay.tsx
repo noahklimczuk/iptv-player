@@ -504,7 +504,7 @@ export function PlayerOverlay({
               initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 24 }} transition={{ duration: 0.18 }}
               style={{
-                // The dock: one white capsule, centred, with everything you press.
+                // The dock: one glass capsule, centred, with everything you press.
                 position: 'absolute', left: '50%', bottom: 28, translate: '-50% 0',
                 width: 'min(1040px, calc(100vw - 56px))',
                 display: 'flex', alignItems: 'center', gap: 12,
@@ -519,7 +519,7 @@ export function PlayerOverlay({
                 onClick={() => invoke(playing ? 'player.pause' : 'player.resume')
                   .catch(report('The player did not respond'))}
                 style={{
-                  borderRadius: 22, background: 'var(--dock-ink)', color: 'var(--dock-bg)',
+                  borderRadius: 22, background: 'var(--dock-ink)', color: 'var(--dock-ink-text)',
                 }}
               />
               {(!player.isLive || player.timeshift) && (
@@ -924,19 +924,25 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
 /* ── Dock chrome ─────────────────────────────────────────────────────────── */
 
 /** Translucent buttons that sit straight on the picture. */
+/**
+ * Liquid Glass on the picture (styles/glass.css, "The player"). There is no blur: the
+ * video is a native window under the page and a backdrop filter has nothing to sample.
+ * The glass is the tint, the sheen and the lit rim.
+ */
 const GLASS_BUTTON: React.CSSProperties = {
   background: 'var(--player-chip)', color: 'var(--player-chip-text)',
-  backdropFilter: 'blur(14px)', borderRadius: 14,
+  boxShadow: 'var(--glass-video-rim)', borderRadius: 14,
 };
 const GLASS_ACTIVE: React.CSSProperties = {
-  background: 'var(--dock-bg)', color: 'var(--dock-text)', borderRadius: 14,
+  background: 'var(--dock-ink)', color: 'var(--dock-ink-text)', borderRadius: 14,
+  boxShadow: 'var(--glass-video-rim)',
 };
-/** Paper-coloured buttons inside the white dock. */
+/** Buttons inside the glass dock. */
 const DOCK_BUTTON: React.CSSProperties = {
   background: 'var(--dock-btn)', color: 'var(--dock-text)', borderRadius: 16,
 };
 const DOCK_ACTIVE: React.CSSProperties = {
-  background: 'var(--dock-ink)', color: 'var(--dock-bg)', borderRadius: 16,
+  background: 'var(--dock-ink)', color: 'var(--dock-ink-text)', borderRadius: 16,
 };
 
 /**
@@ -951,6 +957,7 @@ function ChannelBadge({ player, behind }: { player: PlayerState; behind: number 
         display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, maxWidth: '52vw',
         padding: '8px 18px 8px 8px', borderRadius: 20,
         background: 'var(--dock-bg)', color: 'var(--dock-text)',
+        boxShadow: 'var(--glass-video-rim)',
       }}
     >
       <span
@@ -1063,7 +1070,7 @@ function LiveCards({
             boxShadow: 'var(--shadow-dock)',
           }}
         >
-          <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--accent)' }}>
+          <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--dock-accent)' }}>
             On now · {clockTime(now.start)}–{clockTime(now.stop)}
           </div>
           <div
@@ -1124,6 +1131,7 @@ function LiveCards({
               display: 'inline-flex', alignItems: 'center', gap: 6, height: 40,
               padding: '0 14px', borderRadius: 14, border: 'none', cursor: 'pointer',
               background: 'var(--dock-bg)', color: 'var(--dock-text)',
+              boxShadow: 'var(--glass-video-rim)',
               fontWeight: 800, fontSize: 'var(--fs-sm)',
             }}
           >

@@ -12,6 +12,12 @@ interface UiState {
   animations: boolean;
   hoverPreviews: boolean;
   use24h: boolean;
+  /**
+   * How see-through the Liquid Glass is, 0-100. 0 is the most frosted, the setting
+   * every legibility number in styles/glass.css is measured at; higher lets more of
+   * the page through, with less blur and less dimming behind the labels.
+   */
+  glassClarity: number;
 
   /** Currently open detail modal, if any (README §8.4). */
   detail: CatalogItem | null;
@@ -42,6 +48,7 @@ interface UiState {
   toggleHoverPreviews: () => void;
   /** 24-hour or AM/PM, which `clockTime` reads and nothing used to set (R-136). */
   toggle24h: () => void;
+  setGlassClarity: (v: number) => void;
   openDetail: (i: CatalogItem | null) => void;
   setPalette: (open: boolean, query?: string) => void;
   setPlayer: (p: PlayerState) => void;
@@ -59,6 +66,17 @@ function applyDom(theme: Theme, density: Density, animations: boolean) {
   root.dataset.density = density;
   root.dataset.motion = animations ? 'on' : 'off';
 }
+
+/** The glass reads `--glass-clarity`, 0 to 1 (styles/glass.css). */
+function applyClarity(v: number) {
+  document.documentElement.style.setProperty('--glass-clarity', String(v / 100));
+}
+
+/**
+ * Asked for: "I want the liquid glass to be more transparent, add a slider". So the
+ * default moved off the most frosted end, and the slider covers the whole range.
+ */
+export const DEFAULT_GLASS_CLARITY = 50;
 
 /**
  * Where the four Appearance choices are kept, so they survive the window closing.
@@ -88,6 +106,7 @@ interface SavedAppearance {
   animations: boolean;
   hoverPreviews: boolean;
   use24h: boolean;
+  glassClarity: number;
 }
 
 const THEMES: Theme[] = ['dark', 'oled', 'light', 'contrast'];
@@ -114,6 +133,9 @@ function loadAppearance(): Partial<SavedAppearance> {
     if (typeof v.animations === 'boolean') out.animations = v.animations;
     if (typeof v.hoverPreviews === 'boolean') out.hoverPreviews = v.hoverPreviews;
     if (typeof v.use24h === 'boolean') out.use24h = v.use24h;
+    if (typeof v.glassClarity === 'number' && Number.isFinite(v.glassClarity)) {
+      out.glassClarity = Math.min(100, Math.max(0, Math.round(v.glassClarity)));
+    }
     return out;
   } catch {
     return {};
@@ -140,6 +162,7 @@ const initialAppearance: SavedAppearance = {
     saved.animations ?? !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
   hoverPreviews: saved.hoverPreviews ?? true,
   use24h: saved.use24h ?? true,
+  glassClarity: saved.glassClarity ?? DEFAULT_GLASS_CLARITY,
 };
 
 export const useUi = create<UiState>((set, get) => ({
@@ -148,6 +171,7 @@ export const useUi = create<UiState>((set, get) => ({
   animations: initialAppearance.animations,
   hoverPreviews: initialAppearance.hoverPreviews,
   use24h: initialAppearance.use24h,
+  glassClarity: initialAppearance.glassClarity,
 
   detail: null,
   paletteOpen: false,
@@ -181,6 +205,12 @@ export const useUi = create<UiState>((set, get) => ({
     set((s) => ({ use24h: !s.use24h }));
     remember(get());
   },
+  setGlassClarity: (v) => {
+    const glassClarity = Math.min(100, Math.max(0, Math.round(v)));
+    applyClarity(glassClarity);
+    set({ glassClarity });
+    remember(get());
+  },
   openDetail: (detail) => set({ detail }),
   setPalette: (paletteOpen, paletteQuery = '') => set({ paletteOpen, paletteQuery }),
   setPlayer: (player) => set({ player }),
@@ -200,6 +230,7 @@ function remember(s: UiState) {
     animations: s.animations,
     hoverPreviews: s.hoverPreviews,
     use24h: s.use24h,
+    glassClarity: s.glassClarity,
   });
 }
 
@@ -217,6 +248,7 @@ applyDom(
   initialAppearance.density,
   initialAppearance.animations,
 );
+applyClarity(initialAppearance.glassClarity);
 
 /** Mirror host player state into the store (README §3: UI mirrors, never owns). */
 export function bindPlayerState() {

@@ -51,7 +51,7 @@ export function ChannelBanner({
           <div
             className="dl-display"
             style={{
-              fontSize: 'var(--fs-2xl)', color: 'var(--accent)',
+              fontSize: 'var(--fs-2xl)', color: 'var(--dock-accent)',
               fontVariantNumeric: 'tabular-nums', lineHeight: 1,
             }}
           >
@@ -145,7 +145,7 @@ export function DigitEntry({ digits }: { digits: string }) {
           aria-label={`Channel ${digits}`}
           style={{
             position: 'fixed', top: 'var(--sp-7)', right: 'var(--sp-7)', zIndex: 170,
-            background: 'var(--dock-bg)', color: 'var(--accent)',
+            background: 'var(--dock-bg)', color: 'var(--dock-text)',
             border: 'none', borderRadius: 26,
             padding: 'var(--sp-4) var(--sp-6)', boxShadow: 'var(--shadow-dock)',
             fontFamily: 'var(--font-display)',

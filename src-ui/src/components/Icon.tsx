@@ -7,6 +7,7 @@ export const ICON_PATHS: Record<string, string> = {
   stop: 'M6 6h12v12H6z',
   plus: 'M12 5v14M5 12h14',
   check: 'M4 12l5 5L20 6',
+  filter: 'M3 5h18M6 12h12M10 19h4',
   info: 'M12 8h.01M11 12h1v5h1M12 3a9 9 0 100 18 9 9 0 000-18z',
   chevronRight: 'M9 6l6 6-6 6',
   chevronLeft: 'M15 6l-6 6 6 6',

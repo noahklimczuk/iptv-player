@@ -40,6 +40,8 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
     // the whole point of the list -- the previous `useUi()` would have carried them
     // silently and re-rendered this page on every player heartbeat to do it.
     use24h: useUi((s) => s.use24h),
+    glassClarity: useUi((s) => s.glassClarity),
+    setGlassClarity: useUi((s) => s.setGlassClarity),
     setTheme: useUi((s) => s.setTheme),
     setDensity: useUi((s) => s.setDensity),
     toggleAnimations: useUi((s) => s.toggleAnimations),
@@ -207,6 +209,36 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
             >
               TV
             </button>
+          </div>
+        </Field>
+        <Field
+          label="Glass transparency"
+          hint="How see-through the tab bar, menus and player controls are. Lower is easier to read over busy pictures."
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+            <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', fontWeight: 700 }}>
+              Frosted
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={ui.glassClarity}
+              aria-label="Glass transparency"
+              aria-valuetext={`${ui.glassClarity}%`}
+              data-testid="glass-clarity"
+              onChange={(e) => ui.setGlassClarity(Number(e.target.value))}
+              style={{ flex: 1, minWidth: 160, maxWidth: 260, accentColor: 'var(--accent)' }}
+            />
+            <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', fontWeight: 700 }}>
+              Clear
+            </span>
+            <span
+              style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, minWidth: '4ch' }}
+            >
+              {ui.glassClarity}%
+            </span>
           </div>
         </Field>
         <Field label="Animations" hint="Disables hover previews, trailer autoplay and transitions.">

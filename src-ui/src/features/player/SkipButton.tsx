@@ -52,7 +52,7 @@ export function SkipButton({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 'var(--sp-2)',
-            // Daylight: a white pill just above the dock.
+            // A glass pill just above the dock.
             padding: '13px 24px',
             borderRadius: 'var(--r-full)',
             border: 'none',
@@ -72,7 +72,7 @@ export function SkipButton({
               style={{
                 fontSize: 'var(--fs-xs)',
                 fontWeight: 600,
-                color: 'var(--accent)',
+                color: 'var(--dock-accent)',
                 opacity: 0.9,
               }}
             >
