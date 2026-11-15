@@ -32,14 +32,16 @@ const ROTATE_MS = 12000;
  */
 const ROTATE_WITH_TRAILER_MS = 32000;
 
-/** Buttons on artwork: one solid paper button, the rest frosted. */
+/** Buttons on artwork: one solid paper button, the rest Apple's clear glass. */
 const ON_ART_SOLID: React.CSSProperties = {
   background: 'var(--on-art)', color: 'var(--text-on-light)',
+  // Capsules, as Apple's buttons are.
+  borderRadius: 'var(--r-full)',
 };
 const ON_ART_GLASS: React.CSSProperties = {
-  background: 'color-mix(in srgb, var(--on-art) 20%, transparent)',
-  color: 'var(--on-art)', boxShadow: 'none',
-  backdropFilter: 'blur(12px)',
+  // The material is `.glass-clear` in styles/glass.css; unset the button's own fill.
+  background: undefined, boxShadow: undefined, borderColor: 'transparent',
+  color: 'var(--on-art)', borderRadius: 'var(--r-full)',
 };
 
 export function HeroBillboard({
@@ -360,12 +362,14 @@ export function HeroBillboard({
             icon={myList.has(`${item.kind === 'series' ? 'series' : 'movie'}:${item.id}`) ? 'check' : 'plus'}
             aria-pressed={myList.has(`${item.kind === 'series' ? 'series' : 'movie'}:${item.id}`)}
             onClick={() => toggleMyList(item)}
+            className="glass-clear glass-press"
             style={ON_ART_GLASS}
           >
             My List
           </Button>
           <Button
             variant="secondary" size="lg" icon="info" onClick={() => onOpen(item)}
+            className="glass-clear glass-press"
             style={ON_ART_GLASS}
           >
             More Info
