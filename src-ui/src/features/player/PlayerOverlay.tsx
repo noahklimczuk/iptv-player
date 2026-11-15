@@ -18,6 +18,7 @@ import { notify, report } from '@/lib/errors';
 import { duration } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
 import { isTyping } from '@/hooks/useHotkeys';
+import * as control from './playerControl';
 
 const HIDE_AFTER_MS = 3200;
 
@@ -306,10 +307,9 @@ export function PlayerOverlay({
       bump();
       if (next === volume.current) return;
       // Optimistic, so a flick of the wheel does not wait for a round trip before the
-      // next notch is computed from the old number.
+      // next notch is computed from the old number -- and shown at once.
       volume.current = next;
-      invoke('player.setVolume', { volume: next })
-        .catch(report('Could not change the volume'));
+      control.setVolume(next);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -516,8 +516,7 @@ export function PlayerOverlay({
               <IconButton
                 icon={playing ? 'pause' : 'play'} filled size={64}
                 label={playing ? 'Pause' : 'Play'}
-                onClick={() => invoke(playing ? 'player.pause' : 'player.resume')
-                  .catch(report('The player did not respond'))}
+                onClick={control.togglePause}
                 style={{
                   borderRadius: 22, background: 'var(--dock-ink)', color: 'var(--dock-bg)',
                 }}
@@ -526,14 +525,12 @@ export function PlayerOverlay({
                 <>
                   <IconButton
                     icon="back10" label="Back 10 seconds" size={48}
-                    onClick={() => invoke('player.seek', { positionSecs: -10, relative: true })
-                      .catch(report('Could not seek'))}
+                    onClick={() => control.seekBy(-10)}
                     style={DOCK_BUTTON}
                   />
                   <IconButton
                     icon="forward10" label="Forward 10 seconds" size={48}
-                    onClick={() => invoke('player.seek', { positionSecs: 10, relative: true })
-                      .catch(report('Could not seek'))}
+                    onClick={() => control.seekBy(10)}
                     style={DOCK_BUTTON}
                   />
                 </>
@@ -554,8 +551,7 @@ export function PlayerOverlay({
               <IconButton
                 icon={player.muted ? 'volumeOff' : 'volume'} size={48}
                 label={player.muted ? 'Unmute' : 'Mute'}
-                onClick={() => invoke('player.setMuted', { muted: !player.muted })
-                  .catch(report('Could not change the volume'))}
+                onClick={control.toggleMute}
                 style={DOCK_BUTTON}
               />
               <input
@@ -563,8 +559,7 @@ export function PlayerOverlay({
                 aria-label="Volume"
                 title={`${player.volume}%`}
                 className="dl-range"
-                onChange={(e) => invoke('player.setVolume', { volume: Number(e.target.value) })
-                  .catch(report('Could not change the volume'))}
+                onChange={(e) => control.setVolume(Number(e.target.value))}
                 style={{
                   width: 84,
                   ['--fill' as string]: `${(player.volume / 200) * 100}%`,
@@ -811,7 +806,7 @@ function Scrubber({ player, guide }: { player: PlayerState; guide: NowNext | nul
         label="Seek"
         accent="var(--accent)"
         onCommit={(positionSecs) =>
-          void invoke('player.seek', { positionSecs }).catch(report('Could not seek'))}
+          control.seekTo(positionSecs)}
       />
     </div>
   );
@@ -903,7 +898,7 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
           label="Timeshift"
           accent="var(--accent)"
           onCommit={(positionSecs) =>
-            void invoke('player.seek', { positionSecs }).catch(report('Could not seek'))}
+            control.seekTo(positionSecs)}
         />
         {/* The live edge itself, so the end of the track reads as "now" rather than as
             the end of a recording. */}

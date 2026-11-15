@@ -43,6 +43,7 @@ import { PipTile } from '@/features/player/PipTile';
 import { holeClipPath } from '@/components/SurfaceHole';
 import { SaveLayoutDialog } from '@/features/mosaic/MosaicPage';
 import { PlayerOverlay, behindLive, showingPicture } from '@/features/player/PlayerOverlay';
+import * as control from '@/features/player/playerControl';
 import { CommandPalette } from '@/features/search/CommandPalette';
 import { ProfilePicker } from '@/features/profiles/ProfilePicker';
 import { SetupWizard } from '@/features/setup/SetupWizard';
@@ -530,20 +531,16 @@ export default function App() {
       const p = useUi.getState().player;
       if (!p || p.status === 'idle') return;
       if (!p.isLive) {
-        invoke(p.status === 'playing' ? 'player.pause' : 'player.resume')
-          .catch(report('The player did not respond'));
+        control.togglePause();
         return;
       }
       if (behindLive(p) > 0) {
         invoke('player.backToLive').catch(report('Could not return to live'));
         return;
       }
-      invoke(p.status === 'playing' ? 'player.pause' : 'player.resume')
-        .catch(report('The player did not respond'));
+      control.togglePause();
     },
-    onSeek: (secs: number) =>
-      invoke('player.seek', { positionSecs: secs, relative: true })
-        .catch(report('Could not seek')),
+    onSeek: (secs: number) => control.seekBy(secs),
     /**
      * Volume, with a floor.
      *
@@ -553,13 +550,9 @@ export default function App() {
      * an action that had already finished. The top end was handled -- `set_volume` does
      * `volume.min(200)` -- and only the bottom was missing (R-85).
      */
-    onVolume: (delta: number) =>
-      invoke('player.setVolume', {
-        volume: Math.max(0, (useUi.getState().player?.volume ?? 70) + delta),
-      }).catch(report('Could not change the volume')),
-    onMute: () =>
-      invoke('player.setMuted', { muted: !(useUi.getState().player?.muted ?? false) })
-        .catch(report('Could not change the volume')),
+    // Clamped at both ends in `changeVolume` (R-85: a u32 refuses -5).
+    onVolume: (delta: number) => control.changeVolume(delta),
+    onMute: () => control.toggleMute(),
     onFullscreen: fullscreen.toggle,
     /**
      * `i` — what is this?

@@ -10,6 +10,7 @@ import type { PlaybackAids, PlayerState, SkipMarker } from '@shared/ipc';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { activeProfileId } from '@/state/profile';
+import * as control from '@/features/player/playerControl';
 
 export interface EpisodeAids {
   aids: PlaybackAids | null;
@@ -205,8 +206,7 @@ export function useEpisodeAids(
       // Where we are about to land, so the seek watcher below does not read our own
       // jump back as the viewer making a fresh statement about this show's intro.
       ourSeek.current = marker.endSecs;
-      invoke('player.seek', { positionSecs: marker.endSecs })
-        .catch(report('Could not skip'));
+      control.seekTo(marker.endSecs, 'Could not skip');
       // A press is a statement about where this show's intro really is, so remember
       // it; an automatic jump is just us replaying what we already knew.
       if (!automatic && episodeId != null) {
