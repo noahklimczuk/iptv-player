@@ -35,10 +35,10 @@
 
 :root,
 :root[data-theme='light'] {
-  --glass-tint:          rgb(255 255 255 / 0.34);
-  --glass-tint-strong:   rgb(255 255 255 / 0.58);
-  --glass-filter:        blur(7px) saturate(190%) contrast(0.55) brightness(1.5);
-  --glass-filter-strong: blur(22px) saturate(180%) contrast(0.55) brightness(1.5);
+  --glass-tint:          rgb(255 255 255 / calc(0.34 * (1 - 0.8 * var(--glass-clarity, 0.5))));
+  --glass-tint-strong:   rgb(255 255 255 / calc(0.58 * (1 - 0.5 * var(--glass-clarity, 0.5))));
+  --glass-filter:        blur(calc(7px - 4px * var(--glass-clarity, 0.5))) saturate(190%) contrast(calc(0.55 + 0.4 * var(--glass-clarity, 0.5))) brightness(calc(1.5 - 0.45 * var(--glass-clarity, 0.5)));
+  --glass-filter-strong: blur(calc(22px - 10px * var(--glass-clarity, 0.5))) saturate(180%) contrast(calc(0.55 + 0.2 * var(--glass-clarity, 0.5))) brightness(calc(1.5 - 0.2 * var(--glass-clarity, 0.5)));
   --glass-sheen:         rgb(255 255 255 / 0.28);
   --glass-rim:           rgb(255 255 255 / 0.95);
   --glass-rim-low:       rgb(255 255 255 / 0.55);
@@ -60,10 +60,10 @@
 }
 
 :root[data-theme='dark'] {
-  --glass-tint:          rgb(28 28 32 / 0.3);
-  --glass-tint-strong:   rgb(28 28 32 / 0.55);
-  --glass-filter:        blur(7px) saturate(170%) brightness(0.5);
-  --glass-filter-strong: blur(22px) saturate(170%) brightness(0.45);
+  --glass-tint:          rgb(28 28 32 / calc(0.3 * (1 - 0.8 * var(--glass-clarity, 0.5))));
+  --glass-tint-strong:   rgb(28 28 32 / calc(0.55 * (1 - 0.5 * var(--glass-clarity, 0.5))));
+  --glass-filter:        blur(calc(7px - 4px * var(--glass-clarity, 0.5))) saturate(170%) brightness(calc(0.5 + 0.4 * var(--glass-clarity, 0.5)));
+  --glass-filter-strong: blur(calc(22px - 10px * var(--glass-clarity, 0.5))) saturate(170%) brightness(calc(0.45 + 0.2 * var(--glass-clarity, 0.5)));
   --glass-sheen:         rgb(255 255 255 / 0.07);
   --glass-rim:           rgb(255 255 255 / 0.5);
   --glass-rim-low:       rgb(255 255 255 / 0.22);
@@ -81,10 +81,10 @@
 }
 
 :root[data-theme='oled'] {
-  --glass-tint:          rgb(0 0 0 / 0.32);
-  --glass-tint-strong:   rgb(10 10 12 / 0.6);
-  --glass-filter:        blur(7px) saturate(170%) brightness(0.5);
-  --glass-filter-strong: blur(22px) saturate(170%) brightness(0.45);
+  --glass-tint:          rgb(0 0 0 / calc(0.32 * (1 - 0.8 * var(--glass-clarity, 0.5))));
+  --glass-tint-strong:   rgb(10 10 12 / calc(0.6 * (1 - 0.5 * var(--glass-clarity, 0.5))));
+  --glass-filter:        blur(calc(7px - 4px * var(--glass-clarity, 0.5))) saturate(170%) brightness(calc(0.5 + 0.4 * var(--glass-clarity, 0.5)));
+  --glass-filter-strong: blur(calc(22px - 10px * var(--glass-clarity, 0.5))) saturate(170%) brightness(calc(0.45 + 0.2 * var(--glass-clarity, 0.5)));
   --glass-sheen:         rgb(255 255 255 / 0.06);
   --glass-rim:           rgb(255 255 255 / 0.45);
   --glass-rim-low:       rgb(255 255 255 / 0.2);
@@ -221,6 +221,16 @@
   .glass-bar::before { background: var(--bg); }
 }
 
+/* The transparency slider (Settings > Appearance) sets `--glass-clarity`, 0 to 1: the
+   tints thin, the blur lightens and the dimming or lifting of what is behind eases off.
+   Labels on clearer glass get a soft halo in the glass's own tone, as Apple's vibrant
+   labels do, so they keep an edge against whatever comes through. */
+:root { --glass-halo: 0 0 0; }
+:root[data-theme='light'] { --glass-halo: 255 255 255; }
+.nav-glass a {
+  filter: drop-shadow(0 0 3px rgb(var(--glass-halo) / calc(0.9 * var(--glass-clarity, 0.5))));
+}
+
 /* ── The tab bar ────────────────────────────────────────────────────────────
 
    As on iOS: every tab the same width, labels in the primary colour, and the current
@@ -265,4 +275,42 @@
   .nav-platter { transition: none; }
   .nav-glass[data-pressed] .nav-platter { scale: none; }
   .glass-press:active { transform: none; }
+}
+
+/* ── The player ─────────────────────────────────────────────────────────────
+
+   Asked for: "add liquid glass to the player too". The dock, the panels, the channel
+   banner, the skip and up-next cards and the chips on the picture were white paper.
+   Now they are glass: a dark see-through tint, a sheen, the lit rim and a soft shadow.
+
+   What it cannot have is the blur. mpv draws into a native window *beneath* the
+   WebView, so `backdrop-filter` has nothing to sample -- which is why the tint does the
+   work the dimming does elsewhere, and is thicker than the tab bar's. It follows the
+   transparency slider too, within limits that keep white text readable over a white
+   frame of video. The contrast theme keeps its own solid dock (tokens.css). */
+:root:root:not([data-theme='contrast']) {
+  --dock-tint:        rgb(18 18 22 / calc(0.74 - 0.24 * var(--glass-clarity, 0.5)));
+  --dock-bg:          linear-gradient(180deg, rgb(255 255 255 / 0.1), transparent 55%), var(--dock-tint);
+  --dock-text:        #ffffff;
+  --dock-muted:       rgb(255 255 255 / 0.74);
+  --dock-btn:         rgb(255 255 255 / 0.12);
+  --dock-btn-hover:   rgb(255 255 255 / 0.2);
+  --dock-ink:         #ffffff;
+  --dock-ink-text:    #16161a;
+  /* The accent, lightened to read on the dark glass. */
+  --dock-accent:      color-mix(in srgb, var(--accent) 45%, white);
+  --dock-track:       rgb(255 255 255 / 0.22);
+  --dock-buffer:      rgb(255 255 255 / 0.42);
+  --player-chip:      rgb(18 18 22 / calc(0.55 - 0.2 * var(--glass-clarity, 0.5)));
+  --glass-video-rim:
+    inset 0 0 0 0.5px rgb(255 255 255 / 0.2),
+    inset 1.5px 1.5px 1px -1px rgb(255 255 255 / 0.55),
+    inset -1.5px -1.5px 1px -1px rgb(255 255 255 / 0.22),
+    inset 0 0 18px rgb(255 255 255 / 0.05);
+  --shadow-dock:      0 18px 48px rgb(0 0 0 / 0.38), 0 2px 6px rgb(0 0 0 / 0.25), var(--glass-video-rim);
+}
+:root[data-theme='contrast'] {
+  --dock-ink-text:    #000000;
+  --dock-accent:      #ffdd00;
+  --glass-video-rim:  0 0 0 1px #ffffff;
 }

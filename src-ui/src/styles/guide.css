@@ -52,3 +52,65 @@
   background: var(--surface-sunk);
   font-size: var(--fs-xs); font-weight: 700; color: var(--text-faint);
 }
+
+/* ── Filters ────────────────────────────────────────────────────────────── */
+.guide-filter-badge {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  display: inline-grid; place-items: center;
+  background: var(--accent); color: var(--accent-text);
+  font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.guide-filter-panel {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 30;
+  width: 380px; overflow-y: auto;
+  /* Clear of the tab bar: it floats over the foot of the screen. */
+  max-height: calc(100vh - 210px - var(--navpill-space));
+  border-radius: var(--r-xl); padding: 16px;
+  display: grid; gap: 10px; color: var(--text);
+}
+.guide-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.guide-filter-actions, .guide-filter-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.guide-filter-foot {
+  padding-top: 10px; border-top: 1px solid var(--border);
+  font-size: var(--fs-sm); font-weight: 700; color: var(--text-muted);
+}
+.guide-filter-link {
+  border: none; background: none; padding: 2px 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-size: var(--fs-sm); font-weight: 750;
+}
+.guide-filter-link:disabled { color: var(--text-faint); cursor: default; }
+.guide-filter-list {
+  max-height: 220px; overflow-y: auto; display: grid; gap: 2px;
+  border-radius: var(--r-md); background: color-mix(in srgb, var(--surface-sunk) 70%, transparent);
+  padding: 4px;
+}
+.guide-filter-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+  border-radius: var(--r-sm, 8px); cursor: pointer; font-size: var(--fs-sm); font-weight: 650;
+}
+.guide-filter-row:hover { background: var(--surface-hover); }
+.guide-filter-row input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.guide-filter-row[data-mode='hide'] input:checked + .guide-filter-name {
+  text-decoration: line-through; color: var(--text-faint);
+}
+.guide-filter-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-filter-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+.guide-filter-toggle {
+  display: flex; align-items: center; gap: 10px;
+  font-size: var(--fs-sm); font-weight: 700; color: var(--text-muted);
+}
+/* A hidden group's chip says so: struck through rather than lit. */
+.guide-chips .dl-filter[data-mode='hide'][aria-pressed='true'] {
+  text-decoration: line-through;
+}
+
+/* The row the cursor is on: a band across the whole of it, so "where am I" is answered
+   from anywhere on the screen, not only from the channel column. */
+.guide-row-current::before {
+  content: ''; position: absolute; inset: 1px 0;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: var(--r-md);
+  pointer-events: none;
+}

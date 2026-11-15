@@ -50,6 +50,11 @@ import { useClockTime } from '@/hooks/useClockTime';
 import { SurfaceHole } from '@/components/SurfaceHole';
 import { useInlaidPicture } from '@/hooks/useInlaidPicture';
 import { isTyping } from '@/hooks/useHotkeys';
+import { activeProfileId } from '@/state/profile';
+import {
+  applyFilters, hostGroup, readFilters, toggleGroup, writeFilters, type GuideFilters,
+} from './guideFilters';
+import { GuideFiltersButton } from './GuideFiltersPanel';
 
 const HALF_HOUR = 1800;
 const PX_PER_MIN = 6;
@@ -123,8 +128,12 @@ export function GuidePage({
   // Half an hour back, as the Now button does: opening on the current slot put the
   // "now" line over the first letter of every title.
   const [from, setFrom] = useState(() => floorToSlot(Math.floor(Date.now() / 1000) - HALF_HOUR));
-  const [group, setGroup] = useState<string | undefined>(undefined);
-  const [withListings, setWithListings] = useState(readWithListings);
+  const [filters, setFiltersState] = useState<GuideFilters>(readFilters);
+  const setFilters = useCallback((f: GuideFilters) => {
+    setFiltersState(f);
+    writeFilters(f);
+  }, []);
+  const profileId = activeProfileId();
   const [selected, setSelected] = useState<{ ch: Channel; prog: Programme } | null>(null);
   const dvr = useDvrMarks();
   const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
@@ -159,27 +168,34 @@ export function GuidePage({
    * choosing one of 67 groups narrowed what was drawn and not what was fetched
    * (R-130).
    */
+  const group = hostGroup(filters);
   const { data: channelRows, loading } = useCommand(
     'channels.list',
-    { group },
-    [group],
+    // The profile, so `favorite` is filled in for the "Favourites only" filter.
+    { group, profileId },
+    [group, profileId],
   );
 
   /**
-   * Narrowed to channels with a real schedule when the viewer asks for that.
-   *
-   * On a real line more than half the channels have no guide anywhere, and browsing for
-   * something to watch through 3,600 rows of event slots and loops is the slow way.
-   * Client-side, because the list is already here whole and `epgChannelId` is what
-   * says it -- a refresh now clears matches whose guide schedules nothing.
+   * Narrowed by the filters (`guideFilters.ts`): the groups shown or hidden, and
+   * "With listings" -- on a real line more than half the channels have no guide
+   * anywhere, and browsing through 3,600 rows of event slots and loops is the slow way
+   * -- with favourites, catch-up, radio and quality beside it. Client-side, because
+   * the list is already here whole and every one of those is a field of the channel.
    */
-  const channels = useMemo(() => {
-    const all = channelRows ?? [];
-    return withListings ? all.filter((c) => c.epgChannelId != null) : all;
-  }, [channelRows, withListings]);
+  const channels = useMemo(
+    () => applyFilters(channelRows ?? [], filters),
+    [channelRows, filters],
+  );
 
+  // A filter that takes the selected channel away moves the selection to the top of
+  // what is left, rather than leaving it on a row that is no longer drawn.
   useEffect(() => {
-    if (!previewChannel && channels.length) setPreviewChannel(channels[0]!);
+    if (!channels.length) return;
+    if (!previewChannel || !channels.some((c) => c.id === previewChannel.id)) {
+      setPreviewChannel(channels[0]!);
+      setSelected(null);
+    }
   }, [channels, previewChannel]);
 
   const rowVirt = useVirtualizer({
@@ -307,7 +323,13 @@ export function GuidePage({
       const moveTo = (i: number) => {
         const next = channels[Math.min(channels.length - 1, Math.max(0, i))]!;
         setPreviewChannel(next);
-        setSelected(null);
+        // Keep the time. With a programme selected, Up and Down land on whatever is on
+        // the next channel at that moment, as a set-top box guide does -- dropping the
+        // selection on every row change is what made it hard to see where you were.
+        const at = selected ? Math.max(selected.prog.start, from) : null;
+        const list = next.epgChannelId ? (guide.byEpgId[next.epgChannelId] ?? []) : [];
+        const same = at != null ? list.find((p) => p.start <= at && p.stop > at) : undefined;
+        setSelected(same ? { ch: next, prog: same } : null);
         rowVirt.scrollToIndex(channels.indexOf(next), { align: 'auto' });
         previewSoon(next);
       };
@@ -396,13 +418,9 @@ export function GuidePage({
       <GuideToolbar
         from={from}
         groups={groups ?? []}
-        group={group}
-        setGroup={setGroup}
-        withListings={withListings}
-        setWithListings={(on) => {
-          setWithListings(on);
-          writeWithListings(on);
-        }}
+        filters={filters}
+        setFilters={setFilters}
+        shown={channels.length}
         onNow={scrollToNow}
         onShift={(hours) => jumpTo(from + hours * 3600)}
         onPrimeTime={primeTime}
@@ -431,7 +449,11 @@ export function GuidePage({
             </div>
           ) : channels.length === 0 ? (
             <EmptyState
-              title={withListings ? 'No channels with listings here' : 'No channels in this category'}
+              title={
+                filters.withListings
+                  ? 'No channels with listings here'
+                  : 'No channels match these filters'
+              }
             />
           ) : (
             <div
@@ -444,7 +466,34 @@ export function GuidePage({
                   ['--guide-channel-w' as string]: `${CHANNEL_W}px`,
                 }}
               >
-                <TimeHeader slots={timeSlots} />
+                <TimeHeader
+                  slots={timeSlots}
+                  mark={
+                    selected && selected.prog.stop > from && selected.prog.start < to
+                      ? {
+                          left: CHANNEL_W + xFor(Math.max(selected.prog.start, from), from),
+                          right: CHANNEL_W + xFor(Math.min(selected.prog.stop, to), from),
+                        }
+                      : null
+                  }
+                />
+
+                {/* Where you are, across: a faint band down the selected programme's
+                    time, so the cursor reads as a crosshair with the row band below. */}
+                {selected && selected.prog.stop > from && selected.prog.start < to && (
+                  <div
+                    aria-hidden
+                    data-testid="guide-time-band"
+                    style={{
+                      position: 'absolute', top: 36, bottom: 0,
+                      left: CHANNEL_W + xFor(Math.max(selected.prog.start, from), from),
+                      width: xFor(Math.min(selected.prog.stop, to), from)
+                        - xFor(Math.max(selected.prog.start, from), from),
+                      background: 'color-mix(in srgb, var(--accent) 7%, transparent)',
+                      zIndex: 3, pointerEvents: 'none',
+                    }}
+                  />
+                )}
 
                 {/* Moving "now" line. */}
                 {now >= from && now <= to && (
@@ -488,10 +537,13 @@ export function GuidePage({
                     // fallback ran for 4,874 of 6,699 channels, so the exposure was most
                     // of the grid (R-89).
                     const progs = ch.epgChannelId ? guide.byEpgId[ch.epgChannelId] ?? [] : [];
+                    const current = previewChannel?.id === ch.id;
                     return (
                       <div
                         key={ch.id}
                         data-testid="guide-row"
+                        data-current={current ? 'true' : undefined}
+                        className={current ? 'guide-row-current' : undefined}
                         style={{
                           position: 'absolute', top: vr.start, left: 0,
                           height: ROW_H, width: '100%', display: 'flex',
@@ -560,14 +612,14 @@ export function GuidePage({
 }
 
 function GuideToolbar({
-  from, groups, group, setGroup, withListings, setWithListings, onNow, onShift, onPrimeTime,
+  from, groups, filters, setFilters, shown, onNow, onShift, onPrimeTime,
 }: {
   from: number;
   groups: { name: string; count: number }[];
-  group: string | undefined;
-  setGroup: (g: string | undefined) => void;
-  withListings: boolean;
-  setWithListings: (on: boolean) => void;
+  filters: GuideFilters;
+  setFilters: (f: GuideFilters) => void;
+  /** How many channels the filters leave. */
+  shown: number;
   onNow: () => void;
   onShift: (hours: number) => void;
   onPrimeTime: (offsetDays: number) => void;
@@ -600,14 +652,23 @@ function GuideToolbar({
       </div>
 
       {/* Groups as chips rather than a dropdown: browsing is choosing between them, and
-          a list you have to open to see is a list nobody reads. */}
+          a list you have to open to see is a list nobody reads. Each chip adds its
+          group to the choice or takes it out, so several can be on at once; the
+          Filters panel has the rest -- hiding groups instead, searching them, and
+          the channel filters. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <GuideFiltersButton
+          groups={groups}
+          filters={filters}
+          setFilters={setFilters}
+          shown={shown}
+        />
         <div className="guide-chips" role="group" aria-label="Category">
           <button
             type="button"
             className="dl-filter"
-            aria-pressed={group === undefined}
-            onClick={() => setGroup(undefined)}
+            aria-pressed={filters.groups.length === 0}
+            onClick={() => setFilters({ ...filters, groups: [] })}
           >
             All channels
           </button>
@@ -617,8 +678,9 @@ function GuideToolbar({
               type="button"
               className="dl-filter"
               data-testid="guide-group"
-              aria-pressed={group === g.name}
-              onClick={() => setGroup(group === g.name ? undefined : g.name)}
+              data-mode={filters.groupMode}
+              aria-pressed={filters.groups.includes(g.name)}
+              onClick={() => setFilters(toggleGroup(filters, g.name))}
             >
               {g.name}
               <span className="guide-chip-count">{g.count}</span>
@@ -630,34 +692,15 @@ function GuideToolbar({
             type="button"
             role="switch"
             className="dl-switch"
-            aria-checked={withListings}
+            aria-checked={filters.withListings}
             aria-label="Only channels with listings"
-            onClick={() => setWithListings(!withListings)}
+            onClick={() => setFilters({ ...filters, withListings: !filters.withListings })}
           />
           <span aria-hidden>With listings</span>
         </div>
       </div>
     </div>
   );
-}
-
-const WITH_LISTINGS_KEY = 'aurora.guide.withListings';
-
-/** A per-viewer convenience, so it lives in this browser profile and may be absent. */
-function readWithListings(): boolean {
-  try {
-    return window.localStorage.getItem(WITH_LISTINGS_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function writeWithListings(on: boolean) {
-  try {
-    window.localStorage.setItem(WITH_LISTINGS_KEY, on ? '1' : '0');
-  } catch {
-    // Storage refused (a private window, a policy): the choice lasts this visit.
-  }
 }
 
 /**
@@ -669,7 +712,13 @@ function writeWithListings(on: boolean) {
  * used. Invisible, harmless, and completely unguessable for anyone wondering why a
  * timestamp is in the markup. The honest fix is to not take the prop (R-131).
  */
-function TimeHeader({ slots }: { slots: number[] }) {
+function TimeHeader({
+  slots, mark,
+}: {
+  slots: number[];
+  /** The selected programme's span, in pixels from the left of the grid. */
+  mark: { left: number; right: number } | null;
+}) {
   // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
   const clockTime = useClockTime();
   return (
@@ -679,6 +728,17 @@ function TimeHeader({ slots }: { slots: number[] }) {
         background: 'var(--surface)',
       }}
     >
+      {mark && (
+        <div
+          aria-hidden
+          data-testid="guide-time-mark"
+          style={{
+            position: 'absolute', bottom: 0, height: 4, borderRadius: 2,
+            left: mark.left + 2, width: Math.max(4, mark.right - mark.left - 4),
+            background: 'var(--accent)', pointerEvents: 'none',
+          }}
+        />
+      )}
       <div
         style={{
           width: CHANNEL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7,
@@ -731,9 +791,16 @@ function ChannelCell({
         width: CHANNEL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 4,
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '0 12px 0 8px', textAlign: 'left', cursor: 'pointer',
-        background: active ? 'var(--surface-hover)' : 'var(--surface)',
-        border: 'none', borderRadius: '0 var(--r-md) var(--r-md) 0', color: 'inherit',
+        // The row you are on: accent-tinted with a bar down its edge. It was the hover
+        // grey, a step away from every other row, and the cursor could not be found.
+        background: active
+          ? 'color-mix(in srgb, var(--accent) 22%, var(--surface))'
+          : 'var(--surface)',
+        boxShadow: active ? 'inset 4px 0 0 var(--accent)' : 'none',
+        border: 'none', borderRadius: '0 var(--r-md) var(--r-md) 0',
+        color: active ? 'var(--text)' : 'inherit',
       }}
+      data-current={active ? 'true' : undefined}
     >
       <span
         style={{
@@ -849,6 +916,7 @@ function ProgrammeRow({
           <button
             key={p.id}
             data-testid="programme"
+            aria-pressed={isSelected}
             onClick={() => onSelect(p)}
             onDoubleClick={onTune}
             title={`${p.title} · ${clockTime(p.start)}–${clockTime(p.stop)}`}
@@ -868,9 +936,15 @@ function ProgrammeRow({
                   ? 'color-mix(in srgb, var(--accent) 16%, var(--surface-sunk))'
                   : 'var(--surface-sunk)',
               border: 'none',
-              boxShadow: airing && !isSelected
-                ? 'inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent)'
-                : 'none',
+              boxShadow: isSelected
+                // A ring that stands off the pill, and a glow: the selected programme is
+                // the cursor, and it has to be findable at a glance across the grid.
+                ? '0 0 0 2px var(--surface), 0 0 0 4px var(--accent), '
+                  + '0 6px 20px color-mix(in srgb, var(--accent) 45%, transparent)'
+                : airing
+                  ? 'inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent)'
+                  : 'none',
+              zIndex: isSelected ? 2 : undefined,
               borderRadius: 'var(--r-md)',
               color: isSelected ? 'var(--accent-text)' : 'var(--text)',
               opacity: p.stop < now ? 0.45 : 1,

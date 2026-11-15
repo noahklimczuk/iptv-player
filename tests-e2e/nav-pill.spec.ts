@@ -132,8 +132,14 @@ test('it is still a navigation landmark of links', async ({ page }) => {
 for (const theme of ['dark', 'oled', 'light', 'contrast'] as const) {
   test(`the pill is findable and its labels readable on any page (${theme})`, async ({ page }) => {
     await page.goto('/#/');
+    // At the frosted end of the transparency slider, which is the setting this
+    // guarantee is made for. Clearer glass is the viewer trading some of it away on
+    // purpose ("I want the liquid glass to be more transparent").
     await page.evaluate((t) => {
-      window.localStorage.setItem('aurora.appearance', JSON.stringify({ theme: t }));
+      window.localStorage.setItem(
+        'aurora.appearance',
+        JSON.stringify({ theme: t, glassClarity: 0 }),
+      );
     }, theme);
     await page.reload();
     await expect(pill(page)).toBeVisible();

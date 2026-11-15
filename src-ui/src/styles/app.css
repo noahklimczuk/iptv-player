@@ -353,7 +353,7 @@ body {
 .dl-range::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 20px; height: 20px; margin-top: -5px; border-radius: 50%;
-  background: var(--dock-bg); box-shadow: 0 0 0 4px var(--accent);
+  background: var(--dock-ink); box-shadow: 0 0 0 4px var(--accent);
   transition: transform var(--t-fast) var(--ease-spring);
 }
 .dl-range:active::-webkit-slider-thumb { transform: scale(1.04); }

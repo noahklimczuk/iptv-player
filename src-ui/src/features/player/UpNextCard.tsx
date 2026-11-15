@@ -86,7 +86,7 @@ export function UpNextCard({
                   fontWeight: 800,
                   letterSpacing: '0.05em',
                   textTransform: 'uppercase',
-                  color: 'var(--accent)',
+                  color: 'var(--dock-accent)',
                   marginBottom: 3,
                 }}
               >

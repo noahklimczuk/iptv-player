@@ -38,11 +38,17 @@ function measure(el: HTMLElement): PhysicalRect | null {
   // surface in it would be asking for a zero-sized child window.
   if (box.width < 1 || box.height < 1) return null;
   const dpr = window.devicePixelRatio || 1;
+  // Edges rounded, and the size taken between them -- not the size rounded on its own.
+  // At a fractional scale (125%, 150%) rounding the left edge and the width separately
+  // can put the right edge a pixel off the box's, which is a line of desktop or of
+  // page down one side of the picture.
+  const left = Math.round(box.left * dpr);
+  const top = Math.round(box.top * dpr);
   return {
-    x: Math.round(box.left * dpr),
-    y: Math.round(box.top * dpr),
-    width: Math.round(box.width * dpr),
-    height: Math.round(box.height * dpr),
+    x: left,
+    y: top,
+    width: Math.round(box.right * dpr) - left,
+    height: Math.round(box.bottom * dpr) - top,
   };
 }
 
@@ -130,13 +136,32 @@ export function useInlaidPicture(
     observer.observe(el);
     window.addEventListener('resize', schedule);
     window.addEventListener('scroll', schedule, true);
+    // A transition or an animation ending is the box arriving where it was going.
+    window.addEventListener('transitionend', schedule, true);
+    window.addEventListener('animationend', schedule, true);
+
+    /**
+     * And a backstop that catches everything else.
+     *
+     * Reported as "the guide preview isn't lined up with where it has to go". None of
+     * the events above fires when the box *moves without resizing* because something
+     * above it changed height -- the toolbar wrapping when the group chips arrive, a
+     * filter panel, fonts finishing loading, TV density -- and the surface stayed where
+     * the box had been. A layout read a few times a second is nothing beside a picture
+     * that covers the wrong part of the screen, and `same()` keeps it from saying
+     * anything to the host unless the box really moved.
+     */
+    const poll = window.setInterval(schedule, 300);
 
     return () => {
       alive = false;
       if (frame) window.cancelAnimationFrame(frame);
+      window.clearInterval(poll);
       observer.disconnect();
       window.removeEventListener('resize', schedule);
       window.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('transitionend', schedule, true);
+      window.removeEventListener('animationend', schedule, true);
     };
   }, [active, ref]);
 
