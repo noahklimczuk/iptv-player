@@ -232,7 +232,7 @@ struct Session {
 }
 
 pub struct Mosaic {
-    db: Arc<Mutex<Connection>>,
+    db: Arc<crate::dblock::TimedMutex<Connection>>,
     /// Provider passwords, for rebuilding a tile's stream address (R-126).
     credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
     dvr: Arc<crate::dvr::Dvr>,
@@ -314,7 +314,7 @@ impl Mosaic {
     }
 
     pub fn new(
-        db: Arc<Mutex<Connection>>,
+        db: Arc<crate::dblock::TimedMutex<Connection>>,
         dvr: Arc<crate::dvr::Dvr>,
         factory: TileFactory,
         data_dir: PathBuf,
@@ -1457,7 +1457,7 @@ mod tests {
 
     /// A mosaic wired to `NullBackend`s: no decoding, but every decision this module
     /// makes is real.
-    fn mosaic(limit: Option<i64>) -> (Mosaic, Arc<Mutex<Connection>>) {
+    fn mosaic(limit: Option<i64>) -> (Mosaic, Arc<crate::dblock::TimedMutex<Connection>>) {
         let db = aurora_db::open_memory().unwrap();
         db.execute(
             "INSERT INTO providers (id,name,kind,base_url,enabled,max_connections,created_at)
@@ -1465,7 +1465,7 @@ mod tests {
             [limit],
         )
         .unwrap();
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(crate::dblock::TimedMutex::new(db));
 
         let dvr = Arc::new(crate::dvr::Dvr::new(
             Arc::clone(&db),
@@ -1500,7 +1500,13 @@ mod tests {
     /// them or it sits on top and the mosaic is audible and invisible.
     type Placements = Arc<Mutex<Vec<(&'static str, Rect)>>>;
 
-    fn mosaic_watching_tiles(limit: Option<i64>) -> (Mosaic, Placements, Arc<Mutex<Connection>>) {
+    fn mosaic_watching_tiles(
+        limit: Option<i64>,
+    ) -> (
+        Mosaic,
+        Placements,
+        Arc<crate::dblock::TimedMutex<Connection>>,
+    ) {
         let (m, db) = mosaic(limit);
         let placed: Placements = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&placed);
@@ -1762,7 +1768,9 @@ mod tests {
     }
 
     /// A mosaic whose tiles can be made to fail, plus the ledger they all report to.
-    fn mosaic_with_flaky_tiles(limit: Option<i64>) -> (Mosaic, Shared, Arc<Mutex<Connection>>) {
+    fn mosaic_with_flaky_tiles(
+        limit: Option<i64>,
+    ) -> (Mosaic, Shared, Arc<crate::dblock::TimedMutex<Connection>>) {
         let (m, db) = mosaic(limit);
         let ledger: Shared = Arc::new(Mutex::new(Ledger::default()));
         let factory = Flaky::factory(&ledger);
@@ -1770,7 +1778,12 @@ mod tests {
     }
 
     /// A channel with `count` sources, so a tile has somewhere to roll to.
-    fn seed_channel_with_sources(db: &Arc<Mutex<Connection>>, id: i64, name: &str, count: usize) {
+    fn seed_channel_with_sources(
+        db: &Arc<crate::dblock::TimedMutex<Connection>>,
+        id: i64,
+        name: &str,
+        count: usize,
+    ) {
         let db = db.lock();
         db.execute(
             "INSERT INTO channels (id, provider_id, provider_key, name, match_key, last_seen_at)
@@ -2360,7 +2373,12 @@ mod tests {
         }
     }
 
-    fn seed_channel(db: &Arc<Mutex<Connection>>, id: i64, name: &str, with_source: bool) {
+    fn seed_channel(
+        db: &Arc<crate::dblock::TimedMutex<Connection>>,
+        id: i64,
+        name: &str,
+        with_source: bool,
+    ) {
         let db = db.lock();
         db.execute(
             "INSERT INTO channels (id, provider_id, provider_key, name, match_key, last_seen_at)

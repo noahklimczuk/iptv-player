@@ -57,6 +57,35 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     Ok(conn)
 }
 
+/// A second, read-only connection to a library `open` has already prepared.
+///
+/// The app has one writer connection behind one lock, and every read went through it
+/// too. SQLite in WAL mode does not need that: a reader works from the last committed
+/// snapshot while a writer is mid-transaction, and neither waits for the other. Through
+/// the one lock, though, a page asking for twenty rows queued behind whatever held it --
+/// measured on a real library, a catalogue refresh held it for **7.4 s** while Movies,
+/// Home, Settings and the guide all waited (`aurora_app::dblock`).
+///
+/// Read-only at both levels: opened `SQLITE_OPEN_READ_ONLY`, and `query_only` on top,
+/// so a write routed here by mistake fails loudly instead of racing the writer. No
+/// migrations: those are the writer's job and have already run.
+pub fn open_reader(path: impl AsRef<Path>) -> Result<Connection> {
+    use rusqlite::OpenFlags;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    conn.execute_batch(
+        "PRAGMA query_only = ON;
+         PRAGMA temp_store = MEMORY;
+         PRAGMA cache_size = -65536;",
+    )?;
+    register_functions(&conn)?;
+    Ok(conn)
+}
+
 /// In-memory database, for tests.
 pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;

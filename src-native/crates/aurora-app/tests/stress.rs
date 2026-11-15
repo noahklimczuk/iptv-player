@@ -134,7 +134,7 @@ fn harness() -> (Arc<Playback>, Counter) {
     }
     aurora_db::repo::settings::set(&conn, "timeshift.enabled", &false).unwrap();
 
-    let db = Arc::new(Mutex::new(conn));
+    let db = Arc::new(aurora_app::dblock::TimedMutex::new(conn));
     let counter = Counter::new();
     let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(counter.backend()));
     let dir = std::env::temp_dir().join(format!("aurora-stress-{}", std::process::id()));

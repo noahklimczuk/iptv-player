@@ -199,3 +199,32 @@ test('the shell stops painting over the picture, and starts again after', async 
   await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
   await expect.poll(shellBackground).toBe(opaque);
 });
+
+/**
+ * "The guide preview keeps playing after you leave the guide tab."
+ *
+ * Leaving gave the surface back but never stopped the stream, so it played on, heard
+ * and not seen, behind the next page.
+ */
+test('leaving the guide stops its preview, and a preview taken full screen keeps playing', async ({ page }) => {
+  const status = () => page.evaluate(async () => {
+    const w = window as unknown as { __auroraInvoke: (c: string) => Promise<{ status: string } | null> };
+    return (await w.__auroraInvoke('player.state'))?.status ?? 'idle';
+  });
+
+  await openGuide(page);
+  await channelCells(page).first().click();
+  await expect(preview(page)).toHaveAttribute('data-live', 'true');
+  expect(await status()).not.toBe('idle');
+
+  await page.locator('nav a[href="#/"]').click();
+  await expect.poll(status).toBe('idle');
+
+  // Promoted to the player, it is not a preview any more and must survive the guide.
+  await page.locator('nav a[href="#/guide"]').click();
+  await channelCells(page).first().click();
+  await expect(preview(page)).toHaveAttribute('data-live', 'true');
+  await page.getByRole('button', { name: 'Full screen' }).click();
+  await page.waitForTimeout(300);
+  expect(await status()).not.toBe('idle');
+});

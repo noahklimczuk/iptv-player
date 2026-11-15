@@ -6,6 +6,7 @@
 pub mod assistant;
 pub mod commands;
 pub mod community_markers;
+pub mod dblock;
 pub mod dvr;
 pub mod error;
 pub mod gemini;

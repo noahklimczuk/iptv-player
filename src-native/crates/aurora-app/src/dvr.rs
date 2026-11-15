@@ -81,7 +81,7 @@ impl TickReport {
 }
 
 pub struct Dvr {
-    db: Arc<Mutex<Connection>>,
+    db: Arc<crate::dblock::TimedMutex<Connection>>,
     recorder: Arc<dyn Recorder>,
     folder: PathBuf,
     active: Arc<Mutex<HashMap<i64, Active>>>,
@@ -103,7 +103,7 @@ pub struct Dvr {
 
 impl Dvr {
     pub fn new(
-        db: Arc<Mutex<Connection>>,
+        db: Arc<crate::dblock::TimedMutex<Connection>>,
         recorder: Arc<dyn Recorder>,
         folder: PathBuf,
         credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
@@ -386,7 +386,7 @@ impl Dvr {
     /// own: see `start_due`. It takes only what it needs, so nothing about `Dvr` has to
     /// outlive the call.
     fn open_stream(
-        db: &Arc<Mutex<Connection>>,
+        db: &Arc<crate::dblock::TimedMutex<Connection>>,
         recorder: &dyn Recorder,
         folder: &std::path::Path,
         credentials: &dyn aurora_ingest::credentials::CredentialStore,
@@ -851,7 +851,7 @@ mod tests {
         dir
     }
 
-    fn seeded_db() -> Arc<Mutex<Connection>> {
+    fn seeded_db() -> Arc<crate::dblock::TimedMutex<Connection>> {
         let conn = aurora_db::open_memory().unwrap();
         conn.execute(
             "INSERT INTO providers (id,name,kind,base_url,created_at)
@@ -871,10 +871,14 @@ mod tests {
             [],
         )
         .unwrap();
-        Arc::new(Mutex::new(conn))
+        Arc::new(crate::dblock::TimedMutex::new(conn))
     }
 
-    fn schedule_at(db: &Arc<Mutex<Connection>>, title: &str, air_start: i64) -> i64 {
+    fn schedule_at(
+        db: &Arc<crate::dblock::TimedMutex<Connection>>,
+        title: &str,
+        air_start: i64,
+    ) -> i64 {
         let conn = db.lock();
         repo::schedule(
             &conn,
@@ -893,7 +897,7 @@ mod tests {
         .unwrap()
     }
 
-    fn state_of(db: &Arc<Mutex<Connection>>, id: i64) -> RecordingState {
+    fn state_of(db: &Arc<crate::dblock::TimedMutex<Connection>>, id: i64) -> RecordingState {
         repo::get(&db.lock(), id).unwrap().unwrap().state
     }
 

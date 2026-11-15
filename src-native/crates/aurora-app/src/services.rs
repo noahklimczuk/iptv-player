@@ -14,7 +14,17 @@ use parking_lot::Mutex;
 pub struct Services {
     /// Single writer connection. Reads go through the same lock for now; the read pool
     /// is a Phase 11 optimisation (docs/ROADMAP.md).
-    pub db: Arc<Mutex<Connection>>,
+    pub db: Arc<crate::dblock::TimedMutex<Connection>>,
+    /// A read-only connection for what the screens ask for (`aurora_db::open_reader`).
+    ///
+    /// Not blocked by `db`: a refresh or a metadata pass writing through the writer no
+    /// longer makes every page wait for it. Only for reads -- it refuses writes. Use
+    /// [`Services::read`], which falls back to the writer when there is no reader.
+    ///
+    /// A few of them, because reads queue behind each other too: Home's build holds
+    /// one for half a second on a large library, and the guide's now-and-next asked
+    /// at the same moment should not wait for it.
+    pub readers: Arc<Vec<crate::dblock::TimedMutex<Connection>>>,
     pub player: Arc<Mutex<Box<dyn PlayerBackend>>>,
     /// Owns tuning, failover and the state heartbeat (README §7.14).
     pub playback: Arc<crate::playback::Playback>,
@@ -54,7 +64,38 @@ pub struct Services {
     pub opened: aurora_db::Opened,
 }
 
+/// How many read connections the screens share. Each costs a file handle and its own
+/// page cache (`open_reader` sets 64 MiB as a ceiling, filled only as it is used).
+const READERS: usize = 3;
+
 impl Services {
+    /// The connection for a read: the reader when there is one, else the writer.
+    ///
+    /// Only for code that never writes. The reader is opened read-only, so a write
+    /// through it fails with "attempt to write a readonly database" rather than
+    /// silently going anywhere.
+    #[track_caller]
+    pub fn read(&self) -> crate::dblock::TimedGuard<'_, Connection> {
+        if self.readers.is_empty() {
+            return self.db.lock();
+        }
+        // A free one if there is one; otherwise queue on one, spread by thread so
+        // concurrent callers do not all pile onto the first.
+        for r in self.readers.iter() {
+            if let Some(guard) = r.try_lock() {
+                return guard;
+            }
+        }
+        let n = self.readers.len();
+        let slot = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::thread::current().id().hash(&mut h);
+            (h.finish() as usize) % n
+        };
+        self.readers[slot].lock()
+    }
+
     pub fn new(data_dir: PathBuf) -> Result<Self, crate::AppError> {
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| crate::AppError::Other(format!("cannot create data dir: {e}")))?;
@@ -87,7 +128,24 @@ impl Services {
         let http = HttpClient::new(HttpConfig::default())
             .map_err(|e| crate::AppError::Other(e.message))?;
 
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(crate::dblock::TimedMutex::new(db));
+        // After the writer, which created and migrated the file. A reader that cannot
+        // be opened costs speed, not correctness: reads go through the writer as they
+        // always did.
+        let readers = (0..READERS)
+            .map_while(
+                |_| match aurora_db::open_reader(data_dir.join("library.db")) {
+                    Ok(conn) => Some(crate::dblock::TimedMutex::new(conn)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "could not open a read connection, reads share the writer: {e}"
+                        );
+                        None
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        let readers = Arc::new(readers);
 
         // The recordings folder is configurable because a DVR fills a disk; the
         // default sits beside the library so a portable install stays portable.
@@ -144,6 +202,7 @@ impl Services {
             home: Arc::new(Mutex::new(None)),
             dvr,
             db,
+            readers,
             player,
             http,
             credentials,

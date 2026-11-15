@@ -29,7 +29,7 @@ fn show_of(raw: Option<&str>) -> Show {
 
 #[tauri::command(async)]
 pub fn library_filters(services: State<'_, Services>) -> Result<LibraryFilter> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(LibraryFilter::load(&db)?)
 }
 
@@ -55,7 +55,7 @@ pub fn library_filter_counts(
     args: KindArgs,
 ) -> Result<FilterCounts> {
     let kind = kind_of(&args.kind)?;
-    let db = services.db.lock();
+    let db = services.read();
     Ok(filtering::counts(&db, kind)?)
 }
 
@@ -72,7 +72,7 @@ pub fn library_alternates(
     args: AlternatesArgs,
 ) -> Result<Vec<Alternate>> {
     let kind = kind_of(&args.kind)?;
-    let db = services.db.lock();
+    let db = services.read();
     Ok(filtering::alternates(&db, kind, args.id)?)
 }
 
@@ -117,7 +117,7 @@ pub struct PlaylistPage {
 #[tauri::command(async)]
 pub fn playlist_list(services: State<'_, Services>, args: ListArgs) -> Result<PlaylistPage> {
     let query = args.query()?;
-    let db = services.db.lock();
+    let db = services.read();
     Ok(PlaylistPage {
         rows: playlist::list(&db, &query)?,
         total: playlist::count(&db, &query)?,
@@ -134,7 +134,7 @@ pub struct GroupRow {
 #[tauri::command(async)]
 pub fn playlist_groups(services: State<'_, Services>, args: KindArgs) -> Result<Vec<GroupRow>> {
     let kind = kind_of(&args.kind)?;
-    let db = services.db.lock();
+    let db = services.read();
     Ok(playlist::groups(&db, kind)?
         .into_iter()
         .map(|(name, count)| GroupRow { name, count })

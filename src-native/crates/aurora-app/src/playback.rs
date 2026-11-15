@@ -122,7 +122,7 @@ struct LiveSession {
 }
 
 pub struct Playback {
-    db: Arc<Mutex<Connection>>,
+    db: Arc<crate::dblock::TimedMutex<Connection>>,
     player: Arc<Mutex<Box<dyn PlayerBackend>>>,
     session: Mutex<Option<LiveSession>>,
     /// The non-live thing that is on. Exclusive with `session`: one of the two is always
@@ -163,7 +163,7 @@ pub struct Playback {
 
 impl Playback {
     pub fn new(
-        db: Arc<Mutex<Connection>>,
+        db: Arc<crate::dblock::TimedMutex<Connection>>,
         player: Arc<Mutex<Box<dyn PlayerBackend>>>,
         data_dir: PathBuf,
         credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
@@ -945,7 +945,9 @@ mod tests {
         dir
     }
 
-    fn harness(source_count: usize) -> (Playback, Fake, Arc<Mutex<Connection>>) {
+    fn harness(
+        source_count: usize,
+    ) -> (Playback, Fake, Arc<crate::dblock::TimedMutex<Connection>>) {
         let conn = aurora_db::open_memory().unwrap();
         conn.execute(
             "INSERT INTO providers (id,name,kind,base_url,created_at)
@@ -970,7 +972,7 @@ mod tests {
         // `Fake` models no window. Off, so nothing here depends on the default.
         aurora_db::repo::settings::set(&conn, crate::timeshift::ENABLED_KEY, &false).unwrap();
 
-        let db = Arc::new(Mutex::new(conn));
+        let db = Arc::new(crate::dblock::TimedMutex::new(conn));
         let fake = Fake::new();
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(fake.backend()));
         (
@@ -1077,7 +1079,7 @@ mod tests {
         .unwrap();
 
         let dir = tempdir(tag);
-        let db = Arc::new(Mutex::new(conn));
+        let db = Arc::new(crate::dblock::TimedMutex::new(conn));
         let shared = Shared::new();
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(shared.backend()));
         (
@@ -1097,7 +1099,7 @@ mod tests {
         format!("http://example.com/{i}.ts")
     }
 
-    fn fail_count(db: &Arc<Mutex<Connection>>, source_id: i64) -> i64 {
+    fn fail_count(db: &Arc<crate::dblock::TimedMutex<Connection>>, source_id: i64) -> i64 {
         db.lock()
             .query_row(
                 "SELECT fail_count FROM channel_sources WHERE id = ?1",
@@ -1138,7 +1140,7 @@ mod tests {
         }
         aurora_db::repo::settings::set(&conn, crate::timeshift::ENABLED_KEY, &false).unwrap();
 
-        let db = Arc::new(Mutex::new(conn));
+        let db = Arc::new(crate::dblock::TimedMutex::new(conn));
         let fake = Fake::new();
         let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(fake.backend()));
         (
@@ -1523,7 +1525,7 @@ mod tests {
     }
 
     /// A film's URL in the harness's library, so `play_item` has something to resolve.
-    fn seed_film(db: &Arc<Mutex<Connection>>) -> String {
+    fn seed_film(db: &Arc<crate::dblock::TimedMutex<Connection>>) -> String {
         db.lock()
             .execute(
                 "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
