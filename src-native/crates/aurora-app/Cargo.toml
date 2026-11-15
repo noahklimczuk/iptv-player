@@ -21,6 +21,9 @@ time.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri = { version = "2", features = ["protocol-asset"] }
 parking_lot = "0.12"
+# The seek preview's pictures, as PNG data URLs. Both already in the lockfile.
+png = "0.17"
+base64 = "0.22"
 
 # ShellExecuteW, to open the releases page in the viewer's browser. Same version the
 # player crate already pulls in, so this adds one feature rather than a dependency.

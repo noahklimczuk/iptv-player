@@ -19,6 +19,8 @@ import { duration } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
 import { isTyping } from '@/hooks/useHotkeys';
 import * as control from './playerControl';
+import { SeekBubble, useSeekPreview } from './SeekPreview';
+import type { SeekPreview } from '@shared/ipc';
 
 const HIDE_AFTER_MS = 3200;
 
@@ -668,7 +670,7 @@ export function showingPicture(player: PlayerState | null): boolean {
  * where it was sent — or until it is clear it never will.
  */
 function SeekBar({
-  min, max, value, label, accent, onCommit,
+  min, max, value, label, accent, onCommit, describe,
 }: {
   min: number;
   max: number;
@@ -676,9 +678,25 @@ function SeekBar({
   label: string;
   accent: string;
   onCommit: (seconds: number) => void;
+  /** The seek preview's words for a moment: its time, and anything else worth a line. */
+  describe?: (seconds: number, preview: SeekPreview | null) => { time: string; lines: (string | null)[] };
 }) {
   const [dragged, setDragged] = useState<number | null>(null);
   const committedAt = useRef(0);
+  /** Where the pointer is over the bar, in seconds, while it is. */
+  const [hover, setHover] = useState<number | null>(null);
+  const [pressed, setPressed] = useState(false);
+  const barRef = useRef<HTMLDivElement>(null);
+  const secsAt = (clientX: number) => {
+    const el = barRef.current;
+    if (!el || max <= min) return null;
+    const r = el.getBoundingClientRect();
+    const f = Math.min(1, Math.max(0, (clientX - r.left) / Math.max(1, r.width)));
+    return min + f * (max - min);
+  };
+  // While dragging, the bubble follows the handle; otherwise the pointer.
+  const previewAt = describe ? (pressed && dragged !== null ? dragged : hover) : null;
+  const preview = useSeekPreview(previewAt);
 
   /*
    * Let go of the handle once the host has caught up -- or once it is clear it will not.
@@ -718,12 +736,33 @@ function SeekBar({
   const fill = max > min ? ((shown - min) / (max - min)) * 100 : 0;
 
   const commit = () => {
+    setPressed(false);
     if (dragged === null || committedAt.current !== 0) return;
     committedAt.current = Date.now();
     onCommit(dragged);
   };
 
+  const width = barRef.current?.offsetWidth ?? 0;
+  const bubbleX = previewAt !== null && max > min ? ((previewAt - min) / (max - min)) * width : 0;
+  const words = previewAt !== null && describe ? describe(previewAt, preview) : null;
+
   return (
+    <div
+      ref={barRef}
+      style={{ position: 'relative', flex: 1, width: '100%', display: 'flex', alignItems: 'center' }}
+      onPointerMove={(e) => setHover(secsAt(e.clientX))}
+      onPointerLeave={() => setHover(null)}
+      onPointerDown={() => setPressed(true)}
+    >
+      {words && (
+        <SeekBubble
+          x={bubbleX}
+          width={width}
+          time={words.time}
+          lines={words.lines}
+          preview={preview}
+        />
+      )}
     <input
       type="range"
       min={min}
@@ -741,6 +780,7 @@ function SeekBar({
         ['--fill' as string]: `${fill}%`, ['--buf' as string]: `${fill}%`,
       }}
     />
+    </div>
   );
 }
 
@@ -807,6 +847,7 @@ function Scrubber({ player, guide }: { player: PlayerState; guide: NowNext | nul
         accent="var(--accent)"
         onCommit={(positionSecs) =>
           control.seekTo(positionSecs)}
+        describe={(secs, p) => ({ time: duration(secs), lines: [p?.label ?? null] })}
       />
     </div>
   );
@@ -845,6 +886,7 @@ const DOT: React.CSSProperties = {
  * readouts come from the host's window rather than from anything kept here.
  */
 function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
+  const clockTime = useClockTime();
   const delay = Math.max(0, w.liveSecs - w.positionSecs);
   const atLive = delay <= LIVE_EDGE_SECS;
   const span = Math.max(0, w.liveSecs - w.startSecs);
@@ -899,6 +941,17 @@ function TimeshiftBar({ window: w }: { window: TimeshiftWindow }) {
           accent="var(--accent)"
           onCommit={(positionSecs) =>
             control.seekTo(positionSecs)}
+          describe={(secs, p) => {
+            const back = Math.max(0, w.liveSecs - secs);
+            return {
+              time: back <= LIVE_EDGE_SECS ? 'Live' : `−${duration(back)}`,
+              lines: [
+                p?.clockUnix != null ? clockTime(p.clockUnix) : null,
+                p?.programme ?? null,
+                p?.label ?? null,
+              ],
+            };
+          }}
         />
         {/* The live edge itself, so the end of the track reads as "now" rather than as
             the end of a recording. */}
