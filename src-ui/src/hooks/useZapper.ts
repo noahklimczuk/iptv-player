@@ -92,11 +92,21 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
       // guide's arrow keys preview as the selection rests, and a banner raised on every
       // stop covered the tab bar for five seconds at a time.
       if (reveal) showBanner(ch.id);
+      // Already on, and working: show it rather than tune it again. Full screen from the
+      // guide's preview re-tuned the channel it was showing, which dropped a picture
+      // that was playing for a reconnect -- and on a line that allows one stream the
+      // provider sometimes refused the second ask outright ("Your provider closed the
+      // connection") for a channel that had been fine a second earlier.
+      const now = useUi.getState().player;
+      const live = now?.isLive && now.channelId === ch.id
+        && ['playing', 'paused', 'buffering', 'loading'].includes(now.status);
       // A channel whose every source is dead used to fail into an unhandled
       // rejection: the banner appeared, the player opened, and nothing ever said
       // why the picture was black.
-      invoke('player.play', { kind: 'live', id: ch.id })
-        .catch(report(`Could not tune ${ch.name}`));
+      if (!live) {
+        invoke('player.play', { kind: 'live', id: ch.id })
+          .catch(report(`Could not tune ${ch.name}`));
+      }
       if (reveal) onTuneRef.current?.(ch);
     },
     [current, showBanner],

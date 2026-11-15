@@ -309,6 +309,14 @@ pub trait PlayerBackend: Send {
     fn pump(&mut self, timeout_secs: f64) {
         let _ = timeout_secs;
     }
+
+    /// The picture on screen right now, shrunk to `max_width`, for the seek preview
+    /// (`crate::frames`). `None` from an engine that draws nothing, and whenever there
+    /// is no picture to give.
+    fn grab_frame(&mut self, max_width: u32) -> Option<crate::frames::Frame> {
+        let _ = max_width;
+        None
+    }
 }
 
 /// A backend that models state without decoding anything. Used on non-Windows hosts

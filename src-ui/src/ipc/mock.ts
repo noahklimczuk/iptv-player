@@ -468,8 +468,17 @@ function ensureTicker() {
     setPlayer({ positionSecs: next });
   }, 1000);
 }
+/** How far the item playing has played, for the seek preview: frames exist only there. */
+let mockPlayedUpTo = 0;
+let mockPlayedKey = '';
 function setPlayer(patch: Partial<PlayerState>) {
   player = { ...player, ...patch };
+  const key = `${player.itemKind}:${player.itemId}:${player.channelId}`;
+  if (key !== mockPlayedKey) {
+    mockPlayedKey = key;
+    mockPlayedUpTo = 0;
+  }
+  mockPlayedUpTo = Math.max(mockPlayedUpTo, player.positionSecs);
   if (player.status === 'playing') ensureTicker();
   listeners.forEach((l) => l(player));
   return player;
@@ -2200,6 +2209,34 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'player.setSubtitleTrack': ({ trackId }) => setPlayer({ activeSubtitleTrack: trackId }),
   'player.setAspect': ({ aspect }) => setPlayer({ aspect }),
   'player.state': () => player,
+  /*
+   * The browser build has no frames to give, so it draws one: a card in a hue that
+   * follows the position, for the parts already played (the host keeps frames only of
+   * those) -- enough for the bubble's layout and its "only what has played" rule to be
+   * tested.
+   */
+  'player.seekPreview': ({ positionSecs }) => {
+    const played = player.isLive && player.timeshift
+      ? positionSecs <= player.timeshift.liveSecs
+      : positionSecs <= mockPlayedUpTo;
+    const hue = Math.round((positionSecs * 3) % 360);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180">`
+      + `<rect width="320" height="180" fill="hsl(${hue} 55% 35%)"/>`
+      + `<text x="160" y="100" font-size="28" fill="white" text-anchor="middle">${Math.round(positionSecs)}s</text></svg>`;
+    const behind = player.isLive && player.timeshift
+      ? Math.max(0, player.timeshift.liveSecs - positionSecs)
+      : 0;
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      positionSecs,
+      image: played && player.status !== 'idle' ? `data:image/svg+xml;utf8,${encodeURIComponent(svg)}` : null,
+      imageAtSecs: played ? positionSecs : null,
+      pending: false,
+      label: !player.isLive && positionSecs >= 30 && positionSecs < 90 ? 'Intro' : null,
+      clockUnix: player.isLive && player.timeshift ? now - Math.round(behind) : null,
+      programme: player.isLive && player.timeshift ? 'Evening News' : null,
+    };
+  },
 
   /* ── Multi-view ─────────────────────────────────────────────────────────── */
 

@@ -725,7 +725,14 @@ impl PlayerBackend for MpvBackend {
     }
 
     fn seek(&mut self, position_secs: f64, relative: bool) -> Result<(), PlayerError> {
-        let mode = if relative { "relative" } else { "absolute" };
+        // `+exact` on the relative ones. mpv's `hr-seek=default` is exact only for
+        // absolute seeks, so "Forward 10 seconds" snapped to the next keyframe, which on
+        // a stream with ten-second GOPs is up to twenty seconds on.
+        let mode = if relative {
+            "relative+exact"
+        } else {
+            "absolute"
+        };
         self.cmd(&["seek", &position_secs.to_string(), mode])?;
         // The stall clock starts again from here: a seek can land somewhere that is not
         // buffered, and the wait for that data is not the stream having stopped (R-70).
@@ -894,6 +901,18 @@ impl PlayerBackend for MpvBackend {
         MpvBackend::pump(self, timeout_secs)
     }
 
+    fn grab_frame(&mut self, max_width: u32) -> Option<crate::frames::Frame> {
+        // Not while nothing is showing: mpv would hand back the last frame of whatever
+        // played before, filed against the wrong moment of the wrong stream.
+        if !matches!(
+            self.state.status,
+            PlayerStatus::Playing | PlayerStatus::Paused
+        ) {
+            return None;
+        }
+        screenshot_raw(&self.mpv, max_width)
+    }
+
     fn engine(&self) -> Engine {
         Engine {
             name: "mpv".into(),
@@ -955,5 +974,156 @@ fn video_surface_class() -> windows::core::PCWSTR {
         name
     } else {
         windows::core::w!("STATIC")
+    }
+}
+
+/// `screenshot-raw video`: the decoded picture, without subtitles or the OSD, shrunk.
+///
+/// `libmpv2` wraps commands that return nothing; this one returns a map (`w`, `h`,
+/// `stride`, `format`, `data`), so it goes through `mpv_command_ret` directly. The node
+/// is mpv's, and freed with `mpv_free_node_contents` on every path out.
+fn screenshot_raw(mpv: &Mpv, max_width: u32) -> Option<crate::frames::Frame> {
+    use libmpv2_sys as sys;
+    use std::ffi::{CStr, CString};
+
+    let name = CString::new("screenshot-raw").ok()?;
+    let flag = CString::new("video").ok()?;
+    let mut args = [name.as_ptr(), flag.as_ptr(), std::ptr::null()];
+    let mut node: sys::mpv_node = unsafe { std::mem::zeroed() };
+    let rc = unsafe { sys::mpv_command_ret(mpv.ctx.as_ptr(), args.as_mut_ptr(), &mut node) };
+    if rc < 0 {
+        return None;
+    }
+
+    struct Guard(sys::mpv_node);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            unsafe { sys::mpv_free_node_contents(&mut self.0) };
+        }
+    }
+    let node = Guard(node);
+    if node.0.format != sys::mpv_format_MPV_FORMAT_NODE_MAP {
+        return None;
+    }
+
+    let (mut w, mut h, mut stride) = (0i64, 0i64, 0i64);
+    let mut format = String::new();
+    let mut data: Option<&[u8]> = None;
+    unsafe {
+        let list = &*node.0.u.list;
+        for i in 0..list.num.max(0) as usize {
+            let key = CStr::from_ptr(*list.keys.add(i)).to_string_lossy();
+            let value = &*list.values.add(i);
+            match (key.as_ref(), value.format) {
+                ("w", f) if f == sys::mpv_format_MPV_FORMAT_INT64 => w = value.u.int64,
+                ("h", f) if f == sys::mpv_format_MPV_FORMAT_INT64 => h = value.u.int64,
+                ("stride", f) if f == sys::mpv_format_MPV_FORMAT_INT64 => stride = value.u.int64,
+                ("format", f) if f == sys::mpv_format_MPV_FORMAT_STRING => {
+                    format = CStr::from_ptr(value.u.string)
+                        .to_string_lossy()
+                        .into_owned();
+                }
+                ("data", f) if f == sys::mpv_format_MPV_FORMAT_BYTE_ARRAY => {
+                    let ba = &*value.u.ba;
+                    if !ba.data.is_null() {
+                        data = Some(std::slice::from_raw_parts(ba.data as *const u8, ba.size));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // mpv documents `bgr0` as the format it returns; anything else is not read as if it
+    // were.
+    if format != "bgr0" || w <= 0 || h <= 0 || stride <= 0 {
+        return None;
+    }
+    crate::frames::downscale_bgr0(data?, w as u32, h as u32, stride as usize, max_width)
+}
+
+/// A second player that never shows anything: no window, no sound, paused, reading one
+/// local file so the seek preview can show any moment of a recording.
+///
+/// Software decoding, because a thumbnail is not worth a hardware decoder session the
+/// main player may want, and `vo=null` because mpv keeps the last decoded picture for
+/// `screenshot-raw` whatever the output.
+pub struct FileFrames {
+    mpv: Mpv,
+}
+
+// The handle is only used from the thread that owns this value at a time (the seek
+// preview's worker holds it behind a lock), the same terms `MpvBackend` is `Send` on.
+unsafe impl Send for FileFrames {}
+
+impl FileFrames {
+    pub fn open(path: &std::path::Path) -> Result<Self, PlayerError> {
+        if !libmpv_loadable() {
+            return Err(PlayerError::Init(format!(
+                "{LIBMPV_DLL} could not be loaded"
+            )));
+        }
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")?;
+            init.set_property("aid", "no")?;
+            init.set_property("sid", "no")?;
+            init.set_property("hwdec", "no")?;
+            init.set_property("pause", "yes")?;
+            init.set_property("keep-open", "always")?;
+            init.set_property("hr-seek", "yes")?;
+            init.set_property("load-scripts", "no")?;
+            init.set_property("ytdl", "no")?;
+            init.set_property("osc", "no")?;
+            init.set_property("terminal", "no")?;
+            init.set_property("input-default-bindings", "no")?;
+            Ok(())
+        })
+        .map_err(|e| PlayerError::Init(e.to_string()))?;
+        let mut me = Self { mpv };
+        let file = path.to_string_lossy();
+        me.mpv
+            .command("loadfile", &[&file, "replace"])
+            .map_err(|e| PlayerError::Command(format!("loadfile: {e}")))?;
+        if !me.wait_for(|e| matches!(e, Event::FileLoaded), 8.0) {
+            return Err(PlayerError::Command("the recording did not open".into()));
+        }
+        Ok(me)
+    }
+
+    /// Wait until an event matching `want` arrives, an error, or `secs` pass.
+    fn wait_for(&mut self, want: impl Fn(&Event<'_>) -> bool, secs: f64) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(secs);
+        let ctx = self.mpv.event_context_mut();
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            match ctx.wait_event(left.as_secs_f64()) {
+                Some(Ok(event)) => {
+                    if want(&event) {
+                        return true;
+                    }
+                    if matches!(event, Event::EndFile(_) | Event::Shutdown) {
+                        return false;
+                    }
+                }
+                Some(Err(_)) => return false,
+                None => {}
+            }
+        }
+    }
+}
+
+impl crate::frames::FrameSource for FileFrames {
+    fn frame_at(&mut self, secs: f64, max_width: u32) -> Option<crate::frames::Frame> {
+        let at = format!("{:.3}", secs.max(0.0));
+        self.mpv.command("seek", &[&at, "absolute+exact"]).ok()?;
+        // A paused seek decodes the frame it lands on and reports `playback-restart`
+        // once it has; reading before that returns the previous one.
+        if !self.wait_for(|e| matches!(e, Event::PlaybackRestart), 4.0) {
+            return None;
+        }
+        screenshot_raw(&self.mpv, max_width)
     }
 }

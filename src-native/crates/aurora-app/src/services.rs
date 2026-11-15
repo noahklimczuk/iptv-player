@@ -26,6 +26,8 @@ pub struct Services {
     /// at the same moment should not wait for it.
     pub readers: Arc<Vec<crate::dblock::TimedMutex<Connection>>>,
     pub player: Arc<Mutex<Box<dyn PlayerBackend>>>,
+    /// The seek preview's pictures (`crate::seekpreview`). Fed by the heartbeat.
+    pub frames: Arc<crate::seekpreview::Frames>,
     /// Owns tuning, failover and the state heartbeat (README §7.14).
     pub playback: Arc<crate::playback::Playback>,
     pub http: Arc<HttpClient>,
@@ -203,6 +205,7 @@ impl Services {
             dvr,
             db,
             readers,
+            frames: Arc::new(crate::seekpreview::Frames::default()),
             player,
             http,
             credentials,

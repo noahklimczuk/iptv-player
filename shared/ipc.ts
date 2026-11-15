@@ -363,6 +363,22 @@ export interface PlayerState {
  * Three timestamps and nothing derived: the delay behind live, the rewind left and the
  * scrub position are arithmetic, and one copy of that arithmetic is enough.
  */
+/** The seek preview bubble's contents (`player.seekPreview`). */
+export interface SeekPreview {
+  positionSecs: number;
+  /** A `data:` URL of that moment, or of one within a few seconds of it. */
+  image: string | null;
+  imageAtSecs: number | null;
+  /** A picture is being made; asking again shortly will find it. */
+  pending: boolean;
+  /** A chapter title, or "Intro", "Recap", "Credits". */
+  label: string | null;
+  /** Live TV: the wall-clock moment, Unix seconds. */
+  clockUnix: number | null;
+  /** Live TV: the programme on at that moment. */
+  programme: string | null;
+}
+
 export interface TimeshiftWindow {
   /** The oldest moment still held. */
   startSecs: number;
@@ -1473,6 +1489,12 @@ export interface Commands {
   'player.setSubtitleTrack': (args: { trackId: number | null }) => PlayerState;
   'player.setAspect': (args: { aspect: PlayerState['aspect'] }) => PlayerState;
   'player.state': () => PlayerState;
+  /**
+   * What hovering the scrub bar at `positionSecs` shows: a picture where one can be had
+   * without a second stream (what has already played; any moment of a recording), and
+   * the chapter or marker, and on live TV the time and programme of that moment.
+   */
+  'player.seekPreview': (args: { positionSecs: number }) => SeekPreview;
 
   /* ── Multi-view (README §7.4) ───────────────────────────────────────────── */
 

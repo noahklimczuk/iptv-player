@@ -6,6 +6,7 @@
 
 pub mod backend;
 pub mod error;
+pub mod frames;
 pub mod state;
 pub mod watchdog;
 
@@ -14,8 +15,26 @@ pub mod mpv;
 
 pub use backend::{Engine, NullBackend, PlayerBackend};
 pub use error::{PlaybackError, PlayerError};
+pub use frames::{Frame, FrameSource};
 pub use state::{Aspect, PlayerState, PlayerStatus, Track, TrackKind};
 pub use watchdog::{Phase, Verdict, Watchdog};
+
+/// A silent second player on one local file, for the seek preview's frames.
+///
+/// Local files only: it opens what it is given, and given a provider's URL it would
+/// spend the line's one connection on a thumbnail. `None` where there is no libmpv, or
+/// the file will not open.
+pub fn open_file_frames(path: &std::path::Path) -> Option<Box<dyn FrameSource>> {
+    #[cfg(windows)]
+    {
+        match mpv::FileFrames::open(path) {
+            Ok(f) => return Some(Box::new(f)),
+            Err(e) => tracing::warn!("no seek preview frames for {}: {e}", path.display()),
+        }
+    }
+    let _ = path;
+    None
+}
 
 /// Construct the best backend for this platform.
 pub fn create_backend() -> Box<dyn PlayerBackend> {

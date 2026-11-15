@@ -203,6 +203,8 @@ fn main() {
             let mosaic_handle = std::sync::Arc::clone(&services.mosaic);
             let sleep_handle = std::sync::Arc::clone(&services.sleep);
             let player_backend = std::sync::Arc::clone(&services.player);
+            let frames_handle = std::sync::Arc::clone(&services.frames);
+            let frames_player = std::sync::Arc::clone(&services.player);
 
             // The Phase 0 spike, finally connected (docs/ROADMAP.md). `attach` creates
             // the child window mpv draws into and hands it the handle; without it there
@@ -318,6 +320,9 @@ fn main() {
                             aurora_app::emit(&player_handle, "player.state", &state);
                         }
                     });
+                    // The seek preview's pictures of what has played. Usually nothing:
+                    // one small grab every few seconds of playback at most.
+                    supervised("seek preview", || frames_handle.observe(&frames_player));
                     // The tiles share the heartbeat rather than having one each: `pump`
                     // is the only thing that turns a tile's stream dying into something
                     // the UI can be told about, and nine threads doing it four times a
@@ -527,6 +532,7 @@ fn main() {
             commands::player_set_subtitle_track,
             commands::player_set_aspect,
             commands::player_state,
+            aurora_app::seekpreview::player_seek_preview,
             commands::progress_save,
             mosaic::mosaic_check,
             mosaic::mosaic_open,

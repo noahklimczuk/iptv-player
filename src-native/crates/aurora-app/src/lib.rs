@@ -21,6 +21,7 @@ pub mod playlist;
 pub mod profiles;
 pub mod providers;
 pub mod recommend;
+pub mod seekpreview;
 pub mod series;
 pub mod services;
 pub mod sleep;

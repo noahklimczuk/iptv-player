@@ -707,7 +707,16 @@ export default function App() {
   // Not while the picture is in a corner. PiP exists so the viewer can read a page with
   // the stream still running, so hiding the shell would hide the thing they turned it on
   // for — `PipTile` punches a hole for the tile instead, and the rest stays opaque.
-  const videoBehind = !pipOn && ((playerOpen && showingPicture(ui.player)) || mosaicOpen);
+  //
+  // And not while the guide still has the picture in its box. "It's still doing a
+  // transparent screen before it plays the content": Full screen from the guide's
+  // preview opened the player, which hid every page and cleared the shell at once --
+  // while the picture was still the size of the box it had been in. For the moment
+  // until the host moved it back, the rest of the window showed the desktop. The guide
+  // gives the box up as the player opens, and the shell waits for the host to say it
+  // has (`guideInlay` goes null on its answer, not on the request).
+  const videoBehind = !pipOn
+    && ((playerOpen && showingPicture(ui.player) && guideInlay == null) || mosaicOpen);
 
   /**
    * The hole the small picture shows through.
@@ -807,7 +816,7 @@ export default function App() {
                 // The same tune, without surfacing the player: the picture is going
                 // into a box on a page the viewer is still reading.
                 onPreview={(ch) => tune(ch, { reveal: false })}
-                pictureReady={showingPicture(ui.player)}
+                pictureReady={showingPicture(ui.player) && !playerOpen}
                 onInlay={setGuideInlay}
                 onCatchup={playCatchup}
                 onSearch={(q) => ui.setPalette(true, q)}
