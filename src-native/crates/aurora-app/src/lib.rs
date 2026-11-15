@@ -9,6 +9,7 @@ pub mod community_markers;
 pub mod dvr;
 pub mod error;
 pub mod gemini;
+pub mod home;
 pub mod library;
 pub mod logging;
 pub mod metadata;

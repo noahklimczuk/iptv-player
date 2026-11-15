@@ -254,6 +254,73 @@ impl TmdbClient {
     }
 }
 
+/// One title in a list TMDB ranks: what is trending, or what people who liked one
+/// title went on to like.
+///
+/// TMDB's ids, not the library's. The home feed resolves them against `tmdb_id` and
+/// drops whatever this library does not carry, which is most of them -- the list is a
+/// signal about taste in general, and only its overlap with this subscription is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ranked {
+    pub kind: Kind,
+    pub id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListEntry {
+    id: i64,
+    #[serde(default)]
+    media_type: Option<String>,
+}
+
+/// How many pages of trending to read. Twenty titles a page; the library holds a
+/// fraction of any list, so one page leaves a rail of three.
+const TRENDING_PAGES: u32 = 3;
+
+impl TmdbClient {
+    /// This week's trending films and shows, most trending first.
+    ///
+    /// The only popularity signal Aurora can get. There is one viewer and no server, so
+    /// "what everyone is watching" has to come from somewhere that has everyone, and
+    /// this is the one service the app already talks to.
+    pub fn trending(&self) -> Result<Vec<Ranked>, NetFailure> {
+        let mut out = Vec::new();
+        for page in 1..=TRENDING_PAGES {
+            let list: Paged<ListEntry> =
+                self.get("/trending/all/week", &format!("&page={page}"))?;
+            if list.results.is_empty() {
+                break;
+            }
+            out.extend(list.results.into_iter().filter_map(|e| {
+                let kind = match e.media_type.as_deref() {
+                    Some("movie") => Kind::Movie,
+                    Some("tv") => Kind::Series,
+                    // People, and anything TMDB adds later.
+                    _ => return None,
+                };
+                Some(Ranked { kind, id: e.id })
+            }));
+        }
+        Ok(out)
+    }
+
+    /// What people who liked this title also liked, best first.
+    ///
+    /// TMDB's own recommendations, which are collaborative: built from what its users
+    /// rate together. That is the one kind of signal a single-viewer app cannot compute
+    /// for itself, and it is what makes "Because you watched Heat" find *Collateral*
+    /// rather than every crime film from 1995.
+    pub fn recommendations(&self, kind: Kind, id: i64) -> Result<Vec<Ranked>, NetFailure> {
+        let list: Paged<ListEntry> =
+            self.get(&format!("/{}/{id}/recommendations", kind.path()), "&page=1")?;
+        Ok(list
+            .results
+            .into_iter()
+            .map(|e| Ranked { kind, id: e.id })
+            .collect())
+    }
+}
+
 /// Percent-encode the characters that would break a query string.
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -776,6 +843,60 @@ mod tests {
         // Series use TMDB's "tv" noun and a differently spelled year filter.
         assert!(paths[1].contains("/search/tv"), "{paths:?}");
         assert!(paths[1].contains("first_air_date_year=1995"), "{paths:?}");
+    }
+
+    #[test]
+    fn trending_keeps_films_and_shows_and_drops_people() {
+        let server = TestServer::start(|i, _| {
+            if i == 0 {
+                Reply::ok(
+                    br#"{"results":[{"id":1,"media_type":"movie"},{"id":2,"media_type":"person"},{"id":3,"media_type":"tv"}]}"#
+                        .to_vec(),
+                )
+            } else {
+                Reply::ok(br#"{"results":[]}"#.to_vec())
+            }
+        });
+        let got = client(&server).trending().unwrap();
+        assert_eq!(
+            got,
+            vec![
+                Ranked {
+                    kind: Kind::Movie,
+                    id: 1
+                },
+                Ranked {
+                    kind: Kind::Series,
+                    id: 3
+                },
+            ]
+        );
+        let paths: Vec<String> = server.requests().iter().map(|r| r.path.clone()).collect();
+        assert!(paths[0].contains("/trending/all/week"), "{paths:?}");
+        // An empty page ends the walk rather than asking for the next one.
+        assert_eq!(paths.len(), 2, "{paths:?}");
+    }
+
+    #[test]
+    fn recommendations_ask_for_the_right_noun_and_keep_the_kind() {
+        let server = TestServer::always(Reply::ok(br#"{"results":[{"id":9},{"id":4}]}"#.to_vec()));
+        let got = client(&server).recommendations(Kind::Series, 1399).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                Ranked {
+                    kind: Kind::Series,
+                    id: 9
+                },
+                Ranked {
+                    kind: Kind::Series,
+                    id: 4
+                }
+            ]
+        );
+        assert!(server.requests()[0]
+            .path
+            .contains("/tv/1399/recommendations"));
     }
 
     #[test]

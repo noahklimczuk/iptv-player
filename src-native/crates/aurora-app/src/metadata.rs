@@ -164,7 +164,7 @@ fn resolve_key(services: &Services) -> Option<String> {
         .or_else(|| built_in().map(str::to_string))
 }
 
-fn client(services: &Services) -> Result<TmdbClient> {
+pub(crate) fn client(services: &Services) -> Result<TmdbClient> {
     let key = resolve_key(services).ok_or_else(|| {
         AppError::Other(
             "No metadata API key is set. Add one in Settings to fetch artwork and cast.".into(),

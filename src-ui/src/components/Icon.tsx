@@ -31,6 +31,7 @@ export const ICON_PATHS: Record<string, string> = {
   bell: 'M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',
   star: 'M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5-5.8-3-5.8 3 1.1-6.5L2.6 9.8l6.5-.9z',
   thumbUp: 'M7 10v11H3V10zM7 10l5-7a2 2 0 013 2l-1 5h5a2 2 0 012 2.4l-1.6 7A2 2 0 0117 21H7',
+  thumbDown: 'M17 14V3h4v11zM17 14l-5 7a2 2 0 01-3-2l1-5H5a2 2 0 01-2-2.4l1.6-7A2 2 0 017 3h10',
   close: 'M6 6l12 12M18 6L6 18',
   skip: 'M5 4l10 8-10 8zM19 4v16',
   back10: 'M4 11a8 8 0 11.6 4M4 5v6h6',

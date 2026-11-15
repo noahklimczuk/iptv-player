@@ -35,8 +35,8 @@ export interface CardProgress {
 }
 
 export const CatalogCard = memo(function CatalogCard({
-  item, index, progress, onOpen, onPlay, onRemove, rank, showTitle, reason, shift = 0,
-  onExpand,
+  item, index, progress, onOpen, onPlay, onRemove, onDismiss, rank, showTitle, reason,
+  shift = 0, onExpand,
 }: {
   item: CatalogItem;
   index: number;
@@ -60,6 +60,11 @@ export const CatalogCard = memo(function CatalogCard({
    * home screen indefinitely, and the rail stops being about what you are watching.
    */
   onRemove?: (item: CatalogItem) => void;
+  /**
+   * "Not for me": take this off every rail and recommend less like it. The home screen
+   * passes one; a browse grid is the whole library by definition and does not.
+   */
+  onDismiss?: (item: CatalogItem) => void;
   /**
    * Print the title under the poster.
    *
@@ -283,6 +288,15 @@ export const CatalogCard = memo(function CatalogCard({
                     size={26}
                     onClick={(e) => { e.stopPropagation(); toggleLiked(item); }}
                   />
+                  {onDismiss && !onRemove && (
+                    <IconButton
+                      icon="thumbDown"
+                      label={`Not for me: ${item.title}`}
+                      size={26}
+                      style={{ marginLeft: 'auto' }}
+                      onClick={(e) => { e.stopPropagation(); onDismiss(item); }}
+                    />
+                  )}
                   {onRemove && (
                     <IconButton
                       icon="close"
@@ -291,11 +305,17 @@ export const CatalogCard = memo(function CatalogCard({
                       onClick={(e) => { e.stopPropagation(); onRemove(item); }}
                     />
                   )}
-                  <IconButton
-                    icon="chevronDown" label="More info" size={26}
-                    style={{ marginLeft: 'auto' }}
-                    onClick={(e) => { e.stopPropagation(); onOpen(item); }}
-                  />
+                  {/* Five 26px actions are exactly the width of a card, so a sixth would
+                      overflow it and be clipped under the next card. Where "Not for me" is
+                      offered it takes this place: the card itself opens the same details,
+                      by click and by Enter, so nothing is lost. */}
+                  {!(onDismiss && !onRemove) && (
+                    <IconButton
+                      icon="chevronDown" label="More info" size={26}
+                      style={{ marginLeft: 'auto' }}
+                      onClick={(e) => { e.stopPropagation(); onOpen(item); }}
+                    />
+                  )}
                 </div>
 
                 <div

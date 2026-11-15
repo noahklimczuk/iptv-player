@@ -3,8 +3,8 @@
  * that keeps focus in view, and vertical overflow left visible so expanded cards are not
  * clipped — the detail that makes the Netflix hover work.
  */
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import type { CatalogItem, Rail as RailData } from '@shared/ipc';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { CatalogItem, Rail as RailData, RailPage } from '@shared/ipc';
 import { CatalogCard } from './CatalogCard';
 import { Icon } from './Icon';
 
@@ -30,10 +30,26 @@ const CARD_LIFT = 12;
 const CARD_H = Math.round(CARD_W * 1.5) + 46;
 export const RAIL_EXPANSION_PAD = Math.ceil((CARD_H * (CARD_SCALE - 1)) / 2) + CARD_LIFT;
 
+/**
+ * How close to the end of what is loaded, in cards, a rail asks for the next page.
+ * Far enough ahead that a steady scroll never reaches the edge before it arrives.
+ */
+const PREFETCH_CARDS = 8;
+
 export function Rail({
-  rail, onOpen, onPlay, onRemove, action,
+  rail, onOpen, onPlay, onRemove, onDismiss, loadMore, hidden, action,
 }: {
   rail: RailData;
+  /**
+   * Fetch more of this rail from `offset`. Rails on the home screen hold everything
+   * that belongs on them -- a genre is every film in it -- and the first answer carries
+   * only the first page, so the rest arrives as the rail is scrolled.
+   */
+  loadMore?: (offset: number) => Promise<RailPage>;
+  /** "Not for me", where the screen offers it. Passed down to the cards. */
+  onDismiss?: (i: CatalogItem) => void;
+  /** Keys (`movie:12`) the screen has taken away since this rail arrived. */
+  hidden?: ReadonlySet<string>;
   onOpen: (i: CatalogItem) => void;
   onPlay: (i: CatalogItem) => void;
   /**
@@ -64,12 +80,70 @@ export function Rail({
    */
   const [expanded, setExpanded] = useState<number | null>(null);
 
+  /**
+   * Pages fetched after the first, and what they said about their cards.
+   *
+   * Reset whenever a new build of the rail arrives: its first page is a new ordering,
+   * and pages of the old one appended to it would repeat and skip titles.
+   */
+  const [more, setMore] = useState<{
+    items: CatalogItem[];
+    reasons: Record<string, string>;
+    progress: NonNullable<RailData['progress']>;
+    hasMore: boolean;
+  }>({ items: [], reasons: {}, progress: {}, hasMore: !!rail.hasMore });
+  const loading = useRef(false);
+  useEffect(() => {
+    setMore({ items: [], reasons: {}, progress: {}, hasMore: !!rail.hasMore });
+    loading.current = false;
+  }, [rail]);
+
+  const items = useMemo(() => {
+    const all = [...rail.items, ...more.items];
+    return hidden && hidden.size > 0
+      ? all.filter((i) => !hidden.has(`${i.kind}:${i.id}`))
+      : all;
+  }, [rail.items, more.items, hidden]);
+  const reasons = useMemo(() => ({ ...rail.reasons, ...more.reasons }), [rail.reasons, more.reasons]);
+  const progress = useMemo(
+    () => ({ ...rail.progress, ...more.progress }),
+    [rail.progress, more.progress],
+  );
+  // What the heading counts: the whole rail, less what has been taken off it here.
+  const removedHere = rail.items.length + more.items.length - items.length;
+  const total = Math.max((rail.total ?? items.length) - removedHere, items.length);
+
+  const fetchMore = useCallback(() => {
+    if (!loadMore || loading.current || !more.hasMore) return;
+    loading.current = true;
+    const forRail = rail;
+    // The offset is how much of the build has been read, including cards hidden here:
+    // the host took a dismissed card out of its build too, so the two stay in step.
+    const offset = rail.items.length + more.items.length;
+    loadMore(offset)
+      .then((page) => {
+        if (forRail !== rail) return;
+        setMore((m) => ({
+          items: [...m.items, ...page.items],
+          reasons: { ...m.reasons, ...page.reasons },
+          progress: { ...m.progress, ...page.progress },
+          hasMore: page.hasMore && page.items.length > 0,
+        }));
+      })
+      // A page that failed is asked for again on the next scroll; nothing to say.
+      .catch(() => undefined)
+      .finally(() => { if (forRail === rail) loading.current = false; });
+  }, [loadMore, more.hasMore, more.items.length, rail]);
+
   const sync = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
     setAtStart(el.scrollLeft <= 2);
     setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 2);
-  }, []);
+    if (el.scrollLeft + el.clientWidth >= el.scrollWidth - PREFETCH_CARDS * (CARD_W + GAP)) {
+      fetchMore();
+    }
+  }, [fetchMore]);
 
   useLayoutEffect(() => {
     sync();
@@ -78,7 +152,7 @@ export function Rail({
     const ro = new ResizeObserver(sync);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [sync, rail.items.length]);
+  }, [sync, items.length]);
 
   const page = (dir: 1 | -1) => {
     const el = scroller.current;
@@ -132,9 +206,10 @@ export function Rail({
           {rail.title}
         </h2>
         <span
+          data-testid="rail-count"
           style={{ fontSize: 'var(--fs-sm)', fontWeight: 700, color: 'var(--text-faint)' }}
         >
-          {rail.items.length}
+          {total.toLocaleString()}
         </span>
         {action}
       </div>
@@ -143,7 +218,7 @@ export function Rail({
         {!atStart && (
           <RailArrow dir="left" onClick={() => page(-1)} />
         )}
-        {!atEnd && (
+        {(!atEnd || more.hasMore) && (
           <RailArrow dir="right" onClick={() => page(1)} />
         )}
 
@@ -171,7 +246,7 @@ export function Rail({
             scrollSnapType: 'x proximity',
           }}
         >
-          {rail.items.map((item, i) => (
+          {items.map((item, i) => (
             <div
               key={`${item.kind}-${item.id}`}
               style={{
@@ -195,11 +270,12 @@ export function Rail({
                 // artwork to recognise, and a film whose art carries no name was a
                 // guess.
                 showTitle
-                progress={rail.progress?.[`${item.kind}:${item.id}`] ?? null}
-                reason={rail.reasons?.[`${item.kind}:${item.id}`]}
+                progress={progress[`${item.kind}:${item.id}`] ?? null}
+                reason={reasons[`${item.kind}:${item.id}`]}
                 onOpen={onOpen}
                 onPlay={onPlay}
                 onRemove={onRemove}
+                onDismiss={onDismiss}
                 onExpand={setExpanded}
                 // Everything before the expanded card leans left and everything after it
                 // leans right. Shifting only the immediate neighbours would leave a gap

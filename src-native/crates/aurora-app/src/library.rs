@@ -70,13 +70,12 @@ pub struct Rail {
     /// for twenty titles is a claim about all of them that is true of none.
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub reasons: std::collections::HashMap<String, String>,
+    /// The first page of the rail; `library.railPage` has the rest.
     pub items: Vec<CatalogItem>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RailsArgs {
-    pub profile_id: i64,
+    /// How many titles the whole rail holds, which is what its heading counts.
+    pub total: usize,
+    /// Whether there is more than `items` to page in.
+    pub has_more: bool,
 }
 
 /// Where a half-watched item was left.
@@ -87,173 +86,22 @@ pub struct RailProgress {
     pub duration_secs: i64,
 }
 
-/// How many titles a rail carries. More than fits on screen, so sideways scrolling has
-/// somewhere to go; far short of the library, so the home screen is not a full import.
+/// How many titles a rail of suggestions resolves to, where something still has to
+/// pick a number: the Gemini rail asks a model for a list and keeps this many of the
+/// matches. The home feed's own rails are not limited -- see `crate::home`.
 pub(crate) const RAIL_SIZE: u32 = 24;
 
-/// The home screen (README §11).
+/// The home screen (README §11), built by `crate::home`.
 ///
-/// Empty rails are dropped rather than rendered empty: a row with a heading and no
-/// posters reads as a loading failure, and on a fresh library most of these have
-/// nothing in them yet.
+/// It used to be built here, as six fixed shelves of `RAIL_SIZE`: recently added, best
+/// rated, the first 24 series alphabetically, and one personal rail among them. Kept as
+/// the registered command so the contract and every caller stay as they are.
 #[tauri::command(async)]
-pub fn library_rails(services: State<'_, Services>, args: RailsArgs) -> Result<Vec<Rail>> {
-    let db = services.db.lock();
-    let filters = aurora_db::repo::filtering::LibraryFilter::load(&db)?;
-
-    let browse = |sort: library::MovieSort| library::BrowseQuery {
-        sort,
-        genre: None,
-        category: None,
-        query: None,
-        letter: None,
-        limit: RAIL_SIZE,
-        offset: 0,
-        library: filters,
-    };
-
-    let mut rails = Vec::new();
-
-    // Continue Watching first: it is the only rail about what the viewer was already
-    // doing, and the one thing they are most likely to have come back for.
-    //
-    // Progress is stored against the episode but shown against the *show* — one card
-    // saying "you are partway through this", not one per episode of it. That collapse
-    // happens in the query, because it has to happen before the limit: merging it here
-    // meant somebody working through one series got a rail of a single card, the rest of
-    // what they were watching having never left the database. The dedup below is only
-    // the belt to that query's braces.
-    let mut resumed: Vec<CatalogItem> = Vec::new();
-    let mut resumed_progress = std::collections::HashMap::new();
-    for p in progress::continue_watching(&db, args.profile_id, RAIL_SIZE)? {
-        let item = match p.item_kind {
-            progress::ItemKind::Movie => library::movie(&db, p.item_id)?.map(CatalogItem::Movie),
-            progress::ItemKind::Episode => match library::series_of_episode(&db, p.item_id)? {
-                Some(series_id) => library::series(&db, series_id)?.map(CatalogItem::Series),
-                // The episode was removed by a refresh; its progress row outlives it
-                // by design, and a card for a show that is gone is worse than no card.
-                None => None,
-            },
-            // A channel or a recording is not a library row, so there is nothing here
-            // to put on a poster rail.
-            _ => None,
-        };
-        let Some(item) = item else { continue };
-        let key = catalog_key(&item);
-        if resumed_progress.contains_key(&key) {
-            continue;
-        }
-        resumed_progress.insert(
-            key,
-            RailProgress {
-                position_secs: p.position_secs,
-                duration_secs: p.duration_secs,
-            },
-        );
-        resumed.push(item);
-    }
-    if !resumed.is_empty() {
-        rails.push(Rail {
-            id: "continue".into(),
-            kind: "continueWatching".into(),
-            title: "Continue Watching".into(),
-            reason: None,
-            progress: resumed_progress,
-            reasons: Default::default(),
-            items: resumed,
-        });
-    }
-
-    // My List next: it is the one rail whose contents somebody chose.
-    let mut mine = Vec::new();
-    for (kind, id) in lists::my_list(&db, args.profile_id)? {
-        match kind {
-            lists::ItemKind::Movie => {
-                if let Some(m) = library::movie(&db, id)? {
-                    mine.push(CatalogItem::Movie(m));
-                }
-            }
-            lists::ItemKind::Series => {
-                if let Some(s) = library::series(&db, id)? {
-                    mine.push(CatalogItem::Series(s));
-                }
-            }
-        }
-    }
-    push_if_any(&mut rails, "my-list", "myList", "My List", mine);
-
-    // Recommended, third: after the two rails about things the viewer already chose,
-    // and ahead of everything that is just "what is in the library". On a fresh
-    // install this is rating-led rather than personal and says so in its heading.
-    let picks =
-        crate::recommend::pick(&db, args.profile_id, crate::now_unix(), RAIL_SIZE as usize)?;
-    if !picks.items.is_empty() {
-        rails.push(Rail {
-            id: "recommended".into(),
-            kind: "becauseYouWatched".into(),
-            title: crate::recommend::heading(&picks),
-            reason: None,
-            progress: Default::default(),
-            reasons: picks.reasons,
-            items: picks.items,
-        });
-    }
-
-    let recent = library::list_movies(&db, &browse(library::MovieSort::RecentlyAdded))?;
-    push_if_any(
-        &mut rails,
-        "recently-added",
-        "recentlyAdded",
-        "Recently added",
-        recent.into_iter().map(CatalogItem::Movie).collect(),
-    );
-
-    let acclaimed = library::list_movies(&db, &browse(library::MovieSort::Rating))?;
-    push_if_any(
-        &mut rails,
-        "acclaimed",
-        "acclaimed",
-        "Highly rated",
-        acclaimed.into_iter().map(CatalogItem::Movie).collect(),
-    );
-
-    let shows = library::list_series(
-        &db,
-        &library::BrowseQuery {
-            category: None,
-            query: None,
-            letter: None,
-            sort: library::MovieSort::Title,
-            genre: None,
-            limit: RAIL_SIZE,
-            offset: 0,
-            library: filters,
-        },
-    )?;
-    push_if_any(
-        &mut rails,
-        "series",
-        "recentlyAdded",
-        "Series",
-        shows.into_iter().map(CatalogItem::Series).collect(),
-    );
-
-    Ok(rails)
-}
-
-fn push_if_any(rails: &mut Vec<Rail>, id: &str, kind: &str, title: &str, items: Vec<CatalogItem>) {
-    if items.is_empty() {
-        return;
-    }
-    rails.push(Rail {
-        id: id.into(),
-        kind: kind.into(),
-        title: title.into(),
-        reason: None,
-        progress: std::collections::HashMap::new(),
-        reasons: std::collections::HashMap::new(),
-        items,
-    });
+pub fn library_rails(
+    services: State<'_, Services>,
+    args: crate::home::RailsArgs,
+) -> Result<Vec<Rail>> {
+    crate::home::rails(&services, args)
 }
 
 /// The key a rail's progress map is read by, and the one the UI rebuilds per card.

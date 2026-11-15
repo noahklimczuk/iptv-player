@@ -2,8 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use aurora_app::{
-    assistant, commands, dvr, gemini, library, metadata, mosaic, now_unix, pip, playlist, profiles,
-    providers, recommend,
+    assistant, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, pip, playlist,
+    profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
     timeshift, updates, window,
@@ -600,6 +600,9 @@ fn main() {
             library::providers_list,
             library::library_stats,
             library::library_rails,
+            home::library_rail_page,
+            home::library_not_interested,
+            home::library_refresh_home_signals,
             library::mylist_toggle,
             library::likes_toggle,
             library::lists_marks,

@@ -812,6 +812,42 @@ UPDATE providers
        ) IS NOT NULL;
 "#,
     },
+    Migration {
+        version: 17,
+        name: "home_feed_signals",
+        sql: r#"
+-- Two things the home feed learns from that nothing stored before.
+--
+-- `not_interested` is the viewer saying "not for me" about a title. It is the only
+-- explicit negative signal there is: abandonment is inferred, and a like or a list is
+-- the other direction. The title leaves every rail at once, and its genres, shelf and
+-- people count against what is recommended next. Per profile, like everything else
+-- about taste.
+CREATE TABLE not_interested (
+    profile_id  INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    item_kind   TEXT    NOT NULL CHECK (item_kind IN ('movie','series')),
+    item_id     INTEGER NOT NULL,
+    added_at    INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, item_kind, item_id)
+);
+
+-- Lists TMDB ranks for us, cached: what is trending this week, and for a title the
+-- viewer watched, what people who liked it also liked. Keyed `trending` or
+-- `recs:movie:603` / `recs:series:1399`; `items` is a JSON array of [kind, tmdb_id]
+-- pairs, best first. TMDB ids rather than library ids, because the library is
+-- rebuilt by every refresh and a title's TMDB id is the thing that survives it.
+-- A cache in the plain sense: deleting every row loses nothing but a fetch.
+CREATE TABLE tmdb_lists (
+    list_key    TEXT    PRIMARY KEY,
+    items       TEXT    NOT NULL,
+    fetched_at  INTEGER NOT NULL
+);
+
+-- The feed resolves those ids against the library.
+CREATE INDEX idx_movies_tmdb ON movies(tmdb_id) WHERE tmdb_id IS NOT NULL;
+CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
+"#,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 16;
+pub const LATEST_VERSION: u32 = 17;
