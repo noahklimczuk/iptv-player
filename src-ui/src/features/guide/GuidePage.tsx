@@ -340,10 +340,15 @@ export function GuidePage({
         if (list.length === 0) return;
         const sorted = [...list].sort((a, b) => a.start - b.start);
         const cur = selected?.ch.id === ch.id ? selected.prog : null;
+        // From nothing selected, start on what is on now -- or, in a gap in the
+        // listings, on what comes on next. Looking only for what is on now found
+        // nothing in a gap, and the clamp below then picked the row's *first*
+        // programme, hours before the window: a selection that was never drawn.
+        const upcoming = sorted.findIndex((p) => p.stop > now);
+        const start = upcoming === -1 ? sorted.length - 1 : upcoming;
         const base = cur
           ? sorted.findIndex((p) => p.id === cur.id)
-          // From nothing selected, start on what is on now.
-          : sorted.findIndex((p) => p.start <= now && p.stop > now) - (dir === 1 ? 1 : -1);
+          : start - dir;
         const prog = sorted[Math.min(sorted.length - 1, Math.max(0, base + dir))];
         if (!prog) return;
         setSelected({ ch, prog });
