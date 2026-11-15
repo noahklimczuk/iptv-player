@@ -885,11 +885,13 @@ function buildRails(): Rail[] {
     })
     .filter((x): x is CatalogItem => x !== null);
 
+  // Every rail whole, as on the host (`aurora_core::feed`): nothing is sliced to a
+  // constant, and the screen pages through them with `library.railPage`.
   const genreRail = (g: string): Rail => ({
-    id: `genre-${g}`,
+    id: `genre:${g.toLowerCase()}`,
     kind: 'genre',
     title: g,
-    items: shownMovies.filter((m) => m.genres.includes(g)).slice(0, 18).map(asMovie),
+    items: shownMovies.filter((m) => m.genres.includes(g)).map(asMovie),
   });
 
   const rails: Rail[] = [
@@ -900,26 +902,20 @@ function buildRails(): Rail[] {
       progress: continueProgress,
       items: continueItems,
     },
-    {
-      id: 'upnext', kind: 'upNext', title: 'Up Next',
-      items: shownSeries.slice(6, 20).map(asSeries),
-    },
-    {
-      id: 'top10', kind: 'top10', title: 'Top 10 Movies Today',
-      items: byRating.slice(0, 10).map(asMovie),
-    },
-    { id: 'recent', kind: 'recentlyAdded', title: 'Recently Added', items: byAdded.slice(0, 20).map(asMovie) },
-    // Was "Because you watched <the fourth film in the fixture>", which was true of
-    // nothing. Now the same rail the host builds, from the same history.
     (() => {
-      const r = buildRecommended(24);
+      const r = buildRecommended(Number.MAX_SAFE_INTEGER);
       return {
-        id: 'recommended', kind: 'becauseYouWatched' as const,
-        title: r.title, reasons: r.reasons, items: r.items,
+        id: 'for-you', kind: 'forYou' as const,
+        title: r.personalised ? 'Top Picks For You' : 'Top Picks',
+        reasons: r.reasons, items: r.items,
       };
     })(),
     {
-      id: 'mylist', kind: 'myList', title: 'My List',
+      id: 'top10', kind: 'top10', title: 'Top 10 This Week',
+      items: byRating.slice(0, 10).map(asMovie),
+    },
+    {
+      id: 'my-list', kind: 'myList', title: 'My List',
       items: [...myList].flatMap((key): CatalogItem[] => {
         const [kind, rawId] = key.split(':');
         const id = Number(rawId);
@@ -931,24 +927,66 @@ function buildRails(): Rail[] {
         return s ? [asSeries(s)] : [];
       }),
     },
-    { id: 'series', kind: 'trending', title: 'Trending Series', items: shownSeries.slice(0, 18).map(asSeries) },
+    { id: 'recently-added', kind: 'recentlyAdded', title: 'Recently Added', items: byAdded.map(asMovie) },
+    { id: 'series', kind: 'seriesForYou', title: 'Series For You', items: shownSeries.map(asSeries) },
     {
-      id: '4k', kind: 'fourK', title: '4K & HDR',
-      items: shownMovies.filter((m) => m.quality === '4K').slice(0, 18).map(asMovie),
+      id: '4k', kind: 'fourK', title: 'In 4K',
+      items: shownMovies.filter((m) => m.quality === '4K').map(asMovie),
     },
-    {
-      id: 'acclaimed', kind: 'acclaimed', title: 'Critically Acclaimed',
-      items: byRating.slice(10, 28).map(asMovie),
-    },
+    { id: 'acclaimed', kind: 'acclaimed', title: 'Highly Rated', items: byRating.slice(10).map(asMovie) },
     genreRail('Sci-Fi'),
     genreRail('Thriller'),
     {
-      id: 'short', kind: 'shortAndSweet', title: 'Short & Sweet',
-      items: shownMovies.filter((m) => (m.runtimeMins ?? 999) < 95).slice(0, 18).map(asMovie),
+      id: 'short', kind: 'shortAndSweet', title: 'Under 90 Minutes',
+      items: shownMovies.filter((m) => (m.runtimeMins ?? 999) <= 90).map(asMovie),
     },
     genreRail('Documentary'),
   ];
-  return rails.filter((r) => r.items.length > 0);
+
+  // "Not for me" leaves every rail, as on the host.
+  const kept = rails
+    .map((r) => ({ ...r, items: r.items.filter((i) => !notInterested.has(`${i.kind}:${i.id}`)) }))
+    .filter((r) => r.items.length > 0);
+  feed.clear();
+  for (const r of kept) feed.set(r.id, r);
+  return kept.map((r) => pageOf(r, 0, FEED_FIRST_PAGE).rail);
+}
+
+/** What the host sends of each rail on the first answer (`home::FIRST_PAGE`). */
+const FEED_FIRST_PAGE = 30;
+/** The last build, whole, so pages come from the build the first page came from. */
+const feed = new Map<string, Rail>();
+const notInterested = new Set<string>();
+
+function pageOf(rail: Rail, offset: number, limit: number) {
+  const items = rail.items.slice(offset, offset + limit);
+  const pick = <T,>(m: Record<string, T> | undefined) => {
+    if (!m) return undefined;
+    const out: Record<string, T> = {};
+    for (const i of items) {
+      const k = `${i.kind}:${i.id}`;
+      if (k in m) out[k] = m[k]!;
+    }
+    return out;
+  };
+  const hasMore = offset + items.length < rail.items.length;
+  return {
+    rail: {
+      ...rail,
+      items,
+      reasons: pick(rail.reasons),
+      progress: pick(rail.progress),
+      total: rail.items.length,
+      hasMore,
+    } satisfies Rail,
+    page: {
+      items,
+      reasons: pick(rail.reasons),
+      progress: pick(rail.progress),
+      hasMore,
+      total: rail.items.length,
+    },
+  };
 }
 
 /* ── Guide ─────────────────────────────────────────────────────────────────── */
@@ -1650,6 +1688,28 @@ type Handler<K extends CommandName> = (
 
 const handlers: { [K in CommandName]: Handler<K> } = {
   'library.rails': () => buildRails(),
+  'library.railPage': ({ railId, offset, limit }) => {
+    if (!feed.has(railId)) buildRails();
+    const rail = feed.get(railId);
+    if (!rail) return { items: [], hasMore: false, total: 0 };
+    return pageOf(rail, offset, Math.min(Math.max(limit ?? 40, 1), 200)).page;
+  },
+  'library.notInterested': ({ kind, id, on }) => {
+    const key = `${kind}:${id}`;
+    const set = on !== false;
+    if (set) {
+      notInterested.add(key);
+      // Out of the build being paged, so the next page does not bring it back.
+      for (const [railId, rail] of feed) {
+        feed.set(railId, { ...rail, items: rail.items.filter((i) => `${i.kind}:${i.id}` !== key) });
+      }
+    } else {
+      notInterested.delete(key);
+    }
+    return set;
+  },
+  // There is no TMDB in a browser; the host's answer without a key.
+  'library.refreshHomeSignals': () => ({ updated: 0 }),
   'library.recommended': ({ limit }) => buildRecommended(limit ?? 40),
   'library.movies': ({ sort, limit, offset, genre, category, query, letter }) => {
     const list = browseFilter(visibleMovies(), { genre, category, query, letter });

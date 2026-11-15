@@ -261,8 +261,11 @@ pub fn filmographies(conn: &Connection, people: &[i64]) -> Result<HashMap<Key, V
     Ok(out)
 }
 
+/// A TMDB list, best first, as `(kind, tmdb_id)` pairs.
+pub type TmdbList = Vec<(Kind, i64)>;
+
 /// A cached TMDB list and when it was fetched, if there is one.
-pub fn tmdb_list(conn: &Connection, key: &str) -> Result<Option<(Vec<(Kind, i64)>, i64)>> {
+pub fn tmdb_list(conn: &Connection, key: &str) -> Result<Option<(TmdbList, i64)>> {
     let row: Option<(String, i64)> = conn
         .query_row(
             "SELECT items, fetched_at FROM tmdb_lists WHERE list_key = ?1",

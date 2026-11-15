@@ -197,12 +197,7 @@ fn page_of(
     progress: &HashMap<String, RailProgress>,
     offset: usize,
     limit: usize,
-) -> Result<(
-    Vec<CatalogItem>,
-    HashMap<String, String>,
-    HashMap<String, RailProgress>,
-    bool,
-)> {
+) -> Result<RailPage> {
     let end = (offset + limit).min(rail.items.len());
     let keys = if offset < end {
         &rail.items[offset..end]
@@ -227,7 +222,13 @@ fn page_of(
             }
         }
     }
-    Ok((items, reasons, prog, end < rail.items.len()))
+    Ok(RailPage {
+        has_more: end < rail.items.len(),
+        total: rail.items.len(),
+        items,
+        reasons,
+        progress: prog,
+    })
 }
 
 /// The home screen (README §11): every rail, each with its first page.
@@ -247,8 +248,13 @@ pub fn rails(services: &Services, args: RailsArgs) -> Result<Vec<Rail>> {
 
     let mut out = Vec::with_capacity(built.len());
     for rail in &built {
-        let (items, reasons, progress, has_more) =
-            page_of(&db, rail, &progress_map, 0, FIRST_PAGE)?;
+        let RailPage {
+            items,
+            reasons,
+            progress,
+            has_more,
+            total,
+        } = page_of(&db, rail, &progress_map, 0, FIRST_PAGE)?;
         if items.is_empty() {
             continue;
         }
@@ -260,7 +266,7 @@ pub fn rails(services: &Services, args: RailsArgs) -> Result<Vec<Rail>> {
             progress,
             reasons,
             items,
-            total: rail.items.len(),
+            total,
             has_more,
         });
     }
@@ -322,7 +328,7 @@ pub fn library_rail_page(services: State<'_, Services>, args: RailPageArgs) -> R
         Some(found) => found,
         None => {
             rails(
-                &*services,
+                &services,
                 RailsArgs {
                     profile_id: args.profile_id,
                     seed: args.seed,
@@ -353,15 +359,7 @@ pub fn library_rail_page(services: State<'_, Services>, args: RailPageArgs) -> R
         }
     };
     let db = services.db.lock();
-    let (items, reasons, progress, has_more) =
-        page_of(&db, &rail, &progress, args.offset as usize, limit)?;
-    Ok(RailPage {
-        items,
-        reasons,
-        progress,
-        has_more,
-        total: rail.items.len(),
-    })
+    page_of(&db, &rail, &progress, args.offset as usize, limit)
 }
 
 #[derive(Debug, Deserialize)]

@@ -18,15 +18,12 @@ test('home renders the hero billboard and Netflix-style rails', async ({ page })
 
   // Several named rails from README §8.2 must be present.
   await expect(page.getByRole('region', { name: 'Continue Watching' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Top 10 Movies Today' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Top 10 This Week' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Recently Added' })).toBeVisible();
-  // Recommendations. The heading names the viewer's own taste ("More Sci-fi and
-  // Crime") or says it does not know them yet ("Worth a look") — it used to be
-  // "Because you watched <the fourth film in the fixture>", which was true of nothing.
-  // "Because you watched X" is now a line under each poster, where it can be true.
-  await expect(
-    page.getByRole('region', { name: /^(Worth a look|More |Recommended for you)/ }),
-  ).toBeVisible();
+  // Recommendations: "Top Picks For You" once there is history, "Top Picks" before --
+  // a heading that does not claim to know the viewer when it does not. Why each title
+  // is there is a line under its poster, where it can be true of that title.
+  await expect(page.getByRole('region', { name: /^Top Picks( For You)?$/ })).toBeVisible();
   await expect(page.getByTestId('card-reason').first()).toBeVisible();
 
   await settle(page);

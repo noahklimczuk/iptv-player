@@ -217,7 +217,12 @@ export type RailKind =
   | 'newReleases' | 'hiddenGems' | 'providerCategory' | 'shortAndSweet'
   | 'collections' | 'upNext'
   /** Suggested by Gemini from what has been watched, resolved against this library. */
-  | 'aiPicks';
+  | 'aiPicks'
+  /** The home feed's own (`aurora_core::feed`): the whole library, ranked for this viewer. */
+  | 'forYou'
+  /** Everything a person the viewer keeps watching is in. */
+  | 'person'
+  | 'decade' | 'seriesForYou';
 
 export interface Rail {
   id: string;
@@ -243,7 +248,24 @@ export interface Rail {
    * is a claim about all of them that is true of none.
    */
   reasons?: Record<string, string>;
+  /** The first page of the rail. `library.railPage` has the rest. */
   items: CatalogItem[];
+  /**
+   * How many titles the whole rail holds -- what its heading counts. Absent on a rail
+   * assembled by the screen itself (the Gemini rail), which is all in `items`.
+   */
+  total?: number;
+  /** Whether there is more than `items` to page in. */
+  hasMore?: boolean;
+}
+
+/** More of one home rail, from the same build its first page came from. */
+export interface RailPage {
+  items: CatalogItem[];
+  reasons?: Record<string, string>;
+  progress?: Record<string, { positionSecs: number; durationSecs: number }>;
+  hasMore: boolean;
+  total: number;
 }
 
 /** How a browse list is ordered. */
@@ -1137,7 +1159,29 @@ export interface PipView {
 }
 
 export interface Commands {
-  'library.rails': (args: { profileId: number }) => Rail[];
+  /**
+   * The home screen: every rail with its first page. `seed` changes each time the app
+   * opens, so close calls go a different way each session and stay put within one.
+   */
+  'library.rails': (args: { profileId: number; seed?: number }) => Rail[];
+  /** More of one rail, as the viewer scrolls it. Rails hold everything; nothing is cut. */
+  'library.railPage': (args: {
+    profileId: number; railId: string; offset: number; limit?: number; seed?: number;
+  }) => RailPage;
+  /**
+   * "Not for me": the title leaves every rail, and counts against its genres, shelf
+   * and people from the next build on. `on: false` takes it back. Returns whether it is
+   * set afterwards.
+   */
+  'library.notInterested': (args: {
+    profileId: number; kind: 'movie' | 'series'; id: number; on?: boolean;
+  }) => boolean;
+  /**
+   * Fetch the TMDB lists the feed reads (trending, and "also liked" for what was
+   * watched) when missing or old. Called after Home has drawn; `updated > 0` means
+   * building again would show more. Quietly does nothing without a metadata key.
+   */
+  'library.refreshHomeSignals': (args: { profileId: number }) => { updated: number };
   'library.recommended': (args: { profileId: number; limit?: number }) => Recommended;
   'library.movies': (args: {
     sort: 'recentlyAdded' | 'title' | 'year' | 'rating';

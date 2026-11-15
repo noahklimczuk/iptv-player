@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import type { CatalogItem, Channel } from '@shared/ipc';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CatalogItem, Channel, Rail as RailData } from '@shared/ipc';
 import { AiRail } from './AiRail';
 import { OnNowTile } from './OnNowTile';
 import { HeroBillboard } from '@/components/HeroBillboard';
@@ -35,11 +35,6 @@ export function HomePage({
   // nothing here remounts — and without this, watching something left Home showing
   // the rails it built before you did.
   const catalogVersion = useUi((s) => s.catalogVersion);
-  const { data: rails, loading, error } = useCommand(
-    'library.rails',
-    { profileId },
-    [profileId, catalogVersion],
-  );
 
   /**
    * A seed that changes every time Home is opened, and not while it is open.
@@ -75,6 +70,57 @@ export function HomePage({
       heroSeed.current = fresh;
     }
   }
+
+  const { data: rails, error, reload } = useCommand(
+    'library.rails',
+    // The same seed orders the rails: close calls go a different way each session,
+    // and the screen is stable while it is open.
+    { profileId, seed: heroSeed.current },
+    [profileId, catalogVersion],
+  );
+
+  /**
+   * TMDB's lists -- trending, and what fans of what you watched also liked -- fetched
+   * once Home has drawn, never before: the screen does not wait on the network. When
+   * any arrived, the feed is built again with them, in place.
+   */
+  const askedForSignals = useRef(false);
+  useEffect(() => {
+    if (!rails || askedForSignals.current) return;
+    askedForSignals.current = true;
+    invoke('library.refreshHomeSignals', { profileId })
+      .then((r) => { if (r.updated > 0) reload(); })
+      .catch(() => undefined);
+  }, [rails, profileId, reload]);
+
+  const loadMore = useCallback(
+    (railId: string) => (offset: number) =>
+      invoke('library.railPage', { profileId, railId, offset, seed: heroSeed.current }),
+    [profileId],
+  );
+
+  /**
+   * Titles the viewer said "not for me" about, gone from every rail at once. The host
+   * takes them out of the build it is paging too, and counts them against what they are
+   * made of from the next build on.
+   */
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
+  const dismiss = useCallback(
+    (item: CatalogItem) => {
+      const key = `${item.kind}:${item.id}`;
+      setDismissed((was) => new Set(was).add(key));
+      invoke('library.notInterested', { profileId, kind: item.kind, id: item.id })
+        .catch((e: unknown) => {
+          setDismissed((was) => {
+            const next = new Set(was);
+            next.delete(key);
+            return next;
+          });
+          report(`Could not hide ${item.title}`)(e);
+        });
+    },
+    [profileId],
+  );
 
   /**
    * What was on My List, half-watched or up next when Home opened.
@@ -128,7 +174,15 @@ export function HomePage({
 
     const seen = new Set<string>();
     const pool: CatalogItem[] = [];
-    for (const rail of rails) {
+    // The billboard is the best of the screen, so it draws from the head of the rails
+    // that are about the viewer and about what is popular before anything else. The
+    // rest of the screen is only a fallback for a library too small to have those.
+    const lead = new Set(['forYou', 'top10', 'trending', 'becauseYouWatched']);
+    const ordered = [
+      ...rails.filter((r) => lead.has(r.kind)).map((r) => ({ ...r, items: r.items.slice(0, 8) })),
+      ...rails.filter((r) => !lead.has(r.kind)),
+    ];
+    for (const rail of ordered) {
       if (skip.has(rail.kind)) continue;
       for (const item of rail.items) {
         const key = `${item.kind}:${item.id}`;
@@ -141,7 +195,9 @@ export function HomePage({
     // A billboard is mostly its artwork, so one without a backdrop is a grey panel with
     // a title on it. Preferred rather than required: a small library might have none.
     const withArt = pool.filter((i) => i.backdrop);
-    const chosen = withArt.length >= 6 ? withArt : pool;
+    const chosen = (withArt.length >= 6 ? withArt : pool).filter(
+      (i) => !dismissed.has(`${i.kind}:${i.id}`),
+    );
 
     // A seeded shuffle, so the set is different each time Home is opened and stable
     // while it is open. Mulberry32 — small, and good enough to pick six films.
@@ -159,6 +215,9 @@ export function HomePage({
       [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
     }
     return shuffled.slice(0, 6);
+    // `dismissed` is read but deliberately not a dependency: hiding a title must not
+    // reshuffle the billboard under the viewer. It applies from the next build.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rails]);
 
   /**
@@ -231,7 +290,9 @@ export function HomePage({
     );
   }
 
-  if (loading || !rails) {
+  // Only the first time. A rebuild -- a library refresh, TMDB's lists arriving -- keeps
+  // the screen it has until the new one is ready, rather than flashing skeletons.
+  if (!rails) {
     return (
       <div style={BENTO}>
         <div style={{ gridColumn: 'span 7' }}><Skeleton h={320} r={24} /></div>
@@ -279,6 +340,7 @@ export function HomePage({
             onOpen={onOpen}
             onPlay={onPlay}
             onRemove={removeFromContinue}
+            loadMore={rail.hasMore ? loadMore(rail.id) : undefined}
           />
         ))}
       {/* Renders nothing until it has something, so on a library with no key it does
@@ -286,10 +348,60 @@ export function HomePage({
       <AiRail onOpen={onOpen} onPlay={onPlay} />
       {visibleRails
         .filter((rail) => rail.kind !== 'continueWatching')
-        .map((rail) => (
-          <Rail key={rail.id} rail={rail} onOpen={onOpen} onPlay={onPlay} />
+        .map((rail, i) => (
+          <LazyRail
+            key={rail.id}
+            eager={i < EAGER_RAILS}
+            rail={rail}
+            onOpen={onOpen}
+            onPlay={onPlay}
+            onDismiss={rail.kind === 'myList' ? undefined : dismiss}
+            hidden={dismissed}
+            loadMore={rail.hasMore ? loadMore(rail.id) : undefined}
+          />
         ))}
       <div style={{ gridColumn: '1 / -1', height: 'var(--sp-4)' }} />
     </div>
+  );
+}
+
+/** How many rails are drawn at once; the rest as they come near the viewport. */
+const EAGER_RAILS = 5;
+
+/**
+ * A rail drawn once it is close to being seen.
+ *
+ * The screen has two dozen rails now, each with thirty posters on its first page, and
+ * drawing seven hundred cards before the first one is visible made opening Home
+ * noticeably slower. Until it is near, a rail is a titled section of the height it
+ * will have, so the page is the right length and its scrollbar does not jump.
+ */
+function LazyRail(props: React.ComponentProps<typeof Rail> & { eager: boolean }) {
+  const { eager, ...rest } = props;
+  const [shown, setShown] = useState(eager);
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (shown) return;
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setShown(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => { if (entries.some((e) => e.isIntersecting)) setShown(true); },
+      { rootMargin: '900px 0px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [shown]);
+  if (shown) return <Rail {...rest} />;
+  return (
+    <section
+      ref={ref}
+      aria-label={(rest.rail as RailData).title}
+      className="dl-panel"
+      data-testid="rail-placeholder"
+      style={{ gridColumn: '1 / -1', minHeight: 380 }}
+    />
   );
 }
