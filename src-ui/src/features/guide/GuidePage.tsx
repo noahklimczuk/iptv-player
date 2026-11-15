@@ -1074,11 +1074,18 @@ function PreviewPane({
 
   return (
     <div
+      data-testid="guide-preview-panel"
       style={{
-        background: 'var(--bg-elevated)',
+        // **No background on the panel.** A parent's background is painted across the
+        // whole of it, the box included, and the picture is *behind* the page -- so a
+        // panel colour here covered the video completely. It was only ever seen because
+        // the surface sat a little out of line with the box and showed round the edge
+        // of the panel; once the two lined up exactly, the preview played unseen
+        // ("the guide preview still plays but I can't see it in the box"). The colour
+        // is on the bar under the picture instead, and the box paints its own black
+        // while nothing is playing.
         borderRadius: 'var(--r-xl)', overflow: 'hidden',
         boxShadow: 'var(--shadow-1)',
-        // The panel's background stops at the picture: see the box below.
         display: 'grid',
       }}
     >
@@ -1140,6 +1147,7 @@ function PreviewPane({
         style={{
           display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
           padding: '12px 16px', minHeight: 64,
+          background: 'var(--bg-elevated)',
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>

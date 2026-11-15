@@ -81,7 +81,11 @@ test('where you are is marked across the row, on the programme, and in the time 
   await page.locator('body').click({ position: { x: 5, y: 5 } });
 
   await page.keyboard.press('ArrowDown');
-  await expect(page.locator('[data-testid="guide-row"][data-current="true"]')).toHaveCount(1);
+  const current = page.locator('[data-testid="guide-row"][data-current="true"]');
+  await expect(current).toHaveCount(1);
+  // Its listings arrive after the row does; Right on a row with none yet does nothing,
+  // which is what made this flaky on CI.
+  await expect(current.getByTestId('programme').first()).toBeVisible();
   await page.keyboard.press('ArrowRight');
   const picked = page.locator('[data-testid="programme"][aria-pressed="true"]');
   await expect(picked).toHaveCount(1);
