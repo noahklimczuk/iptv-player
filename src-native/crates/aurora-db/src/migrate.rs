@@ -117,6 +117,8 @@ mod tests {
         "people",
         "credits",
         "enrichment",
+        "not_interested",
+        "tmdb_lists",
     ];
 
     fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {

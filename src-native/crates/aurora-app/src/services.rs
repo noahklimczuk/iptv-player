@@ -44,6 +44,9 @@ pub struct Services {
     /// heartbeat reads. `aurora_app::sleep` holds everything that decides anything, and
     /// it does it without a clock or a lock so it can be tested as arithmetic.
     pub sleep: Arc<Mutex<Option<crate::sleep::Deadline>>>,
+    /// The home feed last built, so its rails can be paged without rebuilding them
+    /// (`crate::home`). Never held while `db` is being locked.
+    pub home: Arc<Mutex<Option<crate::home::HomeCache>>>,
     pub data_dir: PathBuf,
     /// What opening the library took. `Replaced` means the viewer's favourites, watch
     /// progress and recordings metadata are gone and a refresh is needed, which is
@@ -138,6 +141,7 @@ impl Services {
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             updates: Arc::new(crate::updates::Downloads::default()),
             sleep: Arc::new(Mutex::new(None)),
+            home: Arc::new(Mutex::new(None)),
             dvr,
             db,
             player,

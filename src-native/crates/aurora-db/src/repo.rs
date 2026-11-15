@@ -4,6 +4,7 @@ pub mod channels;
 pub mod dvr;
 pub mod enrichment;
 pub mod epg;
+pub mod feed;
 pub mod filtering;
 pub mod library;
 pub mod lists;
