@@ -160,11 +160,11 @@
   --glass-hairline: transparent;
 }
 
-/* Pressing glass makes it swell, as it does under a finger. */
+/* Pressing glass makes it swell a little, as it does under a finger. */
 .glass-press {
-  transition: transform 0.35s var(--ease-spring), box-shadow 0.2s var(--ease);
+  transition: transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease);
 }
-.glass-press:active { transform: scale(1.06); }
+.glass-press:active { transform: scale(1.02); }
 
 /* The top bar: Apple's scroll edge rather than a bar. There is no strip of frost with a
    hard bottom edge -- content scrolls up under a fade that blurs and softens it, and
@@ -250,15 +250,15 @@
   background: var(--glass-platter);
   pointer-events: none;
   transition:
-    transform 0.5s var(--ease-spring),
-    width 0.5s var(--ease-spring),
-    background 0.25s var(--ease),
-    box-shadow 0.25s var(--ease),
-    scale 0.35s var(--ease-spring);
+    transform 0.32s var(--ease-spring),
+    width 0.32s var(--ease-spring),
+    background 0.2s var(--ease),
+    box-shadow 0.2s var(--ease),
+    scale 0.2s var(--ease-spring);
 }
-/* Pressed: the platter lifts into a lens of its own, bigger and brighter at the rim. */
+/* Pressed: the platter lifts into a lens of its own, a touch bigger and brighter at the rim. */
 .nav-glass[data-pressed] .nav-platter {
-  scale: 1.12 1.2;
+  scale: 1.04 1.06;
   background: var(--glass-platter-press);
   box-shadow:
     0 6px 18px rgb(0 0 0 / 0.16),
@@ -267,7 +267,7 @@
 }
 /* Dragged: it follows the pointer exactly; the spring is only for letting go. */
 .nav-glass[data-dragging] .nav-platter {
-  transition: background 0.25s var(--ease), box-shadow 0.25s var(--ease), scale 0.35s var(--ease-spring);
+  transition: background 0.2s var(--ease), box-shadow 0.2s var(--ease), scale 0.2s var(--ease-spring);
 }
 :root[data-theme='contrast'] .nav-glass a[aria-current] { color: #000; }
 

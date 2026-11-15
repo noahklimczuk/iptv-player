@@ -201,7 +201,7 @@ export function CommandPalette({
         <motion.div
           ref={dialogRef}
           tabIndex={-1}
-          initial={{ y: -14, scale: 0.98 }} animate={{ y: 0, scale: 1 }}
+          initial={{ y: -8, scale: 0.99 }} animate={{ y: 0, scale: 1 }}
           transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
           onClick={(e) => e.stopPropagation()}
           role="dialog" aria-modal="true" aria-label="Search"

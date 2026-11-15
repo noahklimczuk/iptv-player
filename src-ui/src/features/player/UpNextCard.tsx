@@ -51,9 +51,9 @@ export function UpNextCard({
     <AnimatePresence>
       {visible && episode && (
         <motion.aside
-          initial={{ opacity: 0, x: 40 }}
+          initial={{ opacity: 0, x: 16 }}
           animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 40 }}
+          exit={{ opacity: 0, x: 16 }}
           transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
           aria-label="Up next"
           style={{

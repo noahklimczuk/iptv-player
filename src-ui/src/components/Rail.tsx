@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogItem, Rail as RailData, RailPage } from '@shared/ipc';
-import { CatalogCard } from './CatalogCard';
+import { CARD_LIFT, CARD_SCALE, CatalogCard } from './CatalogCard';
 import { Icon } from './Icon';
 
 const CARD_W = 168;
@@ -24,8 +24,6 @@ const GAP = 16;
  * box is clipped. A hand-picked 28px was 16px short, which is exactly the sort of number
  * that is right when it is written and wrong after the card gains a line of text.
  */
-const CARD_SCALE = 1.32;
-const CARD_LIFT = 12;
 /** A 2:3 poster at `CARD_W`, plus two lines of title and a year. */
 const CARD_H = Math.round(CARD_W * 1.5) + 46;
 export const RAIL_EXPANSION_PAD = Math.ceil((CARD_H * (CARD_SCALE - 1)) / 2) + CARD_LIFT;

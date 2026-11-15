@@ -85,8 +85,8 @@ export function DetailModal({
             // screen reader reads the label from. See `useFocusTrap` (R-102).
             tabIndex={-1}
             role="dialog" aria-modal="true" aria-label={item.title}
-            initial={{ y: 24, scale: 0.97 }} animate={{ y: 0, scale: 1 }}
-            exit={{ y: 16, scale: 0.98 }}
+            initial={{ y: 12, scale: 0.985 }} animate={{ y: 0, scale: 1 }}
+            exit={{ y: 8, scale: 0.99 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
             onClick={(e) => e.stopPropagation()}
             style={{

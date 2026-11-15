@@ -29,8 +29,8 @@ export function ChannelBanner({
       {channel && (
         <motion.div
           data-testid="channel-banner"
-          initial={{ opacity: 0, y: liftForOsd ? -20 : 30 }} animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: liftForOsd ? -20 : 30 }}
+          initial={{ opacity: 0, y: liftForOsd ? -8 : 12 }} animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: liftForOsd ? -8 : 12 }}
           transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
           style={{
             // Daylight: a white card like the player's own. Over the player it sits at
@@ -138,8 +138,8 @@ export function DigitEntry({ digits }: { digits: string }) {
     <AnimatePresence>
       {digits && (
         <motion.div
-          initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.9 }} transition={{ duration: 0.12 }}
+          initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.97 }} transition={{ duration: 0.12 }}
           role="status"
           aria-live="polite"
           aria-label={`Channel ${digits}`}
