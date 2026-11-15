@@ -21,7 +21,7 @@ use crate::services::Services;
 
 #[tauri::command(async)]
 pub fn providers_list(services: State<'_, Services>) -> Result<Vec<providers::ProviderRow>> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(providers::list(&db)?)
 }
 
@@ -29,7 +29,7 @@ pub fn providers_list(services: State<'_, Services>) -> Result<Vec<providers::Pr
 
 #[tauri::command(async)]
 pub fn library_stats(services: State<'_, Services>) -> Result<library::LibraryStats> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(library::stats(&db)?)
 }
 
@@ -181,7 +181,7 @@ pub struct MarksArgs {
 
 #[tauri::command(async)]
 pub fn lists_marks(services: State<'_, Services>, args: MarksArgs) -> Result<Marks> {
-    let db = services.db.lock();
+    let db = services.read();
     let key = |(kind, id): (lists::ItemKind, i64)| format!("{}:{id}", kind.as_str());
     Ok(Marks {
         my_list: lists::my_list(&db, args.profile_id)?
@@ -265,7 +265,7 @@ pub fn favorites_lists(
     services: State<'_, Services>,
     args: FavoriteListsArgs,
 ) -> Result<Vec<lists::FavoriteList>> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(lists::favorite_lists(&db, args.profile_id)?)
 }
 
@@ -338,7 +338,7 @@ pub fn progress_get(
         "recording" => progress::ItemKind::Recording,
         _ => progress::ItemKind::Movie,
     };
-    let db = services.db.lock();
+    let db = services.read();
     Ok(progress::get(&db, args.profile_id, kind, args.id)?)
 }
 
@@ -390,7 +390,7 @@ pub fn progress_for_series(
     services: State<'_, Services>,
     args: SeriesProgressArgs,
 ) -> Result<Vec<progress::EpisodeProgress>> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(progress::for_series(&db, args.profile_id, args.series_id)?)
 }
 
@@ -411,7 +411,7 @@ pub fn progress_resume_point(
     services: State<'_, Services>,
     args: SeriesProgressArgs,
 ) -> Result<Option<ResumePoint>> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(
         progress::resume_point(&db, args.profile_id, args.series_id)?.map(
             |(episode_id, position_secs)| ResumePoint {

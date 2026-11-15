@@ -234,7 +234,7 @@ fn page_of(
 /// The home screen (README §11): every rail, each with its first page.
 pub fn rails(services: &Services, args: RailsArgs) -> Result<Vec<Rail>> {
     let seed = args.seed.unwrap_or_else(|| now_unix() as u64 / 3_600);
-    let db = services.db.lock();
+    let db = services.read();
     let stamp = store::stamp(&db, args.profile_id, &LibraryFilter::load(&db)?)?;
     // Nothing the feed reads has moved since the last build: the same screen, without
     // reading the library again. The common case by far -- Movies and back.
@@ -358,7 +358,7 @@ pub fn library_rail_page(services: State<'_, Services>, args: RailPageArgs) -> R
             }
         }
     };
-    let db = services.db.lock();
+    let db = services.read();
     page_of(&db, &rail, &progress, args.offset as usize, limit)
 }
 

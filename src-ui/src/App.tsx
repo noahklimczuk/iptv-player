@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { CatalogItem, MosaicRect, MosaicView, PipView, Recording, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
@@ -294,6 +294,34 @@ export default function App() {
     }
     setPlayerOpen(false);
   }, [playerOpen, profileId]);
+
+  /**
+   * Leaving the guide ends its preview.
+   *
+   * "The guide preview keeps playing after you leave the guide tab." The guide gives
+   * the surface back when it unmounts (`preview.clear`), but that only moves the
+   * picture: the stream went on playing behind whatever page came next -- heard, not
+   * seen, holding the line's one connection, and driving the player heartbeat through
+   * the whole interface four times a second.
+   *
+   * A preview is anything playing while the player is not open and the picture is not
+   * in its corner: every other way of starting playback opens one or the other, and
+   * closing the player already stops it. A preview promoted to full screen opens the
+   * player first, so it is kept.
+   */
+  const leftGuide = useRef({ playerOpen, pipOn });
+  leftGuide.current = { playerOpen, pipOn };
+  const onGuide = location.pathname === '/guide';
+  const wasOnGuide = useRef(onGuide);
+  useEffect(() => {
+    const was = wasOnGuide.current;
+    wasOnGuide.current = onGuide;
+    if (!was || onGuide) return;
+    const { playerOpen: open, pipOn: corner } = leftGuide.current;
+    const status = useUi.getState().player?.status;
+    if (open || corner || !status || status === 'idle') return;
+    invoke('player.stop').catch(report('Could not stop the preview'));
+  }, [onGuide]);
 
   const play = useCallback(async (item: CatalogItem, episodeId?: number) => {
     ui.openDetail(null);

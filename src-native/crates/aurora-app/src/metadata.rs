@@ -227,7 +227,7 @@ pub fn metadata_run(
 /// taken from several threads now rather than one, which is what `parking_lot::Mutex` is
 /// for; what matters for the DVR is how long it is held, and that has not changed.
 pub fn enrich_batch(
-    db: &Mutex<Connection>,
+    db: &crate::dblock::TimedMutex<Connection>,
     client: &dyn MetadataClient,
     options: &Options,
     now: i64,
@@ -664,7 +664,7 @@ mod tests {
         }
     }
 
-    fn seeded(movies: usize) -> Mutex<Connection> {
+    fn seeded(movies: usize) -> crate::dblock::TimedMutex<Connection> {
         let conn = aurora_db::open_memory().unwrap();
         conn.execute(
             "INSERT INTO providers (id,name,kind,base_url,created_at)
@@ -680,7 +680,7 @@ mod tests {
             )
             .unwrap();
         }
-        Mutex::new(conn)
+        crate::dblock::TimedMutex::new(conn)
     }
 
     /// The regression guard for the bug this structure exists to prevent.

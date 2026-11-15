@@ -30,7 +30,7 @@ pub fn channels_list(
     services: State<'_, Services>,
     args: ListChannelsArgs,
 ) -> Result<Vec<channels::ChannelRow>> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(channels::list(
         &db,
         &channels::ChannelFilter {
@@ -60,7 +60,7 @@ pub struct GroupRow {
 
 #[tauri::command(async)]
 pub fn channels_groups(services: State<'_, Services>) -> Result<Vec<GroupRow>> {
-    let db = services.db.lock();
+    let db = services.read();
     // The same filter the list behind each group is read through. Counting one way and
     // listing another is how a sidebar comes to disagree with its own screen.
     let filter = filtering::LibraryFilter::load(&db)?;
@@ -81,7 +81,7 @@ pub fn channels_by_number(
     services: State<'_, Services>,
     args: ByNumberArgs,
 ) -> Result<Option<channels::ChannelRow>> {
-    let db = services.db.lock();
+    let db = services.read();
     let Some(id) = channels::find_by_number(&db, args.number)? else {
         return Ok(None);
     };
@@ -158,7 +158,7 @@ fn slice_channels(all: Vec<channels::ChannelRow>, asked: &[i64]) -> Vec<channels
 
 #[tauri::command(async)]
 pub fn epg_grid_slice(services: State<'_, Services>, args: GridSliceArgs) -> Result<GuideSlice> {
-    let db = services.db.lock();
+    let db = services.read();
     let all = channels::list(
         &db,
         &channels::ChannelFilter {
@@ -243,7 +243,7 @@ pub fn epg_now_next_many(
         .into_iter()
         .take(MAX_NOW_NEXT_BATCH)
         .collect();
-    let db = services.db.lock();
+    let db = services.read();
     let mut out = std::collections::HashMap::with_capacity(ids.len());
     for id in ids {
         let Some(epg_id) = channels::get(&db, id)?.and_then(|c| c.epg_channel_id) else {
@@ -262,7 +262,7 @@ pub fn epg_now_next_many(
 
 #[tauri::command(async)]
 pub fn epg_now_next(services: State<'_, Services>, args: NowNextArgs) -> Result<NowNext> {
-    let db = services.db.lock();
+    let db = services.read();
     let Some(ch) = channels::get(&db, args.channel_id)? else {
         return Ok(NowNext {
             now: None,
@@ -353,7 +353,7 @@ pub fn library_movies(
     services: State<'_, Services>,
     args: MoviesArgs,
 ) -> Result<Vec<library::MovieRow>> {
-    let db = services.db.lock();
+    let db = services.read();
     let q = browse_query(
         &db,
         Browse {
@@ -392,7 +392,7 @@ pub fn library_series(
     services: State<'_, Services>,
     args: SeriesArgs,
 ) -> Result<Vec<library::SeriesRow>> {
-    let db = services.db.lock();
+    let db = services.read();
     let q = browse_query(
         &db,
         Browse {
@@ -453,7 +453,7 @@ pub fn library_browse_facets(
     } else {
         filtering::Kind::Movies
     };
-    let db = services.db.lock();
+    let db = services.read();
     let q = browse_query(
         &db,
         Browse {
@@ -486,7 +486,7 @@ pub fn library_browse_facets(
 
 #[tauri::command(async)]
 pub fn library_genres(services: State<'_, Services>) -> Result<Vec<String>> {
-    let db = services.db.lock();
+    let db = services.read();
     let filter = filtering::LibraryFilter::load(&db)?;
     // Both halves: this one is "every genre in the library". A browse screen wants
     // only its own kind's and asks `library_browse_facets`, which is where offering
@@ -528,7 +528,7 @@ pub fn library_episodes(
     // Which rows this show is standing for, and which of them have nothing stored yet.
     // Both asked under one lock, and the lock dropped before the network below.
     let (group, missing, stale) = {
-        let db = services.db.lock();
+        let db = services.read();
         let filter = filtering::LibraryFilter::load(&db)?;
         let group = filter.group_of(&db, filtering::Kind::Series, args.series_id)?;
         let mut missing = Vec::new();
@@ -588,7 +588,7 @@ pub fn library_episodes(
         }
     }
 
-    let db = services.db.lock();
+    let db = services.read();
     if group.len() == 1 {
         return Ok(library::episodes_for(&db, args.series_id, args.season)?);
     }
@@ -626,7 +626,7 @@ pub fn search_query(
     services: State<'_, Services>,
     args: SearchArgs,
 ) -> Result<search::SearchResults> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(search::grouped(&db, &args.text, now_unix(), 40)?)
 }
 
@@ -999,7 +999,7 @@ pub enum Item {
 /// found would be the same bug in a different place.
 #[tauri::command(async)]
 pub fn library_item(services: State<'_, Services>, args: ItemArgs) -> Result<Option<Item>> {
-    let db = services.db.lock();
+    let db = services.read();
     Ok(match args.kind.as_str() {
         "movie" => library::movie(&db, args.id)?.map(Item::Movie),
         "series" => library::series(&db, args.id)?.map(Item::Series),
