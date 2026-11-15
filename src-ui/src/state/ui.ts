@@ -52,12 +52,48 @@ interface UiState {
   openDetail: (i: CatalogItem | null) => void;
   setPalette: (open: boolean, query?: string) => void;
   setPlayer: (p: PlayerState) => void;
+  /**
+   * Show these fields now, ahead of the host (features/player/playerControl.ts). Held
+   * against state reports until one agrees with them, or for `HOLD_MS`.
+   */
+  holdPlayer: (patch: Partial<PlayerState>) => void;
+  /** Drop the hold: the command it was for failed. */
+  releasePlayer: () => void;
   showBanner: (channelId: number) => void;
   hideBanner: () => void;
   pushDigit: (d: string) => void;
   /** Say that the library has moved. */
   bumpCatalog: () => void;
   clearDigits: () => void;
+}
+
+/**
+ * What the screen is showing ahead of the host, and until when.
+ *
+ * A state report read before a command landed would otherwise put the old value back
+ * for a tick -- the pause icon flickering back to play, the volume knob jumping. Each
+ * held field stays until the host reports the same value or the hold runs out, which
+ * is long enough for any command to land and short enough that a command the player
+ * quietly ignored shows the truth again within a moment.
+ */
+const HOLD_MS = 1200;
+let held: { patch: Partial<PlayerState>; until: number } | null = null;
+
+function reconcile(next: PlayerState): PlayerState {
+  if (!held) return next;
+  if (Date.now() > held.until) {
+    held = null;
+    return next;
+  }
+  const keys = Object.keys(held.patch) as (keyof PlayerState)[];
+  const pending = keys.filter((k) => next[k] !== held!.patch[k]);
+  if (pending.length === 0) {
+    held = null;
+    return next;
+  }
+  const out = { ...next } as Record<string, unknown>;
+  for (const k of pending) out[k] = held.patch[k];
+  return out as unknown as PlayerState;
 }
 
 function applyDom(theme: Theme, density: Density, animations: boolean) {
@@ -213,7 +249,15 @@ export const useUi = create<UiState>((set, get) => ({
   },
   openDetail: (detail) => set({ detail }),
   setPalette: (paletteOpen, paletteQuery = '') => set({ paletteOpen, paletteQuery }),
-  setPlayer: (player) => set({ player }),
+  setPlayer: (player) => set({ player: reconcile(player) }),
+  holdPlayer: (patch) => {
+    held = { patch: { ...(held?.patch ?? {}), ...patch }, until: Date.now() + HOLD_MS };
+    const player = get().player;
+    if (player) set({ player: { ...player, ...patch } });
+  },
+  releasePlayer: () => {
+    held = null;
+  },
   showBanner: (channelId) =>
     set({ banner: { channelId, until: Date.now() + 5000 } }),
   hideBanner: () => set({ banner: null }),

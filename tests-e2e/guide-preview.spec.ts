@@ -145,6 +145,35 @@ test('leaving the guide gives the picture back', async ({ page }) => {
   expect(await placedRect(page)).toBeNull();
 });
 
+/**
+ * Nothing at all is painted over the picture, not just the shell.
+ *
+ * "The guide preview still plays but I can't see it in the box": the panel the box sat
+ * in had a background, and a parent's background is painted under its children -- so
+ * the box was transparent and the panel behind it was not. Every element stacked at
+ * the middle of the box has to be clear while the picture is live.
+ */
+test('every layer over the picture is clear while it plays', async ({ page }) => {
+  await openGuide(page);
+  await channelCells(page).first().click();
+  await expect(preview(page)).toHaveAttribute('data-live', 'true');
+
+  const painted = await preview(page).evaluate((box) => {
+    const r = box.getBoundingClientRect();
+    const stack = document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return stack
+      .filter((el) => el !== document.documentElement)
+      .map((el) => {
+        const s = getComputedStyle(el);
+        const clear = (s.backgroundColor === 'rgba(0, 0, 0, 0)' || s.backgroundColor === 'transparent')
+          && s.backgroundImage === 'none';
+        return clear ? null : `${el.tagName.toLowerCase()}[${el.getAttribute('data-testid') ?? el.className}] ${s.backgroundColor} ${s.backgroundImage}`;
+      })
+      .filter(Boolean);
+  });
+  expect(painted, 'layers painting over the live picture').toEqual([]);
+});
+
 test('the shell stops painting over the picture, and starts again after', async ({ page }) => {
   await openGuide(page);
   const shellBackground = () =>
