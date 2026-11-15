@@ -229,13 +229,41 @@ export function PlayerOverlay({
   const [panel, setPanel] = useState<'audio' | 'subtitles' | 'playback' | null>(null);
   const hideTimer = useRef<number | undefined>(undefined);
 
+  /**
+   * What keeps the controls up past the idle timeout: the pointer resting on them, or a
+   * button held down.
+   *
+   * "The controls don't really work." They hid 3.2 s after the mouse last *moved*,
+   * wherever it was -- so a pointer resting on the volume bar while you decided had the
+   * dock vanish from under it, and the click that followed only brought it back. Worse,
+   * holding the seek handle still for three seconds unmounted the bar mid-drag and the
+   * seek was never sent. Hiding is for the picture: while the pointer is on the chrome,
+   * or pressed anywhere, the timer just runs again.
+   */
+  const holdOpen = useRef({ over: false, pressed: false });
   const bump = useCallback(() => {
     setVisible(true);
     window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(() => {
-      setVisible(false);
-      setPanel(null);
-    }, HIDE_AFTER_MS);
+    const arm = () => {
+      hideTimer.current = window.setTimeout(() => {
+        if (holdOpen.current.over || holdOpen.current.pressed) {
+          arm();
+          return;
+        }
+        setVisible(false);
+        setPanel(null);
+      }, HIDE_AFTER_MS);
+    };
+    arm();
+  }, []);
+  useEffect(() => {
+    const up = () => { holdOpen.current.pressed = false; };
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    return () => {
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
   }, []);
 
   useEffect(() => {
@@ -351,8 +379,14 @@ export function PlayerOverlay({
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
       ref={surface}
+      data-player-overlay=""
       onMouseMove={bump}
       onClick={bump}
+      onPointerOver={(e) => {
+        holdOpen.current.over = !!(e.target as Element).closest?.('[data-osd-chrome]');
+      }}
+      onPointerLeave={() => { holdOpen.current.over = false; }}
+      onPointerDown={() => { holdOpen.current.pressed = true; bump(); }}
       style={{
         position: 'fixed', inset: 0, zIndex: 150,
         // The one place in the app that must let the window through — but only while
@@ -681,7 +715,14 @@ function SeekBar({
   /** The seek preview's words for a moment: its time, and anything else worth a line. */
   describe?: (seconds: number, preview: SeekPreview | null) => { time: string; lines: (string | null)[] };
 }) {
-  const [dragged, setDragged] = useState<number | null>(null);
+  const [dragged, setDraggedState] = useState<number | null>(null);
+  /*
+   * The same, readable at once. `pointerup` and `lostpointercapture` both commit, and a
+   * host that answers quickly can settle the first before the second arrives -- which
+   * then still saw the drag in its closure and sent the seek again.
+   */
+  const draggedNow = useRef<number | null>(null);
+  const setDragged = (v: number | null) => { draggedNow.current = v; setDraggedState(v); };
   const committedAt = useRef(0);
   /** Where the pointer is over the bar, in seconds, while it is. */
   const [hover, setHover] = useState<number | null>(null);
@@ -722,12 +763,14 @@ function SeekBar({
     if (Math.abs(value - dragged) <= SEEK_SETTLED_SECS) {
       setDragged(null);
       committedAt.current = 0;
+      echo.current = false;
       return;
     }
     const left = SEEK_SETTLE_TIMEOUT_MS - (Date.now() - committedAt.current);
     const giveUp = window.setTimeout(() => {
       setDragged(null);
       committedAt.current = 0;
+      echo.current = false;
     }, Math.max(0, left));
     return () => window.clearTimeout(giveUp);
   }, [value, dragged]);
@@ -735,11 +778,27 @@ function SeekBar({
   const shown = dragged ?? value;
   const fill = max > min ? ((shown - min) / (max - min)) * 100 : 0;
 
+  /**
+   * Set by a commit, and cleared by the next hand on the bar or once the host has caught
+   * up: while it is set a `change` is the browser's echo of the commit, not a move.
+   *
+   * Without it one drag sent two seeks. The first commit re-rendered the bar back onto
+   * the player's position, the browser then fired the range's trailing `change` with a
+   * value that differed from it by a fraction of a second, React reported that as a
+   * change, the handle was "dragged" again, and `lostpointercapture` committed it a
+   * second time -- each one a real seek, throwing away what mpv had just buffered.
+   *
+   * Only the echo is refused. A change with no pointer or key before it is still a move:
+   * that is how a screen reader sets a slider.
+   */
+  const echo = useRef(false);
   const commit = () => {
     setPressed(false);
-    if (dragged === null || committedAt.current !== 0) return;
+    const to = draggedNow.current;
+    if (to === null || committedAt.current !== 0) return;
     committedAt.current = Date.now();
-    onCommit(dragged);
+    echo.current = true;
+    onCommit(to);
   };
 
   const width = barRef.current?.offsetWidth ?? 0;
@@ -770,7 +829,19 @@ function SeekBar({
       value={dragged ?? value}
       aria-label={label}
       className="dl-range"
-      onChange={(e) => setDragged(Number(e.target.value))}
+      onChange={(e) => {
+        if (!echo.current) setDragged(Number(e.target.value));
+      }}
+      onPointerDown={() => {
+        echo.current = false;
+        committedAt.current = 0;
+      }}
+      onKeyDown={(e) => {
+        if (/^(Arrow|Page|Home|End)/.test(e.key)) {
+          echo.current = false;
+          committedAt.current = 0;
+        }
+      }}
       onPointerUp={commit}
       onLostPointerCapture={commit}
       onKeyUp={commit}

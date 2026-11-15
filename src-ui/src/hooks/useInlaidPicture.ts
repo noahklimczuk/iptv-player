@@ -76,10 +76,16 @@ export function useInlaidPicture(
       // render where `active` is false would fight whatever else is using the surface.
       if (sent.current) {
         sent.current = null;
-        setInlay(null);
+        // The box is reported until the host says the picture has left it, not from
+        // the moment it is asked to: whatever clears the shell for a full-window picture
+        // waits on this, and clearing it early showed the desktop around a picture that
+        // was still box-sized (App.tsx, `videoBehind`).
         invoke('preview.clear')
           .then((v) => setInlay(v.inlay))
-          .catch(report('Could not give the picture back'));
+          .catch((e: unknown) => {
+            setInlay(null);
+            report('Could not give the picture back')(e);
+          });
       }
       return;
     }

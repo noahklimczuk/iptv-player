@@ -20,10 +20,21 @@ async function playFirstEpisode(page: Page) {
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
 }
 
+/** The dock slides in over the page it was opened from; wait until it is really there. */
+async function settled(page: Page, name: string) {
+  const s = page.getByRole('slider', { name });
+  await expect.poll(async () => {
+    const b = await s.boundingBox();
+    if (!b) return false;
+    return s.evaluate((el, [x, y]) => document.elementFromPoint(x, y) === el,
+      [b.x + b.width / 2, b.y + b.height / 2] as [number, number]);
+  }).toBe(true);
+  return (await s.boundingBox())!;
+}
+
 /** Hover the bar `fraction` of the way along. */
 async function hoverAt(page: Page, slider: string, fraction: number) {
-  const bar = page.getByRole('slider', { name: slider });
-  const box = (await bar.boundingBox())!;
+  const box = await settled(page, slider);
   await page.mouse.move(box.x + box.width * fraction, box.y + box.height / 2);
 }
 

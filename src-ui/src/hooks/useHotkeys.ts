@@ -41,7 +41,27 @@ export function isTyping(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
   if (!el) return false;
   const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  if (tag === 'INPUT') {
+    // The player's own sliders take the keys only the player means: arrows seek and
+    // change the volume, Space pauses, M mutes. Treating them as somewhere to type
+    // turned every shortcut off the moment the seek or volume bar had been touched --
+    // and left the arrows moving whichever slider it was ("the controls don't really
+    // work"). Elsewhere -- the glass transparency slider in Settings, say -- a range
+    // keeps its keys.
+    const type = (el as HTMLInputElement).type;
+    if (type === 'range' && el.closest('[data-player-overlay]')) return false;
+    if (type === 'range') return true;
+    return !['checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file'].includes(type);
+  }
+  return tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+
+/** Space and Enter on a focused button press that button; the shortcut must not too. */
+function activatesFocused(e: KeyboardEvent): boolean {
+  if (e.key !== ' ' && e.key !== 'Enter') return false;
+  const el = e.target as HTMLElement | null;
+  if (!el?.closest) return false;
+  return !!el.closest('button, [role="button"], [role="switch"], [role="tab"], a[href], input[type="checkbox"], input[type="radio"]');
 }
 
 export function useHotkeys(h: HotkeyHandlers, enabled = true) {
@@ -56,6 +76,12 @@ export function useHotkeys(h: HotkeyHandlers, enabled = true) {
         return;
       }
       if (isTyping(e.target)) return;
+      if (activatesFocused(e)) return;
+      // On a player slider the shortcut replaces the slider's own arrow handling,
+      // rather than both moving at once.
+      if ((e.target as HTMLInputElement | null)?.type === 'range' && e.key.startsWith('Arrow')) {
+        e.preventDefault();
+      }
       if (e.altKey && /^[1-5]$/.test(e.key)) {
         e.preventDefault();
         h.onNavigate(['/', '/live', '/guide', '/movies', '/series'][Number(e.key) - 1]!);

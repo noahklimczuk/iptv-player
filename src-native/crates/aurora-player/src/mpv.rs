@@ -725,7 +725,14 @@ impl PlayerBackend for MpvBackend {
     }
 
     fn seek(&mut self, position_secs: f64, relative: bool) -> Result<(), PlayerError> {
-        let mode = if relative { "relative" } else { "absolute" };
+        // `+exact` on the relative ones. mpv's `hr-seek=default` is exact only for
+        // absolute seeks, so "Forward 10 seconds" snapped to the next keyframe, which on
+        // a stream with ten-second GOPs is up to twenty seconds on.
+        let mode = if relative {
+            "relative+exact"
+        } else {
+            "absolute"
+        };
         self.cmd(&["seek", &position_secs.to_string(), mode])?;
         // The stall clock starts again from here: a seek can land somewhere that is not
         // buffered, and the wait for that data is not the stream having stopped (R-70).
