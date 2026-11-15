@@ -42,9 +42,9 @@ export function SkipButton({
       {marker && (
         <motion.button
           key={`${marker.kind}-${marker.startSecs}`}
-          initial={{ opacity: 0, y: 12, scale: 0.96 }}
+          initial={{ opacity: 0, y: 6, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 12, scale: 0.96 }}
+          exit={{ opacity: 0, y: 6, scale: 0.98 }}
           transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
           onClick={() => onSkip(marker, false)}
           aria-label={LABELS[marker.kind]}

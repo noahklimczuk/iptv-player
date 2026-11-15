@@ -413,8 +413,8 @@ export function PlayerOverlay({
             data-osd-chrome=""
             data-testid="sleep-warning"
             role="alert"
-            initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.18 }}
+            initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.18 }}
             style={{
               position: 'absolute', top: 'var(--sp-5)', left: '50%', translate: '-50% 0',
               display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -453,8 +453,8 @@ export function PlayerOverlay({
 
             <motion.div
               data-osd-chrome=""
-              initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }} transition={{ duration: 0.18 }}
+              initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.18 }}
               style={{
                 position: 'absolute', top: 24, left: 28, right: 28,
                 display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -501,8 +501,8 @@ export function PlayerOverlay({
 
             <motion.div
               data-osd-chrome=""
-              initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 24 }} transition={{ duration: 0.18 }}
+              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }} transition={{ duration: 0.18 }}
               style={{
                 // The dock: one glass capsule, centred, with everything you press.
                 position: 'absolute', left: '50%', bottom: 28, translate: '-50% 0',
@@ -1056,8 +1056,8 @@ function LiveCards({
       {now && (
         <motion.div
           data-osd-chrome=""
-          initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.18 }}
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.18 }}
           style={{
             position: 'absolute', left: 28, bottom: 132, width: 'min(440px, 36vw)',
             padding: '20px 22px', borderRadius: 26,
@@ -1093,8 +1093,8 @@ function LiveCards({
       {next && (
         <motion.div
           data-osd-chrome=""
-          initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.18 }}
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.18 }}
           aria-label={`After ${title ?? 'this'}`}
           role="group"
           style={{
@@ -1157,7 +1157,7 @@ function WatchSheet({
   return (
     <motion.div
       data-osd-chrome=""
-      initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }}
       transition={{ duration: 0.16 }}
       style={{
         position: 'absolute', right: 28, bottom: 128, width: 420,

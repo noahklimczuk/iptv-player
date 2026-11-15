@@ -177,11 +177,11 @@ export function HeroBillboard({
           // trailer covers this element, so a zoom that only ran while one was playing
           // was a zoom nobody could see. It is what keeps the hero from looking like a
           // screenshot while a title waits its turn.
-          animate={{ opacity: 1, scale: animations ? 1.06 : 1 }}
+          animate={{ opacity: 1, scale: animations ? 1.03 : 1 }}
           exit={{ opacity: 0 }}
           transition={{
             opacity: { duration: animations ? 0.5 : 0 },
-            scale: { duration: animations ? 18 : 0, ease: 'linear' },
+            scale: { duration: animations ? 24 : 0, ease: 'linear' },
           }}
           style={{ position: 'absolute', inset: 0 }}
         >

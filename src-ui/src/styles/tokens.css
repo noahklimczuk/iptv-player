@@ -31,8 +31,8 @@
   --t-fast: 120ms; --t-base: 200ms; --t-slow: 320ms; --t-slower: 500ms;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* Presses only, and never past a 1.04 scale. */
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Presses only, and never past a 1.04 scale. A hint of settle, not a bounce. */
+  --ease-spring: cubic-bezier(0.34, 1.2, 0.64, 1);
 
   /* Artwork hues — placeholders and channel tiles with no logo cycle through these. */
   --art-1: #2B4BFF; --art-2: #FF5A36; --art-3: #14A37F;

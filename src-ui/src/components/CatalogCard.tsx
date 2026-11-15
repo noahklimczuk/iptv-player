@@ -28,6 +28,9 @@ const PREVIEW_DELAY_MS = 700;
  * that is almost clear reads worse than one that plainly is.
  */
 const NEIGHBOUR_SHIFT = 30;
+/** How far a card grows and rises when it expands. `Rail` pads for both. */
+export const CARD_SCALE = 1.32;
+export const CARD_LIFT = 8;
 
 export interface CardProgress {
   positionSecs: number;
@@ -147,8 +150,8 @@ export const CatalogCard = memo(function CatalogCard({
           if (e.key === ' ') { e.preventDefault(); onPlay(item); }
         }}
         animate={{
-          scale: expanded ? 1.32 : 1,
-          y: expanded ? -12 : 0,
+          scale: expanded ? CARD_SCALE : 1,
+          y: expanded ? -CARD_LIFT : 0,
           // Out of the expanded card's way. The card that is expanded never shifts: it
           // grows from where it already is, which is what makes the row look like it
           // opened rather than slid.
@@ -224,7 +227,7 @@ export const CatalogCard = memo(function CatalogCard({
           * and every row below the rail was shoved down and then pulled back as the
           * pointer moved along. That is the jumpiness.
           *
-          * It also made the clipping worse. The card is scaled 1.32x on top of its
+          * It also made the clipping worse. The card is scaled `CARD_SCALE` on top of its
           * layout height, so a taller card overflows the scroller's padding by more, and
           * `overflow-x: auto` forces `overflow-y` to compute as `auto` whatever the
           * stylesheet asks for — so the surplus is cut rather than allowed to hang out.

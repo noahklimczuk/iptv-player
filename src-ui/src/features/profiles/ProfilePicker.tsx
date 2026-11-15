@@ -47,8 +47,8 @@ export function ProfilePicker() {
         {profiles.map((profile) => (
           <motion.button
             key={profile.id}
-            whileHover={{ scale: 1.04 }}
-            whileFocus={{ scale: 1.04 }}
+            whileHover={{ scale: 1.02 }}
+            whileFocus={{ scale: 1.02 }}
             transition={{ duration: 0.16 }}
             onClick={() => (profile.hasPin ? setLocked(profile) : activate(profile))}
             aria-label={`${profile.name}${profile.hasPin ? ', PIN required' : ''}`}
