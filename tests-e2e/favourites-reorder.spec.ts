@@ -18,9 +18,21 @@ import { expect, test, type Page } from '@playwright/test';
 async function favourites(page: Page) {
   await page.goto('/#/live');
   await expect(page.getByTestId('channel-row').first()).toBeVisible();
+  const all = await names(page.getByTestId('channel-row'));
   await page.getByRole('button', { name: /^Favourites$/ }).click();
-  await expect(page.getByTestId('channel-row').first()).toBeVisible();
-  return page.getByTestId('channel-row');
+  const rows = page.getByTestId('channel-row');
+  // The full list stays on screen until the favourites arrive, so a visible row says
+  // nothing about which list it is from: reading the order then read the wrong one and
+  // made the drag test flaky on CI. Wait for the list to change, then to hold still.
+  await expect.poll(async () => (await names(rows)).join('|')).not.toBe(all.join('|'));
+  let last = '';
+  await expect.poll(async () => {
+    const now = (await names(rows)).join('|');
+    const steady = now === last;
+    last = now;
+    return steady;
+  }, { intervals: [150] }).toBe(true);
+  return rows;
 }
 
 /** The channel names in view order. */
