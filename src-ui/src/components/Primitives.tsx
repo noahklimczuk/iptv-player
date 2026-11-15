@@ -7,6 +7,7 @@ import type {
 import { fallBackToRemote, useAssetSrc } from '@/hooks/useAssetSrc';
 
 import { Icon, type IconName } from './Icon';
+import { useLiquidGlass } from '@/components/liquidGlass';
 
 /* ── Button ───────────────────────────────────────────────────────────────── */
 
@@ -436,6 +437,7 @@ export function Select({
   const [cursor, setCursor] = useState(0);
   const box = useRef<HTMLDivElement | null>(null);
   const list = useRef<HTMLDivElement | null>(null);
+  useLiquidGlass({ ref: list, shown: open, bezel: 10 });
   /** Whether this has ever been open, so the first render does not grab the focus. */
   const wasOpen = useRef(false);
   const slug = label.toLowerCase().replace(/\s+/g, '-');

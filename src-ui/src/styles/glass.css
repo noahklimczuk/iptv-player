@@ -1,20 +1,30 @@
-/* Glass: one material for the app's floating chrome.
+/* Liquid Glass: one material for the app's floating chrome, built after Apple's.
 
-   The rule is what makes it cohesive rather than decoration: content sits on solid
-   cards, and only what floats above content is glass -- the tab bar, the top bar, and
-   transient surfaces (the command palette, menus, notices). Nothing else.
+   Asked for: "make the liquid glass identical to the iOS one". What makes Apple's
+   material read as glass rather than frost, and what this now does:
 
-   Tints are set by legibility, not taste: a resting tab label must reach WCAG AA
-   (4.5:1) against the glass laid over a pure white page *and* a pure black one, the
-   two extremes of anything that can blur behind it. tests-e2e/nav-pill.spec.ts
-   holds every theme to that.
+     1. It is clear. A light blur and a thin tint, so what is behind stays legible as
+        itself -- not the heavy frosted panel this was before.
+     2. It bends light. Along the rim the page behind is pulled inward, as through the
+        curved edge of a lens (`--glass-lens`, a displacement map per surface from
+        components/liquidGlass.ts). Engines that cannot do it get the rest unchanged.
+     3. It adapts instead of tinting. Apple keeps labels legible on clear glass by
+        compressing the brightness of what is behind, not by painting over it: dark
+        glass dims the page under it, light glass lifts it. That is the brightness and
+        contrast in `--glass-filter`, and it is why a white poster under the dark tab
+        bar still leaves its white labels readable.
+     4. Its rim catches light: a thin specular edge, brightest where light from the top
+        left would strike, the far edge dimmer, and a soft glow inside.
+     5. Light follows the pointer (`--lg-x`/`--lg-y`), the way the glass lights up
+        under a finger.
 
-   Built from four layers, the same everywhere:
-     1. the page behind, blurred and saturated (`backdrop-filter`), which is what makes
-        it glass rather than a translucent colour;
-     2. a tint, so text on it always has a known background to sit against;
-     3. a sheen and a specular edge along the top, where light would catch it;
-     4. a hairline and a soft shadow, so it separates from what is under it.
+   Legibility is still a number, not taste: a resting tab label reaches WCAG AA (4.5:1)
+   against the glass as actually rendered over a pure white page *and* a pure black one,
+   the two extremes of anything that can be behind it. tests-e2e/nav-pill.spec.ts
+   measures the pixels.
+
+   Content sits on solid cards; only what floats above content is glass -- the tab bar,
+   the top bar's controls, and transient surfaces (the palette, menus, notices).
 
    Not on the player. mpv draws into a native window *beneath* the WebView, so a
    backdrop filter has nothing to sample there -- glass over video would only ever be
@@ -25,119 +35,234 @@
 
 :root,
 :root[data-theme='light'] {
-  --glass-tint:          rgb(255 255 255 / 0.78);
-  --glass-tint-strong:   rgb(255 255 255 / 0.8);
-  --glass-bar:           color-mix(in srgb, var(--bg) 84%, transparent);
-  --glass-sheen:         rgb(255 255 255 / 0.55);
-  --glass-specular:      rgb(255 255 255 / 0.95);
-  --glass-edge:          rgb(255 255 255 / 0.7);
-  --glass-hairline:      rgb(22 22 26 / 0.1);
-  --glass-shadow:        0 14px 36px rgb(22 22 26 / 0.14), 0 2px 6px rgb(22 22 26 / 0.06);
-  --glass-filter:        blur(24px) saturate(180%);
+  --glass-tint:          rgb(255 255 255 / 0.34);
+  --glass-tint-strong:   rgb(255 255 255 / 0.58);
+  --glass-filter:        blur(7px) saturate(190%) contrast(0.55) brightness(1.5);
+  --glass-filter-strong: blur(22px) saturate(180%) contrast(0.55) brightness(1.5);
+  --glass-sheen:         rgb(255 255 255 / 0.28);
+  --glass-rim:           rgb(255 255 255 / 0.95);
+  --glass-rim-low:       rgb(255 255 255 / 0.55);
+  --glass-rim-line:      rgb(255 255 255 / 0.4);
+  --glass-inner:         rgb(255 255 255 / 0.32);
+  --glass-glow:          rgb(255 255 255 / 0.45);
+  --glass-hairline:      rgb(0 0 0 / 0.07);
+  --glass-shadow:        0 10px 30px rgb(0 0 0 / 0.12), 0 1px 4px rgb(0 0 0 / 0.06);
   --glass-text:          #16161a;
-  --glass-text-muted:    #4a4a52;
-  --glass-active-bg:     #16161a;
-  --glass-active-text:   #f4f3ef;
+  --glass-text-muted:    #16161a;
+  --glass-platter:       rgb(120 120 128 / 0.16);
+  --glass-platter-press: rgb(255 255 255 / 0.5);
+  --glass-selected:      var(--accent);
+  /* The scroll edge under the top bar. */
+  --glass-edge-bg:       var(--bg);
+  /* Over artwork: the "clear" variant, which only ever sits on pictures. */
+  --glass-clear-tint:    rgb(255 255 255 / 0.14);
+  --glass-clear-filter:  blur(6px) saturate(160%) brightness(0.9);
 }
 
 :root[data-theme='dark'] {
-  --glass-tint:          rgb(34 34 40 / 0.78);
-  --glass-tint-strong:   rgb(34 34 40 / 0.8);
-  --glass-sheen:         rgb(255 255 255 / 0.09);
-  --glass-specular:      rgb(255 255 255 / 0.2);
-  --glass-edge:          rgb(255 255 255 / 0.12);
-  --glass-hairline:      rgb(0 0 0 / 0.4);
-  --glass-shadow:        0 16px 40px rgb(0 0 0 / 0.45), 0 2px 8px rgb(0 0 0 / 0.3);
+  --glass-tint:          rgb(28 28 32 / 0.3);
+  --glass-tint-strong:   rgb(28 28 32 / 0.55);
+  --glass-filter:        blur(7px) saturate(170%) brightness(0.5);
+  --glass-filter-strong: blur(22px) saturate(170%) brightness(0.45);
+  --glass-sheen:         rgb(255 255 255 / 0.07);
+  --glass-rim:           rgb(255 255 255 / 0.5);
+  --glass-rim-low:       rgb(255 255 255 / 0.22);
+  --glass-rim-line:      rgb(255 255 255 / 0.12);
+  --glass-inner:         rgb(255 255 255 / 0.05);
+  --glass-glow:          rgb(255 255 255 / 0.12);
+  --glass-hairline:      rgb(0 0 0 / 0.35);
+  --glass-shadow:        0 12px 34px rgb(0 0 0 / 0.38), 0 1px 4px rgb(0 0 0 / 0.25);
   --glass-text:          #f4f3ef;
-  --glass-text-muted:    #e2e2e6;
-  --glass-active-bg:     #f4f3ef;
-  --glass-active-text:   #16161a;
+  --glass-text-muted:    #f4f3ef;
+  --glass-platter:       rgb(120 120 128 / 0.36);
+  --glass-platter-press: rgb(255 255 255 / 0.16);
+  /* The light-on-dark accent, as Apple's system blue lightens in dark mode. */
+  --glass-selected:      color-mix(in srgb, var(--accent) 55%, white);
 }
 
 :root[data-theme='oled'] {
-  --glass-tint:          rgb(20 20 24 / 0.8);
-  --glass-tint-strong:   rgb(20 20 24 / 0.84);
-  --glass-sheen:         rgb(255 255 255 / 0.08);
-  --glass-specular:      rgb(255 255 255 / 0.18);
-  --glass-edge:          rgb(255 255 255 / 0.12);
+  --glass-tint:          rgb(0 0 0 / 0.32);
+  --glass-tint-strong:   rgb(10 10 12 / 0.6);
+  --glass-filter:        blur(7px) saturate(170%) brightness(0.5);
+  --glass-filter-strong: blur(22px) saturate(170%) brightness(0.45);
+  --glass-sheen:         rgb(255 255 255 / 0.06);
+  --glass-rim:           rgb(255 255 255 / 0.45);
+  --glass-rim-low:       rgb(255 255 255 / 0.2);
+  --glass-rim-line:      rgb(255 255 255 / 0.12);
+  --glass-inner:         rgb(255 255 255 / 0.04);
+  --glass-glow:          rgb(255 255 255 / 0.1);
   --glass-hairline:      rgb(0 0 0 / 0.6);
-  --glass-shadow:        0 16px 40px rgb(0 0 0 / 0.6), 0 2px 8px rgb(0 0 0 / 0.4);
+  --glass-shadow:        0 12px 34px rgb(0 0 0 / 0.55), 0 1px 4px rgb(0 0 0 / 0.4);
   --glass-text:          #f4f3ef;
-  --glass-text-muted:    #e2e2e6;
-  --glass-active-bg:     #f4f3ef;
-  --glass-active-text:   #16161a;
+  --glass-text-muted:    #f4f3ef;
+  --glass-platter:       rgb(120 120 128 / 0.36);
+  --glass-platter-press: rgb(255 255 255 / 0.16);
+  --glass-selected:      color-mix(in srgb, var(--accent) 55%, white);
 }
 
 :root[data-theme='contrast'] {
   --glass-text:          #ffffff;
   --glass-text-muted:    #ffffff;
-  --glass-active-bg:     #ffdd00;
-  --glass-active-text:   #000000;
+  --glass-platter:       #ffdd00;
+  --glass-selected:      #000000;
 }
 
-/* A floating surface: the tab bar, a notice. */
-.glass {
-  background:
-    linear-gradient(180deg, var(--glass-sheen), transparent 55%),
-    var(--glass-tint);
-  -webkit-backdrop-filter: var(--glass-filter);
-  backdrop-filter: var(--glass-filter);
-  border: 1px solid var(--glass-edge);
+/* The rim, the inner glow and the lift, shared by every variant. Inset shadows rather
+   than a pseudo-element, so the rim stays put on a surface that scrolls (the tab bar
+   does, in a narrow window). */
+.glass,
+.glass-strong,
+.glass-clear {
   box-shadow:
     var(--glass-shadow),
     0 0 0 0.5px var(--glass-hairline),
-    inset 0 1px 0 var(--glass-specular);
+    inset 0 0 0 0.5px var(--glass-rim-line),
+    inset 1.5px 1.5px 1px -1px var(--glass-rim),
+    inset -1.5px -1.5px 1px -1px var(--glass-rim-low),
+    inset 0 0 18px var(--glass-inner);
+  /* Light that follows the pointer, and a sheen along the top. Parked above the
+     surface until a pointer is over it. */
+  background-image:
+    radial-gradient(140px circle at var(--lg-x, 50%) var(--lg-y, -200px), var(--glass-glow), transparent 70%),
+    linear-gradient(180deg, var(--glass-sheen), transparent 55%);
+  border: none;
+}
+
+/* A floating surface: the tab bar, a control on the top bar. */
+.glass {
+  background-color: var(--glass-tint);
+  -webkit-backdrop-filter: var(--glass-lens,) var(--glass-filter);
+  backdrop-filter: var(--glass-lens,) var(--glass-filter);
   color: var(--glass-text);
 }
 
-/* The same material, more opaque, for surfaces that are mostly text to read: the
-   command palette, a menu. Legibility first; the glass is in the edges. */
+/* The same material, frostier, for surfaces that are mostly text to read: the command
+   palette, a menu, a notice -- as Apple's menus and alerts are. */
 .glass-strong {
-  background:
-    linear-gradient(180deg, var(--glass-sheen), transparent 40%),
-    var(--glass-tint-strong);
-  -webkit-backdrop-filter: var(--glass-filter);
-  backdrop-filter: var(--glass-filter);
-  border: 1px solid var(--glass-edge);
-  box-shadow:
-    var(--glass-shadow),
-    0 0 0 0.5px var(--glass-hairline),
-    inset 0 1px 0 var(--glass-specular);
+  background-color: var(--glass-tint-strong);
+  -webkit-backdrop-filter: var(--glass-lens,) var(--glass-filter-strong);
+  backdrop-filter: var(--glass-lens,) var(--glass-filter-strong);
 }
 
-/* The top bar: the page's own colour at rest, frosting what scrolls beneath it. */
-.glass-bar {
-  background: var(--glass-bar);
-  -webkit-backdrop-filter: var(--glass-filter);
-  backdrop-filter: var(--glass-filter);
+/* Apple's "clear" glass: only ever over pictures, where it should hardly be there.
+   The billboard's secondary buttons. White text, so it is the same in every theme. */
+.glass-clear {
+  background-color: var(--glass-clear-tint);
+  -webkit-backdrop-filter: var(--glass-lens,) var(--glass-clear-filter);
+  backdrop-filter: var(--glass-lens,) var(--glass-clear-filter);
+  --glass-rim: rgb(255 255 255 / 0.7);
+  --glass-rim-low: rgb(255 255 255 / 0.3);
+  --glass-rim-line: rgb(255 255 255 / 0.2);
+  --glass-inner: rgb(255 255 255 / 0.08);
+  --glass-glow: rgb(255 255 255 / 0.25);
+  --glass-sheen: rgb(255 255 255 / 0.1);
+  --glass-shadow: 0 6px 20px rgb(0 0 0 / 0.2);
+  --glass-hairline: transparent;
+}
+
+/* Pressing glass makes it swell, as it does under a finger. */
+.glass-press {
+  transition: transform 0.35s var(--ease-spring), box-shadow 0.2s var(--ease);
+}
+.glass-press:active { transform: scale(1.06); }
+
+/* The top bar: Apple's scroll edge rather than a bar. There is no strip of frost with a
+   hard bottom edge -- content scrolls up under a fade that blurs and softens it, and
+   the bar's controls float over it on their own glass. */
+.glass-bar { background: transparent; }
+.glass-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 -32px 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    var(--glass-edge-bg) 0%,
+    color-mix(in srgb, var(--glass-edge-bg) 82%, transparent) 45%,
+    color-mix(in srgb, var(--glass-edge-bg) 30%, transparent) 75%,
+    transparent 100%
+  );
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent);
+  mask-image: linear-gradient(180deg, #000 55%, transparent);
 }
 
 /* Solid where glass would cost legibility. */
 :root[data-theme='contrast'] .glass,
-:root[data-theme='contrast'] .glass-strong {
+:root[data-theme='contrast'] .glass-strong,
+:root[data-theme='contrast'] .glass-clear {
   /* The theme's own outline is its lift: `--shadow-3` is a 2px white ring there. */
   background: #000; border: 1px solid #fff; box-shadow: var(--shadow-3);
   -webkit-backdrop-filter: none; backdrop-filter: none;
 }
-:root[data-theme='contrast'] .glass-bar {
+:root[data-theme='contrast'] .glass-bar::before {
   background: #000; -webkit-backdrop-filter: none; backdrop-filter: none;
+  -webkit-mask-image: none; mask-image: none; inset: 0;
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .glass, .glass-strong { background: var(--bg-elevated); -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .glass-bar { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass, .glass-strong {
+    background: var(--bg-elevated); -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  .glass-clear {
+    background: rgb(0 0 0 / 0.6); -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  .glass-bar::before {
+    background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none;
+    -webkit-mask-image: none; mask-image: none; inset: 0;
+  }
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass, .glass-strong { background: var(--bg-elevated); }
-  .glass-bar { background: var(--bg); }
+  .glass-clear { background: rgb(0 0 0 / 0.6); }
+  .glass-bar::before { background: var(--bg); }
 }
 
-/* The tab bar: labels on the glass, and the current tab a solid lens in it. */
-.nav-glass a { color: var(--glass-text-muted); background: transparent; }
-.nav-glass a:hover:not([aria-current]) { color: var(--glass-text); }
-.nav-glass a[aria-current] {
-  color: var(--glass-active-text);
-  background: var(--glass-active-bg);
-  box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+/* ── The tab bar ────────────────────────────────────────────────────────────
+
+   As on iOS: every tab the same width, labels in the primary colour, and the current
+   tab marked by a soft platter and the accent colour rather than a solid block. The
+   platter is one element that slides between tabs on a spring, swells while the bar is
+   pressed, and can be dragged from tab to tab (components/TabBar.tsx). */
+.nav-glass a { color: var(--glass-text-muted); background: transparent; position: relative; z-index: 1; }
+.nav-glass a[aria-current] { color: var(--glass-selected); }
+.nav-glass a:focus-visible { outline: 2px solid var(--glass-selected); outline-offset: -4px; }
+
+.nav-platter {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  border-radius: calc(var(--r-pill) - 6px);
+  background: var(--glass-platter);
+  pointer-events: none;
+  transition:
+    transform 0.5s var(--ease-spring),
+    width 0.5s var(--ease-spring),
+    background 0.25s var(--ease),
+    box-shadow 0.25s var(--ease),
+    scale 0.35s var(--ease-spring);
+}
+/* Pressed: the platter lifts into a lens of its own, bigger and brighter at the rim. */
+.nav-glass[data-pressed] .nav-platter {
+  scale: 1.12 1.2;
+  background: var(--glass-platter-press);
+  box-shadow:
+    0 6px 18px rgb(0 0 0 / 0.16),
+    inset 1px 1px 1px -0.5px var(--glass-rim),
+    inset -1px -1px 1px -0.5px var(--glass-rim-low);
+}
+/* Dragged: it follows the pointer exactly; the spring is only for letting go. */
+.nav-glass[data-dragging] .nav-platter {
+  transition: background 0.25s var(--ease), box-shadow 0.25s var(--ease), scale 0.35s var(--ease-spring);
+}
+:root[data-theme='contrast'] .nav-glass a[aria-current] { color: #000; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-platter { transition: none; }
+  .nav-glass[data-pressed] .nav-platter { scale: none; }
+  .glass-press:active { transform: none; }
 }

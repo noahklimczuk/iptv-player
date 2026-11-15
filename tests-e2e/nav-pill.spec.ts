@@ -110,20 +110,22 @@ test('it is still a navigation landmark of links', async ({ page }) => {
 });
 
 /**
- * How visible it is, as numbers -- now that it is glass.
+ * How visible it is, as numbers -- now that it is Liquid Glass.
  *
- * Reported first as "make the tab bar more visible": a pill filled at 82% with a 10%
- * border and faint labels disappeared over a bright rail. Those numbers were pinned
- * here as an opaque fill and a strong border. Then glass was asked for, which is a
- * translucent fill and a light edge by definition -- so the guarantee moves to what the
- * complaint was actually about, and gets stricter rather than looser:
+ * Reported first as "make the tab bar more visible": a pill filled at 82% with faint
+ * labels disappeared over a bright rail. Then glass was asked for, and then "make the
+ * liquid glass identical to the iOS one" -- which is clear glass, a thin tint. Apple
+ * keeps labels legible on it by compressing the brightness of what is behind (dark glass
+ * dims the page, light glass lifts it) rather than by painting over it, so the fill
+ * colour alone no longer says what a label sits on. This measures what is actually
+ * drawn:
  *
- *   - it is frosted, not merely translucent: the page behind is blurred, which is what
- *     keeps whatever is under it from competing with the labels;
- *   - a resting label reaches WCAG AA (4.5:1) against the glass laid over a pure white
- *     page and over a pure black one -- the two extremes of anything that can blur
- *     behind it -- in every theme that uses glass;
- *   - it is lifted off the page by a shadow and edged by a specular highlight.
+ *   - it is frosted, not merely see-through: the page behind is blurred;
+ *   - with a pure white page behind it and then a pure black one -- the two extremes of
+ *     anything that can be there -- the glass is screenshotted where a resting label
+ *     sits (labels hidden), and the label's colour reaches WCAG AA (4.5:1) against
+ *     those pixels, in every theme;
+ *   - it is lifted off the page by a shadow.
  *
  * The contrast theme stays solid, and is held to the same 4.5:1 on its own fill.
  */
@@ -143,18 +145,24 @@ for (const theme of ['dark', 'oled', 'light', 'contrast'] as const) {
       const resting = Array.from(el.querySelectorAll('a')).find(
         (a) => a.getAttribute('aria-current') !== 'page',
       ) as HTMLElement;
-      const parse = (c: string) => {
-        const n = c.match(/[\d.]+/g)!.map(Number);
-        return { r: n[0]!, g: n[1]!, b: n[2]!, a: n[3] ?? 1 };
-      };
+      const n = getComputedStyle(resting).color.match(/[\d.]+/g)!.map(Number);
+      const fill = style.backgroundColor.match(/[\d.]+/g)!.map(Number);
       return {
-        fill: parse(style.backgroundColor),
-        filter: style.backdropFilter || (style as unknown as { webkitBackdropFilter: string }).webkitBackdropFilter,
-        label: parse(getComputedStyle(resting).color),
+        fillAlpha: fill[3] ?? 1,
+        filter:
+          style.backdropFilter ||
+          (style as unknown as { webkitBackdropFilter: string }).webkitBackdropFilter,
+        label: { r: n[0]!, g: n[1]!, b: n[2]! },
         fontSize: parseFloat(getComputedStyle(resting).fontSize),
         shadow: style.boxShadow,
       };
     });
+
+    if (theme === 'contrast') {
+      expect(look.fillAlpha, 'the contrast theme is solid, not glass').toBe(1);
+    } else {
+      expect(look.filter, 'glass is frosted, not merely see-through').toContain('blur');
+    }
 
     const channel = (v: number) => {
       const c = v / 255;
@@ -162,28 +170,124 @@ for (const theme of ['dark', 'oled', 'light', 'contrast'] as const) {
     };
     const lum = (c: { r: number; g: number; b: number }) =>
       0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
-    const over = (bg: number) => ({
-      r: look.fill.r * look.fill.a + bg * (1 - look.fill.a),
-      g: look.fill.g * look.fill.a + bg * (1 - look.fill.a),
-      b: look.fill.b * look.fill.a + bg * (1 - look.fill.a),
-    });
     const ratio = (x: { r: number; g: number; b: number }) => {
       const a = lum(look.label);
       const b = lum(x);
       return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     };
 
-    if (theme === 'contrast') {
-      expect(look.fill.a, 'the contrast theme is solid, not glass').toBe(1);
-    } else {
-      expect(look.filter, 'glass is frosted, not merely see-through').toContain('blur');
-    }
-    for (const [name, bg] of [['white', 255], ['black', 0]] as const) {
-      const r = ratio(over(bg));
-      expect(r, `resting labels are ${r.toFixed(2)}:1 over a ${name} page`)
+    // Labels and the platter out of the way, so the shot is of the glass alone.
+    await page.addStyleTag({
+      content: '[data-testid="nav-pill"] a, .nav-platter { visibility: hidden !important; }',
+    });
+    const resting = pill(page).locator('a:not([aria-current])').first();
+    for (const [name, bg] of [['white', '#ffffff'], ['black', '#000000']] as const) {
+      await page.evaluate((colour) => {
+        document.getElementById('behind-pill')?.remove();
+        const d = document.createElement('div');
+        d.id = 'behind-pill';
+        d.style.cssText = `position:fixed;inset:0;z-index:49;background:${colour}`;
+        document.body.appendChild(d);
+      }, bg);
+      await page.waitForTimeout(150);
+      const box = (await resting.boundingBox())!;
+      // The middle of where the label sits, clear of the rim's highlight.
+      const shot = await page.screenshot({
+        clip: {
+          x: box.x + box.width * 0.3,
+          y: box.y + box.height * 0.3,
+          width: box.width * 0.4,
+          height: box.height * 0.4,
+        },
+      });
+      const under = await page.evaluate(async (b64) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${b64}`;
+        await img.decode();
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        const ctx = c.getContext('2d')!;
+        ctx.drawImage(img, 0, 0);
+        const d = ctx.getImageData(0, 0, c.width, c.height).data;
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        const px = d.length / 4;
+        for (let i = 0; i < d.length; i += 4) {
+          r += d[i]!;
+          g += d[i + 1]!;
+          b += d[i + 2]!;
+        }
+        return { r: r / px, g: g / px, b: b / px };
+      }, shot.toString('base64'));
+      const r = ratio(under);
+      const drawn = `rgb(${Math.round(under.r)} ${Math.round(under.g)} ${Math.round(under.b)})`;
+      expect(r, `resting labels are ${r.toFixed(2)}:1 over a ${name} page (glass drawn as ${drawn})`)
         .toBeGreaterThanOrEqual(4.5);
     }
     expect(look.fontSize).toBeGreaterThanOrEqual(11);
     expect(look.shadow).not.toBe('none');
   });
 }
+
+test('the current tab sits on a platter that moves to the tab chosen', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(pill(page)).toBeVisible();
+  const platter = pill(page).locator('.nav-platter');
+  const home = pill(page).getByRole('link', { name: 'Home' });
+  const guide = pill(page).getByRole('link', { name: 'Guide' });
+
+  const offset = async (tab: typeof home) => {
+    const t = (await tab.boundingBox())!;
+    const p = (await platter.boundingBox())!;
+    return Math.abs(p.x + p.width / 2 - (t.x + t.width / 2));
+  };
+  await expect.poll(() => offset(home)).toBeLessThan(2);
+
+  await guide.click();
+  await expect(guide).toHaveAttribute('aria-current', 'page');
+  // It slides there on a spring, and comes to rest under the new tab.
+  await expect.poll(() => offset(guide), { timeout: 3000 }).toBeLessThan(2);
+
+  // Every tab the same width, as on iOS.
+  const widths = await pill(page)
+    .locator('a')
+    .evaluateAll((as) => as.map((a) => (a as HTMLElement).offsetWidth));
+  expect(new Set(widths).size).toBe(1);
+});
+
+test('dragging the platter along the bar and letting go goes to that tab', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(pill(page)).toBeVisible();
+  const home = (await pill(page).getByRole('link', { name: 'Home' }).boundingBox())!;
+  const series = (await pill(page).getByRole('link', { name: 'Series' }).boundingBox())!;
+  const y = home.y + home.height / 2;
+
+  await page.mouse.move(home.x + home.width / 2, y);
+  await page.mouse.down();
+  await expect(pill(page)).toHaveAttribute('data-pressed', 'true');
+  await page.mouse.move(series.x + series.width / 2, y, { steps: 12 });
+  await expect(pill(page)).toHaveAttribute('data-dragging', 'true');
+  await page.mouse.up();
+
+  await expect(pill(page).getByRole('link', { name: 'Series' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(pill(page)).not.toHaveAttribute('data-pressed');
+});
+
+test('the glass bends what is behind it at the rim', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(pill(page)).toBeVisible();
+  // The lens is an SVG displacement map in front of the blur, sized to the bar.
+  await expect
+    .poll(() =>
+      pill(page).evaluate((el) => getComputedStyle(el).getPropertyValue('--glass-lens').trim()),
+    )
+    .toMatch(/^url\(#aurora-lens-\d+\)$/);
+  const filter = await pill(page).evaluate((el) => getComputedStyle(el).backdropFilter);
+  expect(filter).toContain('url(');
+  expect(filter).toContain('blur');
+});

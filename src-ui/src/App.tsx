@@ -1,8 +1,10 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
-import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { CatalogItem, MosaicRect, MosaicView, PipView, Recording, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
+import { TabBar } from '@/components/TabBar';
+import { useLiquidGlass } from '@/components/liquidGlass';
 import { Icon, type IconName } from '@/components/Icon';
 import { artHue } from '@/components/Primitives';
 import { BootScreen } from '@/components/BootScreen';
@@ -729,82 +731,12 @@ export default function App() {
       }}
     >
       {/*
-        * Navigation, as a floating pill near the bottom rather than a rail down the side.
-        *
-        * Three things it has to keep doing, because the suite and a remote control both
-        * depend on them: the accessible name stays "Main", every destination stays a
-        * link with its label as its accessible name, and tab order stays the reading
-        * order. The change is where it sits and what it looks like, not what it is.
-        *
-        * `position: fixed` and not part of the flex row, so the content pane is the full
-        * width of the window — which is the point of moving it. `main` carries bottom
-        * padding instead, so the last row of a grid is not parked underneath the pill.
-        *
-        * It scrolls horizontally rather than wrapping or shrinking: there are ten
-        * destinations and a narrow window cannot show them all, and a pill that reflowed
-        * to two lines would stop being a pill.
+        * Navigation: a floating tab bar near the bottom, in Liquid Glass
+        * (components/TabBar.tsx). `position: fixed` and not part of the flex row, so the
+        * content pane is the full width of the window; `main` carries bottom padding
+        * instead, so the last row of a grid is not parked underneath it.
         */}
-      <nav
-        aria-label="Main"
-        data-testid="nav-pill"
-        style={{
-          position: 'fixed',
-          bottom: 20,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          maxWidth: 'calc(100vw - var(--sp-6) * 2)',
-          height: 'var(--navpill-h)',
-          display: videoBehind ? 'none' : 'flex',
-          alignItems: 'center',
-          gap: 0,
-          padding: 8,
-          borderRadius: 'var(--r-pill)',
-          /*
-           * Glass, from `styles/glass.css`: the page beneath it blurred and tinted, a
-           * sheen and a specular edge along the top, a hairline and a shadow. The tab bar
-           * is the most-seen piece of floating chrome, which is why it is the one the
-           * material was designed around; its colours come from the material too, so the
-           * labels stay legible on the light theme's frosted white as on the dark one.
-           */
-          zIndex: 50,
-          overflowX: 'auto',
-          scrollbarWidth: 'none',
-        }}
-        className="no-scrollbar glass nav-glass"
-      >
-        {NAV.map((n) => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            end={n.to === '/'}
-            onClick={closePlayer}
-            style={({ isActive }) => ({
-              display: 'grid',
-              placeItems: 'center',
-              alignContent: 'center',
-              gap: 3,
-              height: '100%',
-              // The active item is a wider paper-coloured tab; the rest stay compact.
-              minWidth: isActive ? 96 : 68,
-              padding: '0 10px',
-              borderRadius: 'calc(var(--r-pill) - 8px)',
-              textDecoration: 'none',
-              // 11px at desktop density, larger in TV mode.
-              fontSize: 'calc(var(--fs-xs) - 1px)',
-              fontWeight: 750,
-              letterSpacing: '0.01em',
-              whiteSpace: 'nowrap',
-              // Colours are `.nav-glass` in styles/glass.css, keyed on `aria-current`.
-              transition: `background var(--t-base) var(--ease),
-                           color var(--t-fast) var(--ease),
-                           min-width var(--t-base) var(--ease-spring)`,
-            })}
-          >
-            <Icon name={n.icon} size={19} strokeWidth={2} />
-            {n.label}
-          </NavLink>
-        ))}
-      </nav>
+      <TabBar items={NAV} hidden={videoBehind} onNavigate={closePlayer} />
 
       <main
         // The element that scrolls, named so a virtualized page can measure against it.
@@ -1045,20 +977,22 @@ function ThemeToggle() {
   const theme = useUi((s) => s.theme);
   const setTheme = useUi((s) => s.setTheme);
   const dark = theme === 'dark' || theme === 'oled';
+  const glass = useLiquidGlass<HTMLButtonElement>({ bezel: 10 });
   return (
     <button
+      ref={glass}
       type="button"
       role="switch"
       aria-checked={dark}
       aria-label="Dark mode"
       title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
       data-testid="theme-toggle"
-      className="dl-press"
+      // A control floating on the scroll edge: its own piece of glass, as on iOS.
+      className="glass glass-press"
       onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
       style={{
         width: 44, height: 44, borderRadius: 'var(--r-full)', cursor: 'pointer',
-        display: 'grid', placeItems: 'center', border: 'none',
-        background: 'var(--surface)', boxShadow: 'var(--shadow-1)', color: 'var(--text)',
+        display: 'grid', placeItems: 'center', color: 'var(--glass-text)',
       }}
     >
       <Icon name={dark ? 'sun' : 'moon'} size={19} />
@@ -1083,6 +1017,7 @@ function TopBar({
   // is `clockTime`'s 24-hour branch copied out, so the preference could not reach the
   // time the viewer looks at most (R-136).
   const clockTime = useClockTime();
+  const searchGlass = useLiquidGlass<HTMLButtonElement>({ bezel: 12 });
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const t = window.setInterval(() => setClock(new Date()), 15_000);
@@ -1095,8 +1030,8 @@ function TopBar({
         position: 'sticky', top: 0, zIndex: 40, height: 'var(--topbar-h)',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-4)',
         padding: '0 36px',
-        // Frosted rather than opaque: the page's own colour at rest, and what scrolls
-        // beneath it blurs instead of being cut off at a hard edge.
+        // Apple's scroll edge, not a bar: what scrolls beneath fades and blurs out under
+        // it, and the controls float on their own glass (styles/glass.css).
         pointerEvents: 'none',
       }}
       className="glass-bar"
@@ -1130,14 +1065,15 @@ function TopBar({
       </span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-4)', pointerEvents: 'auto' }}>
         <button
+          ref={searchGlass}
           onClick={onSearch}
           aria-label="Search"
+          className="glass glass-press"
           style={{
             display: 'flex', alignItems: 'center', gap: 10, height: 44,
             width: 310, padding: '0 8px 0 16px',
             borderRadius: 'var(--r-full)', cursor: 'pointer',
-            background: 'var(--surface)', border: 'none', boxShadow: 'var(--shadow-1)',
-            color: 'var(--text-muted)', fontSize: 'var(--fs-md)', fontWeight: 500,
+            color: 'var(--glass-text)', fontSize: 'var(--fs-md)', fontWeight: 500,
           }}
         >
           <Icon name="search" size={16} />
@@ -1153,7 +1089,7 @@ function TopBar({
           <kbd
             style={{
               fontFamily: 'inherit', fontSize: 11, fontWeight: 800, padding: '3px 7px',
-              borderRadius: 6, background: 'var(--surface-sunk)', color: 'var(--text-muted)',
+              borderRadius: 6, background: 'var(--glass-platter)', color: 'var(--glass-text)',
             }}
           >
             Ctrl K

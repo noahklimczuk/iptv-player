@@ -9,6 +9,7 @@ import { Icon, type IconName } from '@/components/Icon';
 import { invoke } from '@/ipc';
 import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { report } from '@/lib/errors';
+import { useLiquidGlass } from '@/components/liquidGlass';
 
 /**
  * How many results of one kind are shown before the rest are folded away.
@@ -169,6 +170,8 @@ export function CommandPalette({
   }, [cursor, open, flat.length]);
 
   useFocusTrap(dialogRef, open, inputRef);
+  // The lens along the palette's rim (styles/glass.css).
+  useLiquidGlass({ ref: dialogRef, shown: open, bezel: 22 });
 
   /**
    * `AnimatePresence` sits outside the condition, which is the only place it works.
