@@ -165,6 +165,8 @@ export default function App() {
     ],
   );
   const [playerOpen, setPlayerOpen] = useState(false);
+  const playerOpenRef = useRef(false);
+  playerOpenRef.current = playerOpen;
   // Shown until a provider exists. `?setup` forces it for demos and tests.
   const [setupDone, setSetupDone] = useState(
     () => !new URLSearchParams(window.location.search).has('setup'),
@@ -287,7 +289,19 @@ export default function App() {
   const closePlayer = useCallback(() => {
     if (playerOpen) {
       saveProgress(useUi.getState().player, profileId);
-      invoke('player.stop').catch(report('Could not stop playback'));
+      // Stopped only once the page without the player has been painted.
+      //
+      // Sent at once, the host hid the picture straight away while React was still
+      // drawing Home -- a whole library's rails -- and for those frames the screen was
+      // still the transparent player with nothing behind it: the desktop showing
+      // through under the dock (71.4 s of the viewer's screen recording). Two animation
+      // frames is "after the next paint". A player reopened in that gap keeps playing:
+      // `reopened` is read when the stop would be sent, not when it was asked for.
+      const reopened = playerOpenRef;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (reopened.current) return;
+        invoke('player.stop').catch(report('Could not stop playback'));
+      }));
       // Continue Watching has a new card and the recommendations have changed.
       // Nothing remounts on the way out of the player, so Home has to be told.
       useUi.getState().bumpCatalog();

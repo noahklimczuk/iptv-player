@@ -5,7 +5,7 @@ import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
 import {
-  clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setPlayerErrorMock,
+  clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setNoPictureMock, setPlayerErrorMock,
   setSilentDurationMock, slowMock,
 } from './ipc';
 import { ICON_PATHS } from './components/Icon';
@@ -42,6 +42,8 @@ installGlobalErrorHandlers();
 // existed no journey could press the panel's buttons.
 (window as unknown as { __auroraPlayerError?: unknown }).__auroraPlayerError =
   setPlayerErrorMock;
+// …and hold back the first frame, which is when the window used to turn see-through.
+(window as unknown as { __auroraNoPicture?: unknown }).__auroraNoPicture = setNoPictureMock;
 // …and the icon set, so a test can measure every glyph's geometry rather than only the
 // handful that happen to be on one screen. `getBBox` needs a real SVG engine, so this is
 // the only place the measurement can be made from.

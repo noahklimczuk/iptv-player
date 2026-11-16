@@ -32,6 +32,16 @@ const MAX_FRAMES: usize = 600;
 /// Never grab more often than this, whatever the interval says: a grab copies a frame
 /// back from the GPU under the player lock.
 const MIN_GAP: Duration = Duration::from_millis(1500);
+/// How long playback has to have run without a jump before a frame is grabbed.
+///
+/// A grab is a copy back from the GPU while mpv's core waits. The first one used to be
+/// taken on the very first tick after a load -- while mpv was still bringing its
+/// decoder and the resume seek up -- and the viewer's screen recording shows the
+/// picture freezing for a second and a half right there (9.2-10.8 s). Every seek
+/// restarted that, too. Once playback is settled a grab costs a frame at most.
+const STEADY: Duration = Duration::from_secs(8);
+/// A position this far from where the last tick left it is a seek, not playback.
+const JUMP_SECS: f64 = 2.0;
 
 /// What is playing, as far as the store is concerned: frames from one item are never
 /// shown on another.
@@ -72,6 +82,15 @@ struct Store {
     /// Bucket index -> (the second it was taken at, a `data:` URL).
     frames: BTreeMap<i64, (f64, String)>,
     last_grab: Option<Instant>,
+    /// The item's chapters, read from the player once.
+    ///
+    /// The preview command used to take the player lock and ask mpv for them on every
+    /// hover -- two property reads a chapter, continuously while the pointer moved
+    /// along the bar, against the same lock the heartbeat and every control need.
+    chapters: Option<Vec<aurora_core::markers::Chapter>>,
+    /// Since when playback has run without a jump; `None` while it is not playing.
+    steady_since: Option<Instant>,
+    last_pos: f64,
 }
 
 /// The second player on a recording, kept open while that recording is the one playing.
@@ -80,10 +99,21 @@ struct Reader {
     source: Box<dyn FrameSource>,
 }
 
-#[derive(Default)]
 pub struct Frames {
     store: Mutex<Store>,
     reader: Mutex<Option<Reader>>,
+    /// `STEADY`, except in tests, which cannot wait eight seconds a case.
+    steady: Duration,
+}
+
+impl Default for Frames {
+    fn default() -> Self {
+        Self {
+            store: Mutex::default(),
+            reader: Mutex::default(),
+            steady: STEADY,
+        }
+    }
 }
 
 impl Frames {
@@ -108,7 +138,26 @@ impl Frames {
                     ..Store::default()
                 };
             }
-            if state.status != PlayerStatus::Playing || !position.is_finite() || position < 0.0 {
+            if state.status != PlayerStatus::Playing
+                || !state.has_picture
+                || !position.is_finite()
+                || position < 0.0
+            {
+                store.steady_since = None;
+                return;
+            }
+            if store.chapters.is_none() {
+                store.chapters = Some(player.chapters());
+            }
+            let jumped = (position - store.last_pos).abs() > JUMP_SECS;
+            store.last_pos = position;
+            if jumped || store.steady_since.is_none() {
+                store.steady_since = Some(Instant::now());
+            }
+            if store
+                .steady_since
+                .is_some_and(|t| t.elapsed() < self.steady)
+            {
                 return;
             }
             let bucket = (position / store.interval).floor() as i64;
@@ -129,6 +178,16 @@ impl Frames {
         let bucket = (position / store.interval).floor() as i64;
         store.frames.insert(bucket, (position, url));
         trim(&mut store.frames, bucket);
+    }
+
+    /// The chapters of what is playing now, as last read by the heartbeat. Empty until
+    /// it has read them, which it does as soon as there is a picture.
+    pub fn chapters(&self, state: &PlayerState) -> Vec<aurora_core::markers::Chapter> {
+        let store = self.store.lock();
+        if store.key.is_none() || store.key != key_of(state) {
+            return Vec::new();
+        }
+        store.chapters.clone().unwrap_or_default()
     }
 
     /// A kept frame near `position`, for what is playing now.
@@ -289,7 +348,8 @@ pub fn player_seek_preview(
         out.image = Some(url);
     }
 
-    let chapters = services.player.lock().chapters();
+    // Never the player lock here: see `Store::chapters`.
+    let chapters = services.frames.chapters(&state);
     let skip = match (state.item_kind, state.item_id) {
         (Some(MediaKind::Episode), Some(id)) => {
             let duration = (state.duration_secs > 0.0).then_some(state.duration_secs);
@@ -379,6 +439,163 @@ mod tests {
             item_id: Some(7),
             ..Default::default()
         }
+    }
+
+    /// A player that counts what the seek preview asks of it.
+    struct Counting {
+        state: PlayerState,
+        chapter_reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        grabs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl aurora_player::PlayerBackend for Counting {
+        fn load(
+            &mut self,
+            _: &str,
+            _: &aurora_player::backend::LoadOptions,
+        ) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_paused(&mut self, _: bool) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn seek(&mut self, _: f64, _: bool) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_volume(&mut self, _: u32) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_muted(&mut self, _: bool) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_speed(&mut self, _: f64) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_audio_track(&mut self, _: Option<i64>) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_subtitle_track(&mut self, _: Option<i64>) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn set_aspect(
+            &mut self,
+            _: aurora_player::Aspect,
+        ) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn state(&self) -> PlayerState {
+            self.state.clone()
+        }
+        fn chapters(&self) -> Vec<Chapter> {
+            self.chapter_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            vec![Chapter {
+                title: Some("Opening".into()),
+                start_secs: 0.0,
+            }]
+        }
+        fn resize(&mut self, _: u32, _: u32) -> Result<(), aurora_player::PlayerError> {
+            Ok(())
+        }
+        fn grab_frame(&mut self, _: u32) -> Option<Frame> {
+            self.grabs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(Frame {
+                width: 2,
+                height: 2,
+                rgb: vec![0; 12],
+            })
+        }
+    }
+
+    type Counts = (
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    );
+
+    fn counting(state: PlayerState) -> (Mutex<Box<dyn aurora_player::PlayerBackend>>, Counts) {
+        let chapter_reads = std::sync::Arc::default();
+        let grabs = std::sync::Arc::default();
+        let player: Box<dyn aurora_player::PlayerBackend> = Box::new(Counting {
+            state,
+            chapter_reads: std::sync::Arc::clone(&chapter_reads),
+            grabs: std::sync::Arc::clone(&grabs),
+        });
+        (Mutex::new(player), (chapter_reads, grabs))
+    }
+
+    fn showing(mut state: PlayerState) -> PlayerState {
+        state.status = PlayerStatus::Playing;
+        state.has_picture = true;
+        state
+    }
+
+    #[test]
+    fn chapters_are_read_from_the_player_once_and_then_served_from_the_store() {
+        let state = showing(film(3600.0));
+        let (player, (reads, _)) = counting(state.clone());
+        let frames = Frames::default();
+        assert!(
+            frames.chapters(&state).is_empty(),
+            "nothing before the heartbeat has run"
+        );
+        for _ in 0..5 {
+            frames.observe(&player);
+        }
+        for _ in 0..50 {
+            assert_eq!(frames.chapters(&state).len(), 1);
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn nothing_is_grabbed_until_playback_has_run_steadily_with_a_picture() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut opening = film(3600.0);
+        opening.status = PlayerStatus::Playing;
+        opening.has_picture = false;
+        let (player, (_, grabs)) = counting(opening);
+        let frames = Frames {
+            steady: Duration::from_millis(200),
+            ..Frames::default()
+        };
+        frames.observe(&player);
+        assert_eq!(grabs.load(SeqCst), 0, "opened, but no frame drawn yet");
+
+        let (player, (_, grabs)) = counting(showing(film(3600.0)));
+        frames.observe(&player);
+        assert_eq!(
+            grabs.load(SeqCst),
+            0,
+            "the first tick with a picture only starts the clock"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+        frames.observe(&player);
+        assert_eq!(grabs.load(SeqCst), 1, "settled: now it may grab");
+    }
+
+    #[test]
+    fn a_seek_restarts_the_wait_before_the_next_grab() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let frames = Frames {
+            steady: Duration::from_millis(200),
+            ..Frames::default()
+        };
+        let mut at = showing(film(3600.0));
+        at.position_secs = 100.0;
+        let (player, (_, grabs)) = counting(at.clone());
+        frames.observe(&player);
+        std::thread::sleep(Duration::from_millis(250));
+        at.position_secs = 1900.0;
+        let (player, (_, grabs2)) = counting(at);
+        frames.observe(&player);
+        assert_eq!(
+            grabs.load(SeqCst) + grabs2.load(SeqCst),
+            0,
+            "a jump is a seek: wait again"
+        );
     }
 
     #[test]
