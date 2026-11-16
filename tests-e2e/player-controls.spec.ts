@@ -51,17 +51,36 @@ async function playFirstEpisode(page: Page) {
   await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
 }
 
-test('the controls stay up while the pointer rests on them, and hide once it is on the picture', async ({ page }) => {
+test('the controls stay up a while under a resting pointer, then still get out of the way', async ({ page }) => {
   await playFirstEpisode(page);
   const volume = page.getByRole('slider', { name: 'Volume' });
   const box = await settled(page, 'Volume');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.waitForTimeout(4_500);
-  await expect(volume, 'still there under a pointer that has not moved').toBeVisible();
+  await page.waitForTimeout(3_500);
+  await expect(volume, 'still there under a pointer that has only just stopped').toBeVisible();
+  // "The auto hide takes a long time to go": a pointer left on the dock after a click
+  // used to hold it over the film for as long as it stayed there.
+  await page.waitForTimeout(2_500);
+  await expect(volume, 'gone once the pointer has rested a while, even on the dock').toBeHidden();
+});
 
+test('over the picture the controls hide within a few seconds', async ({ page }) => {
+  await playFirstEpisode(page);
+  const volume = page.getByRole('slider', { name: 'Volume' });
+  await settled(page, 'Volume');
   await page.mouse.move(700, 300);
-  await page.waitForTimeout(4_500);
+  await page.mouse.move(705, 305);
+  await page.waitForTimeout(3_300);
   await expect(volume).toBeHidden();
+});
+
+test('an open menu keeps the controls up while it is read', async ({ page }) => {
+  await playFirstEpisode(page);
+  await settled(page, 'Volume');
+  await page.getByRole('button', { name: 'Playback settings' }).click();
+  await page.mouse.move(700, 300);
+  await page.waitForTimeout(6_000);
+  await expect(page.getByRole('slider', { name: 'Volume' })).toBeVisible();
 });
 
 test('a seek handle held still is not lost, and one drag sends one seek', async ({ page }) => {

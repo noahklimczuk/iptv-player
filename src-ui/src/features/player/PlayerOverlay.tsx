@@ -22,7 +22,15 @@ import * as control from './playerControl';
 import { SeekBubble, useSeekPreview } from './SeekPreview';
 import type { SeekPreview } from '@shared/ipc';
 
-const HIDE_AFTER_MS = 3200;
+/** Still pointer over the picture: the controls get out of the way. */
+const HIDE_AFTER_MS = 2500;
+/**
+ * Still pointer resting on the controls. Longer, so a pointer parked on the volume bar
+ * while you decide does not lose it -- but not for ever: people leave the pointer where
+ * they last clicked, and in the viewer's recording that kept the dock over the film for
+ * a whole minute.
+ */
+const HIDE_OVER_CONTROLS_MS = 5000;
 
 /**
  * How much one wheel notch moves the volume.
@@ -240,21 +248,25 @@ export function PlayerOverlay({
    * seek was never sent. Hiding is for the picture: while the pointer is on the chrome,
    * or pressed anywhere, the timer just runs again.
    */
-  const holdOpen = useRef({ over: false, pressed: false });
+  const holdOpen = useRef({ over: false, pressed: false, panel: false });
+  holdOpen.current.panel = panel !== null;
   const bump = useCallback(() => {
     setVisible(true);
     window.clearTimeout(hideTimer.current);
-    const arm = () => {
-      hideTimer.current = window.setTimeout(() => {
-        if (holdOpen.current.over || holdOpen.current.pressed) {
-          arm();
-          return;
-        }
-        setVisible(false);
-        setPanel(null);
-      }, HIDE_AFTER_MS);
+    const idleSince = performance.now();
+    const check = () => {
+      const h = holdOpen.current;
+      const wait = h.over ? HIDE_OVER_CONTROLS_MS : HIDE_AFTER_MS;
+      // Held while a drag is in progress or a menu is open; otherwise hidden once the
+      // pointer has been still for long enough where it is.
+      if (h.pressed || h.panel || performance.now() - idleSince < wait) {
+        hideTimer.current = window.setTimeout(check, 250);
+        return;
+      }
+      setVisible(false);
+      setPanel(null);
     };
-    arm();
+    hideTimer.current = window.setTimeout(check, HIDE_AFTER_MS);
   }, []);
   useEffect(() => {
     const up = () => { holdOpen.current.pressed = false; };
