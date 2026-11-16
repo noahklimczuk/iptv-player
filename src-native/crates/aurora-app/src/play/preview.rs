@@ -104,11 +104,7 @@ impl Frames {
                 .shots
                 .iter()
                 .enumerate()
-                .max_by(|a, b| {
-                    (a.1.at - now_at)
-                        .abs()
-                        .total_cmp(&(b.1.at - now_at).abs())
-                })
+                .max_by(|a, b| (a.1.at - now_at).abs().total_cmp(&(b.1.at - now_at).abs()))
                 .map(|(i, _)| i)
                 .expect("not empty");
             self.shots.remove(furthest);
@@ -233,7 +229,10 @@ mod tests {
     fn h24_a_seek_restarts_the_wait() {
         let mut f = Frames::default();
         run(&mut f, FILM, 0.0, 0.0, 10);
-        assert!(!f.observe(FILM, &playing(2000.0), 11.0), "grabbed straight after a seek");
+        assert!(
+            !f.observe(FILM, &playing(2000.0), 11.0),
+            "grabbed straight after a seek"
+        );
         assert!(!f.observe(FILM, &playing(2001.0), 12.0));
         assert!(f.observe(FILM, &playing(2003.0), 14.0));
     }
@@ -256,7 +255,10 @@ mod tests {
         assert!(f.nearest(FILM, 10.0).is_some());
         assert!(f.nearest(OTHER, 10.0).is_none());
         f.observe(OTHER, &playing(0.0), 40.0);
-        assert!(f.nearest(FILM, 10.0).is_none(), "the old title's frames survived");
+        assert!(
+            f.nearest(FILM, 10.0).is_none(),
+            "the old title's frames survived"
+        );
         // A grab that finishes after the title changed is thrown away.
         f.keep(FILM, 12.0, "late".into(), 12.0);
         assert!(f.is_empty());
@@ -279,10 +281,21 @@ mod tests {
     #[test]
     fn h25_the_label_is_the_marker_or_the_chapter() {
         let chapters = vec![
-            Chapter { title: Some("Cold open".into()), start_secs: 0.0 },
-            Chapter { title: Some("Act One".into()), start_secs: 300.0 },
+            Chapter {
+                title: Some("Cold open".into()),
+                start_secs: 0.0,
+            },
+            Chapter {
+                title: Some("Act One".into()),
+                start_secs: 300.0,
+            },
         ];
-        let marks = vec![SkipMarker::new(MarkerKind::Intro, 60.0, 120.0, MarkerSource::Chapters)];
+        let marks = vec![SkipMarker::new(
+            MarkerKind::Intro,
+            60.0,
+            120.0,
+            MarkerSource::Chapters,
+        )];
         assert_eq!(label(90.0, &chapters, &marks).as_deref(), Some("Intro"));
         assert_eq!(label(30.0, &chapters, &marks).as_deref(), Some("Cold open"));
         assert_eq!(label(400.0, &chapters, &marks).as_deref(), Some("Act One"));
@@ -293,15 +306,26 @@ mod tests {
     fn h25_live_tv_says_what_time_it_was() {
         let mut r = playing(1000.0);
         r.is_live = true;
-        r.timeshift = Some(Window { start_secs: 100.0, position_secs: 1000.0, live_secs: 1000.0 });
-        assert_eq!(clock_at(&r, 700.0, 1_760_000_000), Some(1_760_000_000 - 300));
+        r.timeshift = Some(Window {
+            start_secs: 100.0,
+            position_secs: 1000.0,
+            live_secs: 1000.0,
+        });
+        assert_eq!(
+            clock_at(&r, 700.0, 1_760_000_000),
+            Some(1_760_000_000 - 300)
+        );
         r.timeshift = None;
         assert_eq!(clock_at(&r, 700.0, 1_760_000_000), None);
     }
 
     #[test]
     fn a_frame_becomes_a_png_data_url() {
-        let frame = Frame { width: 2, height: 1, rgb: vec![255, 0, 0, 0, 0, 255] };
+        let frame = Frame {
+            width: 2,
+            height: 1,
+            rgb: vec![255, 0, 0, 0, 0, 255],
+        };
         let url = data_url(&frame).unwrap();
         assert!(url.starts_with("data:image/png;base64,iVBOR"), "{url}");
     }

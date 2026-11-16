@@ -8,7 +8,7 @@ use aurora_ingest::artwork;
 use aurora_ingest::credentials::{default_store, CredentialStore};
 use aurora_ingest::http::{HttpClient, HttpConfig};
 use aurora_ingest::recorder::StreamRecorder;
-use aurora_player::{create_backend, PlayerBackend};
+use aurora_player::create_backend;
 use parking_lot::Mutex;
 
 pub struct Services {
@@ -25,11 +25,9 @@ pub struct Services {
     /// one for half a second on a large library, and the guide's now-and-next asked
     /// at the same moment should not wait for it.
     pub readers: Arc<Vec<crate::dblock::TimedMutex<Connection>>>,
-    pub player: Arc<Mutex<Box<dyn PlayerBackend>>>,
-    /// The seek preview's pictures (`crate::seekpreview`). Fed by the heartbeat.
-    pub frames: Arc<crate::seekpreview::Frames>,
-    /// Owns tuning, failover and the state heartbeat (README §7.14).
-    pub playback: Arc<crate::playback::Playback>,
+    /// The player: what plays, where the picture goes, the sleep timer and the seek
+    /// preview (docs/PLAYER.md §2). PiP is this same player in a corner.
+    pub player: Arc<crate::play::player::Player>,
     pub http: Arc<HttpClient>,
     /// Provider passwords. Never touches the database (README C10).
     pub credentials: Arc<dyn CredentialStore>,
@@ -38,9 +36,6 @@ pub struct Services {
     /// Multi-view (README §7.4). Holds one backend per open tile, so it is empty — and
     /// costs nothing — until a mosaic is opened.
     pub mosaic: Arc<crate::mosaic::Mosaic>,
-    /// Picture-in-picture (README §6.2). The *same* player in a corner rather than a
-    /// second one, so unlike a mosaic tile it opens no connection and cannot be refused.
-    pub pip: Arc<crate::pip::Pip>,
     /// Downloaded posters and backdrops. Deletable at any time — the library stores
     /// remote URLs, so this is only an accelerator.
     pub artwork: Arc<artwork::Cache>,
@@ -49,13 +44,6 @@ pub struct Services {
     pub warming: Arc<Mutex<std::collections::HashSet<String>>>,
     /// The update installer being fetched, if any (docs/DECISIONS.md D17).
     pub updates: Arc<crate::updates::Downloads>,
-    /// The sleep timer's deadline, or `None` when nothing is armed (README §13).
-    ///
-    /// A `Mutex<Option<..>>` on the services rather than a service of its own: there is
-    /// no behaviour to own, only one value that the command layer sets and the player
-    /// heartbeat reads. `aurora_app::sleep` holds everything that decides anything, and
-    /// it does it without a clock or a lock so it can be tested as arithmetic.
-    pub sleep: Arc<Mutex<Option<crate::sleep::Deadline>>>,
     /// The home feed last built, so its rails can be paged without rebuilding them
     /// (`crate::home`). Never held while `db` is being locked.
     pub home: Arc<Mutex<Option<crate::home::HomeCache>>>,
@@ -98,7 +86,11 @@ impl Services {
         self.readers[slot].lock()
     }
 
-    pub fn new(data_dir: PathBuf) -> Result<Self, crate::AppError> {
+    /// `video` is the engine opened on the app's window ([`crate::play::video::start`]).
+    pub fn new(
+        data_dir: PathBuf,
+        video: crate::play::video::Video,
+    ) -> Result<Self, crate::AppError> {
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| crate::AppError::Other(format!("cannot create data dir: {e}")))?;
         // Not `open`: a corrupt file propagated straight out of here, which Tauri
@@ -155,12 +147,24 @@ impl Services {
             aurora_db::repo::settings::get::<String>(&db.lock(), crate::dvr::FOLDER_KEY)?
                 .map(PathBuf::from)
                 .unwrap_or_else(|| data_dir.join("Recordings"));
-        let player: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(create_backend()));
-
         // No cap is set here on purpose. It was read once, at this point, and on a
         // first run that is before the provider exists — see `Dvr::max_concurrent`,
         // which asks the database per tick instead.
         let credentials: Arc<dyn CredentialStore> = Arc::from(default_store());
+
+        let session = crate::play::session::Session::new(
+            video.engine,
+            Arc::clone(&db),
+            Arc::clone(&credentials),
+            data_dir.clone(),
+        );
+        let player = Arc::new(crate::play::player::Player::new(
+            session,
+            Arc::clone(&db),
+            data_dir.clone(),
+            video.surface,
+            video.window,
+        ));
 
         let dvr = Arc::new(crate::dvr::Dvr::new(
             Arc::clone(&db),
@@ -178,34 +182,24 @@ impl Services {
             Arc::clone(&dvr),
             Arc::new(create_backend),
             data_dir.clone(),
-            Arc::clone(&player),
+            {
+                let player = Arc::clone(&player);
+                Arc::new(move |width, height| player.sink_under_tiles(width, height))
+            },
             Arc::clone(&credentials),
         ));
 
-        let pip = Arc::new(crate::pip::Pip::new(Arc::clone(&player)));
-
-        // Wrapped here rather than at the end, so `Playback` can hold a handle too.
         let http = Arc::new(http);
 
         Ok(Self {
-            pip,
-            playback: Arc::new(crate::playback::Playback::new(
-                Arc::clone(&db),
-                Arc::clone(&player),
-                data_dir.clone(),
-                Arc::clone(&credentials),
-                Some(Arc::clone(&http)),
-            )),
             mosaic,
             artwork: Arc::new(artwork::Cache::new(data_dir.join("artwork"))),
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             updates: Arc::new(crate::updates::Downloads::default()),
-            sleep: Arc::new(Mutex::new(None)),
             home: Arc::new(Mutex::new(None)),
             dvr,
             db,
             readers,
-            frames: Arc::new(crate::seekpreview::Frames::default()),
             player,
             http,
             credentials,

@@ -28,7 +28,11 @@ pub enum What {
     Episode(i64),
     Recording(i64),
     /// A past programme, replayed from the provider's archive (README §7.5).
-    Catchup { channel: i64, start: i64, stop: i64 },
+    Catchup {
+        channel: i64,
+        start: i64,
+        stop: i64,
+    },
 }
 
 /// What the controls say about what is playing.
@@ -110,11 +114,14 @@ fn provider_headers(db: &Connection, what: What) -> Result<(Option<String>, Opti
     };
     let found = db
         .query_row(
-            &format!(
-                "SELECT p.user_agent, p.referrer FROM providers p WHERE p.id = ({sql})"
-            ),
+            &format!("SELECT p.user_agent, p.referrer FROM providers p WHERE p.id = ({sql})"),
             [id],
-            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            },
         )
         .optional()
         .map_err(aurora_db::DbError::from)?;
@@ -133,12 +140,19 @@ fn plan_without_headers(
     let start = start_secs.filter(|s| s.is_finite() && *s > 0.0);
     match what {
         What::Channel(id) => {
-            let ch = channels::get(db, id)?
-                .ok_or_else(|| AppError::Other("That channel is no longer in your library.".into()))?;
+            let ch = channels::get(db, id)?.ok_or_else(|| {
+                AppError::Other("That channel is no longer in your library.".into())
+            })?;
             let mut candidates = Vec::new();
             let mut last_error = None;
             for s in sources::for_channel(db, id, now)? {
-                match streams::playable(db, credentials, &mut access, Kind::Live, &StreamRef::from(&s)) {
+                match streams::playable(
+                    db,
+                    credentials,
+                    &mut access,
+                    Kind::Live,
+                    &StreamRef::from(&s),
+                ) {
                     Ok(url) if !url.trim().is_empty() => candidates.push(Candidate {
                         source_id: Some(s.id),
                         url,
@@ -193,7 +207,8 @@ fn plan_without_headers(
                 )
                 .optional()
                 .map_err(aurora_db::DbError::from)?;
-            let (stream, title) = row.ok_or_else(|| gone("film", "A refresh may have removed it."))?;
+            let (stream, title) =
+                row.ok_or_else(|| gone("film", "A refresh may have removed it."))?;
             let url = address(
                 streams::playable(db, credentials, &mut access, Kind::Movie, &stream)?,
                 "film",
@@ -207,7 +222,10 @@ fn plan_without_headers(
                     item_id: Some(id),
                     channel_id: None,
                 },
-                candidates: vec![Candidate { source_id: None, url }],
+                candidates: vec![Candidate {
+                    source_id: None,
+                    url,
+                }],
                 live: false,
                 start_secs: start,
                 buffer_secs: FILM_BUFFER_SECS,
@@ -261,7 +279,10 @@ fn plan_without_headers(
                     item_id: Some(id),
                     channel_id: None,
                 },
-                candidates: vec![Candidate { source_id: None, url }],
+                candidates: vec![Candidate {
+                    source_id: None,
+                    url,
+                }],
                 live: false,
                 start_secs: start,
                 buffer_secs: FILM_BUFFER_SECS,
@@ -362,8 +383,9 @@ fn plan_without_headers(
                 )
                 .optional()
                 .map_err(aurora_db::DbError::from)?;
-            let (name, mode, source, days, stream) = row
-                .ok_or_else(|| AppError::Other("That channel is no longer in your library.".into()))?;
+            let (name, mode, source, days, stream) = row.ok_or_else(|| {
+                AppError::Other("That channel is no longer in your library.".into())
+            })?;
             let Some(mode) = mode.as_deref().and_then(catchup::Mode::parse) else {
                 return Err(AppError::Other(format!("{name} does not offer catch-up")));
             };
@@ -389,7 +411,9 @@ fn plan_without_headers(
                 now,
             })
             .ok_or_else(|| {
-                AppError::Other(format!("{name} says it has catch-up but not how to ask for it"))
+                AppError::Other(format!(
+                    "{name} says it has catch-up but not how to ask for it"
+                ))
             })?;
             Ok(Plan {
                 what,
@@ -400,7 +424,10 @@ fn plan_without_headers(
                     item_id: Some(channel),
                     channel_id: Some(channel),
                 },
-                candidates: vec![Candidate { source_id: None, url }],
+                candidates: vec![Candidate {
+                    source_id: None,
+                    url,
+                }],
                 // A past programme has a beginning and an end: it is played like a film,
                 // seekable end to end (H3).
                 live: false,

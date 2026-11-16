@@ -153,9 +153,7 @@ impl Placement {
 
     pub fn set_enabled(&mut self, on: bool, mosaic_open: bool) -> Result<PipView, String> {
         if on && mosaic_open {
-            return Err(
-                "Picture-in-picture is not available while multi-view is open.".into(),
-            );
+            return Err("Picture-in-picture is not available while multi-view is open.".into());
         }
         self.pip = on;
         Ok(self.view())
@@ -210,7 +208,12 @@ mod tests {
     use super::*;
 
     fn rect(x: i32, y: i32, width: u32, height: u32) -> Rect {
-        Rect { x, y, width, height }
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     #[test]
@@ -234,7 +237,12 @@ mod tests {
         let order: Vec<Corner> = (0..4).map(|_| p.set_corner(None).corner).collect();
         assert_eq!(
             order,
-            [Corner::BottomLeft, Corner::TopLeft, Corner::TopRight, Corner::BottomRight]
+            [
+                Corner::BottomLeft,
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomRight
+            ]
         );
         assert_eq!(p.set_corner(Some(Corner::TopLeft)).corner, Corner::TopLeft);
     }
@@ -298,7 +306,10 @@ mod tests {
             p
         };
         let r = p.view().rect;
-        assert!(r.x >= 0 && r.y >= 0 && r.right() <= 300 && r.bottom() <= 200, "{r:?}");
+        assert!(
+            r.x >= 0 && r.y >= 0 && r.right() <= 300 && r.bottom() <= 200,
+            "{r:?}"
+        );
     }
 
     #[test]

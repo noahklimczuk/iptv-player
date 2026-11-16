@@ -83,7 +83,11 @@ impl Current {
             start_secs,
             live: self.plan.live,
             cache_secs: self.plan.buffer_secs,
-            timeshift: if self.plan.live { self.timeshift.clone() } else { None },
+            timeshift: if self.plan.live {
+                self.timeshift.clone()
+            } else {
+                None
+            },
         }
     }
 
@@ -247,7 +251,13 @@ impl Session {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let planned = {
             let db = self.db.lock();
-            resolve::plan(&db, self.credentials.as_ref(), what, start_secs, crate::now_unix())
+            resolve::plan(
+                &db,
+                self.credentials.as_ref(),
+                what,
+                start_secs,
+                crate::now_unix(),
+            )
         };
         let _tuning = self.tuning.lock();
         if self.generation.load(Ordering::SeqCst) != generation {
@@ -402,10 +412,9 @@ impl Session {
     fn give_up(&self, failure: NetFailure) {
         let state = {
             let mut i = self.inner();
-            let (live, several) = i
-                .current
-                .as_ref()
-                .map_or((false, false), |c| (c.plan.live, c.plan.candidates.len() > 1));
+            let (live, several) = i.current.as_ref().map_or((false, false), |c| {
+                (c.plan.live, c.plan.candidates.len() > 1)
+            });
             i.failed = Some(actionable(failure, live, several));
             drop(i);
             self.state()

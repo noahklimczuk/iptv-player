@@ -99,7 +99,10 @@ pub fn read(db: &Connection, data_dir: &Path, in_use: Option<u64>) -> Result<Tim
         secs: b.secs,
         folder: dir.to_string_lossy().into_owned(),
         bytes_on_disk: in_use.unwrap_or(0),
-        reclaimable_bytes: leftovers(&dir, in_use.is_some()).iter().map(|(_, n)| n).sum(),
+        reclaimable_bytes: leftovers(&dir, in_use.is_some())
+            .iter()
+            .map(|(_, n)| n)
+            .sum(),
     })
 }
 
@@ -191,7 +194,16 @@ mod tests {
     fn e22_turned_off_means_the_next_channel_gets_none() {
         let db = aurora_db::open_memory().unwrap();
         let data = tempdir("off");
-        change(&db, &data, Change { enabled: Some(false), ..Change::default() }, None).unwrap();
+        change(
+            &db,
+            &data,
+            Change {
+                enabled: Some(false),
+                ..Change::default()
+            },
+            None,
+        )
+        .unwrap();
         assert_eq!(for_live(&db, &data).unwrap(), None);
     }
 
@@ -202,7 +214,11 @@ mod tests {
         let s = change(
             &db,
             &data,
-            Change { bytes: Some(u64::MAX), secs: Some(1), ..Change::default() },
+            Change {
+                bytes: Some(u64::MAX),
+                secs: Some(1),
+                ..Change::default()
+            },
             None,
         )
         .unwrap();
@@ -218,13 +234,24 @@ mod tests {
         let s = change(
             &db,
             &data,
-            Change { folder: Some(elsewhere.to_string_lossy().into()), ..Change::default() },
+            Change {
+                folder: Some(elsewhere.to_string_lossy().into()),
+                ..Change::default()
+            },
             None,
         )
         .unwrap();
         assert_eq!(PathBuf::from(&s.folder), elsewhere);
-        let s = change(&db, &data, Change { folder: Some("  ".into()), ..Change::default() }, None)
-            .unwrap();
+        let s = change(
+            &db,
+            &data,
+            Change {
+                folder: Some("  ".into()),
+                ..Change::default()
+            },
+            None,
+        )
+        .unwrap();
         assert_eq!(PathBuf::from(&s.folder), data.join("timeshift"));
     }
 

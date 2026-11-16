@@ -28,7 +28,7 @@ const base: PlayerState = {
   status: 'playing', hasPicture: true, title: 'x', subtitle: null, channelId: 1, itemKind: null, itemId: null,
   positionSecs: 100, durationSecs: 1000, isLive: false, volume: 70, muted: false, speed: 1,
   audioTracks: [], subtitleTracks: [], activeAudioTrack: null, activeSubtitleTrack: null,
-  aspect: 'auto', timeshift: null, error: null, stats: null,
+  aspect: 'auto', timeshift: null, error: null, stats: null, reconnecting: false,
 };
 const flush = () => new Promise((r) => setTimeout(r, 30));
 

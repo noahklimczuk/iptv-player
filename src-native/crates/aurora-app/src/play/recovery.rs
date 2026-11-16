@@ -24,7 +24,10 @@ pub const HEALTHY_SECS: f64 = 10.0;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Next {
     /// Load this candidate now, from this position (a film reloads where it died).
-    Load { candidate: usize, start_secs: Option<f64> },
+    Load {
+        candidate: usize,
+        start_secs: Option<f64>,
+    },
     /// Wait until this time, then [`Recovery::due`] says what to load.
     Wait { until: f64 },
     /// Nothing more to try: report the failure.
@@ -201,11 +204,17 @@ mod tests {
         let mut r = Recovery::new(true, 3);
         assert_eq!(
             r.failed(0.0, &dropped(), None),
-            Next::Load { candidate: 1, start_secs: None }
+            Next::Load {
+                candidate: 1,
+                start_secs: None
+            }
         );
         assert_eq!(
             r.failed(0.1, &dropped(), None),
-            Next::Load { candidate: 2, start_secs: None }
+            Next::Load {
+                candidate: 2,
+                start_secs: None
+            }
         );
     }
 
@@ -234,11 +243,24 @@ mod tests {
         let mut r = Recovery::new(true, 1);
         let mut now = 100.0;
         for wait in BACKOFF_SECS {
-            assert_eq!(r.failed(now, &dropped(), None), Next::Wait { until: now + wait });
+            assert_eq!(
+                r.failed(now, &dropped(), None),
+                Next::Wait { until: now + wait }
+            );
             assert!(r.waiting());
-            assert_eq!(r.due(now + wait - 0.01), None, "loaded before the backoff ran out");
+            assert_eq!(
+                r.due(now + wait - 0.01),
+                None,
+                "loaded before the backoff ran out"
+            );
             now += wait;
-            assert_eq!(r.due(now), Some(Next::Load { candidate: 0, start_secs: None }));
+            assert_eq!(
+                r.due(now),
+                Some(Next::Load {
+                    candidate: 0,
+                    start_secs: None
+                })
+            );
         }
         assert_eq!(r.failed(now, &dropped(), None), Next::GiveUp);
     }
@@ -282,16 +304,25 @@ mod tests {
     #[test]
     fn h8_a_404_is_asked_for_once() {
         let mut r = Recovery::new(false, 1);
-        assert_eq!(r.failed(0.0, &failure(ErrorCode::NotFound), None), Next::GiveUp);
+        assert_eq!(
+            r.failed(0.0, &failure(ErrorCode::NotFound), None),
+            Next::GiveUp
+        );
     }
 
     #[test]
     fn h8_a_film_whose_stream_dies_is_reloaded_where_it_died() {
         let mut r = Recovery::new(false, 1);
-        assert_eq!(r.failed(0.0, &dropped(), Some(2400.0)), Next::Wait { until: 1.0 });
+        assert_eq!(
+            r.failed(0.0, &dropped(), Some(2400.0)),
+            Next::Wait { until: 1.0 }
+        );
         assert_eq!(
             r.due(1.0),
-            Some(Next::Load { candidate: 0, start_secs: Some(2400.0) })
+            Some(Next::Load {
+                candidate: 0,
+                start_secs: Some(2400.0)
+            })
         );
     }
 
@@ -305,7 +336,10 @@ mod tests {
             r.playing(t + 10.0 + HEALTHY_SECS);
         }
         // Two failures, each followed by healthy playback: a third is not the last.
-        assert!(matches!(r.failed(300.0, &dropped(), None), Next::Wait { .. }));
+        assert!(matches!(
+            r.failed(300.0, &dropped(), None),
+            Next::Wait { .. }
+        ));
     }
 
     #[test]
@@ -318,7 +352,10 @@ mod tests {
         // A channel still tries its other sources: another may carry another codec.
         let mut channel = Recovery::new(true, 2);
         let codec = failure(ErrorCode::UnsupportedCodec);
-        assert!(matches!(channel.failed(0.0, &codec, None), Next::Load { candidate: 1, .. }));
+        assert!(matches!(
+            channel.failed(0.0, &codec, None),
+            Next::Load { candidate: 1, .. }
+        ));
         assert_eq!(channel.failed(0.0, &codec, None), Next::GiveUp);
     }
 }

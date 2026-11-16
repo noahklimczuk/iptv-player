@@ -29,7 +29,9 @@ pub enum SleepAfter {
     EndOfEpisode,
     /// Untagged, so it is `{ "minutes": 30 }` on the wire; serde wants it last.
     #[serde(untagged)]
-    Minutes { minutes: u32 },
+    Minutes {
+        minutes: u32,
+    },
 }
 
 /// `SleepDeadline` in `shared/ipc.ts`.
@@ -89,34 +91,35 @@ impl SleepTimer {
         now: i64,
         playing: Playing,
     ) -> Result<SleepState, String> {
-        let at = match after {
-            SleepAfter::Minutes { minutes } => {
-                if minutes == 0 || minutes > MAX_MINUTES {
-                    return Err(format!(
-                        "A sleep timer runs for 1 to {MAX_MINUTES} minutes, not {minutes}."
-                    ));
+        let at =
+            match after {
+                SleepAfter::Minutes { minutes } => {
+                    if minutes == 0 || minutes > MAX_MINUTES {
+                        return Err(format!(
+                            "A sleep timer runs for 1 to {MAX_MINUTES} minutes, not {minutes}."
+                        ));
+                    }
+                    now + i64::from(minutes) * 60
                 }
-                now + i64::from(minutes) * 60
-            }
-            SleepAfter::EndOfProgramme => playing.programme_ends.ok_or_else(|| {
-                "The guide has no listing for what is on, so Aurora cannot tell when it \
+                SleepAfter::EndOfProgramme => playing.programme_ends.ok_or_else(|| {
+                    "The guide has no listing for what is on, so Aurora cannot tell when it \
                  ends."
-                    .to_string()
-            })?,
-            SleepAfter::EndOfEpisode => {
-                let left = playing.remaining_secs.filter(|s| s.is_finite()).ok_or_else(|| {
+                        .to_string()
+                })?,
+                SleepAfter::EndOfEpisode => {
+                    let left = playing.remaining_secs.filter(|s| s.is_finite()).ok_or_else(|| {
                     "This stream does not say how long it is, so Aurora cannot tell when it \
                      ends."
                         .to_string()
                 })?;
-                let speed = if playing.speed.is_finite() && playing.speed > 0.0 {
-                    playing.speed
-                } else {
-                    1.0
-                };
-                now + (left / speed).ceil() as i64
-            }
-        };
+                    let speed = if playing.speed.is_finite() && playing.speed > 0.0 {
+                        playing.speed
+                    } else {
+                        1.0
+                    };
+                    now + (left / speed).ceil() as i64
+                }
+            };
         if at <= now {
             return Err("That has already ended.".into());
         }
@@ -175,25 +178,36 @@ mod tests {
     fn h19_minutes_from_now() {
         let mut t = SleepTimer::default();
         for m in [15, 30, 45, 60, 90] {
-            let s = t.set(mins(m), SleepAction::StopPlayback, NOW, Playing::default()).unwrap();
+            let s = t
+                .set(mins(m), SleepAction::StopPlayback, NOW, Playing::default())
+                .unwrap();
             assert_eq!(s.remaining_secs, Some(i64::from(m) * 60));
             assert!(!s.warning);
         }
-        assert!(t.set(mins(0), SleepAction::StopPlayback, NOW, Playing::default()).is_err());
+        assert!(t
+            .set(mins(0), SleepAction::StopPlayback, NOW, Playing::default())
+            .is_err());
     }
 
     #[test]
     fn h19_end_of_programme_needs_the_guide() {
         let mut t = SleepTimer::default();
         assert!(t
-            .set(SleepAfter::EndOfProgramme, SleepAction::StopPlayback, NOW, Playing::default())
+            .set(
+                SleepAfter::EndOfProgramme,
+                SleepAction::StopPlayback,
+                NOW,
+                Playing::default()
+            )
             .is_err());
         assert!(!t.armed(), "nothing to go on armed something");
         let on = Playing {
             programme_ends: Some(NOW + 1200),
             ..Playing::default()
         };
-        let s = t.set(SleepAfter::EndOfProgramme, SleepAction::QuitApp, NOW, on).unwrap();
+        let s = t
+            .set(SleepAfter::EndOfProgramme, SleepAction::QuitApp, NOW, on)
+            .unwrap();
         assert_eq!(s.armed.unwrap().at_unix, NOW + 1200);
     }
 
@@ -205,10 +219,17 @@ mod tests {
             speed: 2.0,
             ..Playing::default()
         };
-        let s = t.set(SleepAfter::EndOfEpisode, SleepAction::StopPlayback, NOW, p).unwrap();
+        let s = t
+            .set(SleepAfter::EndOfEpisode, SleepAction::StopPlayback, NOW, p)
+            .unwrap();
         assert_eq!(s.armed.unwrap().at_unix, NOW + 300);
         assert!(t
-            .set(SleepAfter::EndOfEpisode, SleepAction::StopPlayback, NOW, Playing::default())
+            .set(
+                SleepAfter::EndOfEpisode,
+                SleepAction::StopPlayback,
+                NOW,
+                Playing::default()
+            )
             .is_err());
     }
 
@@ -220,7 +241,12 @@ mod tests {
             ..Playing::default()
         };
         assert!(t
-            .set(SleepAfter::EndOfProgramme, SleepAction::StopPlayback, NOW, ended)
+            .set(
+                SleepAfter::EndOfProgramme,
+                SleepAction::StopPlayback,
+                NOW,
+                ended
+            )
             .is_err());
         assert!(!t.armed());
     }
@@ -228,8 +254,9 @@ mod tests {
     #[test]
     fn h20_warns_in_the_last_minute_extends_and_cancels() {
         let mut t = SleepTimer::default();
-        t.set(mins(15), SleepAction::StopPlayback, NOW, Playing::default()).unwrap();
-        assert!(t.state(NOW + 15 * 60 - 61).warning == false);
+        t.set(mins(15), SleepAction::StopPlayback, NOW, Playing::default())
+            .unwrap();
+        assert!(!t.state(NOW + 15 * 60 - 61).warning);
         assert!(t.state(NOW + 15 * 60 - 60).warning);
         let s = t.extend(15, NOW + 15 * 60 - 30).unwrap();
         assert_eq!(s.armed.unwrap().at_unix, NOW + 30 * 60);
@@ -241,7 +268,8 @@ mod tests {
     #[test]
     fn it_fires_once() {
         let mut t = SleepTimer::default();
-        t.set(mins(15), SleepAction::ShutDownPc, NOW, Playing::default()).unwrap();
+        t.set(mins(15), SleepAction::ShutDownPc, NOW, Playing::default())
+            .unwrap();
         assert_eq!(t.due(NOW + 899), None);
         assert_eq!(t.due(NOW + 900).unwrap().action, SleepAction::ShutDownPc);
         assert_eq!(t.due(NOW + 901), None);
@@ -253,7 +281,10 @@ mod tests {
         assert_eq!(after, mins(30));
         let after: SleepAfter = serde_json::from_str(r#""endOfProgramme""#).unwrap();
         assert_eq!(after, SleepAfter::EndOfProgramme);
-        assert_eq!(serde_json::to_value(mins(45)).unwrap(), serde_json::json!({"minutes": 45}));
+        assert_eq!(
+            serde_json::to_value(mins(45)).unwrap(),
+            serde_json::json!({"minutes": 45})
+        );
         assert_eq!(
             serde_json::to_value(SleepAction::ShutDownPc).unwrap(),
             serde_json::json!("shutDownPc")

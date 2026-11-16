@@ -142,7 +142,7 @@ dependencies = [
  "aurora-core",
  "aurora-db",
  "aurora-ingest",
- "aurora-player",
+ "aurora-video",
  "serde_json",
 ]
 

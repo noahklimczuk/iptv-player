@@ -67,7 +67,10 @@ impl Rig {
             if f(&s) {
                 return s;
             }
-            assert!(Instant::now() < deadline, "timed out waiting for {what}: {s:#?}");
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}: {s:#?}"
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -83,7 +86,9 @@ impl Rig {
     /// The current file fails, and the engine has said so.
     fn dies(&self, why: &str) {
         self.mpv.fail(why);
-        self.until("the failure", |s| s.reconnecting || s.report.status == Status::Error);
+        self.until("the failure", |s| {
+            s.reconnecting || s.report.status == Status::Error
+        });
     }
 
     fn fail_count(&self, url: &str) -> i64 {
@@ -124,7 +129,11 @@ fn h2_something_no_longer_in_the_library_says_so_and_stops_the_old_picture() {
     let r = rig();
     r.session.play(What::Channel(1), None).unwrap();
     r.plays(10.0);
-    let e = r.session.play(What::Movie(99), None).unwrap_err().to_string();
+    let e = r
+        .session
+        .play(What::Movie(99), None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("no longer in your library"), "{e}");
     let s = r.until("stopped", |s| s.report.status == Status::Idle);
     assert_eq!(s.title, None);
@@ -175,11 +184,14 @@ fn h5_a_source_that_plays_is_remembered() {
     r.session.play(What::Channel(1), None).unwrap();
     r.plays(10.0);
     r.session.tick(100.0);
-    let ok: Option<i64> = r
-        .db
-        .lock()
-        .query_row("SELECT last_ok_at FROM channel_sources WHERE channel_id = 1", [], |x| x.get(0))
-        .unwrap();
+    let ok: Option<i64> =
+        r.db.lock()
+            .query_row(
+                "SELECT last_ok_at FROM channel_sources WHERE channel_id = 1",
+                [],
+                |x| x.get(0),
+            )
+            .unwrap();
     assert!(ok.is_some());
 }
 
@@ -216,7 +228,10 @@ fn h7_and_h12_a_single_source_waits_out_its_backoff_and_says_it_is_reconnecting(
     let s = r.session.state();
     assert!(s.reconnecting);
     assert_eq!(s.report.status, Status::Buffering);
-    assert_eq!(s.report.error, None, "an error was shown while still retrying");
+    assert_eq!(
+        s.report.error, None,
+        "an error was shown while still retrying"
+    );
     assert_eq!(r.opened().len(), 1, "reloaded before the backoff");
     r.session.tick(100.0 + BACKOFF_SECS[0]);
     assert_eq!(r.opened(), vec![LIVE_A, LIVE_A]);
@@ -279,13 +294,21 @@ fn every_state_is_published_to_the_page() {
     let r = rig();
     let seen = Arc::new(parking_lot::Mutex::new(Vec::<PlayerState>::new()));
     let sink = seen.clone();
-    r.session.on_state(Box::new(move |s| sink.lock().push(s.clone())));
+    r.session
+        .on_state(Box::new(move |s| sink.lock().push(s.clone())));
     r.session.play(What::Channel(1), None).unwrap();
     r.plays(10.0);
     let deadline = Instant::now() + Duration::from_secs(3);
-    while !seen.lock().iter().any(|s| s.report.status == Status::Playing) {
+    while !seen
+        .lock()
+        .iter()
+        .any(|s| s.report.status == Status::Playing)
+    {
         assert!(Instant::now() < deadline, "playing was never published");
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(seen.lock().iter().all(|s| s.title.as_deref() == Some("One Source")));
+    assert!(seen
+        .lock()
+        .iter()
+        .all(|s| s.title.as_deref() == Some("One Source")));
 }
