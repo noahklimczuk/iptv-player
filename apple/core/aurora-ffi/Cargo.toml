@@ -1,0 +1,27 @@
+[package]
+name = "aurora-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Aurora's shared Rust core, exposed to Swift through UniFFI for tvOS and iOS"
+
+[lib]
+# Only `lib` here. apple/scripts/build-core.sh asks for a `staticlib` per Apple target
+# (for AuroraCore.xcframework) and a `cdylib` on the Mac (for uniffi-bindgen) with
+# `cargo rustc --crate-type`, so neither is linked where nothing uses it: not by
+# `cargo test`, and not six times over per build.
+crate-type = ["lib"]
+
+[dependencies]
+aurora-core.workspace = true
+aurora-db.workspace = true
+aurora-ingest.workspace = true
+aurora-player.workspace = true
+uniffi.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

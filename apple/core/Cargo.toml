@@ -1,0 +1,42 @@
+# The Apple app's Rust workspace.
+#
+# Deliberately **not** a member of `src-native/`. The Windows app and its workspace are
+# not edited by the Apple port: this workspace reaches the shared library crates by
+# path, read-only, and has its own lockfile and target directory. A change here cannot
+# alter what the Windows build compiles, and a `cargo` command run in `src-native/`
+# never sees this directory. See apple/README.md.
+[workspace]
+resolver = "2"
+members = ["aurora-ffi", "uniffi-bindgen"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+# The shared crates, exactly as the Windows app builds them. Nothing in them is
+# Windows-only except what they already gate behind `cfg(windows)`.
+aurora-core = { path = "../../src-native/crates/aurora-core" }
+aurora-db = { path = "../../src-native/crates/aurora-db" }
+aurora-ingest = { path = "../../src-native/crates/aurora-ingest" }
+aurora-player = { path = "../../src-native/crates/aurora-player" }
+uniffi = "=0.32.2"
+thiserror = "1"
+tracing = "0.1"
+parking_lot = "0.12"
+
+# Debug builds carry line tables for our own crate (enough for a backtrace) and no
+# debug info for the ~150 dependencies, which otherwise makes every static library
+# hundreds of megabytes and every link slow.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# Unwinding kept, as in src-native: a panic in a background tick must be catchable.

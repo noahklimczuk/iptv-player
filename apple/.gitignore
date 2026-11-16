@@ -1,0 +1,14 @@
+# Built from source by apple/scripts/build-core.sh: never committed.
+/core/target/
+/Frameworks/
+/Shared/Core/Generated/
+
+# Generated from project.yml by apple/scripts/generate-project.sh.
+/Aurora.xcodeproj/
+/AuroraTV/Info.plist
+/AuroraMobile/Info.plist
+
+# Xcode per-user state.
+xcuserdata/
+*.xcuserstate
+DerivedData/
