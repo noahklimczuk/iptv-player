@@ -52,13 +52,22 @@ export const useProfile = create<ProfileState>((set, get) => ({
       throw e;
     }
     // With exactly one unlocked profile there is nobody to choose between, so skip
-    // the picker rather than making every launch a two-click affair.
+    // the picker rather than making every launch a two-click affair -- but only at
+    // launch. The picker reloads the list when it opens, and this used to close it
+    // again at once: with one profile, the top bar's profile button flashed "Who's
+    // watching?" and put you straight back, so there was no way to reach anything on
+    // that screen.
+    const atLaunch = !get().loaded;
     const onlyOne = profiles.length === 1 && !profiles[0]!.hasPin;
+    const was = get().active;
+    // Keep the active profile, refreshed (a rename shows at once); if it was deleted,
+    // there is no active profile until one is chosen.
+    const still = was ? profiles.find((p) => p.id === was.id) ?? null : null;
     set({
       profiles,
       parental,
-      active: onlyOne ? profiles[0]! : get().active,
-      picking: onlyOne ? false : get().picking,
+      active: still ?? (onlyOne ? profiles[0]! : null),
+      picking: atLaunch && onlyOne ? false : get().picking,
       loaded: true,
     });
   },
