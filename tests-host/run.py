@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests-host"))
 from driver import WD  # noqa: E402
 from fakegithub import FakeGitHub  # noqa: E402
 
-# Windows is what this project ships, and the only host where `aurora-player` compiles
+# Windows is what this project ships, and the only host where the video engine runs
 # libmpv in at all, so the harness runs there too. It differs in three places: there is
 # already a desktop, so no Xvfb; the WebView is WebView2, so `tauri-driver` drives it
 # through msedgedriver rather than WebKitWebDriver; and a file that is still open cannot

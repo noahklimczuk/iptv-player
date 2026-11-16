@@ -105,7 +105,7 @@ Windows suites check it, and it lands first (Phase 1).
 | `aurora-ingest::credentials` | Gets a **Keychain** backend (the `keyring` crate's `apple-native` feature, or `security-framework` directly) beside the Windows Credential Manager one. |
 | `aurora-ingest::selfupdate`, `updates` | Excluded on Apple. Updates come from TestFlight or the App Store. |
 | `aurora-ingest::recorder` and the DVR scheduler | **Stay on Windows.** tvOS has no general background execution, and an Apple TV's storage is a cache the system purges. Recording *rules* still sync (§3.4), so a rule made on the phone records on the PC. |
-| `aurora-player::mpv` (Win32 child window) | Replaced by Swift code: an `MPVKit` view hosted in SwiftUI. Swift implements a `PlayerBackend` trait, so failover, the playback state machine and the error taxonomy stay in Rust. |
+| `aurora-video::libmpv` and `::surface` (Win32 child window) | Replaced by Swift code: an `MPVKit` view hosted in SwiftUI. Swift implements the engine's `Driver` trait, so failover, the playback state machine and the error taxonomy stay in Rust. |
 | Timeshift | Ports via mpv's cache. The buffer belongs in `Caches/`, and the size limit should be smaller on tvOS, where free disk is scarce. |
 | Mosaic / multiview | **iPad and Apple TV 4K only**, capped by `max_connections` as on Windows. Low priority. |
 | PiP | iOS gets system Picture in Picture. MPVKit needs a sample-buffer display layer for that, so it is a later spike. |

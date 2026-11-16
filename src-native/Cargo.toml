@@ -3,7 +3,6 @@ resolver = "2"
 members = [
   "crates/aurora-core",
   "crates/aurora-db",
-  "crates/aurora-player",
   "crates/aurora-video",
   "crates/aurora-ingest",
   "crates/aurora-contract",
@@ -21,7 +20,6 @@ members = [
 default-members = [
   "crates/aurora-core",
   "crates/aurora-db",
-  "crates/aurora-player",
   "crates/aurora-video",
   "crates/aurora-ingest",
   "crates/aurora-contract",
@@ -51,7 +49,6 @@ sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled", "backup", "functions"] }
 aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }
-aurora-player = { path = "crates/aurora-player" }
 aurora-video = { path = "crates/aurora-video" }
 aurora-ingest = { path = "crates/aurora-ingest" }
 

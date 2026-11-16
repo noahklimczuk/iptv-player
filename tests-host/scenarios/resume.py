@@ -32,7 +32,7 @@ class Skipped(Exception):
 
 def run(d, ctx):
     if sys.platform != "win32":
-        raise Skipped("NullBackend reports no position, so this would prove nothing")
+        raise Skipped("with no video engine there is no position, so this would prove nothing")
     if not (URL and USER and PASS):
         raise Skipped("no panel credentials in the environment")
 

@@ -20,7 +20,7 @@
 //! Neither needs the host to build. They read `shared/ipc.ts`, `main.rs`,
 //! `tauri.conf.json` and the sources of `aurora-app` as text, and serialise a handful of
 //! real structs -- `PlayerState`, `ChannelRow`, `ProgrammeRow` -- to compare field names
-//! against what the contract declares. Those come from `aurora-db`, `aurora-player` and
+//! against what the contract declares. Those come from `aurora-db`, `aurora-video` and
 //! `aurora-core`, none of which pulls in Tauri, which is this crate's only constraint.
 //! `aurora-app` itself is reached by path and never linked, which is why there is no code
 //! in this file.

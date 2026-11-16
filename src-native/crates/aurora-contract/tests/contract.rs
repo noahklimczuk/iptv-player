@@ -445,8 +445,8 @@ fn the_csp_allows_the_image_schemes_providers_actually_use() {
 /// correct as far as anyone could tell, and called from nowhere — so a Windows run showed no
 /// video for reasons that had nothing to do with compositing, and the OSD would have
 /// frozen after the first frame because nothing drained mpv's event queue. They were
-/// unreachable structurally: the app layer holds a `Box<dyn PlayerBackend>`, and
-/// neither method was on the trait.
+/// unreachable structurally: the app layer held the old player behind a trait, and
+/// neither method was on it.
 ///
 /// This reads the sources rather than running anything, because the thing that went
 /// wrong is not behaviour — it is a call that does not exist. Nothing on this machine

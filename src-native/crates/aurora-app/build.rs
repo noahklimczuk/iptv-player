@@ -13,12 +13,12 @@ fn main() {
     // report rather than something the Windows loader kills it for.
     //
     // `libmpv2-sys` links `mpv.lib`, which makes `libmpv-2.dll` a load-time import: the
-    // loader resolves it before `main` runs, so `create_backend`'s fallback to
-    // `NullBackend` was unreachable and the process simply ended — 0xC0000135 with no
-    // window, no log and no message (F-34). Delay-loading moves that decision to the
-    // first call, and `MpvBackend::new` makes it explicitly with `LoadLibraryW`.
+    // loader resolves it before `main` runs, so the app's fallback to running without
+    // video was unreachable and the process simply ended — 0xC0000135 with no window,
+    // no log and no message (F-34). Delay-loading moves that decision to the first call,
+    // and `aurora_video::libmpv::loadable` makes it explicitly with `LoadLibraryW`.
     //
-    // This belongs here rather than in `aurora-player` because `rustc-link-arg` from a
+    // This belongs here rather than in `aurora-video` because `rustc-link-arg` from a
     // library applies to that library's own artifact, not to the binary being linked.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rustc-link-arg-bins=/DELAYLOAD:libmpv-2.dll");

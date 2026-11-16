@@ -60,7 +60,7 @@ env:
 
 jobs:
   # Everything that is platform-independent. Runs on Linux because it is fast and
-  # because aurora-core / aurora-db / aurora-player deliberately have no platform
+  # because aurora-core / aurora-db / aurora-video deliberately have no platform
   # dependencies (docs/DECISIONS.md D2, D3).
   core:
     name: Core tests + UI
@@ -247,9 +247,9 @@ jobs:
         run: cargo check --workspace --all-targets
 
       - name: Tests (crates that link nothing external)
-        # aurora-player's test binary links against mpv.lib, which is not on the
-        # runner, so its tests run on Linux only (they cover the platform-independent
-        # NullBackend). Everything here still type-checks above.
+        # aurora-video's and aurora-app's test binaries link against mpv.lib, which is
+        # not on the runner, so their tests run on Linux only (against a fake mpv).
+        # Everything here still type-checks above.
         #
         # aurora-core and aurora-ingest matter here specifically: `fsname` exists
         # because Windows rejects filenames Linux accepts, and only a Windows

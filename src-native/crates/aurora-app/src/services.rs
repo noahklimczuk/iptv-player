@@ -8,7 +8,6 @@ use aurora_ingest::artwork;
 use aurora_ingest::credentials::{default_store, CredentialStore};
 use aurora_ingest::http::{HttpClient, HttpConfig};
 use aurora_ingest::recorder::StreamRecorder;
-use aurora_player::create_backend;
 use parking_lot::Mutex;
 
 pub struct Services {
@@ -173,14 +172,13 @@ impl Services {
             Arc::clone(&credentials),
         ));
 
-        // One instance per tile, made on demand. `create_backend` rather than a clone of
-        // the main player, because each tile needs its own mpv and its own child surface
-        // — which is also README §6.1's shape: one long-lived instance for the main
-        // surface, short-lived ones for the tiles.
+        // One engine per tile, made on demand, each with its own mpv and its own child
+        // surface (docs/PLAYER.md E32): one long-lived instance for the main surface,
+        // short-lived ones for the tiles.
         let mosaic = Arc::new(crate::mosaic::Mosaic::new(
             Arc::clone(&db),
             Arc::clone(&dvr),
-            Arc::new(create_backend),
+            crate::play::tile::EngineTile::factory(),
             data_dir.clone(),
             {
                 let player = Arc::clone(&player);

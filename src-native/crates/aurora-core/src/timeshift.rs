@@ -173,7 +173,7 @@ impl Window {
     pub fn clamp(&self, target_secs: f64) -> f64 {
         // Not `f64::clamp`, which panics if `min > max` or if either bound is NaN.
         //
-        // Built through `Budget::window` the invariant holds -- `aurora-player` makes
+        // Built through `Budget::window` the invariant holds -- the video engine makes
         // `start_secs <= position_secs <= live_secs` true three times over -- but
         // `Window` has public fields, derives `Deserialize`, crosses the IPC boundary,
         // and its three numbers originate in mpv properties. With `panic = "abort"` in

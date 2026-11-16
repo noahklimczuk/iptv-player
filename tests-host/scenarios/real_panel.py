@@ -317,10 +317,10 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
     # (F-36). `children_front_to_back` is front-first, so the tile must come before the
     # main surface in that list.
     #
-    # Polled past the player's own start timeout, not up to it. `aurora_player`'s
-    # watchdog fails a stream that never starts after DEFAULT_START_TIMEOUT_SECS (20),
-    # and `Mosaic::tick` turns that into the tile's `error` — so at exactly 20 seconds
-    # this loop was giving up in the same moment the app was deciding. On a line having a
+    # Polled past the engine's own start limit, not up to it. `aurora_video` fails a
+    # stream that never starts after OPEN_LIMIT_SECS (25), and `Mosaic::tick` turns that
+    # into the tile's `error` — so a loop that stopped at the limit would give up in the
+    # same moment the app was deciding. On a line having a
     # bad minute that produced "no tile surface", which reads like the z-order bug and
     # was the provider refusing a second connection: seen once here, with the same run's
     # recording managing 5.0 MB where a healthy one gets 29.

@@ -439,3 +439,255 @@ fn plan_without_headers(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aurora_db::rusqlite::params;
+    use aurora_ingest::credentials::MemoryStore;
+
+    const NOW: i64 = 1_760_000_000;
+
+    fn library() -> Connection {
+        let db = aurora_db::open_memory().unwrap();
+        db.execute(
+            "INSERT INTO providers (id,name,kind,base_url,user_agent,referrer,created_at)
+             VALUES (1,'P','m3u','https://example.com','  Kodi/21  ','',0)",
+            [],
+        )
+        .unwrap();
+        db
+    }
+
+    fn channel(db: &Connection, id: i64, name: &str, url: Option<&str>) {
+        db.execute(
+            "INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+             VALUES (?1,1,?2,?2,?2,0)",
+            params![id, name],
+        )
+        .unwrap();
+        if let Some(url) = url {
+            db.execute(
+                "INSERT INTO channel_sources (channel_id,url) VALUES (?1,?2)",
+                params![id, url],
+            )
+            .unwrap();
+        }
+    }
+
+    fn plan_of(db: &Connection, what: What) -> Result<Plan> {
+        plan(db, &MemoryStore::default(), what, None, NOW)
+    }
+
+    fn refusal(db: &Connection, what: What) -> String {
+        match plan_of(db, what) {
+            Ok(p) => panic!("planned {:?} when it should have been refused", p.what),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_channel_is_live_named_and_sent_with_its_providers_headers() {
+        let db = library();
+        channel(&db, 1, "BBC One", Some("http://example.com/1.ts"));
+        let p = plan_of(&db, What::Channel(1)).unwrap();
+        assert!(p.live);
+        assert_eq!(p.buffer_secs, LIVE_BUFFER_SECS);
+        assert_eq!(p.label.title.as_deref(), Some("BBC One"));
+        assert_eq!(p.label.channel_id, Some(1));
+        assert_eq!(p.candidates[0].url, "http://example.com/1.ts");
+        assert!(p.candidates[0].source_id.is_some());
+        // Trimmed, and a blank Referer is no Referer.
+        assert_eq!(p.user_agent.as_deref(), Some("Kodi/21"));
+        assert_eq!(p.referrer, None);
+    }
+
+    #[test]
+    fn a_radio_channel_and_a_hidden_one_are_still_playable() {
+        let db = library();
+        channel(&db, 1, "Jazz FM", Some("http://example.com/j.mp3"));
+        db.execute("UPDATE channels SET is_radio = 1 WHERE id = 1", [])
+            .unwrap();
+        channel(&db, 2, "Hidden", Some("http://example.com/h.ts"));
+        db.execute("UPDATE channels SET hidden = 1 WHERE id = 2", [])
+            .unwrap();
+        assert!(plan_of(&db, What::Channel(1)).is_ok());
+        assert!(plan_of(&db, What::Channel(2)).is_ok());
+    }
+
+    #[test]
+    fn every_source_is_a_candidate_and_blank_addresses_are_left_out() {
+        let db = library();
+        channel(&db, 1, "Two Feeds", Some("http://example.com/a.ts"));
+        for url in ["http://example.com/b.ts", "   "] {
+            db.execute(
+                "INSERT INTO channel_sources (channel_id,url,priority) VALUES (1,?1,5)",
+                [url],
+            )
+            .unwrap();
+        }
+        let urls: Vec<String> = plan_of(&db, What::Channel(1))
+            .unwrap()
+            .candidates
+            .into_iter()
+            .map(|c| c.url)
+            .collect();
+        assert_eq!(urls.len(), 2, "{urls:?}");
+        assert!(urls.iter().all(|u| !u.trim().is_empty()));
+    }
+
+    #[test]
+    fn a_channel_with_no_address_or_none_at_all_says_which() {
+        let db = library();
+        channel(&db, 1, "No Source", None);
+        let said = refusal(&db, What::Channel(1));
+        assert!(said.contains("No Source has no stream address"), "{said}");
+        let said = refusal(&db, What::Channel(99));
+        assert!(said.contains("no longer in your library"), "{said}");
+    }
+
+    #[test]
+    fn a_film_starts_where_asked_and_says_when_it_is_gone_or_has_no_address() {
+        let db = library();
+        db.execute(
+            "INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+             VALUES (1,1,'m1','A Film','afilm','http://example.com/f.mkv',0),
+                    (2,1,'m2','No Address','noaddress','   ',0)",
+            [],
+        )
+        .unwrap();
+        let p = plan(
+            &db,
+            &MemoryStore::default(),
+            What::Movie(1),
+            Some(754.5),
+            NOW,
+        )
+        .unwrap();
+        assert!(!p.live);
+        assert_eq!(p.start_secs, Some(754.5));
+        assert_eq!(p.buffer_secs, FILM_BUFFER_SECS);
+        assert_eq!(p.label.title.as_deref(), Some("A Film"));
+        assert_eq!(p.user_agent.as_deref(), Some("Kodi/21"));
+        // A nonsense start is no start.
+        for bad in [f64::NAN, -3.0, 0.0] {
+            let p = plan(&db, &MemoryStore::default(), What::Movie(1), Some(bad), NOW).unwrap();
+            assert_eq!(p.start_secs, None, "{bad}");
+        }
+        assert!(refusal(&db, What::Movie(42)).contains("film"));
+        assert!(!refusal(&db, What::Movie(2)).is_empty());
+    }
+
+    #[test]
+    fn an_episode_is_labelled_with_its_show_and_number() {
+        let db = library();
+        db.execute(
+            "INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+             VALUES (1,1,'s1','The Show','theshow',0)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO episodes (id,series_id,season,episode,title,url)
+             VALUES (1,1,2,5,'The Fifth','http://example.com/e.mp4'),
+                    (2,1,2,6,NULL,'http://example.com/e6.mp4')",
+            [],
+        )
+        .unwrap();
+        let p = plan_of(&db, What::Episode(1)).unwrap();
+        assert_eq!(p.label.title.as_deref(), Some("The Show"));
+        assert_eq!(p.label.subtitle.as_deref(), Some("S2 E5 · The Fifth"));
+        assert_eq!(
+            plan_of(&db, What::Episode(2))
+                .unwrap()
+                .label
+                .subtitle
+                .as_deref(),
+            Some("S2 E6")
+        );
+        assert!(refusal(&db, What::Episode(9)).contains("episode"));
+    }
+
+    fn recording(db: &Connection, id: i64, state: &str, path: Option<&str>) {
+        db.execute(
+            "INSERT INTO recordings (id,channel_id,title,air_start,air_stop,start,stop,
+                                     state,file_path,created_at)
+             VALUES (?1,1,'The News',?1 * 1000,?1 * 1000 + 100,?1 * 1000,?1 * 1000 + 100,?2,?3,0)",
+            params![id, state, path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_finished_recording_plays_its_file_and_one_that_cannot_says_why() {
+        let db = library();
+        channel(&db, 1, "BBC One", Some("http://example.com/1.ts"));
+        let file = std::env::temp_dir().join(format!("aurora-resolve-{}.ts", std::process::id()));
+        std::fs::write(&file, b"ts").unwrap();
+        let path = file.to_string_lossy().into_owned();
+        recording(&db, 1, "completed", Some(&path));
+        recording(&db, 2, "scheduled", None);
+        recording(&db, 3, "recording", None);
+        recording(&db, 4, "failed", None);
+        recording(&db, 5, "completed", Some("/nowhere/at/all.ts"));
+
+        let p = plan_of(&db, What::Recording(1)).unwrap();
+        assert_eq!(p.candidates[0].url, path);
+        assert!(!p.live);
+        // A local file: no provider headers.
+        assert_eq!(p.user_agent, None);
+
+        assert!(refusal(&db, What::Recording(2)).contains("not started yet"));
+        assert!(refusal(&db, What::Recording(3)).contains("still being written"));
+        assert!(refusal(&db, What::Recording(4)).contains("no file on disk"));
+        assert!(refusal(&db, What::Recording(5)).contains("is gone"));
+        assert!(refusal(&db, What::Recording(6)).contains("recording"));
+        let _ = std::fs::remove_file(file);
+    }
+
+    fn catchup_channel(db: &Connection, id: i64, mode: Option<&str>, days: i64, url: Option<&str>) {
+        channel(db, id, &format!("Channel {id}"), url);
+        db.execute(
+            "UPDATE channels SET catchup_mode = ?2, catchup_days = ?3 WHERE id = ?1",
+            params![id, mode, days],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn catch_up_plays_like_a_film_under_the_channels_name() {
+        let db = library();
+        catchup_channel(&db, 1, Some("shift"), 7, Some("http://example.com/1.ts"));
+        let start = NOW - 3_600;
+        let p = plan_of(
+            &db,
+            What::Catchup {
+                channel: 1,
+                start,
+                stop: start + 1_800,
+            },
+        )
+        .unwrap();
+        assert!(!p.live, "a past programme is seekable end to end");
+        assert_eq!(p.label.title.as_deref(), Some("Channel 1"));
+        assert!(p.candidates[0].url.starts_with("http://example.com/1.ts"));
+    }
+
+    #[test]
+    fn catch_up_refusals_say_which_one_it_is() {
+        let db = library();
+        catchup_channel(&db, 1, None, 0, Some("http://example.com/1.ts"));
+        catchup_channel(&db, 2, Some("shift"), 1, Some("http://example.com/2.ts"));
+        catchup_channel(&db, 3, Some("shift"), 7, None);
+        let ask = |channel, start| What::Catchup {
+            channel,
+            start,
+            stop: start + 600,
+        };
+        assert!(refusal(&db, ask(1, NOW - 60)).contains("does not offer catch-up"));
+        assert!(refusal(&db, ask(2, NOW + 600)).contains("has not aired that yet"));
+        assert!(refusal(&db, ask(2, NOW - 3 * 86_400)).contains("1-day catch-up window"));
+        assert!(refusal(&db, ask(3, NOW - 60)).contains("not how to ask for it"));
+        assert!(refusal(&db, ask(99, NOW - 60)).contains("no longer in your library"));
+    }
+}

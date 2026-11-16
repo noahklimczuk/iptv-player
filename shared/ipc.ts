@@ -326,7 +326,7 @@ export interface SearchResults {
   people: SearchHit[];
 }
 
-/** Mirrors aurora-player's PlayerBackend state. */
+/** What the player reports (`aurora_video::Status`). */
 export interface PlayerState {
   status: 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | 'error';
   /** What is loaded, for the OSD title. */

@@ -33,9 +33,11 @@ build verifiable in CI on any runner.
 
 **Context.** The mpv/WebView2/Win32 compositing layer (README §2.1) cannot compile on Linux.
 
-**Decision.** `aurora-player` exposes a `PlayerBackend` trait. The real implementation
-(`MpvBackend`, Win32 child HWND + libmpv) is `#[cfg(windows)]`. A `NullBackend` compiles everywhere
-and is used by tests and by the Linux dev server.
+**Decision.** `aurora-video`'s engine drives mpv through a `Driver` trait. The real driver
+(libmpv, drawing into a Win32 child window) is `#[cfg(windows)]`. `FakeMpv` and `NoVideo`
+compile everywhere: the first is what the tests drive, the second is what the app runs on
+when there is no video. (This replaced the `aurora-player` crate and its `PlayerBackend`
+trait in the 2026-11 player rebuild, docs/PLAYER.md.)
 
 **Consequence.** `cargo test -p aurora-core -p aurora-db` and the UI build run on any platform;
 the Windows build is exercised by CI on `windows-latest`. No Windows capability is weakened to

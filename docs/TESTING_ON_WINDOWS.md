@@ -1,8 +1,8 @@
 # Running the harness on Windows
 
 `tests-host/` runs on Linux today and covers everything up to the point where a picture
-would appear. It stops there for one reason: `aurora-player` is `NullBackend` off
-Windows, so nothing in this repository has ever executed a line of `mpv.rs`. The Win32
+would appear. It stops there for one reason: off Windows the app has no video engine,
+so nothing there executes the libmpv driver. The Win32
 child surface, its `HWND_BOTTOM` ordering under a transparent WebView2, hardware
 decoding, and the viewer's original report — *audio plays, no video* — are all on the
 other side of that line.
