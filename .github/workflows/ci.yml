@@ -199,6 +199,17 @@ jobs:
           path: screenshots/
           if-no-files-found: ignore
 
+      - name: Upload traces of failed journeys
+        # Open with `pnpm exec playwright show-trace <zip>`: the DOM, focus and every
+        # event at each step, which is what an intermittent failure needs.
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # The Windows-only half: the mpv/Win32 compositing layer and the Tauri host.
   # This is the only runner that can compile aurora-app, so a green core job alone
   # does NOT mean the app builds.
