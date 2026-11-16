@@ -16,6 +16,7 @@ pub mod logging;
 pub mod metadata;
 pub mod mosaic;
 pub mod pip;
+pub mod play;
 pub mod playback;
 pub mod playlist;
 pub mod profiles;
