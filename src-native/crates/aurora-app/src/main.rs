@@ -217,6 +217,9 @@ fn main() {
             // that never appears is not.
             match app.get_webview_window("main") {
                 Some(main_window) => {
+                    // Before the surface is attached, so it is sized for where the
+                    // window will actually be.
+                    window::place_in_middle(&main_window);
                     {
                         let mut player = player_backend.lock();
                         match window::attach_video_surface(&main_window, player.as_mut()) {
