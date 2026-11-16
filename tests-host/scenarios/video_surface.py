@@ -172,9 +172,9 @@ def run(d, ctx):
 
     order = wp.children_front_to_back(hwnd)
     assert order, "the window has no children at all, so nothing was ever attached"
-    surface = [h for h in order if wp.class_name(h).lower() == "static"]
+    surface = [h for h in order if wp.is_video_surface(h)]
     assert surface, (
-        "no STATIC child window: mpv's surface is not there. Children: "
+        "no video surface child window: mpv's surface is not there. Children: "
         f"{[wp.describe(h) for h in order]}"
     )
     surface = surface[0]

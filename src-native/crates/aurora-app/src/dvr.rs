@@ -395,9 +395,19 @@ impl Dvr {
     ) -> Result<Active> {
         let url = {
             let db = db.lock();
-            let (url, _) =
-                crate::window::resolve_playback(&db, credentials, "live", rec.channel_id, None)?;
-            url
+            let plan = crate::play::resolve::plan(
+                &db,
+                credentials,
+                crate::play::resolve::What::Channel(rec.channel_id),
+                None,
+                now,
+            )?;
+            // The channel's best source, the one a viewer tuning in now would get.
+            plan.candidates
+                .into_iter()
+                .next()
+                .map(|c| c.url)
+                .expect("a plan always has a candidate")
         };
 
         let dest = folder.join(recording_filename(

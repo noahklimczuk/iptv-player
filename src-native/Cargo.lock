@@ -120,6 +120,7 @@ dependencies = [
  "aurora-db",
  "aurora-ingest",
  "aurora-player",
+ "aurora-video",
  "base64 0.22.1",
  "parking_lot",
  "png 0.17.16",
@@ -141,7 +142,7 @@ dependencies = [
  "aurora-core",
  "aurora-db",
  "aurora-ingest",
- "aurora-player",
+ "aurora-video",
  "serde_json",
 ]
 

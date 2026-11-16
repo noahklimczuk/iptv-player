@@ -15,6 +15,7 @@ pub mod model;
 pub mod none;
 pub mod request;
 pub mod stall;
+pub mod state;
 #[cfg(windows)]
 pub mod surface;
 
@@ -23,3 +24,4 @@ pub use engine::{seek_target, Engine, Seek, VideoError};
 pub use frame::Frame;
 pub use model::{Aspect, Report, Stats, Status, Track, TrackKind};
 pub use request::{Request, Timeshift};
+pub use state::{ItemKind, PlayerState};

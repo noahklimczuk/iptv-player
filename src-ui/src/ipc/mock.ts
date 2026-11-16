@@ -334,6 +334,7 @@ let mockParental: ParentalSettings = {
 let player: PlayerState = {
   status: 'idle',
   hasPicture: false,
+  reconnecting: false,
   title: null, subtitle: null, channelId: null, itemKind: null, itemId: null,
   positionSecs: 0, durationSecs: 0, isLive: false,
   volume: 70, muted: false, speed: 1,

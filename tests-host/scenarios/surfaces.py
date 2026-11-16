@@ -46,10 +46,10 @@ SLACK = 2
 
 
 def _statics(hwnd, visible_only=True):
-    """The STATIC children, which is what mpv attaches, front of the z-order first."""
+    """The video surfaces mpv draws into, front of the z-order first."""
     out = []
     for child in wp.children_front_to_back(hwnd):
-        if wp.class_name(child).lower() != "static":
+        if not wp.is_video_surface(child):
             continue
         if visible_only and not wp.is_visible(child):
             continue

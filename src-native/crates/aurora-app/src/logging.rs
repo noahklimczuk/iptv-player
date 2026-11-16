@@ -96,7 +96,7 @@ pub struct Diagnostics {
     pub credentials_persist: bool,
     /// What is decoding video, for the same reason the data folder is here: a support
     /// message that says "no picture" is unanswerable without it.
-    pub video_engine: aurora_player::Engine,
+    pub video_engine: crate::play::video::EngineInfo,
 }
 
 #[tauri::command(async)]
@@ -112,7 +112,7 @@ pub fn app_diagnostics(
             }
         },
         credentials_persist: services.credentials.is_persistent(),
-        video_engine: services.player.lock().engine(),
+        video_engine: crate::play::video::info(services.player.session.engine()),
     })
 }
 

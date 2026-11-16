@@ -275,8 +275,12 @@ pub struct Mosaic {
     /// shown again, and holding it means those two cannot drift apart. Done from the
     /// commands instead, `open`, `open_saved`, `close` and `promote` would each have to
     /// remember, and the one that forgot would be a mosaic nobody can see.
-    main: Arc<Mutex<Box<dyn PlayerBackend>>>,
+    main: SinkMain,
 }
+
+/// Sends the main player's surface, full size, beneath the tiles
+/// (`crate::play::player::Player::sink_under_tiles`).
+pub type SinkMain = Arc<dyn Fn(u32, u32) + Send + Sync>;
 
 impl Mosaic {
     /// Put the main player's surface underneath the tiles.
@@ -308,9 +312,7 @@ impl Mosaic {
             width: w.max(1),
             height: h.max(1),
         };
-        if let Err(e) = self.main.lock().place(rect) {
-            tracing::warn!("could not put the main video surface under the tiles: {e}");
-        }
+        (self.main)(rect.width, rect.height);
     }
 
     pub fn new(
@@ -318,7 +320,7 @@ impl Mosaic {
         dvr: Arc<crate::dvr::Dvr>,
         factory: TileFactory,
         data_dir: PathBuf,
-        main: Arc<Mutex<Box<dyn PlayerBackend>>>,
+        main: SinkMain,
         credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
     ) -> Self {
         Self {
@@ -1346,7 +1348,7 @@ pub fn mosaic_check(services: State<'_, Services>, args: LayoutArgs) -> Result<B
 #[tauri::command(async)]
 pub fn mosaic_open(services: State<'_, Services>, args: OpenArgs) -> Result<MosaicView> {
     let layout = layout_of(&args.layout)?;
-    let _ = services.playback.stop();
+    let _ = services.player.stop();
     services
         .mosaic
         .open(layout, &args.channel_ids, crate::now_unix())
@@ -1360,7 +1362,7 @@ pub fn mosaic_open(services: State<'_, Services>, args: OpenArgs) -> Result<Mosa
 #[tauri::command(async)]
 pub fn mosaic_open_rotating(services: State<'_, Services>, args: OpenArgs) -> Result<MosaicView> {
     let layout = layout_of(&args.layout)?;
-    let _ = services.playback.stop();
+    let _ = services.player.stop();
     services
         .mosaic
         .open_rotating(layout, &args.channel_ids, crate::now_unix())
@@ -1402,13 +1404,15 @@ pub fn mosaic_set_tile(services: State<'_, Services>, args: SetTileArgs) -> Resu
 pub fn mosaic_promote(
     services: State<'_, Services>,
     args: TileArgs,
-) -> Result<aurora_player::PlayerState> {
+) -> Result<aurora_video::PlayerState> {
     let channel_id = services.mosaic.channel_at(args.index)?;
     // Released before tuning, not after: on a line with exactly enough connections for
     // the layout, the main player's stream would be one over for as long as the tiles
     // were still up, and the provider would refuse the one the viewer just asked for.
     services.mosaic.close();
-    services.playback.play_live(channel_id, crate::now_unix())
+    services
+        .player
+        .play(crate::play::resolve::What::Channel(channel_id), None)
 }
 
 #[tauri::command(async)]
@@ -1436,7 +1440,7 @@ pub fn mosaic_open_saved(services: State<'_, Services>, args: IdArgs) -> Result<
     .ok_or_else(|| AppError::Other("That saved layout is gone.".into()))?;
 
     let layout = layout_of(&saved.layout)?;
-    let _ = services.playback.stop();
+    let _ = services.player.stop();
     services
         .mosaic
         .open(layout, &saved.channels, crate::now_unix())
@@ -1480,7 +1484,7 @@ mod tests {
                 dvr,
                 factory,
                 std::env::temp_dir(),
-                Arc::new(Mutex::new(Box::new(NullBackend::default()))),
+                Arc::new(|_, _| {}),
                 std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
             ),
             db,
@@ -1510,11 +1514,20 @@ mod tests {
         let (m, db) = mosaic(limit);
         let placed: Placements = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&placed);
-        let main: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(Box::new(Spy {
-            who: "main",
-            placed: Arc::clone(&placed),
-            gate: None,
-        })));
+        let main: SinkMain = {
+            let placed = Arc::clone(&placed);
+            Arc::new(move |width, height| {
+                placed.lock().push((
+                    "main",
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                    },
+                ))
+            })
+        };
         let factory: TileFactory = Arc::new(move || {
             Box::new(Spy {
                 who: "tile",
