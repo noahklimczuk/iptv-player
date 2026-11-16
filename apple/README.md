@@ -10,10 +10,16 @@ where the work deliberately departs from that plan.
 Phase 2 of the plan (the spike: Rust → Swift → video), plus the start of Phase 4's
 screens. The app can:
 
+- ask "Who's watching?" and check a profile's PIN (skipped when there's one profile
+  with no PIN, as on Windows). Wrong tries and the lockout are counted in the shared
+  database, so they're the same tries Windows counts,
 - add an Xtream Codes panel or an M3U playlist (the password goes in the Keychain),
 - import it with progress: live TV only (the tvOS default) or with films and series,
 - list channels by group, with now/next from the guide,
 - keep favourite channels per profile (long-press a channel),
+- show a channel's schedule a day at a time, and replay what already aired where the
+  channel keeps an archive (catch-up, up to a week back),
+- keep films and series on My List, and like them,
 - search channels, what's on now and later, films and series in one box,
 - browse films and series by the provider's shelves, with search,
 - list providers in Settings with what each holds, and refresh one,
@@ -22,8 +28,9 @@ screens. The app can:
   sources in turn. Films and episodes resume, and save their position every 15 s and
   on pause or stop.
 
-Not yet: the guide grid, profile switching, My List, named favourite lists, removing a
-provider, library filters, catch-up, and sync (Phase 3).
+Not yet: the full guide grid, creating and editing profiles, profile age and daily
+limits (being fixed on Windows first; the Apple app will follow the same rule), named
+favourite lists, removing a provider, library filters, recordings, and sync (Phase 3).
 
 Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 
@@ -32,7 +39,8 @@ Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 | Shared crates build for `aarch64-apple-ios` (iPhone/iPad) | ✅ unmodified, including `ring`/rustls and bundled SQLite |
 | Shared crates build for `x86_64-apple-ios` (simulator on Intel) | ✅ |
 | Shared crates build for `aarch64-apple-tvos` (Apple TV) | ✅ on **stable** Rust. The plan's risk 1 (`ring` on tvOS) didn't happen. |
-| `cargo test` in `apple/core` | ✅ 21 tests, including an import → list → tune run over HTTP |
+| `cargo test` in `apple/core` | ✅ 28 tests, including an import → list → favourite → search → tune → catch-up run over HTTP |
+| `AuroraMobile` and `AuroraTV` build for their simulators | ✅ |
 | Playback on a real Apple TV, import time for a big panel, zap time | ⏳ needs hardware: the remaining Phase 2 exit criteria |
 
 ## The separation rule
@@ -80,7 +88,8 @@ sticky, which episode is next) aren't repeated at all.
 Copies drift: the first draft gave live TV a 10-second buffer where Windows uses 8.
 To catch that, `aurora-ffi/src/mirrors.rs` reads `aurora-app`'s sources as text and
 fails when a copied value no longer matches (the live and VOD buffer sizes, the free
-guides, the columns a provider is saved with). If the Windows app changes one of them, `cargo test`
+guides, the columns a provider is saved with, the source a catch-up replay is built
+from). If the Windows app changes one of them, `cargo test`
 in `apple/core` says which file to update.
 
 As more screens arrive (guide, films, series, DVR rules), the amount of mirrored glue

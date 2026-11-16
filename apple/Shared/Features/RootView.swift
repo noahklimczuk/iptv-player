@@ -8,6 +8,22 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        Group {
+            if !model.profilesLoaded {
+                ProgressView()
+            } else if model.picking && !model.profiles.isEmpty {
+                ProfilePicker()
+            } else {
+                tabs
+                    // A new profile starts every screen afresh: its favourites, its My
+                    // List, its progress.
+                    .id(model.profileId)
+            }
+        }
+        .task { await model.loadProfiles() }
+    }
+
+    private var tabs: some View {
         TabView {
             LiveView().tabItem { Label("Live TV", systemImage: "tv") }
             MoviesView().tabItem { Label("Films", systemImage: "film") }

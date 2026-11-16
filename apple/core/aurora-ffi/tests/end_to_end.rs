@@ -14,7 +14,7 @@ use aurora_ffi::{
 };
 
 const PLAYLIST: &str = "#EXTM3U
-#EXTINF:-1 tvg-id=\"news.uk\" group-title=\"News\",Aurora News HD
+#EXTINF:-1 tvg-id=\"news.uk\" group-title=\"News\" catchup=\"append\" catchup-days=\"3\",Aurora News HD
 http://streams.example/news.ts
 #EXTINF:-1 tvg-id=\"sport.uk\" group-title=\"Sport\",Aurora Sport
 http://streams.example/sport.ts
@@ -157,6 +157,34 @@ fn a_playlist_is_imported_listed_and_tuned() {
     let found = core.search("sport".into(), 10).unwrap();
     assert_eq!(found.channels.len(), 1, "{found:?}");
     assert_eq!(found.channels[0].title, "Aurora Sport");
+
+    // Catch-up: News keeps a three-day archive, so an hour ago replays; tomorrow and
+    // ten days ago don't. The URL is the shared rule's (`append` adds utc and lutc).
+    assert!(news[0].has_catchup);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let hour_ago = now - 3600;
+    assert_eq!(
+        core.catch_up_available(news[0].id, vec![hour_ago, now + 86_400, now - 10 * 86_400])
+            .unwrap(),
+        [true, false, false]
+    );
+    let replay = core
+        .tune_catchup(news[0].id, hour_ago, hour_ago + 1800)
+        .unwrap();
+    assert!(
+        replay.url.starts_with(&format!(
+            "http://streams.example/news.ts?utc={hour_ago}&lutc="
+        )),
+        "{}",
+        replay.url
+    );
+    assert!(replay
+        .mpv_options
+        .iter()
+        .any(|o| o.name == "cache-secs" && o.value == "30"));
 
     core.report_source(tune.sources[0].source_id, true).unwrap();
     core.report_source(tune.sources[0].source_id, false)

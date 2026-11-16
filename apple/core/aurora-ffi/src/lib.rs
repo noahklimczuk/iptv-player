@@ -15,16 +15,19 @@
 //!
 //! Scope today: the Phase 2 spike of docs/APPLE_PORT_AND_SYNC.md (open a library, add a
 //! provider, import it, list its channels, tune one), plus the guide's now/next and
-//! schedule, films and series, watch progress, favourite channels and search.
+//! schedule, films and series, watch progress, favourite channels, search, catch-up, profiles and My List.
 
 uniffi::setup_scaffolding!();
 
+mod catchup;
 mod error;
 mod guide;
 mod library;
 #[cfg(test)]
 mod mirrors;
+mod mylist;
 mod playback;
+mod profiles;
 mod providers;
 mod search;
 mod secrets;
@@ -38,10 +41,13 @@ use aurora_ingest::credentials::CredentialStore;
 use aurora_ingest::http::{HttpClient, HttpConfig};
 use parking_lot::Mutex;
 
+pub use catchup::CatchupTune;
 pub use error::{AuroraError, Result};
 pub use guide::{NowNext, Programme};
 pub use library::{Channel, ChannelGroup};
+pub use mylist::{ItemMarks, ListKind, MyList};
 pub use playback::{LiveTune, MpvOption, PlayableSource};
+pub use profiles::{PinOutcome, Profile};
 pub use providers::{ImportContent, ImportListener, ImportPhase, ImportReport, Provider};
 pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};

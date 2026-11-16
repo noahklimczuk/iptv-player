@@ -8,6 +8,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                if model.profiles.count > 1 || model.activeProfile?.hasPin == true {
+                    Section("Profile") {
+                        LabeledContent("Watching as", value: model.activeProfile?.name ?? "")
+                        Button("Switch profile", systemImage: "person.2") { model.picking = true }
+                    }
+                }
                 Section("Providers") {
                     ForEach(model.providers, id: \.id) { provider in
                         ProviderRow(provider: provider)
@@ -39,6 +45,7 @@ struct SettingsView: View {
 private struct ProviderRow: View {
     @Environment(AppModel.self) private var model
     let provider: Provider
+    @State private var confirmingRemove = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -52,10 +59,22 @@ private struct ProviderRow: View {
             if let max = provider.maxConnections {
                 Text("\(max) stream\(max == 1 ? "" : "s") at once").font(.caption2).foregroundStyle(.tertiary)
             }
-            Button("Refresh", systemImage: "arrow.clockwise") {
-                Task { await refresh() }
+            HStack {
+                Button("Refresh", systemImage: "arrow.clockwise") {
+                    Task { await refresh() }
+                }
+                Button("Remove", systemImage: "trash", role: .destructive) {
+                    confirmingRemove = true
+                }
             }
             .disabled(model.importProgress != nil)
+        }
+        .confirmationDialog("Remove \(provider.name)?", isPresented: $confirmingRemove, titleVisibility: .visible) {
+            Button("Remove", role: .destructive) {
+                Task { await model.removeProvider(provider.id) }
+            }
+        } message: {
+            Text("Its channels, films, series and guide are removed from this device, and its password from the Keychain.")
         }
     }
 

@@ -5,19 +5,22 @@ enum PlayerItem: Identifiable, Hashable {
     case channel(id: Int64, name: String)
     case movie(id: Int64, title: String, startAt: Double?)
     case episode(id: Int64, title: String, startAt: Double?)
+    /// A programme that already aired on a channel, `start..stop` in Unix seconds.
+    case catchup(channelId: Int64, title: String, start: Int64, stop: Int64)
 
     var id: String {
         switch self {
         case .channel(let id, _): "channel-\(id)"
         case .movie(let id, _, _): "movie-\(id)"
         case .episode(let id, _, _): "episode-\(id)"
+        case .catchup(let id, _, let start, _): "catchup-\(id)-\(start)"
         }
     }
 
     var title: String {
         switch self {
         case .channel(_, let name): name
-        case .movie(_, let title, _), .episode(_, let title, _): title
+        case .movie(_, let title, _), .episode(_, let title, _), .catchup(_, let title, _, _): title
         }
     }
 }
@@ -34,6 +37,7 @@ struct PlayerScreen: View {
     private enum Resolved {
         case live(LiveTune)
         case vod(VodTune)
+        case replay(CatchupTune)
     }
 
     @State private var status: MPVPlayerController.PlayerStatus?
@@ -106,6 +110,8 @@ struct PlayerScreen: View {
                 case .channel(let id, _): .live(try core.tuneLive(channelId: id))
                 case .movie(let id, _, let startAt): .vod(try core.tuneMovie(movieId: id, startAtSecs: startAt))
                 case .episode(let id, _, let startAt): .vod(try core.tuneEpisode(episodeId: id, startAtSecs: startAt))
+                case .catchup(let id, _, let start, let stop):
+                    .replay(try core.tuneCatchup(channelId: id, start: start, stop: stop))
                 }
             }.value
         } catch {
@@ -119,6 +125,7 @@ struct PlayerScreen: View {
         switch resolved {
         case .live(let tune): controller.play(tune, core: core)
         case .vod(let tune): controller.play(tune, core: core, profileId: model.profileId)
+        case .replay(let tune): controller.play(tune, core: core)
         }
     }
 }

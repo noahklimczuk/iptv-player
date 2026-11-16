@@ -114,3 +114,50 @@ fn a_provider_is_saved_with_the_same_columns() {
     let norm = |s: &str| s.split_whitespace().collect::<String>();
     assert_eq!(norm(ours), norm(windows));
 }
+
+#[test]
+fn catch_up_picks_the_channel_source_windows_picks() {
+    // `catchup_channel` chooses the source a replay is built from. If Windows changes
+    // which one (or which columns it reads), catchup.rs must follow.
+    fn sql(block: &str) -> String {
+        let from = block.find("SELECT").expect("a SELECT");
+        block[from..]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    let window = app_src("window.rs");
+    let windows = sql(between(&window, "pub fn catchup_channel(", "LIMIT 1"));
+    let ours = sql(between(
+        include_str!("catchup.rs"),
+        "// The channel's best source",
+        "LIMIT 1",
+    ));
+    assert_eq!(
+        ours, windows,
+        "aurora-app window.rs catchup_channel picks its source differently now; update catchup.rs"
+    );
+}
+
+#[test]
+fn a_provider_is_removed_the_way_windows_removes_one() {
+    // Both delete the row (the schema cascades the rest) and then forget the password.
+    let app = app_src("providers.rs");
+    let windows = between(&app, "pub fn providers_delete(", "Ok(true)");
+    let ours = between(
+        include_str!("providers.rs"),
+        "pub fn remove_provider(",
+        "Ok(true)",
+    );
+    for needle in [
+        "SELECT credential_ref FROM providers WHERE id = ?1",
+        "DELETE FROM providers WHERE id = ?1",
+        "credentials.delete(&key)",
+    ] {
+        assert!(
+            windows.contains(needle),
+            "aurora-app providers_delete no longer has `{needle}`; update remove_provider"
+        );
+        assert!(ours.contains(needle), "remove_provider lost `{needle}`");
+    }
+}

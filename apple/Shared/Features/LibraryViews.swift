@@ -9,23 +9,31 @@ struct MoviesView: View {
     @State private var movies: [Movie] = []
     @State private var search = ""
     @State private var selected: Movie?
+    @State private var myList = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                ShelfPicker(shelves: shelves, selection: $shelf)
+                ShelfPicker(shelves: shelves, selection: $shelf, myList: $myList)
                 PosterGrid(items: movies.map { PosterItem(id: $0.id, title: $0.title, year: $0.year, poster: $0.poster) }) { id in
                     selected = movies.first { $0.id == id }
                 }
-                if movies.isEmpty {
+                if movies.isEmpty && myList {
+                    ContentUnavailableView("Nothing on My List", systemImage: "plus",
+                                           description: Text("Add a film from its page."))
+                } else if movies.isEmpty {
                     ContentUnavailableView("No films", systemImage: "film",
                                            description: Text("Import films from a provider in Live TV → Add provider."))
                 }
             }
             .navigationTitle("Films")
             .searchable(text: $search)
-            .task(id: "\(shelf ?? "")|\(search)") {
-                movies = await model.movies(.shelf(shelf, query: search))
+            .task(id: "\(myList)|\(shelf ?? "")|\(search)|\(selected == nil)") {
+                // Reloaded when a film's page closes, so My List shows what was just added.
+                guard selected == nil else { return }
+                movies = myList
+                    ? await model.myList()?.movies ?? []
+                    : await model.movies(.shelf(shelf, query: search))
             }
             .task { shelves = await model.movieShelves() }
             .sheet(item: $selected) { MovieDetail(movie: $0) }
@@ -54,6 +62,7 @@ struct MovieDetail: View {
                     PlayButtons(progress: progress) { startAt in
                         playing = .movie(id: movie.id, title: movie.title, startAt: startAt)
                     }
+                    MarkButtons(kind: .movie, id: movie.id)
                 }
                 .padding()
             }
@@ -71,22 +80,33 @@ struct SeriesView: View {
     @State private var shelf: String?
     @State private var series: [Series] = []
     @State private var search = ""
+    @State private var myList = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                ShelfPicker(shelves: shelves, selection: $shelf)
+                ShelfPicker(shelves: shelves, selection: $shelf, myList: $myList)
                 PosterGrid(items: series.map { PosterItem(id: $0.id, title: $0.title, year: $0.year, poster: $0.poster) },
                            destination: { id in SeriesDetail(seriesId: id) })
-                if series.isEmpty {
+                if series.isEmpty && myList {
+                    ContentUnavailableView("Nothing on My List", systemImage: "plus",
+                                           description: Text("Add a series from its page."))
+                } else if series.isEmpty {
                     ContentUnavailableView("No series", systemImage: "rectangle.stack",
                                            description: Text("Import series from a provider in Live TV → Add provider."))
                 }
             }
             .navigationTitle("Series")
             .searchable(text: $search)
-            .task(id: "\(shelf ?? "")|\(search)") {
-                series = await model.series(.shelf(shelf, query: search))
+            .task(id: "\(myList)|\(shelf ?? "")|\(search)") {
+                series = myList
+                    ? await model.myList()?.series ?? []
+                    : await model.series(.shelf(shelf, query: search))
+            }
+            .onAppear {
+                // Back from a series page, which may have added or removed it.
+                guard myList else { return }
+                Task { series = await model.myList()?.series ?? [] }
             }
             .task { shelves = await model.seriesShelves() }
         }
@@ -106,6 +126,7 @@ struct SeriesDetail: View {
         List {
             if let detail {
                 Section {
+                    MarkButtons(kind: .series, id: seriesId)
                     if let overview = detail.overview { Text(overview) }
                     if let resume, let episode = episodes.first(where: { $0.id == resume.episodeId }) {
                         Button(resume.positionSecs > 0 ? "Resume \(label(episode))" : "Play \(label(episode))",
@@ -191,13 +212,19 @@ struct PlayButtons: View {
 struct ShelfPicker: View {
     let shelves: [Shelf]
     @Binding var selection: String?
+    /// The profile's My List instead of a shelf.
+    @Binding var myList: Bool
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                chip("All", selected: selection == nil) { selection = nil }
+                chip("My List", selected: myList) { myList = true }
+                chip("All", selected: !myList && selection == nil) { myList = false; selection = nil }
                 ForEach(shelves, id: \.name) { shelf in
-                    chip(shelf.name, selected: selection == shelf.name) { selection = shelf.name }
+                    chip(shelf.name, selected: !myList && selection == shelf.name) {
+                        myList = false
+                        selection = shelf.name
+                    }
                 }
             }
             .padding(.horizontal)
@@ -208,6 +235,32 @@ struct ShelfPicker: View {
         Button(title, action: action)
             .buttonStyle(.bordered)
             .tint(selected ? .accentColor : .secondary)
+    }
+}
+
+/// My List and Like, for a film's or a series' page.
+struct MarkButtons: View {
+    @Environment(AppModel.self) private var model
+    let kind: ListKind
+    let id: Int64
+    @State private var marks: ItemMarks?
+
+    var body: some View {
+        HStack {
+            Button {
+                Task { if let now = await model.toggleMyList(kind, id: id) { marks?.inMyList = now } }
+            } label: {
+                Label("My List", systemImage: marks?.inMyList == true ? "checkmark" : "plus")
+            }
+            Button {
+                Task { if let now = await model.toggleLiked(kind, id: id) { marks?.liked = now } }
+            } label: {
+                Label("Like", systemImage: marks?.liked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
+            }
+        }
+        .buttonStyle(.bordered)
+        .disabled(marks == nil)
+        .task { marks = await model.marks(kind, id: id) }
     }
 }
 
@@ -247,14 +300,26 @@ struct PosterGrid<Destination: View>: View {
             ForEach(items) { item in
                 if let destination {
                     NavigationLink { destination(item.id) } label: { PosterCard(item: item) }
-                        .buttonStyle(.plain)
+                        .tileButtonStyle()
                 } else {
                     Button { onSelect?(item.id) } label: { PosterCard(item: item) }
-                        .buttonStyle(.plain)
+                        .tileButtonStyle()
                 }
             }
         }
         .padding()
+    }
+}
+
+extension View {
+    /// A poster or profile tile: on tvOS the card style, which lifts the focused tile so
+    /// the Siri Remote's position can be seen (`.plain` shows none there); plain elsewhere.
+    func tileButtonStyle() -> some View {
+        #if os(tvOS)
+        buttonStyle(.card)
+        #else
+        buttonStyle(.plain)
+        #endif
     }
 }
 

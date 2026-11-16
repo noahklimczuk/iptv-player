@@ -79,6 +79,7 @@ struct ChannelListView: View {
     @State private var channels: [Channel] = []
     @State private var guide: [Int64: NowNext] = [:]
     @State private var playing: PlayerItem?
+    @State private var guideFor: Channel?
 
     var body: some View {
         List(channels, id: \.id) { channel in
@@ -89,6 +90,9 @@ struct ChannelListView: View {
             }
             // Long-press on the Siri Remote, long-press or right-click on iPhone and iPad.
             .contextMenu {
+                Button(channel.hasCatchup ? "Guide and catch-up" : "Guide", systemImage: "calendar") {
+                    guideFor = channel
+                }
                 Button(channel.favorite ? "Remove from Favourites" : "Add to Favourites",
                        systemImage: channel.favorite ? "heart.slash" : "heart") {
                     Task { await toggle(channel) }
@@ -108,6 +112,7 @@ struct ChannelListView: View {
             guide = Dictionary(answer.map { ($0.channelId, $0) }, uniquingKeysWith: { a, _ in a })
         }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
+        .navigationDestination(item: $guideFor) { ChannelGuideView(channel: $0) }
     }
 
     private func toggle(_ channel: Channel) async {
@@ -135,6 +140,10 @@ private struct ChannelRow: View {
                     if channel.favorite {
                         Image(systemName: "heart.fill").font(.caption).foregroundStyle(.pink)
                             .accessibilityLabel("Favourite")
+                    }
+                    if channel.hasCatchup {
+                        Image(systemName: "gobackward").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Catch-up")
                     }
                     if channel.stale {
                         Text("Dropped").font(.caption).foregroundStyle(.orange)

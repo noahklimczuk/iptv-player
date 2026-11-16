@@ -15,9 +15,16 @@ final class AppModel {
     private(set) var lastImport: ImportReport?
     var error: String?
 
-    /// Whose favourites and progress these are. Profile 1 ("Me") exists in every library
-    /// (an `aurora-db` migration creates it); choosing another is a later screen.
+    /// Whose favourites, My List and progress these are. Falls back to 1, which exists in
+    /// every library (an `aurora-db` migration creates it), as on Windows.
     private(set) var profileId: Int64 = 1
+    private(set) var profiles: [Profile] = []
+    private(set) var activeProfile: Profile?
+    /// "Who's watching?" is up. True until a profile is chosen, as on Windows.
+    var picking = true
+    /// The picker's question has been asked of the core, however it was answered. Until
+    /// then the first screen isn't known, so nothing is shown rather than the wrong one.
+    private(set) var profilesLoaded = false
 
     /// `nil` only if the library could not be opened, and then `error` says why.
     let core: AuroraCore?
@@ -112,6 +119,13 @@ final class AppModel {
         return await call(nil) { try $0.toggleFavorite(profileId: profile, channelId: channelId) }
     }
 
+    /// Which of these programmes can be replayed now, by id.
+    func replayable(channelId: Int64, _ programmes: [Programme]) async -> Set<Int64> {
+        let starts = programmes.map(\.start)
+        let flags = await call([]) { try $0.catchUpAvailable(channelId: channelId, starts: starts) }
+        return Set(zip(programmes, flags).filter(\.1).map(\.0.id))
+    }
+
     func search(_ text: String) async -> SearchResults? {
         await call(nil) { try $0.search(text: text, limit: 30) }
     }
@@ -120,9 +134,9 @@ final class AppModel {
         await call([]) { try $0.nowNext(channelIds: channelIds) }
     }
 
-    func schedule(channelId: Int64, hours: Int64 = 24) async -> [Programme] {
-        let now = Int64(Date().timeIntervalSince1970)
-        return await call([]) { try $0.schedule(channelId: channelId, from: now - 3600, to: now + hours * 3600) }
+    func schedule(channelId: Int64, from: Date, to: Date) async -> [Programme] {
+        let from = Int64(from.timeIntervalSince1970), to = Int64(to.timeIntervalSince1970)
+        return await call([]) { try $0.schedule(channelId: channelId, from: from, to: to) }
     }
 
     func movies(_ browse: Browse) async -> [Movie] {
@@ -157,6 +171,61 @@ final class AppModel {
     func seriesResume(seriesId: Int64) async -> SeriesResume? {
         let profile = profileId
         return await call(nil) { try $0.seriesResume(profileId: profile, seriesId: seriesId) }
+    }
+
+    /// Remove a provider and everything imported from it.
+    func removeProvider(_ id: Int64) async {
+        _ = await call(false) { try $0.removeProvider(providerId: id) }
+        await reload()
+    }
+
+    // MARK: Profiles
+
+    /// Load the profiles. With exactly one, and no PIN on it, there is nobody to choose
+    /// between, so it is chosen: the same rule as Windows' `state/profile.ts`.
+    func loadProfiles() async {
+        let all = await call([]) { try $0.profiles() }
+        profiles = all
+        if all.count == 1, let only = all.first, !only.hasPin {
+            activate(only)
+        } else if let active = activeProfile {
+            activeProfile = all.first { $0.id == active.id }
+        }
+        profilesLoaded = true
+    }
+
+    func activate(_ profile: Profile) {
+        activeProfile = profile
+        profileId = profile.id
+        picking = false
+    }
+
+    func verifyPin(_ profile: Profile, pin: String) async -> PinOutcome? {
+        await call(nil) { try $0.verifyProfilePin(profileId: profile.id, pin: pin) }
+    }
+
+    // MARK: My List
+
+    /// Returns whether it is on My List now.
+    func toggleMyList(_ kind: ListKind, id: Int64) async -> Bool? {
+        let profile = profileId
+        return await call(nil) { try $0.toggleMyList(profileId: profile, kind: kind, id: id) }
+    }
+
+    /// Returns whether it is liked now.
+    func toggleLiked(_ kind: ListKind, id: Int64) async -> Bool? {
+        let profile = profileId
+        return await call(nil) { try $0.toggleLiked(profileId: profile, kind: kind, id: id) }
+    }
+
+    func marks(_ kind: ListKind, id: Int64) async -> ItemMarks? {
+        let profile = profileId
+        return await call(nil) { try $0.itemMarks(profileId: profile, kind: kind, id: id) }
+    }
+
+    func myList() async -> MyList? {
+        let profile = profileId
+        return await call(nil) { try $0.myList(profileId: profile) }
     }
 
     /// Run one core call off the main actor; on failure, say why and return `fallback`.

@@ -153,6 +153,30 @@ impl AuroraCore {
         self.save_provider(&name, "m3u", url.trim(), None, None)
     }
 
+    /// Remove a provider: its channels, films, series and guide go with it (the schema
+    /// cascades), and its password leaves the Keychain. Returns false if it was already
+    /// gone. Mirrors `aurora-app/src/providers.rs` `providers_delete`.
+    pub fn remove_provider(&self, provider_id: i64) -> Result<bool> {
+        let db = self.db.lock();
+        let credential: Option<String> = db
+            .query_row(
+                "SELECT credential_ref FROM providers WHERE id = ?1",
+                params![provider_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let removed = db.execute("DELETE FROM providers WHERE id = ?1", params![provider_id])?;
+        if removed == 0 {
+            return Ok(false);
+        }
+        if let Some(key) = credential {
+            // Already forgotten is fine: the point is that nothing is left behind.
+            let _ = self.credentials.delete(&key);
+        }
+        Ok(true)
+    }
+
     /// Every provider, in the order they were added.
     pub fn providers(&self) -> Result<Vec<Provider>> {
         let db = self.db.lock();
@@ -387,6 +411,38 @@ mod tests {
             .unwrap();
         assert!(!key.contains("hunter2"));
         assert_eq!(core.credentials.get(&key).unwrap(), "hunter2");
+    }
+
+    #[test]
+    fn removing_a_provider_forgets_its_password() {
+        let (core, _dir) = core();
+        let id = core
+            .add_xtream(
+                "Panel".into(),
+                "http://panel.example".into(),
+                "alice".into(),
+                "hunter2".into(),
+            )
+            .unwrap();
+        let key: String = core
+            .db
+            .lock()
+            .query_row(
+                "SELECT credential_ref FROM providers WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(core.remove_provider(id).unwrap());
+        assert!(core.providers().unwrap().is_empty());
+        assert!(
+            core.credentials.get(&key).is_err(),
+            "the password outlived its provider"
+        );
+        assert!(
+            !core.remove_provider(id).unwrap(),
+            "a second remove finds nothing"
+        );
     }
 
     #[test]

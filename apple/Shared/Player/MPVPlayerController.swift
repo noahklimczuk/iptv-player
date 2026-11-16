@@ -24,6 +24,9 @@ final class MPVPlayerController: UIViewController {
     private enum Session {
         case live(LiveTune, sourceIndex: Int)
         case vod(VodTune, profileId: Int64, lastSaved: Date)
+        /// A programme that already aired, from the provider's archive. Seekable like a
+        /// film, but no watch progress: Windows doesn't keep any for catch-up either.
+        case replay(CatchupTune)
     }
 
     private var core: AuroraCore?
@@ -91,6 +94,18 @@ final class MPVPlayerController: UIViewController {
         }
     }
 
+    /// Replay a programme that already aired.
+    func play(_ tune: CatchupTune, core: AuroraCore) {
+        queue.async { [self] in
+            self.core = core
+            session = .replay(tune)
+            apply(tune.mpvOptions)
+            DispatchQueue.main.async { self.onStatus?(.opening(source: 1, of: 1)) }
+            // Can carry the provider's password (R-126): handed to mpv, never logged.
+            command("loadfile", tune.url, "replace")
+        }
+    }
+
     func stop() {
         queue.async { [self] in
             saveProgress(force: true)
@@ -110,11 +125,14 @@ final class MPVPlayerController: UIViewController {
         }
     }
 
-    /// Jump by `seconds`, forwards or back. Films and episodes only: live has no
+    /// Jump by `seconds`, forwards or back. Films, episodes and catch-up: live has no
     /// timeshift on Apple yet.
     func seek(by seconds: Double) {
         queue.async { [self] in
-            guard case .vod = session else { return }
+            switch session {
+            case .vod?, .replay?: break
+            case .live?, nil: return
+            }
             command("seek", String(seconds), "relative")
         }
     }
@@ -144,7 +162,7 @@ final class MPVPlayerController: UIViewController {
         switch session {
         case .live(let tune, let index)?:
             if index < tune.sources.count { report(tune.sources[index].sourceId, opened: true) }
-        case .vod?, nil:
+        case .vod?, .replay?, nil:
             break
         }
         DispatchQueue.main.async { self.onStatus?(.playing) }
@@ -167,6 +185,11 @@ final class MPVPlayerController: UIViewController {
         case .vod(let tune, _, _)?:
             session = nil
             DispatchQueue.main.async { self.onStatus?(.failed("\(tune.title) would not play: \(reason).")) }
+        case .replay(let tune)?:
+            session = nil
+            DispatchQueue.main.async {
+                self.onStatus?(.failed("\(tune.title)'s archive would not play: \(reason)."))
+            }
         case nil:
             break
         }
