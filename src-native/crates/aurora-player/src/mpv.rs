@@ -88,6 +88,8 @@ const LOG_LEVEL: &str = "warn";
 enum Drained {
     StartFile,
     FileLoaded,
+    /// Playback has really begun after a load or a seek: there is a frame on screen.
+    PlaybackRestart,
     EndFile(u32),
     Property(String),
     /// mpv reported an error rather than an event. This is how a stream that will not
@@ -330,6 +332,7 @@ impl MpvBackend {
         tracing::warn!("playback failed: {described}");
         self.state.error = Some(PlaybackError::classify(&described));
         self.state.status = PlayerStatus::Error;
+        self.state.has_picture = false;
         // A failed stream is not a buffered one. Leaving the window up would have the
         // OSD offer a rewind into a cache that is no longer being written.
         self.timeshift = None;
@@ -367,6 +370,7 @@ impl MpvBackend {
                 out.push(match event {
                     Ok(Event::StartFile) => Drained::StartFile,
                     Ok(Event::FileLoaded) => Drained::FileLoaded,
+                    Ok(Event::PlaybackRestart) => Drained::PlaybackRestart,
                     Ok(Event::EndFile(reason)) => Drained::EndFile(reason),
                     Ok(Event::PropertyChange { name, .. }) => Drained::Property(name.to_string()),
                     Ok(Event::LogMessage { prefix, text, .. }) => {
@@ -381,7 +385,11 @@ impl MpvBackend {
 
         for event in drained {
             match event {
-                Drained::StartFile => self.state.status = PlayerStatus::Loading,
+                Drained::StartFile => {
+                    self.state.status = PlayerStatus::Loading;
+                    self.state.has_picture = false;
+                }
+                Drained::PlaybackRestart => self.state.has_picture = true,
                 Drained::FileLoaded => {
                     self.state.status = PlayerStatus::Playing;
                     self.state.error = None;
@@ -698,6 +706,7 @@ impl PlayerBackend for MpvBackend {
     fn stop(&mut self) -> Result<(), PlayerError> {
         let r = self.cmd(&["stop"]);
         self.state.status = PlayerStatus::Idle;
+        self.state.has_picture = false;
         self.timeshift = None;
         self.state.timeshift = None;
         // Nothing is being attempted any more, so nothing is late. Without this the

@@ -333,6 +333,7 @@ let mockParental: ParentalSettings = {
 
 let player: PlayerState = {
   status: 'idle',
+  hasPicture: false,
   title: null, subtitle: null, channelId: null, itemKind: null, itemId: null,
   positionSecs: 0, durationSecs: 0, isLive: false,
   volume: 70, muted: false, speed: 1,
@@ -473,6 +474,11 @@ let mockPlayedUpTo = 0;
 let mockPlayedKey = '';
 function setPlayer(patch: Partial<PlayerState>) {
   player = { ...player, ...patch };
+  // The mock draws nothing, so it has a picture whenever the real host would -- unless
+  // a test says otherwise, to stand for the second between opening and the first frame.
+  if (!('hasPicture' in patch)) {
+    player.hasPicture = !mockNoPicture && ['playing', 'paused', 'buffering'].includes(player.status);
+  }
   const key = `${player.itemKind}:${player.itemId}:${player.channelId}`;
   if (key !== mockPlayedKey) {
     mockPlayedKey = key;
@@ -3144,6 +3150,16 @@ export function failNextMock(name: string, message: string): void {
  * notice, not to the panel. Which is why the panel's four dead buttons went unpressed by
  * any journey for as long as they existed (R-110).
  */
+let mockNoPicture = false;
+/**
+ * Hold back the picture: the player says `playing` but nothing has been drawn yet, as
+ * the real host does for the second between opening a stream and its first frame.
+ */
+export function setNoPictureMock(on: boolean): PlayerState {
+  mockNoPicture = on;
+  return setPlayer({});
+}
+
 export function setPlayerErrorMock(error: PlayerState['error']): PlayerState {
   return setPlayer({ error, status: error ? 'error' : player.status });
 }

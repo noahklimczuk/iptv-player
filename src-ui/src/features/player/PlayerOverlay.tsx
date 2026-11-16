@@ -681,7 +681,10 @@ const HAS_A_FRAME: ReadonlySet<PlayerState['status']> = new Set([
  * may make itself transparent.
  */
 export function showingPicture(player: PlayerState | null): boolean {
-  return !!player && hasVideoSurface() && HAS_A_FRAME.has(player.status);
+  // `hasPicture` as well as the status: `playing` arrives when the file is opened, a
+  // second or so before mpv has drawn anything, and transparent for that second was a
+  // hole through to the desktop.
+  return !!player && hasVideoSurface() && HAS_A_FRAME.has(player.status) && player.hasPicture;
 }
 
 /**

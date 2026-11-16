@@ -355,6 +355,12 @@ export interface PlayerState {
   timeshift: TimeshiftWindow | null;
   error: PlaybackError | null;
   stats: PlaybackStats | null;
+  /**
+   * Whether mpv has drawn a frame of what is on now. `status` turns `playing` when the
+   * file is opened, a second or so before there is a picture; the window may only be
+   * made transparent once this is true, or the viewer sees through it to the desktop.
+   */
+  hasPicture: boolean;
 }
 
 /**

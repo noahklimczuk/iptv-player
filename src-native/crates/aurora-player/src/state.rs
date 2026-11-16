@@ -140,6 +140,17 @@ pub struct PlayerState {
     pub timeshift: Option<Window>,
     pub error: Option<PlaybackError>,
     pub stats: Option<PlaybackStats>,
+    /// Whether mpv has actually drawn a frame of what is on now.
+    ///
+    /// `status` turns `Playing` when mpv reports `FileLoaded`, which is when the file
+    /// has been *opened* -- before the first frame is decoded, and before a resume
+    /// seek. The UI made the window transparent on `Playing`, so for the second or so
+    /// in between there was nothing behind it and the viewer looked straight through
+    /// the app at their desktop ("a transparent screen before it plays the content",
+    /// seen at 7.6-8.8 s of the viewer's screen recording). This turns true on
+    /// `PlaybackRestart`, which mpv sends once playback has really begun.
+    #[serde(default)]
+    pub has_picture: bool,
 }
 
 impl Default for PlayerState {
@@ -165,6 +176,7 @@ impl Default for PlayerState {
             timeshift: None,
             error: None,
             stats: None,
+            has_picture: false,
         }
     }
 }

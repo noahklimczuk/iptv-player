@@ -25,7 +25,7 @@ const { useUi } = await import('@/state/ui');
 const control = await import('./playerControl');
 
 const base: PlayerState = {
-  status: 'playing', title: 'x', subtitle: null, channelId: 1, itemKind: null, itemId: null,
+  status: 'playing', hasPicture: true, title: 'x', subtitle: null, channelId: 1, itemKind: null, itemId: null,
   positionSecs: 100, durationSecs: 1000, isLive: false, volume: 70, muted: false, speed: 1,
   audioTracks: [], subtitleTracks: [], activeAudioTrack: null, activeSubtitleTrack: null,
   aspect: 'auto', timeshift: null, error: null, stats: null,
