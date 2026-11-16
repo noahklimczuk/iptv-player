@@ -631,6 +631,18 @@ jobs:
             'benchmark playback performance.'
           ) -join "`n"
 
+          # Both assets, because both are how a copy of Aurora updates itself: an
+          # installed one runs the installer, a portable one replaces its own files
+          # from the zip. Publishing only the installer is what made a portable build
+          # unable to update at all — `Release::asset` refuses to hand it the wrong
+          # file, and rightly, so the right one has to be here.
+          #
+          # Renamed to carry the version, like the installer: several of these share a
+          # Downloads folder and have to stay tellable apart. The updater matches on
+          # "portable" and ".zip", so the name stays within what it looks for.
+          $portableAsset = Join-Path $env:RUNNER_TEMP "aurora-tv-$version-portable.zip"
+          Copy-Item 'aurora-tv-portable.zip' $portableAsset
+
           # gh exits non-zero when the release does not exist, which is information
           # rather than an error, so the native-command trap is off around the probe.
           $PSNativeCommandUseErrorActionPreference = $false
@@ -652,21 +664,14 @@ jobs:
               throw "$tag already belongs to $owner, not this commit ($full). Re-run this job to build it as the next version."
             }
             gh release edit $tag --notes $notes --latest
+            gh release upload $tag $asset $portableAsset --clobber
           } else {
-            gh release create $tag --target $full --latest `
+            # Created with its files in one step. Given files, gh makes a draft, uploads
+            # them, and only then publishes. Created bare and uploaded to afterwards, the
+            # release was public for a few seconds with no files: an app that checked in
+            # that window (one did, on 1.0.77) was told there was no portable build, and
+            # remembered that for six hours.
+            gh release create $tag $asset $portableAsset --target $full --latest `
               --title "Aurora TV $version" --notes $notes
           }
-          # Both assets, because both are how a copy of Aurora updates itself: an
-          # installed one runs the installer, a portable one replaces its own files
-          # from the zip. Publishing only the installer is what made a portable build
-          # unable to update at all — `Release::asset` refuses to hand it the wrong
-          # file, and rightly, so the right one has to be here.
-          #
-          # Renamed to carry the version, like the installer: several of these share a
-          # Downloads folder and have to stay tellable apart. The updater matches on
-          # "portable" and ".zip", so the name stays within what it looks for.
-          $portableAsset = Join-Path $env:RUNNER_TEMP "aurora-tv-$version-portable.zip"
-          Copy-Item 'aurora-tv-portable.zip' $portableAsset
-
-          gh release upload $tag $asset $portableAsset --clobber
           Write-Host "Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"
