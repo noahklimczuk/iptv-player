@@ -32,6 +32,8 @@ Not yet: the full guide grid, creating and editing profiles, profile age and dai
 limits (being fixed on Windows first; the Apple app will follow the same rule), named
 favourite lists, removing a provider, library filters, recordings, and sync (Phase 3).
 
+The app targets **iOS 26 and tvOS 26 only**.
+
 Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 
 | Check | Result |
@@ -41,6 +43,10 @@ Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 | Shared crates build for `aarch64-apple-tvos` (Apple TV) | ✅ on **stable** Rust. The plan's risk 1 (`ring` on tvOS) didn't happen. |
 | `cargo test` in `apple/core` | ✅ 28 tests, including an import → list → favourite → search → tune → catch-up run over HTTP |
 | `AuroraMobile` and `AuroraTV` build for their simulators | ✅ |
+| Runs in the simulator: opens its library, imports an M3U over HTTP, lists it, keeps it across launches | ✅ iOS 26.5 and tvOS 26.5 |
+| mpv in the app: the shared `LoadOptions` applied (user agent, the 8 s live buffer), HLS opened and decoded, sound playing | ✅ tvOS 26.5 simulator |
+| mpv's **picture** | ⏳ the simulator on an Intel Mac has no Vulkan driver for MoltenVK (`VK_ERROR_INCOMPATIBLE_DRIVER`), so the app says "only the sound is playing". Needs a real Apple TV/iPhone, or an Apple-silicon Mac |
+| iPhone tab bar on the iOS 26 simulator | ⚠️ draws as an empty glass shape on this Intel Mac; the same `TabView` draws correctly on tvOS. To check on a device |
 | Playback on a real Apple TV, import time for a big panel, zap time | ⏳ needs hardware: the remaining Phase 2 exit criteria |
 
 ## The separation rule
@@ -124,6 +130,18 @@ set in Xcode. A free account's builds expire after 7 days (plan §2.6).
 On an **Intel Mac** the tvOS simulator is x86_64, and `x86_64-apple-tvos` is still a
 Tier 3 Rust target. `build-core.sh` builds it with nightly and `-Zbuild-std`, installing
 nightly the first time. Apple-silicon Macs only need stable.
+
+### Trying it without tapping (debug builds)
+
+```sh
+xcrun simctl launch <device> tv.aurora.tv \
+  -AuroraDemoPlaylist http://127.0.0.1:8000/demo.m3u   # imports it, live TV only
+  -AuroraAutoplay YES                                  # then plays the first channel
+  -AuroraMpvLog v                                      # mpv's full log, to the system log
+```
+
+The simulator reaches the Mac's `127.0.0.1`, so `python3 -m http.server` beside an
+M3U is enough. None of this exists in a release build.
 
 Tests for the Rust side:
 

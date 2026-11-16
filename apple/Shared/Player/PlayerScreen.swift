@@ -92,6 +92,17 @@ struct PlayerScreen: View {
             .padding()
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             .padding()
+        case .noPicture(let message):
+            HStack {
+                #if os(iOS)
+                Button("Close", systemImage: "xmark") { dismiss() }
+                    .labelStyle(.iconOnly)
+                #endif
+                Label(message, systemImage: "speaker.wave.2")
+                    .padding()
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .padding()
         case .playing, nil:
             #if os(iOS)
             Button("Close", systemImage: "xmark") { dismiss() }

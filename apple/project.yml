@@ -8,8 +8,8 @@ name: Aurora
 options:
   bundleIdPrefix: tv.aurora
   deploymentTarget:
-    iOS: "17.0"
-    tvOS: "17.0"
+    iOS: "26.0"
+    tvOS: "26.0"
   createIntermediateGroups: true
 
 settings:

@@ -42,6 +42,10 @@ final class MPVPlayerController: UIViewController {
     enum PlayerStatus: Equatable {
         case opening(source: Int, of: Int)
         case playing
+        /// Sound, but the picture couldn't start: the video output (Vulkan through
+        /// MoltenVK) failed on this device. Playback carries on, so say so rather than
+        /// leave a black screen with audio and no explanation.
+        case noPicture(String)
         case failed(String)
     }
 
@@ -165,7 +169,31 @@ final class MPVPlayerController: UIViewController {
         case .vod?, .replay?, nil:
             break
         }
-        DispatchQueue.main.async { self.onStatus?(.playing) }
+        let status: PlayerStatus = hasVideoTrack() && currentVideoOutput() == nil
+            ? .noPicture("The picture couldn't start on this device's graphics, so only the sound is playing.")
+            : .playing
+        DispatchQueue.main.async { self.onStatus?(status) }
+    }
+
+    /// Whether the file has a picture to show at all: a radio stream has none, and
+    /// that's not a failure.
+    private func hasVideoTrack() -> Bool {
+        guard let mpv else { return false }
+        var count: Int64 = 0
+        guard mpv_get_property(mpv, "track-list/count", MPV_FORMAT_INT64, &count) >= 0 else { return false }
+        return (0..<count).contains { i in
+            guard let raw = mpv_get_property_string(mpv, "track-list/\(i)/type") else { return false }
+            defer { mpv_free(raw) }
+            return String(cString: raw) == "video"
+        }
+    }
+
+    /// The video output mpv is drawing with, or nil when none could start.
+    private func currentVideoOutput() -> String? {
+        guard let mpv, let raw = mpv_get_property_string(mpv, "current-vo") else { return nil }
+        defer { mpv_free(raw) }
+        let name = String(cString: raw)
+        return name.isEmpty ? nil : name
     }
 
     private func fileFailed(_ reason: String) {
@@ -243,7 +271,8 @@ final class MPVPlayerController: UIViewController {
         mpv_set_option_string(handle, "hwdec", "videotoolbox")
         mpv_set_option_string(handle, "video-rotate", "no")
         #if DEBUG
-        mpv_request_log_messages(handle, "warn")
+        // `-AuroraMpvLog v` (or `debug`) at launch for mpv's full story; warnings otherwise.
+        mpv_request_log_messages(handle, UserDefaults.standard.string(forKey: "AuroraMpvLog") ?? "warn")
         #endif
         guard mpv_initialize(handle) >= 0 else {
             mpv_terminate_destroy(handle)
