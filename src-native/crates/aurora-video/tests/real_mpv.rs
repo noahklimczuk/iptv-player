@@ -113,3 +113,51 @@ fn a_load_replacing_a_load_ends_on_the_second() {
     assert!(r.error.is_none(), "{r:?}");
     assert!(!r.is_live);
 }
+
+/// Every per-file setting the engine sends is one this mpv knows, with and without a
+/// rewind buffer. A name mpv does not know is refused, and the engine carries on
+/// without it: `cache-dir` (mpv only has `demuxer-cache-dir`) silently kept the
+/// rewind buffer in memory instead of on disk.
+#[test]
+#[ignore = "needs libmpv-2.dll"]
+fn every_setting_the_engine_sends_is_one_mpv_accepts() {
+    use aurora_core::timeshift::Budget;
+    use aurora_video::request::Setting;
+    use aurora_video::{Driver, Timeshift};
+
+    let mut mpv = LibMpv::open(&Config {
+        wid: None,
+        headless: true,
+    })
+    .expect("libmpv");
+    let dir = std::env::temp_dir().join("aurora-real-mpv-settings");
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = Request {
+        url: "http://example.invalid/live.ts".into(),
+        live: true,
+        cache_secs: 8,
+        headers: vec![("X-Test".into(), "1".into())],
+        ..Request::default()
+    };
+    let buffered = Request {
+        timeshift: Some(Timeshift {
+            budget: Budget::default(),
+            dir,
+        }),
+        ..plain.clone()
+    };
+    let film = Request {
+        live: false,
+        start_secs: Some(12.5),
+        ..plain.clone()
+    };
+    for req in [plain, buffered, film] {
+        for s in req.settings() {
+            let applied = match &s {
+                Setting::Text(n, v) => mpv.set(n, v),
+                Setting::List(n, items) => mpv.set_list(n, items),
+            };
+            assert!(applied.is_ok(), "mpv refused {}: {applied:?}", s.name());
+        }
+    }
+}

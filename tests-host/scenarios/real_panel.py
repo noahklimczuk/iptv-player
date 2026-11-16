@@ -250,14 +250,14 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
 
     hwnd = wp.find("Aurora")
     assert hwnd, "no window titled Aurora on the desktop"
-    # Visible STATIC children only, and there should be exactly one before a mosaic
+    # Visible video surfaces only, and there should be exactly one before a mosaic
     # exists. Taking the frontmost without filtering picked a hidden sibling and reported
     # "already hidden before any mosaic", which was the lookup being wrong rather than the
     # app. `video_surface` is the scenario that pins the z-order itself.
     visible = [
         c
         for c in wp.children_front_to_back(hwnd)
-        if wp.class_name(c).lower() == "static" and wp.is_visible(c)
+        if wp.is_video_surface(c) and wp.is_visible(c)
     ]
     assert len(visible) == 1, (
         "expected one visible video surface before any mosaic; found "
@@ -337,7 +337,7 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
         order = [
             c
             for c in wp.children_front_to_back(hwnd)
-            if wp.class_name(c).lower() == "static" and wp.is_visible(c)
+            if wp.is_video_surface(c) and wp.is_visible(c)
         ]
         if len(order) > 1 and order.index(main) > 0:
             ordered = True
@@ -368,7 +368,7 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
     tiles = [
         c
         for c in wp.children_front_to_back(hwnd)
-        if wp.class_name(c).lower() == "static" and wp.is_visible(c) and c != main
+        if wp.is_video_surface(c) and wp.is_visible(c) and c != main
     ]
     rects = [wp.window_rect(t) for t in tiles]
     print(f"   mosaic: {len(tiles)} visible surface(s) at {[(r[0] - cx, r[1] - cy, r[2], r[3]) for r in rects]}")

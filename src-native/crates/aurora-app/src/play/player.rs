@@ -294,11 +294,10 @@ impl Player {
     }
 
     pub fn timeshift_clear(&self) -> Result<u64> {
-        let playing = self.cache_in_use().is_some();
         let dir = {
             let db = self.db.lock();
             timeshift::folder(&db, &self.data_dir)?
         };
-        Ok(timeshift::clear(&dir, playing))
+        Ok(timeshift::clear(&dir))
     }
 }

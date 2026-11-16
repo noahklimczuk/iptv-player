@@ -99,10 +99,7 @@ pub fn read(db: &Connection, data_dir: &Path, in_use: Option<u64>) -> Result<Tim
         secs: b.secs,
         folder: dir.to_string_lossy().into_owned(),
         bytes_on_disk: in_use.unwrap_or(0),
-        reclaimable_bytes: leftovers(&dir, in_use.is_some())
-            .iter()
-            .map(|(_, n)| n)
-            .sum(),
+        reclaimable_bytes: leftovers(&dir).iter().map(|(_, n)| n).sum(),
     })
 }
 
@@ -133,35 +130,28 @@ pub fn change(
     read(db, data_dir, in_use)
 }
 
-/// The files in `dir` that are not the one mpv is writing. While a buffered stream
-/// plays, the newest file is taken to be its cache and left alone.
-fn leftovers(dir: &Path, playing: bool) -> Vec<(PathBuf, u64)> {
+/// The files in `dir`: leftovers from earlier runs.
+///
+/// mpv's own cache file is never among them. It is created, opened and unlinked at
+/// once, so the open handle keeps the bytes and the folder keeps no name; that is why
+/// the buffer in use is read from mpv (`bytes_on_disk`), never from a listing.
+fn leftovers(dir: &Path) -> Vec<(PathBuf, u64)> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = entries
+    entries
         .flatten()
         .filter_map(|e| {
             let m = e.metadata().ok()?;
-            m.is_file().then(|| {
-                (
-                    e.path(),
-                    m.len(),
-                    m.modified().unwrap_or(std::time::UNIX_EPOCH),
-                )
-            })
+            m.is_file().then(|| (e.path(), m.len()))
         })
-        .collect();
-    files.sort_by_key(|f| std::cmp::Reverse(f.2));
-    if playing && !files.is_empty() {
-        files.remove(0);
-    }
-    files.into_iter().map(|(p, n, _)| (p, n)).collect()
+        .collect()
 }
 
-/// Delete what can be deleted; the bytes freed.
-pub fn clear(dir: &Path, playing: bool) -> u64 {
-    leftovers(dir, playing)
+/// Delete the leftovers; the bytes freed. A file still held open is skipped: Windows
+/// refuses, and it counts for nothing.
+pub fn clear(dir: &Path) -> u64 {
+    leftovers(dir)
         .into_iter()
         .filter(|(p, _)| fs::remove_file(p).is_ok())
         .map(|(_, n)| n)
@@ -256,14 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn emptying_leaves_the_file_mpv_is_writing() {
+    fn emptying_frees_the_leftovers_and_reports_what_it_freed() {
         let dir = tempdir("clear");
         fs::write(dir.join("old"), vec![0u8; 100]).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        fs::write(dir.join("current"), vec![0u8; 7]).unwrap();
-        assert_eq!(leftovers(&dir, true).iter().map(|f| f.1).sum::<u64>(), 100);
-        assert_eq!(clear(&dir, true), 100);
-        assert!(dir.join("current").exists());
-        assert_eq!(clear(&dir, false), 7);
+        fs::write(dir.join("older"), vec![0u8; 7]).unwrap();
+        assert_eq!(leftovers(&dir).iter().map(|f| f.1).sum::<u64>(), 107);
+        assert_eq!(clear(&dir), 107);
+        assert!(leftovers(&dir).is_empty());
+        assert_eq!(clear(&dir), 0);
     }
 }

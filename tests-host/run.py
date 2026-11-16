@@ -445,6 +445,10 @@ def driver_env(github):
     # stop agreeing -- which is the shape R-164 had, where cleanup asked `cmdkey` to
     # delete from `AuroraTV` while every secret was filed under `AuroraTV-tests-host`.
     env.setdefault("AURORA_CREDENTIAL_SERVICE", CREDENTIAL_SERVICE)
+    # And the web view's own profile. Tauri puts it under
+    # `%LOCALAPPDATA%\tv.aurora.player\EBWebView` whatever `portable.txt` says, which is
+    # the installed copy's: its cookies, storage and cache, shared with every run.
+    env.setdefault("WEBVIEW2_USER_DATA_FOLDER", os.path.join(DATA, "EBWebView"))
     return env
 
 

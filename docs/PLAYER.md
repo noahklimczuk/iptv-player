@@ -85,9 +85,10 @@ are kept, so that nothing outside the player has to change. Everything behind th
   padding skipped, never enlarged, nonsense sizes refused.
 
 ### Other instances
-- **E32** PiP, each multi-view tile and seek-preview grabbing use their own instances
-  through the same API. Multi-view tiles open per tile and close per tile, so a closed
-  tile releases its provider connection.
+- **E32** Each multi-view tile uses its own instance through the same API, opened and
+  closed per tile, so a closed tile releases its provider connection. PiP and the seek
+  preview's pictures use the main player, not instances of their own: a provider line
+  commonly allows one connection, and a second stream would knock the first off.
 
 ---
 
