@@ -29,6 +29,7 @@ pub mod streams;
 pub mod supervise;
 pub mod timeshift;
 pub mod updates;
+pub mod webview_reap;
 pub mod window;
 
 /// How long after launch the background passes start.

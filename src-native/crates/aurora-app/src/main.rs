@@ -123,6 +123,11 @@ fn take_staged_update() -> bool {
         return false;
     }
 
+    // The app that asked for this restart may still be closing, and its web view goes
+    // only once it has. The new copy cleans up what is left (`webview_reap`), but only
+    // what has been orphaned, so let the old one finish first.
+    aurora_app::webview_reap::wait_for_launcher(std::time::Duration::from_secs(20));
+
     // Relaunch the path we came from, which now holds the new binary.
     match std::env::current_exe() {
         Ok(exe) => match std::process::Command::new(&exe).spawn() {
@@ -148,9 +153,14 @@ fn main() {
     if take_staged_update() {
         return;
     }
+    // Before the window: a web view left behind by an Aurora that has gone stops this
+    // one's from starting, and a transparent window with no page in it is invisible.
+    let (reaped, reap_note) = aurora_app::webview_reap::user_data_dir()
+        .map(|dir| aurora_app::webview_reap::reap(&dir))
+        .unwrap_or((0, "no web view folder".into()));
 
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             use tauri::Manager;
             // Portable mode (README §13): a marker file next to the exe keeps all data
             // local, with no %LOCALAPPDATA% and no registry.
@@ -177,6 +187,14 @@ fn main() {
                 env!("CARGO_PKG_VERSION"),
                 data_dir.display()
             );
+            if reaped > 0 {
+                tracing::warn!(
+                    reaped,
+                    "ended web view processes left behind by an Aurora that had exited:                      {reap_note}"
+                );
+            } else {
+                tracing::info!("web view folder at launch: {reap_note}");
+            }
 
             let services = Services::new(data_dir)?;
 
