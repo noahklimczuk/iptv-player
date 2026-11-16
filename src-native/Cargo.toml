@@ -4,6 +4,7 @@ members = [
   "crates/aurora-core",
   "crates/aurora-db",
   "crates/aurora-player",
+  "crates/aurora-video",
   "crates/aurora-ingest",
   "crates/aurora-contract",
   "crates/aurora-app",
@@ -21,6 +22,8 @@ default-members = [
   "crates/aurora-core",
   "crates/aurora-db",
   "crates/aurora-player",
+  "crates/aurora-video",
+  "crates/aurora-video",
   "crates/aurora-ingest",
   "crates/aurora-contract",
 ]
@@ -50,6 +53,7 @@ rusqlite = { version = "0.32", features = ["bundled", "backup", "functions"] }
 aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }
 aurora-player = { path = "crates/aurora-player" }
+aurora-video = { path = "crates/aurora-video" }
 aurora-ingest = { path = "crates/aurora-ingest" }
 
 [profile.release]
