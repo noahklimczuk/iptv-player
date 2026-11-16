@@ -55,6 +55,7 @@ uninstall, code signing, and catch-up and recording against a provider.
 - `docs/ARCHITECTURE.md` — how the pieces fit together
 - `docs/BUILDING.md` — what builds on which platform, and how to run it
 - `docs/DECISIONS.md` — choices taken and why
+- `docs/APPLE_PORT_AND_SYNC.md` — plan for Apple TV / iOS and sync across every device
 - `screenshots/` — the UI as it actually renders
 
 ## Quick start
