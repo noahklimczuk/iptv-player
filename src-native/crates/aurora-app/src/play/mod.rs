@@ -3,6 +3,7 @@
 
 pub mod guide;
 pub mod placement;
+pub mod preview;
 pub mod recovery;
 pub mod resolve;
 pub mod session;
