@@ -133,6 +133,29 @@ test('the trailer hands focus back when YouTube takes it @motion', async ({ page
   await expect(back, 'focus stayed in the trailer').toBeFocused();
 });
 
+test('a trailer that takes focus with nothing focused before gives it back to the page @motion', async ({ page }) => {
+  // The other half of CI's case: YouTube's dialog took focus on load, before anybody had
+  // focused anything, and focusing the body does not take focus from a frame.
+  await page.goto('/#/');
+  const hero = page.getByRole('region', { name: 'Featured' });
+  for (let i = 0; i < 6 && !(await hero.locator('iframe').count()); i++) {
+    await hero.getByRole('button', { name: /^Show / }).nth(i).click();
+    await page.locator('body').evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.waitForTimeout(2_500);
+  }
+  test.skip(!(await hero.locator('iframe').count()), 'no title in the fixtures has a trailer');
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await hero.locator('iframe').evaluate((f) => {
+    f.closest('[inert]')?.removeAttribute('inert');
+    (f as HTMLIFrameElement).focus();
+  });
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.tagName), {
+      message: 'focus stayed in the trailer',
+    })
+    .not.toBe('IFRAME');
+});
+
 test('reduce motion stops the billboard rotating at all', async ({ page }) => {
   await page.clock.install();
   await page.goto('/#/settings');

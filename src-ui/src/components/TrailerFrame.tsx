@@ -96,8 +96,13 @@ export function TrailerFrame({
       // After the browser has moved focus, which is when `activeElement` says where.
       window.setTimeout(() => {
         if (document.activeElement !== frame.current) return;
-        if (last?.isConnected) last.focus({ preventScroll: true });
-        else frame.current?.blur();
+        // Nothing was focused before (the body), or it is gone: blur the frame, which
+        // leaves focus on the page. Focusing the body would not take it from the frame.
+        if (last && last !== document.body && last.isConnected) {
+          last.focus({ preventScroll: true });
+        } else {
+          frame.current?.blur();
+        }
       }, 0);
     };
     if (document.activeElement instanceof HTMLElement) last = document.activeElement;

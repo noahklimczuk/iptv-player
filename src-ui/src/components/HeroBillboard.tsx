@@ -95,7 +95,12 @@ export function HeroBillboard({
         // Whoever is on it is still on it, so hold instead of rotating; a real move
         // elsewhere blurs again and resumes it.
         const active = document.activeElement;
-        if (active && active !== document.body && sectionRef.current?.contains(active)) {
+        // A frame is not somebody: the trailer can hold focus by itself (see
+        // `TrailerFrame`), and that must not stop the rotation.
+        if (
+          active && active !== document.body && active.tagName !== 'IFRAME'
+          && sectionRef.current?.contains(active)
+        ) {
           setPaused(true);
           return;
         }
