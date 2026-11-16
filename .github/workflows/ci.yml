@@ -124,32 +124,31 @@ jobs:
         # were some, which is why nothing ran it.
         run: pnpm test
 
-      - name: Rust advisories
+      - name: Install cargo-audit
         # The JavaScript side has had `pnpm audit` run against it; the Rust side had
         # never been checked at all. `Cargo.lock` is committed, so this is a question
         # with a definite answer rather than a moving target.
         #
-        # `working-directory` is not optional here, whatever its default suggests. The
-        # action runs `cargo audit --file <dir>/Cargo.lock`, and this workspace's
-        # lockfile is under src-native, not at the repository root — so the default `.`
-        # made the step die with "Couldn't load ./Cargo.lock" before it audited
-        # anything. It had never once run.
+        # `cargo audit` itself, run beside the lockfile, rather than
+        # `rustsec/audit-check`. On 2026-11-16 that action failed three runs in a row
+        # with "Not Found - update-a-check-run" after a clean audit with the same
+        # input that had passed an hour earlier: its result went through a GitHub
+        # check-run API call that kept failing, not through anything it audited.
+        # It also ran from the repository root, so it never read
+        # `src-native/.cargo/audit.toml` and needed every ignore repeated here. Run
+        # from `src-native`, that toml is the one list of accepted advisories, for CI
+        # and for a developer alike.
         #
-        # `ignore` has to be given here as well as in `src-native/.cargo/audit.toml`,
-        # and the two must agree. The action runs `cargo audit` from the repository
-        # root and passes `--file src-native/Cargo.lock`, so cargo-audit never looks
-        # beside the lockfile it is reading and never sees that file — while a developer
-        # running `cargo audit` from `src-native` sees only that file and not this
-        # input. The reasoning for each entry lives in the toml, which is the one a
-        # person reads; this is the copy CI honours.
-        uses: rustsec/audit-check@v2
+        # Same rule as before: a vulnerability fails the job; unmaintained and unsound
+        # notices are printed as warnings and do not.
+        uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: src-native
-          # RUSTSEC-2026-0459 — the bundled SQLite's uninitialised-page-cache read.
-          # Needs a database somebody else wrote, and nothing here opens one. Accepted
-          # until `rusqlite 0.41`; see `src-native/.cargo/audit.toml`.
-          ignore: RUSTSEC-2026-0459
+          tool: cargo-audit
+
+      - name: Rust advisories
+        if: ${{ !cancelled() }}
+        working-directory: src-native
+        run: cargo audit
 
       - name: JavaScript advisories
         # Fails the job on a high or critical only: a moderate in a dev-only tool is
@@ -198,6 +197,17 @@ jobs:
           name: screenshots
           path: screenshots/
           if-no-files-found: ignore
+
+      - name: Upload traces of failed journeys
+        # Open with `pnpm exec playwright show-trace <zip>`: the DOM, focus and every
+        # event at each step, which is what an intermittent failure needs.
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # The Windows-only half: the mpv/Win32 compositing layer and the Tauri host.
   # This is the only runner that can compile aurora-app, so a green core job alone
