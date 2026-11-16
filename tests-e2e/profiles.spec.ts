@@ -161,3 +161,88 @@ test('the lockout counts down instead of freezing', async ({ page }) => {
     })
     .toBeLessThan(first);
 });
+
+/**
+ * "Can't switch / open one; can't create or edit." Two causes:
+ *
+ * - With one profile, the picker reloaded the list as it opened, and that reload's
+ *   "only one profile, skip the picker" closed it again at once: the top bar's button
+ *   flashed "Who's watching?" and put you straight back.
+ * - There was no screen to add or edit a profile. The host commands existed; nothing
+ *   called them.
+ */
+test('with one profile, the top bar opens the picker and it stays open', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await page.getByRole('button', { name: /Switch profile/ }).click();
+  await expect(page.getByRole('heading', { name: "Who's watching?" })).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(page.getByRole('heading', { name: "Who's watching?" }), 'it closed itself').toBeVisible();
+
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+});
+
+test('a profile can be added from the picker and switched to', async ({ page }) => {
+  await page.goto('/#/');
+  await page.getByRole('button', { name: /Switch profile/ }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
+  await page.getByLabel('Name').fill('Sam');
+  await page.getByRole('checkbox', { name: /Kids profile/ }).check();
+  await page.getByRole('form').getByRole('button', { name: 'Add profile' }).click();
+
+  const sam = page.getByRole('button', { name: 'Sam', exact: true });
+  await expect(sam).toBeVisible();
+  await expect(page.getByText('KIDS')).toBeVisible();
+  await sam.click();
+  await expect(page.getByRole('button', { name: /Switch profile \(currently Sam\)/ })).toBeVisible();
+});
+
+test('a profile can be renamed, PIN-locked, unlocked again, and deleted', async ({ page }) => {
+  await page.goto('/#/');
+  await page.getByRole('button', { name: /Switch profile/ }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
+  await page.getByLabel('Name').fill('Guest');
+  await page.getByRole('form').getByRole('button', { name: 'Add profile' }).click();
+  await expect(page.getByRole('button', { name: 'Guest', exact: true })).toBeVisible();
+
+  // Rename and lock it.
+  await page.getByRole('button', { name: 'Manage profiles' }).click();
+  await page.getByRole('button', { name: 'Edit Guest' }).click();
+  await page.getByLabel('Name').fill('Visitor');
+  await page.getByLabel(/PIN/).fill('4321');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByRole('button', { name: 'Visitor, PIN required' })).toBeVisible();
+
+  // The PIN is the one that was set.
+  await page.getByRole('button', { name: 'Visitor, PIN required' }).click();
+  for (const d of '4321') await page.getByRole('button', { name: d, exact: true }).click();
+  await expect(page.getByRole('button', { name: /Switch profile \(currently Visitor\)/ })).toBeVisible();
+
+  // Take the PIN off, then delete the profile.
+  await page.getByRole('button', { name: /Switch profile/ }).click();
+  await page.getByRole('button', { name: 'Manage profiles' }).click();
+  await page.getByRole('button', { name: 'Edit Visitor' }).click();
+  await page.getByRole('checkbox', { name: 'Remove the PIN' }).check();
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('button', { name: 'Edit Visitor' })).toBeVisible();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByRole('button', { name: 'Visitor', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Manage profiles' }).click();
+  await page.getByRole('button', { name: 'Edit Visitor' }).click();
+  await page.getByRole('button', { name: 'Delete profile' }).click();
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Visitor/ })).toHaveCount(0);
+});
+
+test('the only profile cannot be deleted', async ({ page }) => {
+  await page.goto('/#/');
+  await page.getByRole('button', { name: /Switch profile/ }).click();
+  await page.getByRole('button', { name: 'Manage profiles' }).click();
+  await page.getByRole('button', { name: /^Edit / }).first().click();
+  // The editor is open -- rename and PIN are offered -- but not delete.
+  await expect(page.getByRole('button', { name: 'Save' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete profile' })).toHaveCount(0);
+});
