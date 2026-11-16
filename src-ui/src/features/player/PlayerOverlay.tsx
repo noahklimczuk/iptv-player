@@ -23,7 +23,7 @@ import { SeekBubble, useSeekPreview } from './SeekPreview';
 import type { SeekPreview } from '@shared/ipc';
 
 /** Still pointer over the picture: the controls get out of the way. */
-const HIDE_AFTER_MS = 2500;
+const HIDE_AFTER_MS = 3200;
 /**
  * Still pointer resting on the controls. Longer, so a pointer parked on the volume bar
  * while you decide does not lose it -- but not for ever: people leave the pointer where
@@ -257,9 +257,10 @@ export function PlayerOverlay({
     const check = () => {
       const h = holdOpen.current;
       const wait = h.over ? HIDE_OVER_CONTROLS_MS : HIDE_AFTER_MS;
-      // Held while a drag is in progress or a menu is open; otherwise hidden once the
-      // pointer has been still for long enough where it is.
-      if (h.pressed || h.panel || performance.now() - idleSince < wait) {
+      // Held while a drag is in progress, or while the pointer is on an open menu
+      // (reading the subtitle list is not idling). Otherwise hidden once the pointer
+      // has been still long enough where it is; a menu left open goes with the dock.
+      if (h.pressed || (h.panel && h.over) || performance.now() - idleSince < wait) {
         hideTimer.current = window.setTimeout(check, 250);
         return;
       }

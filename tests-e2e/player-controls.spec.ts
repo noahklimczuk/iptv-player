@@ -70,17 +70,22 @@ test('over the picture the controls hide within a few seconds', async ({ page })
   await settled(page, 'Volume');
   await page.mouse.move(700, 300);
   await page.mouse.move(705, 305);
-  await page.waitForTimeout(3_300);
+  await page.waitForTimeout(4_000);
   await expect(volume).toBeHidden();
+  // And the first movement brings them straight back.
+  await page.mouse.move(720, 320);
+  await expect(volume).toBeVisible();
 });
 
-test('an open menu keeps the controls up while it is read', async ({ page }) => {
+test('an open menu stays while the pointer is on it', async ({ page }) => {
   await playFirstEpisode(page);
   await settled(page, 'Volume');
   await page.getByRole('button', { name: 'Playback settings' }).click();
-  await page.mouse.move(700, 300);
+  const panel = page.getByTestId('playback-panel');
+  const box = (await panel.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.waitForTimeout(6_000);
-  await expect(page.getByRole('slider', { name: 'Volume' })).toBeVisible();
+  await expect(panel).toBeVisible();
 });
 
 test('a seek handle held still is not lost, and one drag sends one seek', async ({ page }) => {
