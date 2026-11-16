@@ -47,7 +47,7 @@ pub use guide::{NowNext, Programme};
 pub use library::{Channel, ChannelGroup};
 pub use mylist::{ItemMarks, ListKind, MyList};
 pub use playback::{LiveTune, MpvOption, PlayableSource};
-pub use profiles::{PinOutcome, Profile};
+pub use profiles::{PinChange, PinOutcome, Profile};
 pub use providers::{ImportContent, ImportListener, ImportPhase, ImportReport, Provider};
 pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};

@@ -8,11 +8,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if model.profiles.count > 1 || model.activeProfile?.hasPin == true {
-                    Section("Profile") {
-                        LabeledContent("Watching as", value: model.activeProfile?.name ?? "")
-                        Button("Switch profile", systemImage: "person.2") { model.picking = true }
-                    }
+                Section("Profile") {
+                    LabeledContent("Watching as", value: model.activeProfile?.name ?? "")
+                    Button("Profiles", systemImage: "person.2") { model.picking = true }
                 }
                 Section("Providers") {
                     ForEach(model.providers, id: \.id) { provider in

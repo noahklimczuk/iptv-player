@@ -181,17 +181,48 @@ final class AppModel {
 
     // MARK: Profiles
 
-    /// Load the profiles. With exactly one, and no PIN on it, there is nobody to choose
-    /// between, so it is chosen: the same rule as Windows' `state/profile.ts`.
+    /// Load the profiles, by Windows' rule (`state/profile.ts`): with exactly one, and no
+    /// PIN on it, there is nobody to choose between, so it is chosen -- but only at
+    /// launch, or opening the picker to add a profile would close it again at once.
+    /// Otherwise the active profile is refreshed (a rename shows at once), and if it was
+    /// deleted there is none until one is chosen.
     func loadProfiles() async {
+        let atLaunch = !profilesLoaded
         let all = await call([]) { try $0.profiles() }
         profiles = all
-        if all.count == 1, let only = all.first, !only.hasPin {
-            activate(only)
-        } else if let active = activeProfile {
-            activeProfile = all.first { $0.id == active.id }
+        let still = activeProfile.flatMap { active in all.first { $0.id == active.id } }
+        if let still {
+            activeProfile = still
+        } else if all.count == 1, let only = all.first, !only.hasPin {
+            activeProfile = only
+            profileId = only.id
+            if atLaunch { picking = false }
+        } else {
+            activeProfile = nil
+            picking = true
         }
         profilesLoaded = true
+    }
+
+    /// Add a profile; a kids profile starts limited to age 12, as on Windows.
+    func createProfile(name: String, isKids: Bool, pin: String?) async -> Bool {
+        let ok = await call(false) { _ = try $0.createProfile(name: name, isKids: isKids, pin: pin); return true }
+        await loadProfiles()
+        return ok
+    }
+
+    func updateProfile(_ id: Int64, name: String, pin: PinChange) async -> Bool {
+        let ok = await call(false) { try $0.updateProfile(profileId: id, name: name, pin: pin); return true }
+        await loadProfiles()
+        return ok
+    }
+
+    /// False for the last profile, which can't be deleted.
+    func deleteProfile(_ id: Int64) async -> Bool {
+        let gone = await call(false) { try $0.deleteProfile(profileId: id) }
+        if !gone && error == nil { error = "The last profile cannot be deleted." }
+        await loadProfiles()
+        return gone
     }
 
     func activate(_ profile: Profile) {

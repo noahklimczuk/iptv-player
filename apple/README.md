@@ -10,9 +10,12 @@ where the work deliberately departs from that plan.
 Phase 2 of the plan (the spike: Rust → Swift → video), plus the start of Phase 4's
 screens. The app can:
 
-- ask "Who's watching?" and check a profile's PIN (skipped when there's one profile
-  with no PIN, as on Windows). Wrong tries and the lockout are counted in the shared
-  database, so they're the same tries Windows counts,
+- ask "Who's watching?" and check a profile's PIN (skipped at launch when there's one
+  profile with no PIN, as on Windows). Wrong tries and the lockout are counted in the
+  shared database, so they're the same tries Windows counts,
+- add, rename and delete profiles and set, change or remove a PIN, by Windows'
+  editor's rules (a kids profile starts at age 12; a PIN is 4 digits; the last
+  profile stays), checked against `ProfilePicker.tsx` by `mirrors.rs`,
 - add an Xtream Codes panel or an M3U playlist (the password goes in the Keychain),
 - import it with progress: live TV only (the tvOS default) or with films and series,
 - list channels by group, with now/next from the guide,
@@ -28,7 +31,7 @@ screens. The app can:
   sources in turn. Films and episodes resume, and save their position every 15 s and
   on pause or stop.
 
-Not yet: the full guide grid, creating and editing profiles, profile age and daily
+Not yet: the full guide grid, profile age and daily
 limits (being fixed on Windows first; the Apple app will follow the same rule), named
 favourite lists, removing a provider, library filters, recordings, and sync (Phase 3).
 
@@ -41,7 +44,7 @@ Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 | Shared crates build for `aarch64-apple-ios` (iPhone/iPad) | ✅ unmodified, including `ring`/rustls and bundled SQLite |
 | Shared crates build for `x86_64-apple-ios` (simulator on Intel) | ✅ |
 | Shared crates build for `aarch64-apple-tvos` (Apple TV) | ✅ on **stable** Rust. The plan's risk 1 (`ring` on tvOS) didn't happen. |
-| `cargo test` in `apple/core` | ✅ 28 tests, including an import → list → favourite → search → tune → catch-up run over HTTP |
+| `cargo test` in `apple/core` | ✅ 33 tests, including an import → list → favourite → search → tune → catch-up run over HTTP |
 | `AuroraMobile` and `AuroraTV` build for their simulators | ✅ |
 | Runs in the simulator: opens its library, imports an M3U over HTTP, lists it, keeps it across launches | ✅ iOS 26.5 and tvOS 26.5 |
 | mpv in the app: the shared `LoadOptions` applied (user agent, the 8 s live buffer), HLS opened and decoded, sound playing | ✅ tvOS 26.5 simulator |

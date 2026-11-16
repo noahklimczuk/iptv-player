@@ -161,3 +161,30 @@ fn a_provider_is_removed_the_way_windows_removes_one() {
         assert!(ours.contains(needle), "remove_provider lost `{needle}`");
     }
 }
+
+fn ui_src(file: &str) -> String {
+    let root: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("repo root")
+        .to_path_buf();
+    let path = root.join("src-ui/src").join(file);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+}
+
+#[test]
+fn a_new_profile_follows_the_windows_editors_rules() {
+    // The editor's rules live in Windows' UI, not a shared crate: a kids profile
+    // starts at an age limit, and a PIN is a fixed number of digits.
+    let editor = ui_src("features/profiles/ProfilePicker.tsx");
+    let kids = format!("maxAge: kids ? {} : null", crate::profiles::KIDS_MAX_AGE);
+    assert!(
+        editor.contains(&kids),
+        "ProfilePicker.tsx no longer says `{kids}`; update profiles.rs KIDS_MAX_AGE"
+    );
+    let pin = format!("/^\\d{{{}}}$/", crate::profiles::PIN_DIGITS);
+    assert!(
+        editor.contains(&pin),
+        "ProfilePicker.tsx no longer checks a PIN with `{pin}`; update profiles.rs PIN_DIGITS"
+    );
+}
