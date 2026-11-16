@@ -106,6 +106,33 @@ test('a blur that leaves focus where it was does not restart the rotation @motio
   await expect(play, `focus moved off Play, to ${where}`).toBeFocused();
 });
 
+test('the trailer hands focus back when YouTube takes it @motion', async ({ page }) => {
+  // What CI caught: YouTube's "confirm you're not a bot" dialog focusing itself inside
+  // the billboard's trailer, after which every key went to YouTube. Focusing the frame
+  // from here ends in the same state: the window blurs and the frame is the active
+  // element.
+  await page.goto('/#/');
+  const hero = page.getByRole('region', { name: 'Featured' });
+  const play = hero.getByRole('button', { name: /^Play/ }).first();
+  await play.focus();
+  // A trailer, which not every title has: step through until one is showing.
+  for (let i = 0; i < 6 && !(await hero.locator('iframe').count()); i++) {
+    await page.locator('body').focus();
+    await hero.getByRole('button', { name: /^Show / }).nth(i).click();
+    await page.waitForTimeout(2_500);
+  }
+  test.skip(!(await hero.locator('iframe').count()), 'no title in the fixtures has a trailer');
+  const back = hero.getByRole('button', { name: /^Play/ }).first();
+  await back.focus();
+  // `inert` makes a focus() from here a no-op, but it did not stop YouTube's own script
+  // on CI, so it is lifted to reach the state CI reached: the frame holding focus.
+  await hero.locator('iframe').evaluate((f) => {
+    f.closest('[inert]')?.removeAttribute('inert');
+    (f as HTMLIFrameElement).focus();
+  });
+  await expect(back, 'focus stayed in the trailer').toBeFocused();
+});
+
 test('reduce motion stops the billboard rotating at all', async ({ page }) => {
   await page.clock.install();
   await page.goto('/#/settings');

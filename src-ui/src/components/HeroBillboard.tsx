@@ -245,8 +245,8 @@ export function HeroBillboard({
         <div
           aria-hidden={false}
           // Inert: a background preview, never something to operate (its mute button is
-          // outside it). Without this the embed could take focus from the Play button a
-          // keyboard user is resting on, seen intermittently on CI. React 18 has no
+          // outside it), so Tab never lands in it. That does not stop YouTube focusing
+          // its own page; `TrailerFrame` hands focus back when it does. React 18 has no
           // typed `inert`, so it goes through as a plain attribute.
           {...{ inert: '' }}
           style={{
