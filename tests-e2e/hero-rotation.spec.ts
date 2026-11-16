@@ -81,6 +81,27 @@ test('the billboard stops rotating while a keyboard user is on it @motion', asyn
   await expect.poll(() => featured(page), { message: 'it never resumed' }).not.toBe(held);
 });
 
+test('a blur that leaves focus where it was does not restart the rotation @motion', async ({ page }) => {
+  // What a window losing focus, or focus moving into the trailer's frame, looks like
+  // to the billboard: a `focusout` with nowhere to go, while the button is still the
+  // active element. Acting on it alone let the title change under a focused Play
+  // button, which is what CI caught intermittently.
+  await page.clock.install();
+  await page.goto('/#/');
+  const hero = page.getByRole('region', { name: 'Featured' });
+  const play = hero.getByRole('button', { name: /^Play/ }).first();
+  await play.focus();
+  await expect(play).toBeFocused();
+  const held = await featured(page);
+
+  await play.evaluate((el) =>
+    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null })),
+  );
+  await advance(page, 80_000);
+  expect(await featured(page), 'a stray blur let the billboard rotate under Play').toBe(held);
+  await expect(play).toBeFocused();
+});
+
 test('reduce motion stops the billboard rotating at all', async ({ page }) => {
   await page.clock.install();
   await page.goto('/#/settings');

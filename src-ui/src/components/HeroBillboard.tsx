@@ -55,6 +55,7 @@ export function HeroBillboard({
   const [trailer, setTrailer] = useState(false);
   const [muted, setMuted] = useState(true);
   const [paused, setPaused] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
   const animations = useUi((s) => s.animations);
   const hoverPreviews = useUi((s) => s.hoverPreviews);
   const myList = useMarks((s) => s.myList);
@@ -87,7 +88,19 @@ export function HeroBillboard({
     // seconds is motion, whether or not it is animated on the way.
     if (paused || !animations || items.length < 2) return;
     const t = window.setTimeout(
-      () => setIndex((i) => (i + 1) % items.length),
+      () => {
+        // `onBlur` is not proof that focus left. It also fires when the window loses
+        // focus (the button stays the active element and is focused again on return)
+        // and when focus moves into the trailer's frame, which is inside the billboard.
+        // Whoever is on it is still on it, so hold instead of rotating; a real move
+        // elsewhere blurs again and resumes it.
+        const active = document.activeElement;
+        if (active && active !== document.body && sectionRef.current?.contains(active)) {
+          setPaused(true);
+          return;
+        }
+        setIndex((i) => (i + 1) % items.length);
+      },
       trailer ? ROTATE_WITH_TRAILER_MS : ROTATE_MS,
     );
     return () => window.clearTimeout(t);
@@ -135,6 +148,7 @@ export function HeroBillboard({
 
   return (
     <section
+      ref={sectionRef}
       aria-label="Featured"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
