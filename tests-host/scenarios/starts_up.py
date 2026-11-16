@@ -65,14 +65,15 @@ def run(d, ctx):
     # passing against a silently null backend, proving nothing at all.
     engine = d.invoke("app.diagnostics")["videoEngine"]
     if os.name == "nt":
-        assert engine["name"] == "mpv" and engine["rendersVideo"], (
+        assert engine["name"] == "libmpv" and engine["rendersVideo"], (
             f"this is a Windows build and it has no video engine: {engine}. "
             f"aurora.log says why — usually libmpv-2.dll missing beside the exe."
         )
     else:
-        # Off Windows `create_backend` has no mpv to choose. A run claiming otherwise
-        # would mean the harness is not testing what it thinks it is.
-        assert engine == {"name": "null", "version": None, "rendersVideo": False}, engine
+        # Off Windows there is no mpv to choose, and the engine says so: it is "none",
+        # with the reason where a version would be. A run claiming otherwise would mean
+        # the harness is not testing what it thinks it is.
+        assert engine["name"] == "none" and not engine["rendersVideo"], engine
 
     # And "Skip for now" has to actually skip.
     #

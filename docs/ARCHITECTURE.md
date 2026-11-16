@@ -33,9 +33,12 @@ src-native/                      Cargo workspace
     tmdb.rs                      MetadataClient trait + TMDB client
     enrich.rs                    search → choose → write, in bounded batches
     artwork.rs                   content-addressed image cache, LRU eviction
-  crates/aurora-player/          playback abstraction
-    backend.rs                   PlayerBackend trait + NullBackend (all platforms)
-    mpv.rs                       #[cfg(windows)] libmpv + child HWND
+  crates/aurora-video/           the video engine (docs/PLAYER.md §1)
+    engine.rs                    one thread owns mpv; commands, reports, generations
+    driver.rs                    the Driver trait: libmpv, FakeMpv (tests), NoVideo
+    libmpv.rs                    #[cfg(windows)] libmpv, delay-loaded
+    surface.rs                   #[cfg(windows)] the child window mpv draws into
+    request.rs stall.rs ...      per-file settings, the start/stall watchdog
   crates/aurora-app/             Tauri 2 host: commands, events, service wiring
     dvr.rs                       the scheduler: one `tick` drives every recording
 
@@ -96,6 +99,6 @@ keypress → UI intent player.play{channelId}
              hidden channels resolve and a zap does not scan the table
            · Playback::begin_tune — one tune at a time, with a generation counter, so a
              slow tune cannot load over the channel the viewer moved on to
-         → aurora-player::MpvBackend.load(url, headers)
+         → aurora_app::play::session::Session::play → aurora_video::Engine::load
          → mpv property events → player.state event → UI banner + OSD
 ```

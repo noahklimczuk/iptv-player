@@ -8,8 +8,6 @@ pub enum AppError {
     #[error(transparent)]
     Db(#[from] aurora_db::DbError),
     #[error(transparent)]
-    Player(#[from] aurora_player::PlayerError),
-    #[error(transparent)]
     Video(#[from] aurora_video::VideoError),
     /// A newer tune replaced this one before it finished.
     ///

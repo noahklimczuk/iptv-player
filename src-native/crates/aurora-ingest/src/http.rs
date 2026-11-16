@@ -474,9 +474,9 @@ pub(crate) fn classify_reqwest(e: &reqwest::Error) -> NetFailure {
     NetFailure::classify(&causes)
 }
 
-/// Where `redact` lives now: `aurora-core`, so `aurora-player` can reach it.
+/// Where `redact` lives now: `aurora-core`, reachable from crates without `reqwest`.
 ///
-/// It was here, in the crate that also carries `reqwest`, and `aurora-player` cannot
+/// It was here, in the crate that also carries `reqwest`, and the old player crate could not
 /// depend on that to redact a log line — which is why `mpv.rs` logged mpv's output with
 /// no redaction at all (R-62). The function is pure string work and belongs beside
 /// `catchup::split_xtream_stream_url`, which parses the same URL form. Re-exported

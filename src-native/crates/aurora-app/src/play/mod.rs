@@ -10,5 +10,6 @@ pub mod recovery;
 pub mod resolve;
 pub mod session;
 pub mod sleep;
+pub mod tile;
 pub mod timeshift;
 pub mod video;

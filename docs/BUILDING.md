@@ -5,8 +5,8 @@
 | Component | Linux / macOS | Windows |
 |---|---|---|
 | `aurora-core`, `aurora-db` | ✅ builds and tests | ✅ |
-| `aurora-player` (trait + NullBackend) | ✅ builds and tests | ✅ |
-| `aurora-player::mpv` (Win32 + libmpv) | ⚠️ `cargo check --target x86_64-pc-windows-msvc` only | ✅ |
+| `aurora-video` (engine, tested against a fake mpv) | ✅ builds and tests | ✅ |
+| `aurora-video::libmpv` and `::surface` (Win32 + libmpv) | ⚠️ `cargo check --target x86_64-pc-windows-msvc` only | ✅ |
 | `aurora-app` Win32 code (installer launch, video surface) | ⚠️ `cargo check --target x86_64-pc-windows-gnu` only | ✅ |
 | `aurora-app` (Tauri host) | ✅ with GTK dev packages (below) | ✅ |
 | `src-ui` (React) | ✅ | ✅ |
@@ -162,7 +162,7 @@ See `docs/TESTING_A_BUILD.md` for what to check on first launch.
 ```
 rustup target add x86_64-pc-windows-msvc
 cd src-native
-cargo check -p aurora-player --target x86_64-pc-windows-msvc
+cargo check -p aurora-video --target x86_64-pc-windows-msvc
 ```
 
 This type-checks the mpv/Win32 backend without an MSVC linker, which catches most

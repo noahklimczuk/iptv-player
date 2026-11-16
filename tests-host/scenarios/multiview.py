@@ -47,8 +47,9 @@ def run(d, ctx):
         )
         assert check["needed"] == tiles, check
         assert check["recordings"] == 0, check
-        # Nothing declared means every layout is worth offering.
-        assert check["largestFitting"] == "grid3x3", check
+        # Nothing declared means nothing is promised about what fits (R-42): "we have
+        # no idea" is not "yes, nine".
+        assert check["largestFitting"] is None, check
 
     # A host refusal arrives as an `AssertionError` from `driver.invoke`, so it cannot be
     # caught by type apart from a scenario's own failed assertion. Hence the sentinel:

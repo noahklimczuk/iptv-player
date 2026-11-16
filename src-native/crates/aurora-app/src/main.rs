@@ -371,7 +371,7 @@ fn main() {
             let mosaic = std::sync::Arc::clone(&mosaic_handle);
             let player_handle = app.handle().clone();
             std::thread::Builder::new()
-                .name("aurora-player".into())
+                .name("aurora-heartbeat".into())
                 .spawn(move || {
                     let mut last_sleep_emit = 0;
                     loop {

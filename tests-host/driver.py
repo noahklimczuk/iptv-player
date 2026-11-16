@@ -14,7 +14,7 @@ database and drives it over WebDriver. The transport is the real IPC, the comman
 the real Rust, the library is a real file on disk.
 
 It runs on either platform, and which one matters more than it looks. On Linux it
-drives WebKitGTK under Xvfb, and `aurora-player` is the `NullBackend` — so every
+drives WebKitGTK under Xvfb, and the app has no video engine — so every
 scenario up to the point where a picture would appear is covered, and the picture
 itself is not. On Windows it drives WebView2, which is what ships, and the backend is
 the real libmpv one. The Win32 child surface and its z-order under a transparent

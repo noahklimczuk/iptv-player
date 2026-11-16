@@ -34,7 +34,7 @@ class Skipped(Exception):
 
 def run(d, ctx):
     if sys.platform != "win32":
-        raise Skipped("mpv is Windows-only; NullBackend never fails to open anything")
+        raise Skipped("mpv is Windows-only; with no video engine nothing ever fails to open")
     if not M3U:
         raise Skipped("no AURORA_TEST_DEAD_M3U in the environment")
 
