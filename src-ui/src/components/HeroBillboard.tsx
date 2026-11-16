@@ -244,6 +244,11 @@ export function HeroBillboard({
       {trailer && trailerKey && (
         <div
           aria-hidden={false}
+          // Inert: a background preview, never something to operate (its mute button is
+          // outside it). Without this the embed could take focus from the Play button a
+          // keyboard user is resting on, seen intermittently on CI. React 18 has no
+          // typed `inert`, so it goes through as a plain attribute.
+          {...{ inert: '' }}
           style={{
             position: 'absolute', inset: 0, overflow: 'hidden',
             // Behind the scrims and the text below, in front of the backdrop.

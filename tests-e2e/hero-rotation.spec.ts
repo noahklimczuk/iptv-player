@@ -99,7 +99,11 @@ test('a blur that leaves focus where it was does not restart the rotation @motio
   );
   await advance(page, 80_000);
   expect(await featured(page), 'a stray blur let the billboard rotate under Play').toBe(held);
-  await expect(play).toBeFocused();
+  // A trailer has had time to start; if one did, it cannot take focus.
+  const frames = await hero.locator('iframe').count();
+  if (frames) await expect(hero.locator('[inert] iframe')).toHaveCount(frames);
+  const where = await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120));
+  await expect(play, `focus moved off Play, to ${where}`).toBeFocused();
 });
 
 test('reduce motion stops the billboard rotating at all', async ({ page }) => {
