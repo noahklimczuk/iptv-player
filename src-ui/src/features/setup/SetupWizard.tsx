@@ -73,6 +73,19 @@ export function SetupWizard({
    */
   /** The pending detection, so typing does not queue one per keystroke. */
   const pending = useRef<number | null>(null);
+  /**
+   * The provider type the viewer picked by hand for the address in the field, if any.
+   *
+   * Detection answers a beat after typing stops, and it used to set `kind` regardless.
+   * Type an address, pick "Xtream / panel login" straight away, and the late answer
+   * switched it back to "M3U playlist URL" (found by a setup journey on CI). A choice
+   * made by hand wins for that address; typing a new one hands it back to detection.
+   */
+  const chosenKind = useRef<DraftProvider['kind'] | null>(null);
+  const chooseKind = useCallback((kind: DraftProvider['kind']) => {
+    chosenKind.current = kind;
+    setDraft((d) => ({ ...d, kind }));
+  }, []);
 
   const runDetect = useCallback(async (text: string, fromPaste: boolean) => {
     const d = await invoke('providers.detect', { text }).catch(() => null);
@@ -85,12 +98,15 @@ export function SetupWizard({
     // carrying credentials fills the fields in, a bare panel host only offers them.
     if (d.kind !== 'xtream') setDetected('none');
     else setDetected(d.username ? 'credentials' : 'panel');
+    const chosen = chosenKind.current;
     setDraft((prev) => ({
       ...prev,
-      kind: d.kind,
+      kind: chosen ?? d.kind,
       url: d.url,
-      username: d.username ?? '',
-      password: d.password ?? '',
+      // Credentials typed after picking a panel by hand stay, unless the address
+      // itself carried some.
+      username: d.username ?? (chosen ? prev.username : ''),
+      password: d.password ?? (chosen ? prev.password : ''),
       name: prev.name || hostOf(d.url),
     }));
     if (fromPaste && d.username && d.password) setPasted(d.url);
@@ -107,6 +123,7 @@ export function SetupWizard({
   const detect = useCallback((text: string, fromPaste = false) => {
     setPasted(text);
     setValidation(null);
+    chosenKind.current = null;
     if (pending.current != null) {
       window.clearTimeout(pending.current);
       pending.current = null;
@@ -210,7 +227,7 @@ export function SetupWizard({
             {step === 'source' && (
               <SourceStep
                 draft={draft} setDraft={setDraft}
-                pasted={pasted} onPaste={detect} detected={detected}
+                pasted={pasted} onPaste={detect} detected={detected} onKind={chooseKind}
                 checking={checking} validation={validation} onCheck={validate}
                 onNext={() => setStep('content')}
               />
@@ -391,13 +408,15 @@ function canContinue(draft: DraftProvider): boolean {
 }
 
 function SourceStep({
-  draft, setDraft, pasted, onPaste, detected, checking, validation, onCheck, onNext,
+  draft, setDraft, pasted, onPaste, detected, onKind, checking, validation, onCheck, onNext,
 }: {
   draft: DraftProvider;
   setDraft: React.Dispatch<React.SetStateAction<DraftProvider>>;
   pasted: string;
   /** The second argument says the text arrived by paste rather than by typing. */
   onPaste: (text: string, fromPaste?: boolean) => void;
+  /** The viewer picked a provider type by hand. */
+  onKind: (kind: DraftProvider['kind']) => void;
   /** What detection could tell from the address: nothing, a full credential pair, or
       a panel root whose credentials the user still has to type. */
   detected: 'none' | 'credentials' | 'panel';
@@ -476,7 +495,7 @@ function SourceStep({
               data-active={draft.kind === value}
               data-variant={draft.kind === value ? 'primary' : 'secondary'}
               aria-pressed={draft.kind === value}
-              onClick={() => setDraft((d) => ({ ...d, kind: value }))}
+              onClick={() => onKind(value)}
             >
               {label}
             </button>

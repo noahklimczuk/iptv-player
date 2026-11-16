@@ -264,6 +264,27 @@ test('a bare panel host offers the credential fields', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/19-wizard-bare-host.png` });
 });
 
+test('a type picked by hand is not undone by detection answering late', async ({ page }) => {
+  // The race CI caught: the address is typed, the panel option is picked before the
+  // detection delay is up, and the late answer ("a playlist") switched it back. The
+  // clock is held so the answer can only come after the click, the order CI hit.
+  await page.clock.install();
+  await openWizard(page);
+  await page.clock.pauseAt(Date.now() + 60_000);
+  await page.getByLabel('Provider address').fill('http://example.com/list.m3u');
+  await page.getByRole('button', { name: 'Xtream / panel login' }).click();
+  // Past `DETECT_AFTER_TYPING_MS`, so the answer comes now.
+  await page.clock.runFor(1_000);
+  await expect(page.getByLabel('Username')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Xtream / panel login' }))
+    .toHaveAttribute('aria-pressed', 'true');
+
+  // A new address is detection's to answer again.
+  await page.getByLabel('Provider address').fill('http://example.com/other.m3u');
+  await page.clock.runFor(1_000);
+  await expect(page.getByLabel('Username')).toBeHidden();
+});
+
 test('the provider type can be chosen when detection guesses wrong', async ({ page }) => {
   await openWizard(page);
   await page.getByLabel('Provider address').fill('http://example.com/list.m3u');
