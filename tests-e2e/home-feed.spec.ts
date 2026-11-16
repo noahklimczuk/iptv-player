@@ -7,7 +7,7 @@
  * heading counts the whole rail, scrolling reaches past the first page, and a title the
  * viewer says "not for me" about leaves every rail at once.
  */
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 interface MockCall { name: string; args: Record<string, unknown> }
 
@@ -24,6 +24,25 @@ async function centre(page: Page, rail: string) {
   const r = page.getByRole('region', { name: rail });
   await r.evaluate((el) => el.scrollIntoView({ block: 'center' }));
   return r;
+}
+
+/**
+ * Until the expanded card has stopped growing.
+ *
+ * A click jumps the pointer to the button. While the card is still scaling up, that
+ * point can be outside it: the card collapses, the button goes, and the pointer never
+ * re-enters, so the click waited out the whole timeout (seen on CI, from the trace).
+ */
+async function settled(target: Locator) {
+  let last = '';
+  await expect
+    .poll(async () => {
+      const now = JSON.stringify(await target.boundingBox());
+      const same = now === last;
+      last = now;
+      return same;
+    }, { intervals: [150], message: 'the expanded card never stopped moving' })
+    .toBe(true);
 }
 
 const cards = (page: Page, rail: string) =>
@@ -57,6 +76,7 @@ test('not for me takes a title off every rail at once', async ({ page }) => {
   await first.hover();
   const notForMe = first.getByRole('button', { name: `Not for me: ${title}` });
   await expect(notForMe).toBeVisible();
+  await settled(notForMe);
   await notForMe.click();
 
   await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);

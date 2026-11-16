@@ -40,6 +40,10 @@ export default defineConfig({
     baseURL: ORIGIN,
     viewport: { width: 1600, height: 950 },
     deviceScaleFactor: 1,
+    // A trace of any test that failed, kept on CI and uploaded with the run: the
+    // intermittent failures (a keypress that never reached the player, focus leaving a
+    // button) left nothing to look at but an assertion message.
+    trace: process.env.CI ? 'retain-on-failure' : 'off',
     ...(existsSync(preinstalled) ? { launchOptions: { executablePath: preinstalled } } : {}),
   },
   /**

@@ -55,6 +55,7 @@ export function HeroBillboard({
   const [trailer, setTrailer] = useState(false);
   const [muted, setMuted] = useState(true);
   const [paused, setPaused] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
   const animations = useUi((s) => s.animations);
   const hoverPreviews = useUi((s) => s.hoverPreviews);
   const myList = useMarks((s) => s.myList);
@@ -87,7 +88,24 @@ export function HeroBillboard({
     // seconds is motion, whether or not it is animated on the way.
     if (paused || !animations || items.length < 2) return;
     const t = window.setTimeout(
-      () => setIndex((i) => (i + 1) % items.length),
+      () => {
+        // `onBlur` is not proof that focus left. It also fires when the window loses
+        // focus (the button stays the active element and is focused again on return)
+        // and when focus moves into the trailer's frame, which is inside the billboard.
+        // Whoever is on it is still on it, so hold instead of rotating; a real move
+        // elsewhere blurs again and resumes it.
+        const active = document.activeElement;
+        // A frame is not somebody: the trailer can hold focus by itself (see
+        // `TrailerFrame`), and that must not stop the rotation.
+        if (
+          active && active !== document.body && active.tagName !== 'IFRAME'
+          && sectionRef.current?.contains(active)
+        ) {
+          setPaused(true);
+          return;
+        }
+        setIndex((i) => (i + 1) % items.length);
+      },
       trailer ? ROTATE_WITH_TRAILER_MS : ROTATE_MS,
     );
     return () => window.clearTimeout(t);
@@ -135,6 +153,7 @@ export function HeroBillboard({
 
   return (
     <section
+      ref={sectionRef}
       aria-label="Featured"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
@@ -230,6 +249,11 @@ export function HeroBillboard({
       {trailer && trailerKey && (
         <div
           aria-hidden={false}
+          // Inert: a background preview, never something to operate (its mute button is
+          // outside it), so Tab never lands in it. That does not stop YouTube focusing
+          // its own page; `TrailerFrame` hands focus back when it does. React 18 has no
+          // typed `inert`, so it goes through as a plain attribute.
+          {...{ inert: '' }}
           style={{
             position: 'absolute', inset: 0, overflow: 'hidden',
             // Behind the scrims and the text below, in front of the backdrop.
