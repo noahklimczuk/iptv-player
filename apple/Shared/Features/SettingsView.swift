@@ -19,6 +19,7 @@ struct SettingsView: View {
                     Button("Add a provider", systemImage: "plus") { adding = true }
                 }
                 LibraryFiltersSection()
+                MetadataSection()
                 if let progress = model.importProgress {
                     Section("Importing") {
                         Text(progress.phase.label)
@@ -161,5 +162,96 @@ private struct LibraryFiltersSection: View {
             }
         }
         counts = rows
+    }
+}
+
+/// Posters, cast and ratings from TMDB (Windows' `MetadataPanel`, same wording). The build
+/// normally carries a key, so the usual state is nothing to do but watch the counts.
+private struct MetadataSection: View {
+    @Environment(AppModel.self) private var model
+    @State private var status: MetadataStatus?
+    @State private var key = ""
+    @State private var message: String?
+
+    var body: some View {
+        Section {
+            Text("Posters, backdrops, descriptions and cast come from TMDB. Aurora only asks about a title once — if nothing matches confidently, it leaves the title alone rather than guessing, so a wrong poster never ends up on the wrong film.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let status {
+                coverage("Films", status.movies)
+                coverage("Series", status.series)
+                if let progress = model.metadataProgress {
+                    VStack(alignment: .leading) {
+                        Text("Fetching… \(progress.done.formatted()) of \(progress.total.formatted())")
+                        ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                    }
+                    Button("Stop", systemImage: "stop.fill") { model.stopMetadata() }
+                } else if status.hasKey {
+                    Button("Fetch metadata now", systemImage: "arrow.down.circle") {
+                        message = nil
+                        model.fetchMetadata(userAsked: true)
+                    }
+                }
+                keyRows(status)
+            }
+            if let message {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Metadata")
+        }
+        .task(id: ReloadKey(library: model.libraryVersion, running: model.metadataProgress != nil)) {
+            status = await model.metadataStatus()
+        }
+    }
+
+    private struct ReloadKey: Equatable {
+        let library: Int
+        let running: Bool
+    }
+
+    private func coverage(_ label: String, _ c: Coverage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                Spacer()
+                Text("\(c.matched.formatted()) of \(c.total.formatted())").foregroundStyle(.secondary)
+            }
+            // Not found is a settled answer, not an error, and is labelled as one.
+            let extra = [c.noMatch > 0 ? "\(c.noMatch.formatted()) not found" : nil,
+                         c.failed > 0 ? "\(c.failed.formatted()) to retry" : nil].compactMap { $0 }
+            if !extra.isEmpty {
+                Text(extra.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+            }
+            ProgressView(value: Double(c.matched), total: Double(max(c.total, 1)))
+        }
+    }
+
+    @ViewBuilder
+    private func keyRows(_ status: MetadataStatus) -> some View {
+        SecureField(status.keyIsBuiltIn ? "Built in — nothing to enter"
+                    : status.hasKey ? "•••••••• (a key is saved)" : "Paste your TMDB API key",
+                    text: $key)
+            .textContentType(.password)
+            .autocorrectionDisabled()
+            .onSubmit { Task { await save(key) } }
+        if !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Button("Save key") { Task { await save(key) } }
+        }
+        if status.hasKey && !status.keyIsBuiltIn {
+            Button("Remove key", role: .destructive) { Task { await save(nil) } }
+        }
+        if status.keyIsBuiltIn {
+            Text("This build ships with a metadata key, so artwork and cast work without any setup. Entering your own replaces it — worth doing only if you would rather the requests counted against your own rate limit than one shared with every copy of this build.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func save(_ value: String?) async {
+        await model.setMetadataKey(value)
+        key = ""
+        message = value == nil ? "Key removed." : "Key saved."
+        status = await model.metadataStatus()
+        if value != nil { model.fetchMetadata(userAsked: true) }
     }
 }

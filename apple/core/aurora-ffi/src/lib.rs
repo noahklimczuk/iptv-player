@@ -24,6 +24,7 @@ mod error;
 mod filters;
 mod guide;
 mod library;
+mod metadata;
 #[cfg(test)]
 mod mirrors;
 mod mylist;
@@ -47,6 +48,7 @@ pub use error::{AuroraError, Result};
 pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
 pub use guide::{GuideCell, GuideRow, NowNext, Programme};
 pub use library::{Channel, ChannelGroup};
+pub use metadata::{Coverage, Credit, MetadataListener, MetadataReport, MetadataStatus};
 pub use mylist::{ItemMarks, ListKind, MyList};
 pub use playback::{LiveTune, MpvOption, PlayableSource};
 pub use profiles::{PinChange, PinOutcome, Profile};
@@ -69,7 +71,8 @@ pub struct AuroraCore {
     /// One connection. The Windows host adds a read pool beside its writer; the spike
     /// does not need one yet, and adding it later changes nothing Swift sees.
     db: Mutex<Connection>,
-    http: HttpClient,
+    /// Shared: the TMDB client keeps its own handle to it.
+    http: Arc<HttpClient>,
     credentials: Arc<dyn CredentialStore>,
     data_dir: PathBuf,
 }
@@ -95,7 +98,7 @@ impl AuroraCore {
                 corrupt_copy.display()
             );
         }
-        let http = HttpClient::new(HttpConfig::default())?;
+        let http = Arc::new(HttpClient::new(HttpConfig::default())?);
         Ok(Arc::new(Self {
             db: Mutex::new(db),
             http,

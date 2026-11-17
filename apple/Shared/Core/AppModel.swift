@@ -47,6 +47,14 @@ final class AppModel {
         var total: UInt64
     }
 
+    /// A metadata sweep in progress: titles looked up in this batch, out of how many.
+    struct MetadataProgress: Equatable {
+        var done: UInt64
+        var total: UInt64
+    }
+    private(set) var metadataProgress: MetadataProgress?
+    private var metadataTask: Task<Void, Never>?
+
     init() {
         do {
             core = try AuroraCore.open(dataDir: Self.dataDirectory().path, secrets: KeychainSecretStore())
@@ -54,6 +62,8 @@ final class AppModel {
             core = nil
             self.error = "Aurora could not open its library. \(error.viewerMessage)"
         }
+        // Windows starts a sweep at launch too: whatever the last one didn't reach.
+        Task { self.fetchMetadata() }
     }
 
     /// Application Support, which the system does not purge — unlike Caches, which is
@@ -119,6 +129,69 @@ final class AppModel {
             self.error = error.viewerMessage
         }
         await reload()
+        // An import leaves new titles bare; fetch their artwork and cast straight away,
+        // as Windows does, rather than waiting for someone to find the button.
+        fetchMetadata()
+    }
+
+    // MARK: Metadata
+
+    /// Fetch artwork, cast and ratings for whatever is still bare, in the background.
+    ///
+    /// Started on its own after launch and after every import, where it must never get in
+    /// the way: no key, no network, a failure, all stay quiet, as on Windows. Started from
+    /// Settings (`userAsked`), a failure is said.
+    func fetchMetadata(userAsked: Bool = false) {
+        guard let core, metadataTask == nil else { return }
+        let relay = MetadataRelay { [weak self] done, total in
+            Task { @MainActor in self?.metadataProgress = MetadataProgress(done: done, total: total) }
+        }
+        metadataTask = Task {
+            defer {
+                metadataTask = nil
+                metadataProgress = nil
+            }
+            if !userAsked {
+                let status = try? await Task.detached { try core.metadataStatus() }.value
+                guard let status, status.hasKey, status.movies.pending + status.series.pending > 0 else { return }
+            }
+            do {
+                let report = try await withTaskCancellationHandler {
+                    try await Task.detached { try core.fetchMetadata(listener: relay) }.value
+                } onCancel: {
+                    relay.cancel()
+                }
+                // New genres, posters and ratings: lists and facets reload.
+                if report.matched > 0 { libraryVersion += 1 }
+            } catch {
+                if userAsked { self.error = error.viewerMessage }
+                Self.log.notice("metadata sweep stopped: \(error.viewerMessage, privacy: .public)")
+            }
+        }
+    }
+
+    /// Stop a sweep after the titles in flight; what was fetched is kept.
+    func stopMetadata() {
+        metadataTask?.cancel()
+    }
+
+    func metadataStatus() async -> MetadataStatus? {
+        await call(nil) { try $0.metadataStatus() }
+    }
+
+    /// Save the viewer's own TMDB key, or clear it with nil.
+    func setMetadataKey(_ key: String?) async {
+        await call(()) { try $0.setMetadataKey(key: key) }
+    }
+
+    func credits(_ kind: ListKind, id: Int64) async -> [Credit] {
+        await call([]) { try $0.credits(kind: kind, id: id) }
+    }
+
+    /// Forget a wrong match and look the title up again.
+    func rematch(_ kind: ListKind, id: Int64) async {
+        await call(()) { try $0.rematch(kind: kind, id: id) }
+        fetchMetadata(userAsked: true)
     }
 
     func channels(group: String?, favoritesOnly: Bool = false, limit: UInt32 = 200, offset: UInt32 = 0) async -> [Channel] {
@@ -338,6 +411,23 @@ extension BrowseSort {
         case .year: "Year"
         case .rating: "Rating"
         }
+    }
+}
+
+/// Hands metadata progress to a closure, and tells the core when to stop.
+private final class MetadataRelay: MetadataListener, @unchecked Sendable {
+    private let onProgress: @Sendable (UInt64, UInt64) -> Void
+    private let stopped = OSAllocatedUnfairLock(initialState: false)
+
+    init(_ onProgress: @escaping @Sendable (UInt64, UInt64) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func cancel() { stopped.withLock { $0 = true } }
+
+    func progress(done: UInt64, total: UInt64) -> Bool {
+        onProgress(done, total)
+        return !stopped.withLock { $0 }
     }
 }
 

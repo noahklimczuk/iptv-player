@@ -86,6 +86,7 @@ struct MovieDetail: View {
                     }
                     .foregroundStyle(.secondary)
                     if let overview = movie.overview { Text(overview) }
+                    CastAndCrew(kind: .movie, id: movie.id, genres: movie.genres)
                     PlayButtons(progress: progress) { startAt in
                         playing = .movie(id: movie.id, title: movie.title, startAt: startAt)
                     }
@@ -299,6 +300,7 @@ struct SeriesDetail: View {
                 Section {
                     MarkButtons(kind: .series, id: seriesId)
                     if let overview = detail.overview { Text(overview) }
+                    CastAndCrew(kind: .series, id: seriesId, genres: detail.genres)
                     if let resume, let episode = episodes.first(where: { $0.id == resume.episodeId }) {
                         Button(resume.positionSecs > 0 ? "Resume \(label(episode))" : "Play \(label(episode))",
                                systemImage: "play.fill") {
@@ -425,6 +427,35 @@ struct FilterChip: View {
         .buttonStyle(.bordered)
         .tint(selected ? .accentColor : .secondary)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Genres, then the cast and director from TMDB, as Windows' detail page lists them:
+/// the first six billed names, nothing where nothing is known.
+struct CastAndCrew: View {
+    @Environment(AppModel.self) private var model
+    let kind: ListKind
+    let id: Int64
+    let genres: [String]
+    @State private var credits: [Credit] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            meta("Genres", genres.joined(separator: ", "))
+            meta("Cast", credits.filter(\.isCast).prefix(6).map(\.name).joined(separator: ", "))
+            let directors = credits.filter { !$0.isCast && $0.role?.lowercased() == "director" }
+            meta(directors.count == 1 ? "Director" : "Directors", directors.map(\.name).joined(separator: ", "))
+        }
+        .font(.callout)
+        // A finished sweep may have just found this title.
+        .task(id: model.libraryVersion) { credits = await model.credits(kind, id: id) }
+    }
+
+    @ViewBuilder
+    private func meta(_ label: String, _ value: String) -> some View {
+        if !value.isEmpty {
+            (Text("\(label): ").foregroundStyle(.tertiary) + Text(value).foregroundStyle(.secondary))
+        }
     }
 }
 

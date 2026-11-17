@@ -16,6 +16,11 @@
 #   apple/Frameworks/AuroraCore.xcframework
 #   apple/Shared/Core/Generated/aurora_ffi.swift
 #
+# API keys are compiled in from the environment, as on Windows: AURORA_TMDB_KEY (film
+# and series metadata) is read by the core at build time, so a build run with it set
+# ships with that key. CI fills it from the TMDB_API_KEY secret; a local build without
+# it simply asks the viewer for a key in Settings.
+#
 # Only touches apple/. The Windows workspace in src-native/ is read (the shared crates
 # are path dependencies) and never written: this workspace has its own target dir.
 set -euo pipefail
