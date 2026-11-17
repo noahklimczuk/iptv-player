@@ -24,6 +24,7 @@ pub mod series;
 pub mod services;
 pub mod streams;
 pub mod supervise;
+pub mod sync;
 pub mod updates;
 pub mod webview_reap;
 pub mod window;

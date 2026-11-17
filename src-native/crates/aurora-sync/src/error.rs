@@ -37,6 +37,14 @@ pub enum SyncError {
     Protocol(String),
 }
 
+/// A passphrase or recovery code that does not open the vault is something the person
+/// can fix, so it is an account error with the vault's own wording.
+impl From<crate::vault::VaultError> for SyncError {
+    fn from(e: crate::vault::VaultError) -> Self {
+        SyncError::Account(e.to_string())
+    }
+}
+
 impl From<serde_json::Error> for SyncError {
     fn from(e: serde_json::Error) -> Self {
         SyncError::Malformed(e.to_string())

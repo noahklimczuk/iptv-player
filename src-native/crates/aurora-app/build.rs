@@ -8,6 +8,9 @@ fn main() {
     // so without this a warm target directory ships whatever key the last build saw.
     // That was found the hard way for TMDB (AUDIT/test-report.md §12).
     println!("cargo:rerun-if-env-changed=AURORA_GEMINI_KEY");
+    // Which Firebase project sync uses (`sync::config`). Baked in the same way.
+    println!("cargo:rerun-if-env-changed=AURORA_FIREBASE_API_KEY");
+    println!("cargo:rerun-if-env-changed=AURORA_FIREBASE_PROJECT_ID");
 
     // Delay-load libmpv, so that a missing or unreadable DLL is something the app can
     // report rather than something the Windows loader kills it for.

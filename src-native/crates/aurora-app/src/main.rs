@@ -9,7 +9,7 @@ use aurora_app::{
     profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
-    updates, window,
+    sync, updates, window,
 };
 
 /// Send the log somewhere a person can read it.
@@ -462,6 +462,26 @@ fn main() {
                 })
                 .expect("spawning the refresh thread");
 
+            // Cross-device sync (docs/APPLE_PORT_AND_SYNC.md §3.6). Its own thread rather
+            // than the maintenance one, which runs once: this is a loop, ticking every few
+            // seconds and syncing when `household::Pacer` says a round is due. Does
+            // nothing at all on a library that never signed in.
+            let sync_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("aurora-sync".into())
+                .spawn(move || {
+                    std::thread::sleep(aurora_app::sync::START_DELAY);
+                    loop {
+                        supervised("sync", || {
+                            if let Some(services) = sync_handle.try_state::<Services>() {
+                                services.sync.tick(now_unix());
+                            }
+                        });
+                        std::thread::sleep(aurora_app::sync::TICK);
+                    }
+                })
+                .expect("spawning the sync thread");
+
             Ok(())
         })
         .on_window_event(|win, event| {
@@ -644,6 +664,14 @@ fn main() {
             updates::updates_open_releases,
             updates::updates_download,
             updates::updates_install,
+            sync::sync_status,
+            sync::sync_create_account,
+            sync::sync_sign_in,
+            sync::sync_now,
+            sync::sync_reset,
+            sync::sync_sign_out,
+            sync::sync_recovery_code,
+            sync::sync_device_name,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");

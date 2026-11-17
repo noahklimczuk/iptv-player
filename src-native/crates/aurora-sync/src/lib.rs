@@ -13,6 +13,9 @@
 //! - [`engine`] pushes the outbox and pulls what other devices wrote, through a
 //!   [`transport::SyncTransport`] and a [`codec::Codec`].
 //!
+//! - [`household`] is what a host app drives: the account on this device, where its
+//!   secrets live, and when to sync.
+//!
 //! The transport and codec are traits so the merge rules can be tested as ordinary unit
 //! tests -- several simulated devices, offline edits, skewed clocks -- against
 //! [`transport::MemoryTransport`] with no network.
@@ -21,6 +24,7 @@ pub mod codec;
 pub mod engine;
 pub mod error;
 pub mod firebase;
+pub mod household;
 pub mod local;
 pub mod record;
 pub mod transport;
