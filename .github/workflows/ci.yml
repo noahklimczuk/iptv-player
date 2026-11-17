@@ -329,6 +329,12 @@ jobs:
       # in the repository — this repository is public, and a key committed here would be
       # in the history for good as well as in the binary.
       AURORA_GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Which Firebase project sync uses (docs/APPLE_PORT_AND_SYNC.md §3). Neither value
+      # is secret -- the project's security rules and end-to-end encryption protect a
+      # household's data -- but the key is a secret anyway so secret scanning has nothing
+      # to flag in this public repository. Unset is a valid build with no sync to offer.
+      AURORA_FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+      AURORA_FIREBASE_PROJECT_ID: auroratv-1d4ce
     steps:
       - uses: actions/checkout@v4
         with:
@@ -467,7 +473,8 @@ jobs:
           $text = [System.Text.Encoding]::ASCII.GetString($bytes)
           foreach ($k in @(
             @{ Name = 'Gemini'; Env = $env:AURORA_GEMINI_KEY },
-            @{ Name = 'TMDB';   Env = $env:AURORA_TMDB_KEY }
+            @{ Name = 'TMDB';   Env = $env:AURORA_TMDB_KEY },
+            @{ Name = 'Firebase'; Env = $env:AURORA_FIREBASE_API_KEY }
           )) {
             $set = -not [string]::IsNullOrWhiteSpace($k.Env)
             # Set or not, and nothing else -- not even the length, which is still
