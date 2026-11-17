@@ -357,3 +357,34 @@ fn opening_a_film_pulls_its_progress_directly() {
         2460
     );
 }
+
+#[test]
+fn devices_sync_through_the_encrypted_codec_and_the_server_sees_no_plaintext() {
+    use aurora_sync::transport::SyncTransport;
+    use aurora_sync::vault::{VaultCodec, VaultKey};
+
+    let server = MemoryTransport::new();
+    let key = VaultKey::generate().unwrap();
+    let mk = |name: &str, offset: i64| {
+        let d = device(&server, name, offset, true);
+        (d, Engine::new(server.clone(), VaultCodec::new(&key), name))
+    };
+    let (mut a, ea) = mk("pc", 0);
+    let (mut b, eb) = mk("tv", 100);
+    ea.join(&mut a.conn).unwrap();
+    eb.join(&mut b.conn).unwrap();
+    lists::toggle_favorite(&a.conn, 1, 10, None, 1).unwrap();
+    ea.sync(&mut a.conn).unwrap();
+    eb.sync(&mut b.conn).unwrap();
+    assert_eq!(b.favorites(), 1);
+
+    for env in server.pull(None, 10_000).unwrap().records {
+        let text = String::from_utf8_lossy(&env.payload);
+        assert!(!text.contains("BBC") && !text.contains("501") && !text.contains("Favorites"));
+        assert!(
+            !env.doc_id.contains(':'),
+            "doc id leaks the key: {}",
+            env.doc_id
+        );
+    }
+}

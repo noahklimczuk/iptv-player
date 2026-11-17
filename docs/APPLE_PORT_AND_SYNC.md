@@ -269,7 +269,7 @@ not even which films are on the list.
   server timestamp, a `deleted` flag and the writing device's id.
 - **Recovery.** A forgotten passphrase cannot be recovered; that is what end-to-end
   means. The device's local data is untouched. On setup, Aurora shows a **recovery
-  code** (the vault key, as words) to write down. **Reset sync** throws away the server
+  code** (the vault key in Crockford base32 with a checksum, eleven groups of five; `aurora_sync::vault`) to write down. **Reset sync** throws away the server
   copy and re-uploads from the device the viewer chooses.
 - **Firestore security rules** restrict `users/{uid}/**` to `request.auth.uid == uid`.
   The rules ship in the repo (`firebase/firestore.rules`) with emulator tests. They are
