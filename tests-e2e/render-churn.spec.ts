@@ -74,3 +74,65 @@ test('playing something does not re-register the key handler over and over', asy
   await page.keyboard.press('k');
   await expect.poll(status, { message: 'k did not resume' }).toBe('playing');
 });
+
+/**
+ * Counts how often the page under the player is rendered again, through the hook React
+ * reports its commits to (the one the DevTools extension uses). Home is found by its
+ * props: it is the one element given exactly `onOpen`, `onPlay` and `onTune`. A commit
+ * in which it bailed out leaves the same props object on it; one that rendered it again
+ * gives it a new one.
+ */
+const countHomeRenders = () => {
+  const w = window as unknown as { __homeRenders: number };
+  w.__homeRenders = 0;
+  let last: unknown = null;
+  type Fiber = { child: Fiber | null; sibling: Fiber | null; memoizedProps: Record<string, unknown> | null };
+  const isHome = (p: Record<string, unknown> | null) =>
+    !!p && typeof p === 'object' && Object.keys(p).sort().join() === 'onOpen,onPlay,onTune';
+  (window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown }).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+    supportsFiber: true,
+    renderers: new Map(),
+    inject: () => 1,
+    checkDCE: () => {},
+    onScheduleFiberRoot: () => {},
+    onCommitFiberUnmount: () => {},
+    onPostCommitFiberRoot: () => {},
+    onCommitFiberRoot: (_id: number, root: { current: Fiber }) => {
+      const stack: Fiber[] = [root.current];
+      while (stack.length) {
+        const f = stack.pop()!;
+        if (isHome(f.memoizedProps)) {
+          if (last !== null && f.memoizedProps !== last) w.__homeRenders += 1;
+          last = f.memoizedProps;
+          return;
+        }
+        if (f.sibling) stack.push(f.sibling);
+        if (f.child) stack.push(f.child);
+      }
+    },
+  };
+};
+
+test('the page under the player is not rendered again on every player state', async ({
+  page,
+}) => {
+  // Home on a real library is tens of thousands of titles. Rendered again on each of the
+  // host's pushes, it kept the page in long tasks 73% of the time while a channel
+  // played, and a pause left it too busy to answer at all.
+  await page.addInitScript(countHomeRenders);
+  // `?video` before the hash: it is read from the query, and makes the page behave as
+  // it does over the host's surface -- `<main>` hidden while the picture shows.
+  await page.goto('/?video#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await page.getByRole('button', { name: 'Play' }).first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+
+  const renders = () =>
+    page.evaluate(() => (window as unknown as { __homeRenders: number }).__homeRenders);
+  await page.waitForTimeout(1_000);
+  const settled = await renders();
+  // Five seconds is five of the mock's ticks, each a new player state.
+  await page.waitForTimeout(5_000);
+  const during = (await renders()) - settled;
+  expect(during, `Home was rendered again ${during} times in five seconds of playback`).toBe(0);
+});
