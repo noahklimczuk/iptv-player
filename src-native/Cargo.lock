@@ -194,6 +194,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurora-sync"
+version = "1.0.0"
+dependencies = [
+ "aurora-core",
+ "aurora-db",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "aurora-video"
 version = "1.0.0"
 dependencies = [

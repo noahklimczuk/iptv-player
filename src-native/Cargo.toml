@@ -6,6 +6,7 @@ members = [
   "crates/aurora-video",
   "crates/aurora-ingest",
   "crates/aurora-contract",
+  "crates/aurora-sync",
   "crates/aurora-app",
 ]
 # aurora-app pulls in Tauri, whose Linux backend needs GTK and whose Windows build
@@ -23,6 +24,7 @@ default-members = [
   "crates/aurora-video",
   "crates/aurora-ingest",
   "crates/aurora-contract",
+  "crates/aurora-sync",
 ]
 
 [workspace.package]
@@ -51,6 +53,7 @@ aurora-core = { path = "crates/aurora-core" }
 aurora-db = { path = "crates/aurora-db" }
 aurora-video = { path = "crates/aurora-video" }
 aurora-ingest = { path = "crates/aurora-ingest" }
+aurora-sync = { path = "crates/aurora-sync" }
 
 [profile.release]
 opt-level = 3

@@ -170,7 +170,7 @@ last a year.
         └────── HTTPS (REST) ──┴──────────────────────┘
                           │
           Firebase Authentication (email + password)
-          Cloud Firestore   users/{uid}/records/{recordId}
+          Cloud Firestore   users/{uid}/records/{recordId}_{deviceId}
                             users/{uid}/meta/vault
 ```
 
@@ -305,15 +305,33 @@ not even which films are on the list.
   `aurora-contract/tests/sync_settings.rs` fails on any key the sources use that the
   table does not name.
 
+**One copy per writer (`aurora-sync`, built).** The server stores a record as one
+document *per device that wrote it*: `records/{recordId}_{deviceId}`. A device pushing a
+record replaces only its own previous copy, and a reader merges every copy it pulls. A
+single shared document per record would be last-*push*-wins, because the server cannot
+merge ciphertext: a device pushing its version would replace a newer edit from another
+device that it had not pulled yet, and that edit would be lost for good. The multi-device
+tests caught exactly this (two devices editing different fields of one profile in the
+same millisecond). With a copy per writer the merge is commutative, every device
+converges on the join of all copies in any order, and no transactions or preconditions
+are needed on the server.
+
 **Push.** The outbox drains in batches of up to 500 writes (Firestore's limit) via
 `documents:commit`. Each write sets `serverTime` with a `REQUEST_TIME` field transform.
-Progress writes are **coalesced**: at most one per item per 60 s while playing, plus one
-on pause, stop, end and backgrounding.
+A record is read from its row at push time and diffed against the shadow, so only the
+fields this device changed carry the new clock; the shadow and outbox are updated only
+after the server accepted the batch. Progress writes are **coalesced**: at most one per
+item per 60 s while playing, plus one on pause, stop, end and backgrounding.
 
 **Pull.** A `runQuery` for `serverTime > cursor` ordered by `serverTime`, paged. Each
-record is decrypted and merged by its rule (§3.4), and then the cursor advances. A
-record this device wrote itself, and which nothing has changed since, is skipped without
-a merge.
+copy is decrypted and merged by its rule (§3.4), and then the cursor advances. Copies
+this device wrote itself are skipped. If the record also has an unpushed local change,
+that change is folded into what is written to the row, but not into the shadow, so the
+next push still sends it.
+
+**Joining.** A device's first sync pulls before it turns capture on. A provider or
+profile that exists on both sides (matched on kind + URL + username, or on name) adopts
+the household's id first, so the same favourite on both devices becomes one record.
 
 **When it runs.**
 
@@ -352,8 +370,12 @@ A heavy household, with three devices each watching 6 hours a day:
 | **Reads** | **~3,900 of 50,000** |
 
 Storage: a record is under 1 KB, and even 20,000 records (years of episode progress) is
-about 20 MB of 1 GiB. A new device's first sync reads every record once, about 20,000
-reads at the very worst. That fits in one day's quota even after a heavy day.
+about 20 MB of 1 GiB; with a copy per writer (§3.6) three devices make that at most
+60 MB. A new device's first sync reads every copy once. Most records are written by one
+device only, so that is near 20,000 reads at the very worst and fits in one day's quota.
+In the pathological case where all three devices had written every one of 20,000
+records it is 60,000 reads, past the 50,000 quota: the pull stops at the quota, keeps
+its cursor (§3.8), and finishes the next day.
 
 `aurora-sync` keeps a **local count of today's reads and writes**. Past 70% of either
 quota it widens the poll interval and stops the 60-second progress writes, keeping only
