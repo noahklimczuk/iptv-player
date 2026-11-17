@@ -1,0 +1,91 @@
+# The Apple app's Xcode project, as text. Generate it with:
+#
+#   apple/scripts/generate-project.sh
+#
+# The .xcodeproj is git-ignored: this file is the source of truth, so a project change
+# is a reviewable diff of a few lines rather than of project.pbxproj.
+name: Aurora
+options:
+  bundleIdPrefix: tv.aurora
+  deploymentTarget:
+    iOS: "26.0"
+    tvOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Signing for a real device: set your team in Xcode, or DEVELOPMENT_TEAM here
+    # locally. Simulators need none.
+    CODE_SIGN_STYLE: Automatic
+
+packages:
+  # libmpv for iOS and tvOS. The plain `MPVKit` product is the LGPL build of mpv and
+  # FFmpeg; `MPVKit-GPL` is not used (docs/APPLE_PORT_AND_SYNC.md §2.6).
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 1.1.0-n9.0.2
+
+targetTemplates:
+  AuroraApp:
+    type: application
+    sources:
+      - path: Shared
+    dependencies:
+      - framework: Frameworks/AuroraCore.xcframework
+        embed: false
+      - package: MPVKit
+        product: MPVKit
+    preBuildScripts:
+      - name: Check the Rust core is built
+        script: |
+          if [ ! -d "$SRCROOT/Frameworks/AuroraCore.xcframework" ] || [ ! -f "$SRCROOT/Shared/Core/Generated/aurora_ffi.swift" ]; then
+            echo "error: run apple/scripts/build-core.sh first (the Rust core and its Swift bindings are built from source, not committed)"
+            exit 1
+          fi
+        basedOnDependencyAnalysis: false
+
+targets:
+  AuroraTV:
+    templates: [AuroraApp]
+    info:
+      path: AuroraTV/Info.plist
+      properties:
+        # Poster and logo artwork loads through URLSession (AsyncImage), and providers
+        # serve it from arbitrary hosts, mostly over plain http://. The Rust core and
+        # mpv open their own sockets and are not subject to App Transport Security.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    platform: tvOS
+    sources:
+      - path: AuroraTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tv.aurora.tv
+        INFOPLIST_KEY_CFBundleDisplayName: Aurora
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+
+  AuroraMobile:
+    templates: [AuroraApp]
+    info:
+      path: AuroraMobile/Info.plist
+      properties:
+        # Poster and logo artwork loads through URLSession (AsyncImage), and providers
+        # serve it from arbitrary hosts, mostly over plain http://. The Rust core and
+        # mpv open their own sockets and are not subject to App Transport Security.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    platform: iOS
+    sources:
+      - path: AuroraMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tv.aurora.mobile
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_CFBundleDisplayName: Aurora
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
