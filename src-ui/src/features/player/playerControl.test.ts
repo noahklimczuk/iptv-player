@@ -48,6 +48,18 @@ describe('transport (C6, C7, C8)', () => {
     expect(player().positionSecs).toBe(101);
   });
 
+  it('a film still opening pauses, and the next press resumes it', () => {
+    invoke.mockReturnValue(never());
+    useUi.setState({ player: { ...base, status: 'loading', hasPicture: false, positionSecs: 0 } });
+    control.togglePause();
+    expect(invoke).toHaveBeenLastCalledWith('player.pause');
+    expect(player().status).toBe('paused');
+    useUi.getState().releasePlayer();
+    useUi.setState({ player: { ...base, status: 'paused', hasPicture: false, positionSecs: 0 } });
+    control.togglePause();
+    expect(invoke).toHaveBeenLastCalledWith('player.resume');
+  });
+
   it('a buffering stream pauses; one that is stopped or failed is left alone', () => {
     invoke.mockReturnValue(never());
     useUi.setState({ player: { ...base, status: 'buffering' } });

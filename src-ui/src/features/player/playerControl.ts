@@ -38,11 +38,16 @@ export function resume() {
   void settle(invoke('player.resume'), 'The player did not respond');
 }
 
-/** C6. Buffering counts as playing: the viewer pressing pause wants it stopped. */
+/**
+ * C6. Buffering and loading count as playing: the viewer pressing pause wants it
+ * stopped. Loading used to count as paused, so Space while a film opened sent `resume`
+ * to something already on its way and did nothing, press after press, until it played.
+ * The host opens it paused when asked, and says Paused, so the next press resumes.
+ */
 export function togglePause() {
   const p = now();
   if (!p || p.status === 'idle' || p.status === 'error') return;
-  if (p.status === 'playing' || p.status === 'buffering') pause();
+  if (p.status === 'playing' || p.status === 'buffering' || p.status === 'loading') pause();
   else resume();
 }
 

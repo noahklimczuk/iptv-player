@@ -238,6 +238,51 @@ fn e13_waiting_for_data_is_buffering_and_pause_is_paused() {
 }
 
 #[test]
+fn e13_pause_while_it_opens_says_paused_and_the_next_press_resumes() {
+    // Space while a film was still opening sent `resume` twice before a press finally
+    // paused it, because the engine said Loading after a pause it had honoured.
+    let (engine, mpv) = start();
+    engine.load(film()).unwrap();
+    let r = engine.set_paused(true).unwrap();
+    assert_eq!(r.status, Status::Paused);
+    // The report says Paused as soon as it is asked; mpv hears it from the engine's
+    // thread a moment later. Wait for mpv, or a loaded machine fails this for nothing.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while mpv.last_set("pause").as_deref() != Some("yes") {
+        assert!(Instant::now() < deadline, "mpv was not asked to pause");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    until(&engine, "paused while opening", |r| {
+        r.status == Status::Paused
+    });
+    mpv.loaded();
+    until(&engine, "still paused once open", |r| {
+        r.status == Status::Paused
+    });
+    engine.set_paused(false).unwrap();
+    until(&engine, "opening again", |r| r.status == Status::Loading);
+    mpv.plays();
+    mpv.prop("time-pos", Node::Double(10.0));
+    until(&engine, "playing", |r| r.status == Status::Playing);
+}
+
+#[test]
+fn e25_a_stream_paused_before_it_opens_is_still_given_up() {
+    let mpv = FakeMpv::new();
+    let engine = Engine::start_with(
+        mpv.driver(),
+        Limits {
+            open_secs: 0.6,
+            buffer_secs: 0.6,
+            frozen_secs: 0.6,
+        },
+    );
+    engine.load(channel()).unwrap();
+    engine.set_paused(true).unwrap();
+    until(&engine, "error", |r| r.status == Status::Error);
+}
+
+#[test]
 fn e16_tracks_carry_language_and_title() {
     let (engine, mpv) = start();
     playing(&engine, &mpv, film());
