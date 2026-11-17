@@ -221,17 +221,44 @@ final class AppModel {
         fetchMetadata(userAsked: true)
     }
 
-    func channels(group: String?, favoritesOnly: Bool = false, limit: UInt32 = 200, offset: UInt32 = 0) async -> [Channel] {
+    /// `list` is which favourites list `favoritesOnly` shows and each channel's
+    /// `favorite` answers for: the default Favourites when nil.
+    func channels(group: String?, favoritesOnly: Bool = false, list: String? = nil,
+                  limit: UInt32 = 200, offset: UInt32 = 0) async -> [Channel] {
         let profile = profileId
         return await call([]) {
-            try $0.channels(profileId: profile, group: group, favoritesOnly: favoritesOnly, limit: limit, offset: offset)
+            try $0.channels(profileId: profile, group: group, favoritesOnly: favoritesOnly,
+                            favoritesList: list, limit: limit, offset: offset)
         }
     }
 
-    /// Returns whether the channel is a favourite now.
-    func toggleFavorite(channelId: Int64) async -> Bool? {
+    /// Into or out of `list` (the default Favourites when nil); a new name makes a new
+    /// list. Returns whether the channel is in that list now.
+    func toggleFavorite(channelId: Int64, list: String? = nil) async -> Bool? {
         let profile = profileId
-        return await call(nil) { try $0.toggleFavorite(profileId: profile, channelId: channelId) }
+        return await call(nil) { try $0.toggleFavorite(profileId: profile, channelId: channelId, list: list) }
+    }
+
+    /// Favourites first (always there), then the named lists alphabetically.
+    func favoriteLists() async -> [FavoriteList] {
+        let profile = profileId
+        return await call([]) { try $0.favoriteLists(profileId: profile) }
+    }
+
+    func renameFavoriteList(_ from: String, to: String) async {
+        let profile = profileId
+        _ = await call(0) { try $0.renameFavoriteList(profileId: profile, from: from, to: to) }
+    }
+
+    func deleteFavoriteList(_ name: String) async {
+        let profile = profileId
+        _ = await call(0) { try $0.deleteFavoriteList(profileId: profile, name: name) }
+    }
+
+    /// Save a list in the order on screen.
+    func reorderFavorites(list: String?, channelIds: [Int64]) async {
+        let profile = profileId
+        _ = await call(0) { try $0.reorderFavorites(profileId: profile, list: list, channelIds: channelIds) }
     }
 
     /// The guide grid for the channels on screen, over `from..to`.

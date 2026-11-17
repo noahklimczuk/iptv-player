@@ -116,7 +116,7 @@ fn a_real_panel_is_imported_listed_guided_and_tuned() {
     // Listing and groups.
     let groups = core.channel_groups().unwrap();
     assert!(!groups.is_empty(), "channels arrived with no groups");
-    let first = core.channels(1, None, false, 50, 0).unwrap();
+    let first = core.channels(1, None, false, None, 50, 0).unwrap();
     assert!(!first.is_empty());
 
     // The password is in the Keychain stand-in, not in the database.
@@ -180,7 +180,7 @@ fn a_real_panel_is_imported_listed_guided_and_tuned() {
 
     // Removing the panel takes its password with it.
     assert!(core.remove_provider(id).unwrap());
-    assert!(core.channels(1, None, false, 5, 0).unwrap().is_empty());
+    assert!(core.channels(1, None, false, None, 5, 0).unwrap().is_empty());
 }
 
 /// An error message with the login taken out, in case one ever carries a URL.

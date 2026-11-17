@@ -157,7 +157,7 @@ mod tests {
         }
         let names = || -> Vec<String> {
             let mut n: Vec<_> = core
-                .channels(1, None, false, 100, 0)
+                .channels(1, None, false, None, 100, 0)
                 .unwrap()
                 .into_iter()
                 .map(|c| c.name)

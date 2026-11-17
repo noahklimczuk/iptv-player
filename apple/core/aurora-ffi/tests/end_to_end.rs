@@ -187,7 +187,7 @@ fn a_playlist_is_imported_listed_and_tuned() {
         .collect();
     assert_eq!(groups, vec!["News".to_string(), "Sport".to_string()]);
 
-    let news = core.channels(1, Some("News".into()), false, 50, 0).unwrap();
+    let news = core.channels(1, Some("News".into()), false, None, 50, 0).unwrap();
     assert_eq!(news.len(), 1);
     assert_eq!(news[0].name, "Aurora News HD");
     assert!(
@@ -209,11 +209,34 @@ fn a_playlist_is_imported_listed_and_tuned() {
     assert_eq!(option("cache-secs").as_deref(), Some("8"));
 
     // Favourites are per profile, and the list filter honours them.
-    assert!(core.toggle_favorite(1, news[0].id).unwrap());
-    let favourites = core.channels(1, None, true, 50, 0).unwrap();
+    assert!(core.toggle_favorite(1, news[0].id, None).unwrap());
+    let favourites = core.channels(1, None, true, None, 50, 0).unwrap();
     assert_eq!(favourites.len(), 1);
     assert!(favourites[0].favorite);
-    assert!(!core.toggle_favorite(1, news[0].id).unwrap());
+    assert!(!core.toggle_favorite(1, news[0].id, None).unwrap());
+
+    // Named lists, as on Windows: a list exists once something is in it, the default
+    // is always offered, the flag answers for the list asked about, and a list keeps
+    // the order it was given.
+    let sport = core.channels(1, Some("Sport".into()), false, None, 50, 0).unwrap();
+    let names = |core: &AuroraCore| -> Vec<(String, u32)> {
+        core.favorite_lists(1).unwrap().into_iter().map(|l| (l.name, l.channels)).collect()
+    };
+    assert_eq!(names(&core).len(), 1, "only the default, empty: {:?}", names(&core));
+    assert!(core.toggle_favorite(1, news[0].id, Some("Evening".into())).unwrap());
+    assert!(core.toggle_favorite(1, sport[0].id, Some("Evening".into())).unwrap());
+    assert!(names(&core).contains(&("Evening".to_string(), 2)));
+    let evening = core.channels(1, None, true, Some("Evening".into()), 50, 0).unwrap();
+    assert_eq!(evening.iter().map(|c| c.id).collect::<Vec<_>>(), vec![news[0].id, sport[0].id]);
+    assert!(evening.iter().all(|c| c.favorite));
+    assert!(core.channels(1, None, true, None, 50, 0).unwrap().is_empty(), "not in the default");
+    core.reorder_favorites(1, Some("Evening".into()), vec![sport[0].id, news[0].id]).unwrap();
+    let evening = core.channels(1, None, true, Some("Evening".into()), 50, 0).unwrap();
+    assert_eq!(evening.iter().map(|c| c.id).collect::<Vec<_>>(), vec![sport[0].id, news[0].id]);
+    assert_eq!(core.rename_favorite_list(1, "Evening".into(), "Nights".into()).unwrap(), 2);
+    assert!(names(&core).contains(&("Nights".to_string(), 2)));
+    assert_eq!(core.delete_favorite_list(1, "Nights".into()).unwrap(), 2);
+    assert_eq!(names(&core).len(), 1);
 
     // The import indexed the channels for search.
     let found = core.search("sport".into(), 10).unwrap();
@@ -248,7 +271,7 @@ fn a_playlist_is_imported_listed_and_tuned() {
     // The guide arrived from the playlist's own url-tvg, and the grid shows it: only the
     // rows asked for, one per channel in order, the aired programme replayable.
     let sport_id = core
-        .channels(1, Some("Sport".into()), false, 50, 0)
+        .channels(1, Some("Sport".into()), false, None, 50, 0)
         .unwrap()[0]
         .id;
     let rows = core

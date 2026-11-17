@@ -50,7 +50,7 @@ pub use error::{AuroraError, Result};
 pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
 pub use guide::{GuideCell, GuideRow, NowNext, Programme};
 pub use home::{CatalogItem, Rail, RailItem, RailPage, RailProgress};
-pub use library::{Channel, ChannelGroup};
+pub use library::{Channel, ChannelGroup, FavoriteList};
 pub use metadata::{Coverage, Credit, MetadataListener, MetadataReport, MetadataStatus};
 pub use mylist::{ItemMarks, ListKind, MyList};
 pub use playback::{LiveTune, MpvOption, PlayableSource};

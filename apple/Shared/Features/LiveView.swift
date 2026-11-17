@@ -4,6 +4,8 @@ import SwiftUI
 struct LiveView: View {
     @Environment(AppModel.self) private var model
     @State private var addingProvider = false
+    /// Favourites first, then the profile's named lists (Windows' sidebar entries).
+    @State private var lists: [FavoriteList] = []
 
     var body: some View {
         NavigationStack {
@@ -23,8 +25,17 @@ struct LiveView: View {
                     )
                 }
                 Section {
-                    NavigationLink { ChannelListView(group: nil, favoritesOnly: true) } label: {
-                        Label("Favourites", systemImage: "heart")
+                    ForEach(lists, id: \.name) { list in
+                        let named = list.name == defaultFavorites ? nil : list.name
+                        NavigationLink {
+                            ChannelListView(group: nil, favoritesOnly: true, list: named)
+                        } label: {
+                            LabeledContent {
+                                Text("\(list.channels)")
+                            } label: {
+                                Label(named ?? "Favourites", systemImage: "heart")
+                            }
+                        }
                     }
                     NavigationLink("All channels") { ChannelListView(group: nil) }
                     ForEach(model.groups, id: \.name) { group in
@@ -44,9 +55,17 @@ struct LiveView: View {
                 NavigationStack { AddProviderView() }
             }
             .task { await model.reload() }
+            // Every time the screen comes back: a list made or emptied in a channel list
+            // shows here at once.
+            .task(id: model.profileId) { lists = await model.favoriteLists() }
+            .onAppear { Task { lists = await model.favoriteLists() } }
         }
     }
 }
+
+/// The default list's stored name (`aurora_db::repo::lists::FAVORITES`), shown as
+/// "Favourites".
+let defaultFavorites = "Favorites"
 
 private struct ImportProgressRow: View {
     let progress: AppModel.ImportProgress
@@ -65,12 +84,24 @@ private struct ImportProgressRow: View {
 
 struct ChannelListView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
     let group: String?
     var favoritesOnly = false
+    /// Which favourites list: the heart means "in this list" wherever it is pressed, as on
+    /// Windows. Nil is the default Favourites.
+    var list: String?
     @State private var channels: [Channel] = []
     @State private var guide: [Int64: NowNext] = [:]
     @State private var playing: PlayerItem?
     @State private var guideFor: Channel?
+    /// "Add to a new list…" is asking for a name for this channel.
+    @State private var newListFor: Channel?
+    @State private var newListName = ""
+    @State private var renaming = false
+    @State private var renameTo = ""
+    @State private var confirmingDelete = false
+
+    private var listTitle: String { list ?? "Favourites" }
 
     var body: some View {
         List(channels, id: \.id) { channel in
@@ -80,39 +111,117 @@ struct ChannelListView: View {
                 ChannelRow(channel: channel, guide: guide[channel.id])
             }
             // Long-press on the Siri Remote, long-press or right-click on iPhone and iPad.
-            .contextMenu {
-                Button(channel.hasCatchup ? "Guide and catch-up" : "Guide", systemImage: "calendar") {
-                    guideFor = channel
-                }
-                Button(channel.favorite ? "Remove from Favourites" : "Add to Favourites",
-                       systemImage: channel.favorite ? "heart.slash" : "heart") {
-                    Task { await toggle(channel) }
-                }
-            }
+            .contextMenu { menu(for: channel) }
         }
         .overlay {
             if favoritesOnly && channels.isEmpty {
-                ContentUnavailableView("No favourites yet", systemImage: "heart",
+                ContentUnavailableView(list == nil ? "No favourites yet" : "\(listTitle) is empty",
+                                       systemImage: "heart",
                                        description: Text("Long-press a channel to add it."))
             }
         }
-        .navigationTitle(favoritesOnly ? "Favourites" : group ?? "All channels")
-        .task {
-            channels = await model.channels(group: group, favoritesOnly: favoritesOnly)
-            let answer = await model.nowNext(channelIds: channels.map(\.id))
-            guide = Dictionary(answer.map { ($0.channelId, $0) }, uniquingKeysWith: { a, _ in a })
+        .navigationTitle(favoritesOnly ? listTitle : group ?? "All channels")
+        .toolbar {
+            // A named list can be renamed or deleted; the default is always there.
+            if favoritesOnly, list != nil {
+                Menu("List", systemImage: "ellipsis.circle") {
+                    Button("Rename list", systemImage: "pencil") { renameTo = listTitle; renaming = true }
+                    Button("Delete list", systemImage: "trash", role: .destructive) { confirmingDelete = true }
+                }
+            }
         }
+        .task { await load() }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
         .navigationDestination(item: $guideFor) { ChannelGuideView(channel: $0) }
+        .alert("Add to a new list", isPresented: Binding(get: { newListFor != nil }, set: { if !$0 { newListFor = nil } })) {
+            TextField("List name", text: $newListName)
+            Button("Add") {
+                // Read now: closing the alert clears `newListFor` before a task would run.
+                guard let channel = newListFor else { return }
+                let name = newListName
+                Task { await addToNewList(channel, name: name) }
+            }
+            Button("Cancel", role: .cancel) { newListFor = nil }
+        } message: {
+            if let channel = newListFor { Text("Add \(channel.name) to a new list called:") }
+        }
+        .alert("Rename list", isPresented: $renaming) {
+            TextField("List name", text: $renameTo)
+            Button("Rename") { let name = renameTo; Task { await rename(to: name) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete \(listTitle)?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete list", role: .destructive) { Task { await deleteList() } }
+        } message: {
+            Text("The channels stay in your library; only this list goes.")
+        }
+    }
+
+    @ViewBuilder private func menu(for channel: Channel) -> some View {
+        Button(channel.hasCatchup ? "Guide and catch-up" : "Guide", systemImage: "calendar") {
+            guideFor = channel
+        }
+        Button(channel.favorite ? "Remove from \(listTitle)" : "Add to \(listTitle)",
+               systemImage: channel.favorite ? "heart.slash" : "heart") {
+            Task { await toggle(channel) }
+        }
+        Button("Add to a new list…", systemImage: "plus") {
+            newListName = ""
+            newListFor = channel
+        }
+        // The order of a list is the viewer's own (Windows drags it); everywhere else
+        // it is the provider's numbering.
+        if favoritesOnly, let i = channels.firstIndex(where: { $0.id == channel.id }) {
+            if i > 0 {
+                Button("Move up", systemImage: "arrow.up") { Task { await move(from: i, to: i - 1) } }
+            }
+            if i < channels.count - 1 {
+                Button("Move down", systemImage: "arrow.down") { Task { await move(from: i, to: i + 1) } }
+            }
+        }
+    }
+
+    private func load() async {
+        channels = await model.channels(group: group, favoritesOnly: favoritesOnly, list: list)
+        let answer = await model.nowNext(channelIds: channels.map(\.id))
+        guide = Dictionary(answer.map { ($0.channelId, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     private func toggle(_ channel: Channel) async {
-        guard let now = await model.toggleFavorite(channelId: channel.id) else { return }
+        guard let now = await model.toggleFavorite(channelId: channel.id, list: list) else { return }
         if favoritesOnly && !now {
             channels.removeAll { $0.id == channel.id }
         } else if let i = channels.firstIndex(where: { $0.id == channel.id }) {
             channels[i].favorite = now
         }
+    }
+
+    /// A list exists once something is in it, so making one and filling it are the same
+    /// step, as on Windows.
+    private func addToNewList(_ channel: Channel, name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != list else { return }
+        _ = await model.toggleFavorite(channelId: channel.id, list: name)
+    }
+
+    private func move(from: Int, to: Int) async {
+        var next = channels
+        next.insert(next.remove(at: from), at: to)
+        channels = next
+        await model.reorderFavorites(list: list, channelIds: next.map(\.id))
+    }
+
+    private func rename(to name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let from = list, !name.isEmpty, name != from else { return }
+        await model.renameFavoriteList(from, to: name)
+        dismiss() // back to Live TV, which lists it under its new name
+    }
+
+    private func deleteList() async {
+        guard let name = list else { return }
+        await model.deleteFavoriteList(name)
+        dismiss()
     }
 }
 
