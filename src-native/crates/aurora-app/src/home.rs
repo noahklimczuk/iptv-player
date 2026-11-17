@@ -244,7 +244,15 @@ pub fn rails(services: &Services, args: RailsArgs) -> Result<Vec<Rail>> {
         }
     }
     let (inputs, progress_map) = gather(&db, args.profile_id, seed)?;
+    // Scoring reads nothing from the library, and is the larger half of a build: on a
+    // real 33,729-title library, 244-293 ms of scoring against 125-136 ms of reading.
+    // The connection was held through it, so a rebuild after watching something (the
+    // progress changed, so the cache misses) kept it for 0.8-2.7 s. Let it go meanwhile.
+    // A title a refresh removes in between is skipped by `hydrate`, and the stamp taken
+    // above is older than anything that happens now, so the next visit rebuilds.
+    drop(db);
     let built = feed::build(&inputs);
+    let db = services.read();
 
     let mut out = Vec::with_capacity(built.len());
     for rail in &built {
@@ -530,5 +538,45 @@ mod tests {
         assert_eq!(string_key((Kind::Series, 7)), "series:7");
         assert_eq!(parse_kind("series"), Some(Kind::Series));
         assert_eq!(parse_kind("channel"), None);
+    }
+
+    /// Where a home build's time goes, on a copy of a real library named by
+    /// `AURORA_HOME_DB`. Ignored: there is no such library in CI.
+    #[test]
+    #[ignore]
+    fn probe_where_a_home_build_spends_its_time() {
+        use std::time::Instant;
+        let path = std::env::var("AURORA_HOME_DB").expect("AURORA_HOME_DB");
+        let db = aurora_db::open(&path).unwrap();
+        let profile: i64 = db
+            .query_row("SELECT id FROM profiles ORDER BY id LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        for round in 0..2 {
+            let t = Instant::now();
+            let filter = LibraryFilter::load(&db).unwrap();
+            let _ = store::stamp(&db, profile, &filter).unwrap();
+            let stamp_ms = t.elapsed().as_millis();
+            let t = Instant::now();
+            let items = store::items(&db, &filter).unwrap();
+            let items_ms = t.elapsed().as_millis();
+            let t = Instant::now();
+            let (inputs, progress) = gather(&db, profile, 1).unwrap();
+            let gather_ms = t.elapsed().as_millis();
+            let t = Instant::now();
+            let built = feed::build(&inputs);
+            let build_ms = t.elapsed().as_millis();
+            let t = Instant::now();
+            for rail in &built {
+                page_of(&db, rail, &progress, 0, FIRST_PAGE).unwrap();
+            }
+            let pages_ms = t.elapsed().as_millis();
+            eprintln!(
+                "round {round}: stamp {stamp_ms} ms, items {items_ms} ms ({} rows),                  gather {gather_ms} ms (items included), score {build_ms} ms,                  first pages {pages_ms} ms ({} rails)",
+                items.len(),
+                built.len()
+            );
+        }
     }
 }
