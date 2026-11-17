@@ -41,10 +41,10 @@ test('playback settings opens speed and aspect, which nothing could reach before
     'true',
   );
 
-  // So does the aspect ratio.
+  // So does the aspect ratio, and the list marks it as the current choice (C13).
   await panel.getByRole('button', { name: '4:3' }).click();
-  await expect.poll(async () =>
-    panel.getByRole('button', { name: '4:3' }).getAttribute('aria-pressed')).toBe(null);
+  await expect(panel.getByRole('button', { name: '4:3' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.getByRole('button', { name: 'Auto' })).toHaveAttribute('aria-pressed', 'false');
   await page.screenshot({ path: `${SHOTS}/52-playback-settings.png` });
 });
 

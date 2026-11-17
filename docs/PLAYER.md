@@ -254,3 +254,10 @@ are kept, so that nothing outside the player has to change. Everything behind th
    live, VOD (MKV, MP4), an episode with Up Next, catch-up, timeshift, PiP, multi-view.
 
 Each step is its own PR and merges only on green CI.
+
+Step 3 is two PRs. **3a** is the overlay: `PlayerOverlay`, `Dock`, `Scrub`, `Panels`,
+`WatchMenu`, `useChrome`, the rules in `model.ts` and the commands in `playerControl.ts`,
+with the key map (`useHotkeys`) and fullscreen (`useFullscreen`) it depends on. It covers
+C1–C18, C24–C29 and C31–C34; `tests-e2e/player-rebuild.spec.ts` has a test for each one
+no older journey covers. **3b** is the pieces around it: the channel banner and number
+entry (C19–C21), Skip and Up Next (C22, C23), PiP and the guide preview (C30).

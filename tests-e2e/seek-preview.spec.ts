@@ -34,6 +34,10 @@ async function settled(page: Page, name: string) {
 
 /** Hover the bar `fraction` of the way along. */
 async function hoverAt(page: Page, slider: string, fraction: number) {
+  // Wake the controls the way a viewer would. They hide 3.2 s after the last input, and
+  // the first hover here comes after a three-second wait with none.
+  await page.mouse.move(640, 300);
+  await page.mouse.move(645, 305);
   const box = await settled(page, slider);
   await page.mouse.move(box.x + box.width * fraction, box.y + box.height / 2);
 }

@@ -54,7 +54,7 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
-import { invoke, onMosaicState } from '@/ipc';
+import { invoke, onMosaicState, onSleepFired } from '@/ipc';
 import { notify, report } from '@/lib/errors';
 import { useMarks } from '@/state/marks';
 import { useProfile } from '@/state/profile';
@@ -451,6 +451,31 @@ export default function App() {
   const fullscreen = useFullscreen();
 
   /**
+   * Leaving the player always leaves fullscreen (C15).
+   *
+   * Every way out ends here: Back, Escape, the Back button, a sleep timer stopping
+   * playback, Open settings on an error, the guide, any other page, and the player going
+   * to a corner as picture-in-picture. Keyed on the player being on screen rather than
+   * on its status, because a film ending before Up Next starts the next one, or a live
+   * stream failing over to another source, passes through idle and error on the way and
+   * is still the viewer watching.
+   */
+  const watching = playerOpen && !pipOn;
+  const wasWatching = useRef(watching);
+  const leaveFullscreen = fullscreen.leave;
+  useEffect(() => {
+    if (wasWatching.current && !watching) leaveFullscreen();
+    wasWatching.current = watching;
+  }, [watching, leaveFullscreen]);
+
+  // The sleep timer stopped playback: the player has nothing left to show (C15).
+  const closePlayerNow = useRef(closePlayer);
+  closePlayerNow.current = closePlayer;
+  useEffect(() => onSleepFired((d) => {
+    if (d.action === 'stopPlayback') closePlayerNow.current();
+  }), []);
+
+  /**
    * Play something the assistant offered (README §8.5).
    *
    * Straight to `player.play` rather than through `play`, which takes a whole
@@ -552,9 +577,13 @@ export default function App() {
     onLastChannel: () => zapper.lastChannel(),
     onGuide: () => { closePlayer(); navigate('/guide'); },
     onPalette: () => useUi.getState().setPalette(true),
+    // Escape peels one layer at a time: a detail panel, a mosaic, fullscreen (C16),
+    // then the player. An open watch-settings menu is closed before any of these, by
+    // the player itself.
     onBack: () => {
       if (useUi.getState().detail) useUi.getState().openDetail(null);
       else if (mosaicOpen) closeMosaic();
+      else if (playerOpen && !pipOn && fullscreen.fullscreen) fullscreen.leave();
       else if (playerOpen) closePlayer();
     },
     onPlayPause: () => {
@@ -582,7 +611,11 @@ export default function App() {
       }
       control.togglePause();
     },
-    onSeek: (secs: number) => control.seekBy(secs),
+    // Only for a player on screen (C32): the guide's arrows move around the guide,
+    // and a preview playing beside it must not seek or change volume as they do.
+    onSeek: (secs: number) => {
+      if (playerOpen || pipOn) control.seekBy(secs);
+    },
     /**
      * Volume, with a floor.
      *
@@ -593,7 +626,9 @@ export default function App() {
      * `volume.min(200)` -- and only the bottom was missing (R-85).
      */
     // Clamped at both ends in `changeVolume` (R-85: a u32 refuses -5).
-    onVolume: (delta: number) => control.changeVolume(delta),
+    onVolume: (delta: number) => {
+      if (playerOpen || pipOn) control.changeVolume(delta);
+    },
     onMute: () => control.toggleMute(),
     onFullscreen: fullscreen.toggle,
     /**
@@ -609,6 +644,11 @@ export default function App() {
     onInfo: () => {
       const p = useUi.getState().player;
       if (!p) return;
+      // In the player, I is the stats panel (C18).
+      if (playerOpen && !pipOn) {
+        useUi.getState().togglePlayerStats();
+        return;
+      }
       if (p.isLive) {
         if (p.channelId != null) useUi.getState().showBanner(p.channelId);
         return;
@@ -631,7 +671,9 @@ export default function App() {
     // back to back, but churn on the hottest path in the app (R-134).
     //
     // The same pattern `closePlayer` and the banner effect already use.
-  }), [zapper, navigate, playerOpen, closePlayer, fullscreen.toggle, mosaicOpen, closeMosaic, togglePip]);
+  }), [
+    zapper, navigate, playerOpen, pipOn, closePlayer, fullscreen, mosaicOpen, closeMosaic, togglePip,
+  ]);
 
   useHotkeys(handlers, !ui.paletteOpen);
 

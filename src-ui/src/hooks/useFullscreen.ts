@@ -1,24 +1,30 @@
 /**
- * Whether the window is fullscreen, and one way to change it.
+ * Whether the window is fullscreen, and the ways to change it (C14–C16).
  *
- * Shared rather than local to the button, because there are two ways in — the OSD button
- * and the `f` key — and a button that keeps its own copy of the answer starts lying as
- * soon as somebody uses the other one.
+ * One copy of the answer for the whole app, because there are several ways in (the
+ * dock's button, F, F11, a double click on the picture) and one way out that nobody
+ * presses: leaving the player leaves fullscreen (C15).
  *
- * The state is what the host reports back, not what was asked for: `window.fullscreen`
- * returns the state it ended up in, so a request the window manager refuses leaves the
- * label describing what is actually on screen.
+ * The state is what the window ended up in, not what was asked for: `window.fullscreen`
+ * answers with the state it reached, and in a browser `fullscreenchange` reports Escape
+ * and F11 handled by the browser itself.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke, isNativeHost } from '@/ipc';
 import { report } from '@/lib/errors';
 
-export function useFullscreen(): { fullscreen: boolean; toggle: () => void } {
-  const [fullscreen, setFullscreen] = useState(false);
+export interface Fullscreen {
+  fullscreen: boolean;
+  toggle: () => void;
+  /** Leave fullscreen if in it. Safe to call at any time, as often as wanted. */
+  leave: () => void;
+}
 
-  // Escape and F11 leave fullscreen without going through either of our paths, and in a
-  // browser the DOM is the only thing that knows. Under the native host this event does
-  // not fire, and the returned value from `toggle` is what keeps the state honest.
+export function useFullscreen(): Fullscreen {
+  const [fullscreen, setFullscreen] = useState(false);
+  const known = useRef(false);
+  known.current = fullscreen;
+
   useEffect(() => {
     if (isNativeHost()) return;
     const sync = () => setFullscreen(document.fullscreenElement !== null);
@@ -26,11 +32,26 @@ export function useFullscreen(): { fullscreen: boolean; toggle: () => void } {
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
-  const toggle = useCallback(() => {
-    void invoke('window.fullscreen', {})
+  const set = useCallback((want: boolean | undefined) => {
+    void invoke('window.fullscreen', want === undefined ? {} : { fullscreen: want })
       .then(setFullscreen)
       .catch(report('Could not change fullscreen'));
   }, []);
 
-  return { fullscreen, toggle };
+  const toggle = useCallback(() => set(undefined), [set]);
+
+  const leave = useCallback(() => {
+    // Under the native host the window may be fullscreen without this hook having
+    // seen it happen, so it is always asked; the command is idempotent. In a browser
+    // the document knows, and leaving when not fullscreen is a refused promise.
+    if (isNativeHost() ? true : document.fullscreenElement !== null || known.current) {
+      // Marked at once, not when the window answers: a second Escape pressed before the
+      // answer arrives is the viewer leaving the player, not leaving fullscreen again.
+      known.current = false;
+      setFullscreen(false);
+      set(false);
+    }
+  }, [set]);
+
+  return { fullscreen, toggle, leave };
 }
