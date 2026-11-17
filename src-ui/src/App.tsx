@@ -468,6 +468,33 @@ export default function App() {
     wasWatching.current = watching;
   }, [watching, leaveFullscreen]);
 
+  /**
+   * The player takes the keyboard from whatever opened it, and gives it back after.
+   *
+   * Playing from the title dialog closes it, and the dialog hands focus back to the
+   * poster that opened it (`useFocusTrap`). The poster plays on Space, and so does any
+   * focused button, so the poster stayed focused behind the picture and every Space
+   * pressed while the film was still opening played it again. Each one restarted the
+   * stream on a line that allows one connection: the start went from about 3 s to
+   * 11–45 s on the real line, with pause doing nothing. The overlay takes no focus of
+   * its own (the global key map is how the keyboard reaches it), so nothing else ever
+   * moved focus off the opener.
+   */
+  const focusBeforePlayer = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (watching) {
+      const el = document.activeElement;
+      if (el instanceof HTMLElement && el !== document.body && !el.closest('[data-player-overlay]')) {
+        focusBeforePlayer.current = el;
+        el.blur();
+      }
+      return;
+    }
+    const el = focusBeforePlayer.current;
+    focusBeforePlayer.current = null;
+    if (el && document.contains(el)) el.focus({ preventScroll: true });
+  }, [watching]);
+
   // The sleep timer stopped playback: the player has nothing left to show (C15).
   const closePlayerNow = useRef(closePlayer);
   closePlayerNow.current = closePlayer;
