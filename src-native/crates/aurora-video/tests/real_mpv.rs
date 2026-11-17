@@ -75,6 +75,38 @@ fn a_local_film_plays_seeks_pauses_and_gives_a_frame() {
 
 #[test]
 #[ignore]
+fn paused_before_it_opens_it_opens_paused_and_resumes() {
+    let e = engine();
+    e.load(Request {
+        url: video(),
+        cache_secs: 10,
+        ..Request::default()
+    })
+    .unwrap();
+    // At once, as Space pressed on the way in does: before mpv has opened the file.
+    assert_eq!(e.set_paused(true).unwrap().status, Status::Paused);
+    let r = until(&e, "opened, still paused", 20, |r| {
+        r.status == Status::Paused && r.duration_secs > 1.0
+    });
+    std::thread::sleep(Duration::from_millis(1500));
+    let held = e.report();
+    assert_eq!(held.status, Status::Paused);
+    assert!(
+        (held.position_secs - r.position_secs).abs() < 0.2,
+        "it played while paused: {} then {}",
+        r.position_secs,
+        held.position_secs
+    );
+    e.set_paused(false).unwrap();
+    until(&e, "playing with a picture", 20, |r| {
+        r.status == Status::Playing && r.has_picture && r.position_secs > held.position_secs
+    });
+    e.stop().unwrap();
+    e.shutdown();
+}
+
+#[test]
+#[ignore]
 fn nothing_listening_is_an_error_with_a_reason() {
     let e = engine();
     e.load(Request {
