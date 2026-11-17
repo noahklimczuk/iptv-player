@@ -27,6 +27,7 @@ pub mod redact;
 pub mod rules;
 pub mod series;
 pub mod sources;
+pub mod sync_settings;
 pub mod timeshift;
 pub mod title;
 pub mod tmdb;

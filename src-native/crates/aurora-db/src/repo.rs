@@ -18,3 +18,4 @@ pub mod recommend;
 pub mod search;
 pub mod settings;
 pub mod sources;
+pub mod sync;
