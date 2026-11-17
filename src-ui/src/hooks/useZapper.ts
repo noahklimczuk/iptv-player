@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel } from '@shared/ipc';
 import { invoke } from '@/ipc';
-import { report } from '@/lib/errors';
+import { notify, report } from '@/lib/errors';
 import { useUi } from '@/state/ui';
 import { stepIndex } from './zap';
 
@@ -144,6 +144,7 @@ export function useZapper(channels: Channel[], options: ZapperOptions = {}) {
     // put them back on the number they had already moved on from.
     if (intent.current !== mine) return;
     if (hit) tune(hit);
+    else notify(`There is no channel ${n}`);
   }, [digits, clearDigits, tune]);
 
   useEffect(() => {

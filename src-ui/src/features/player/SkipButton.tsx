@@ -1,12 +1,13 @@
 /**
- * Skip Intro / Skip Recap / Skip Credits (README §9).
+ * Skip Intro / Recap / Credits (docs/PLAYER.md C22).
  *
- * Appears only while the playhead is inside a marker, sits clear of the transport bar,
- * and seeks to the end of the region. When the viewer has asked this show to always
- * skip, it performs the jump itself instead of waiting to be pressed — once per region,
- * so scrubbing back into an intro does not fight the viewer.
+ * Shown only while the playhead is inside a marked stretch, and pressing it seeks to the
+ * stretch's end. A marker the library learned from the viewer's own skips says so. When
+ * the viewer has asked this show to always skip, the jump happens by itself, once per
+ * stretch, so seeking back into an intro does not throw them forward again. The parent
+ * keys this on the episode, so that memory is per episode.
  */
-import { AnimatePresence, motion } from 'framer-motion';
+import './player.css';
 import { useEffect, useRef } from 'react';
 import type { MarkerKind, SkipMarker } from '@shared/ipc';
 import { Icon } from '@/components/Icon';
@@ -21,66 +22,33 @@ export function SkipButton({
   marker, autoSkip, onSkip,
 }: {
   marker: SkipMarker | null;
-  /** The viewer has asked this show to skip this kind automatically. */
   autoSkip: boolean;
   onSkip: (marker: SkipMarker, automatic: boolean) => void;
 }) {
-  // Remember which regions we already auto-skipped, so seeking back in does not
-  // immediately yank the viewer forward again.
-  const autoSkipped = useRef(new Set<string>());
+  const skipped = useRef(new Set<string>());
 
   useEffect(() => {
     if (!marker || !autoSkip) return;
     const key = `${marker.kind}:${marker.startSecs}`;
-    if (autoSkipped.current.has(key)) return;
-    autoSkipped.current.add(key);
+    if (skipped.current.has(key)) return;
+    skipped.current.add(key);
     onSkip(marker, true);
   }, [marker, autoSkip, onSkip]);
 
+  if (!marker) return null;
+  const learned = marker.source === 'learned';
   return (
-    <AnimatePresence>
-      {marker && (
-        <motion.button
-          key={`${marker.kind}-${marker.startSecs}`}
-          initial={{ opacity: 0, y: 6, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 6, scale: 0.98 }}
-          transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          onClick={() => onSkip(marker, false)}
-          aria-label={LABELS[marker.kind]}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--sp-2)',
-            // A glass pill just above the dock.
-            padding: '13px 24px',
-            borderRadius: 'var(--r-full)',
-            border: 'none',
-            background: 'var(--dock-bg)',
-            color: 'var(--dock-text)',
-            fontSize: 'var(--fs-md)',
-            fontWeight: 800,
-            cursor: 'pointer',
-            boxShadow: 'var(--shadow-dock)',
-          }}
-        >
-          <Icon name="skip" size={18} filled />
-          {LABELS[marker.kind]}
-          {marker.source === 'learned' && (
-            <span
-              title="Learned from your earlier skips in this show"
-              style={{
-                fontSize: 'var(--fs-xs)',
-                fontWeight: 600,
-                color: 'var(--dock-accent)',
-                opacity: 0.9,
-              }}
-            >
-              learned
-            </span>
-          )}
-        </motion.button>
-      )}
-    </AnimatePresence>
+    <button
+      key={`${marker.kind}-${marker.startSecs}`}
+      type="button"
+      className="pl-skip"
+      aria-label={LABELS[marker.kind]}
+      title={learned ? 'Learned from your skips in this show' : LABELS[marker.kind]}
+      onClick={() => onSkip(marker, false)}
+    >
+      <Icon name="skip" size={18} filled />
+      <span>{LABELS[marker.kind]}</span>
+      {learned && <span className="pl-skip-learned">Learned from your skips</span>}
+    </button>
   );
 }

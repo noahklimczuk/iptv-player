@@ -1,161 +1,82 @@
 /**
- * The set-top-box channel banner (README §7.2): number, logo, name, current programme
- * with a progress bar and time range, and "Next: …". Appears on every zap, then fades.
+ * The channel banner and number entry (docs/PLAYER.md C19, C20).
+ *
+ * The banner appears on every zap: the channel's number, logo and name, what is on now
+ * with its time range and how far through it is, and what is on next. Over the player it
+ * sits at the top, clear of the dock; elsewhere at the foot of the page.
  */
-import { AnimatePresence, motion } from 'framer-motion';
+import './player.css';
 import type { Channel } from '@shared/ipc';
-import { Badge, ChannelTile, ProgressBar } from '@/components/Primitives';
+import { ChannelTile } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
-import { progressPct } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
 
 export function ChannelBanner({
   channel, liftForOsd = false,
 }: {
   channel: Channel | null;
-  /** Raise the banner clear of the player's transport bar when the OSD is showing. */
+  /** The player is open: sit at the top, clear of its dock. */
   liftForOsd?: boolean;
 }) {
-  // Bound to the 12/24-hour preference, shadowing the pure import (R-136).
-  const clockTime = useClockTime();
-  const { data } = useCommand('epg.nowNext', { channelId: channel?.id ?? 0 }, [channel?.id]);
-  const now = Math.floor(Date.now() / 1000);
-  const pct = data?.now
-    ? progressPct(now - data.now.start, data.now.stop - data.now.start)
+  const clock = useClockTime();
+  const { data } = useCommand('epg.nowNext', { channelId: channel?.id ?? 0 }, [channel?.id], channel != null);
+  if (!channel) return null;
+
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const on = data?.now ?? null;
+  const next = data?.next ?? null;
+  const through = on
+    ? Math.min(100, Math.max(0, ((nowSecs - on.start) / Math.max(1, on.stop - on.start)) * 100))
     : 0;
 
   return (
-    <AnimatePresence>
-      {channel && (
-        <motion.div
-          data-testid="channel-banner"
-          initial={{ opacity: 0, y: liftForOsd ? -8 : 12 }} animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: liftForOsd ? -8 : 12 }}
-          transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-          style={{
-            // Daylight: a white card like the player's own. Over the player it sits at
-            // the top centre, between the channel badge and the chips, where it cannot
-            // cover the On now card or the dock; elsewhere it is at the foot of the page.
-            position: 'fixed', left: 0, right: 0,
-            ...(liftForOsd ? { top: 24 } : { bottom: 'var(--sp-6)' }),
-            zIndex: 160, pointerEvents: 'none',
-            background: 'var(--dock-bg)', color: 'var(--dock-text)',
-            borderRadius: 26, boxShadow: 'var(--shadow-dock)',
-            padding: '14px 22px 14px 14px',
-            display: 'grid', gridTemplateColumns: 'auto auto 1fr auto', gap: 16,
-            alignItems: 'center', width: liftForOsd ? 'min(560px, 40vw)' : 'min(760px, 90vw)',
-            margin: '0 auto',
-          }}
-        >
-          <ChannelTile name={channel.name} number={channel.number} logo={channel.logo} size={52} />
-          <div
-            className="dl-display"
-            style={{
-              fontSize: 'var(--fs-2xl)', color: 'var(--dock-accent)',
-              fontVariantNumeric: 'tabular-nums', lineHeight: 1,
-            }}
-          >
-            {channel.number}
-          </div>
-
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-              <strong
-                style={{
-                  fontSize: 'var(--fs-lg)', fontWeight: 800, whiteSpace: 'nowrap',
-                  overflow: 'hidden', textOverflow: 'ellipsis',
-                }}
+    <div
+      data-testid="channel-banner"
+      className={liftForOsd ? 'pl-banner pl-banner-top' : 'pl-banner pl-banner-bottom'}
+      role="status"
+      aria-live="polite"
+      aria-label={`${channel.number ?? ''} ${channel.name}${on ? `, now ${on.title}` : ''}`.trim()}
+    >
+      <ChannelTile name={channel.name} number={channel.number} logo={channel.logo} size={52} />
+      <div className="dl-display pl-banner-number">{channel.number}</div>
+      <div className="pl-banner-main">
+        <div className="pl-banner-name">
+          <strong>{channel.name}</strong>
+          {channel.quality && <span className="pl-tag pl-tag-quiet">{channel.quality}</span>}
+        </div>
+        {on ? (
+          <>
+            <div className="pl-banner-now">{on.title}</div>
+            <div className="pl-banner-time">
+              <span>{clock(on.start)}–{clock(on.stop)}</span>
+              <div
+                className="pl-progress pl-banner-progress"
+                role="progressbar"
+                aria-label="Programme progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(through)}
               >
-                {channel.name}
-              </strong>
-              {channel.quality && <Badge tone="neutral">{channel.quality}</Badge>}
-              {data?.now?.isLive && <Badge tone="live">● Live</Badge>}
-            </div>
-
-            {data?.now ? (
-              <>
-                <div
-                  style={{
-                    fontSize: 'var(--fs-md)', fontWeight: 600, whiteSpace: 'nowrap',
-                    overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}
-                >
-                  {data.now.title}
-                </div>
-                <div
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', marginTop: 5,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--dock-muted)',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    {clockTime(data.now.start)}–{clockTime(data.now.stop)}
-                  </span>
-                  <div style={{ flex: 1, maxWidth: 280 }}>
-                    <ProgressBar percent={pct} height={6} />
-                  </div>
-                </div>
-                {data.next && (
-                  <div
-                    style={{
-                      marginTop: 5, fontSize: 'var(--fs-xs)', fontWeight: 700,
-                      color: 'var(--dock-muted)',
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                    }}
-                  >
-                    Next: {clockTime(data.next.start)} {data.next.title}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--dock-muted)' }}>
-                No guide data for this channel
+                <div style={{ width: `${through}%` }} />
               </div>
-            )}
-          </div>
-
-          <div
-            style={{
-              fontSize: 'var(--fs-xl)', fontWeight: 800, color: 'var(--dock-text)',
-              fontVariantNumeric: 'tabular-nums',
-            }}
-          >
-            {clockTime(now)}
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+            </div>
+            {next && <div className="pl-banner-next">Next: {clock(next.start)} {next.title}</div>}
+          </>
+        ) : (
+          <div className="pl-banner-next">No guide data for this channel</div>
+        )}
+      </div>
+      <div className="pl-banner-clock">{clock(nowSecs)}</div>
+    </div>
   );
 }
 
-/** Direct channel-number entry overlay (README §7.2): "2 _ _". */
+/** "2 _ _" while a channel number is being typed (C20). */
 export function DigitEntry({ digits }: { digits: string }) {
+  if (!digits) return null;
   return (
-    <AnimatePresence>
-      {digits && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.97 }} transition={{ duration: 0.12 }}
-          role="status"
-          aria-live="polite"
-          aria-label={`Channel ${digits}`}
-          style={{
-            position: 'fixed', top: 'var(--sp-7)', right: 'var(--sp-7)', zIndex: 170,
-            background: 'var(--dock-bg)', color: 'var(--dock-text)',
-            border: 'none', borderRadius: 26,
-            padding: 'var(--sp-4) var(--sp-6)', boxShadow: 'var(--shadow-dock)',
-            fontFamily: 'var(--font-display)',
-            fontSize: 'var(--fs-3xl)', fontWeight: 800, letterSpacing: '0.12em',
-            fontVariantNumeric: 'tabular-nums', pointerEvents: 'none',
-          }}
-        >
-          {digits.padEnd(3, '–')}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <div className="pl-digits" role="status" aria-live="polite" aria-label={`Channel ${digits}`}>
+      {digits.padEnd(3, '–')}
+    </div>
   );
 }

@@ -689,6 +689,9 @@ export default function App() {
         .catch(report('Could not look that up'));
     },
     onPip: togglePip,
+    onEnter: () => {
+      if (useUi.getState().digits) void zapper.commitDigits();
+    },
     onNavigate: (to: string) => { closePlayer(); navigate(to); },
     // `ui` is deliberately absent. Every field the handlers read is read *when a key is
     // pressed* rather than when the memo is built — `useUi.getState()` below — so the

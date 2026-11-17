@@ -27,6 +27,8 @@ export interface HotkeyHandlers {
   onPip: () => void;
   onInfo: () => void;
   onNavigate: (to: string) => void;
+  /** Enter: commit a channel number being typed (C20). */
+  onEnter?: () => void;
 }
 
 /**
@@ -98,6 +100,7 @@ export function useHotkeys(handlers: HotkeyHandlers, enabled = true) {
         case ' ':
         case 'k': e.preventDefault(); k.onPlayPause(); break;
         case 'Escape': k.onBack(); break;
+        case 'Enter': k.onEnter?.(); break;
         case 'Backspace': e.preventDefault(); k.onLastChannel(); break;
         case 'PageUp': e.preventDefault(); k.onChannelUp(); break;
         case 'PageDown': e.preventDefault(); k.onChannelDown(); break;
