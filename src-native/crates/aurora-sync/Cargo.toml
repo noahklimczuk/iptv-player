@@ -23,3 +23,7 @@ getrandom.workspace = true
 sha2.workspace = true
 hmac = "0.12"
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# Firebase over REST (§3.1): the same blocking rustls client aurora-ingest uses, so
+# one TLS stack and nothing new for the tvOS build to get through (§5 risk 1).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+base64 = "0.22"

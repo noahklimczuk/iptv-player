@@ -20,6 +20,11 @@ pub enum SyncError {
     #[error("the sync service's daily quota is used up")]
     QuotaExhausted,
 
+    /// An account call was refused for a reason the person can act on: wrong password,
+    /// an email already registered, a weak password. The text is ready to show.
+    #[error("{0}")]
+    Account(String),
+
     /// The account's session expired or was revoked. Needs the viewer to sign in.
     #[error("sync needs you to sign in again")]
     Unauthenticated,

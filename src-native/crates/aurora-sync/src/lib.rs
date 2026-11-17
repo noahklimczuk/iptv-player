@@ -20,6 +20,7 @@
 pub mod codec;
 pub mod engine;
 pub mod error;
+pub mod firebase;
 pub mod local;
 pub mod record;
 pub mod transport;

@@ -1,0 +1,27 @@
+rules_version = '2';
+
+// Aurora sync (docs/APPLE_PORT_AND_SYNC.md §3.5).
+//
+// Defence in depth. The real protection is end-to-end encryption: every record is
+// ciphertext under a key Google never sees. These rules make sure that, on top of that,
+// a signed-in household can touch only its own documents, and nobody else can touch any.
+//
+// Layout:
+//   users/{uid}/records/{recordId}_{deviceId}   one device's copy of one record
+//   users/{uid}/meta/vault                      the passphrase-wrapped vault key
+//
+// Deploy with `firebase deploy --only firestore:rules` from the repository root.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
