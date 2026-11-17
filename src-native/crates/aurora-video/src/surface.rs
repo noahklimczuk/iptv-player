@@ -11,7 +11,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SetWindowPos, HWND_BOTTOM,
     SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, WINDOW_EX_STYLE,
-    WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS, WS_DISABLED,
+    WNDCLASSW, WS_CHILD, WS_DISABLED,
 };
 
 const CLASS: PCWSTR = w!("AuroraVideoSurface");
@@ -70,7 +70,13 @@ impl Surface {
                 WINDOW_EX_STYLE(0),
                 CLASS,
                 w!(""),
-                WS_CHILD | WS_CLIPSIBLINGS | WS_DISABLED,
+                // Never `WS_CLIPSIBLINGS`. The web view is a sibling above this one and
+                // covers the whole window, so with it the surface's visible region is
+                // empty: Windows clips every frame mpv presents, and the transparent page
+                // shows the desktop through a window with sound and no picture (1.0.81 to
+                // 1.0.84). The web view is the one that must not be drawn over, and it
+                // already is not, being above this in z-order.
+                WS_CHILD | WS_DISABLED,
                 rect.x,
                 rect.y,
                 rect.width.max(1) as i32,
