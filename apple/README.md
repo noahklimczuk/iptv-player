@@ -80,13 +80,15 @@ apple/
 ```
 
 - `apple/core` depends on `aurora-core`, `aurora-db`, `aurora-ingest` and
-  `aurora-player` **by path, read-only**. It isn't a member of the `src-native`
+  `aurora-video` **by path, read-only**. It isn't a member of the `src-native`
   workspace, so `cargo` in `src-native/` never sees it, and its lockfile can't move
   the Windows build's versions.
 - It doesn't depend on `aurora-app`, the Tauri host. That's Windows-only and stays so.
 - Swift implements the platform pieces through traits the shared crates already define:
   `SecretStore` (Keychain) feeds `aurora_ingest::credentials::CredentialStore`, and the
-  player reads `aurora_player::backend::LoadOptions::mpv_options()`.
+  player applies `aurora_video::Request::settings()`, the per-file mpv settings Windows'
+  video engine applies (only the `Request` half: the engine itself drives libmpv on
+  Windows, and MPVKit does that here).
 
 ### Where this departs from the plan
 

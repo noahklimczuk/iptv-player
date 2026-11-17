@@ -3,7 +3,7 @@
 //! Browsing and progress are straight calls into `aurora_db::repo::{library, progress}`,
 //! so the rules that matter — what counts as finished, that "finished" is sticky, which
 //! episode is next — are the shared ones. Tuning mirrors the `"movie"` and `"episode"`
-//! arms of `aurora-app/src/window.rs` `resolve_playback`.
+//! arms of `aurora-app/src/play/resolve.rs` `resolve`.
 
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ use aurora_db::repo::filtering::{Kind, LibraryFilter};
 use aurora_db::repo::library::{self, BrowseQuery, MovieSort};
 use aurora_db::repo::progress::{self, ItemKind};
 use aurora_db::rusqlite::OptionalExtension;
-use aurora_player::backend::{LoadOptions, Playing};
+use aurora_video::Request;
 
 use crate::error::{AuroraError, Result};
 use crate::playback::{mpv_options, stream_url, MpvOption, StreamRef};
@@ -20,7 +20,7 @@ use crate::{now_unix, AuroraCore};
 
 /// Network buffer for films and episodes, in seconds (README §6.1).
 ///
-/// Mirrors `aurora-app/src/window.rs` `cache_secs_for(false)`; `mirrors.rs` fails if
+/// Mirrors `aurora-app/src/play/resolve.rs` `FILM_BUFFER_SECS`; `mirrors.rs` fails if
 /// the two disagree.
 pub(crate) const VOD_CACHE_SECS: u32 = 30;
 
@@ -330,8 +330,8 @@ impl AuroraCore {
             .collect())
     }
 
-    /// Mirrors the `"movie"` and `"episode"` arms of `aurora-app/src/window.rs`
-    /// `resolve_playback`, including the title shown (`shown_title`, R-76).
+    /// Mirrors the `What::Movie` and `What::Episode` arms of `aurora-app/src/play/resolve.rs`
+    /// `resolve`, including the title shown (`shown_title`, R-76).
     fn tune_vod(&self, kind: VodKind, id: i64, start_at_secs: Option<f64>) -> Result<VodTune> {
         let db = self.db.lock();
         let (sql, noun, media) = match kind {
@@ -384,19 +384,10 @@ impl AuroraCore {
         }
         let title = title.unwrap_or_else(|| noun.to_string());
 
-        let options = LoadOptions {
-            is_live: false,
+        let options = Request {
+            live: false,
             cache_secs: VOD_CACHE_SECS,
-            start_at_secs,
-            title: Some(title.clone()),
-            playing: Some(Playing {
-                kind: match kind {
-                    VodKind::Movie => aurora_player::state::MediaKind::Movie,
-                    VodKind::Episode => aurora_player::state::MediaKind::Episode,
-                },
-                id,
-                channel_id: None,
-            }),
+            start_secs: start_at_secs,
             ..Default::default()
         };
         Ok(VodTune {

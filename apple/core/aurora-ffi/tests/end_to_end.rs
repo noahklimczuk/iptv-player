@@ -202,8 +202,8 @@ fn a_playlist_is_imported_listed_and_tuned() {
     let option = |name: &str| {
         tune.mpv_options
             .iter()
-            .find(|o| o.name == name)
-            .map(|o| o.value.clone())
+            .find(|o| o.name() == name)
+            .and_then(|o| o.text().map(str::to_string))
     };
     assert!(option("user-agent").is_some_and(|ua| !ua.is_empty()));
     assert_eq!(option("cache-secs").as_deref(), Some("8"));
@@ -243,7 +243,7 @@ fn a_playlist_is_imported_listed_and_tuned() {
     assert!(replay
         .mpv_options
         .iter()
-        .any(|o| o.name == "cache-secs" && o.value == "30"));
+        .any(|o| o.name() == "cache-secs" && o.text() == Some("30")));
 
     // The guide arrived from the playlist's own url-tvg, and the grid shows it: only the
     // rows asked for, one per channel in order, the aired programme replayable.

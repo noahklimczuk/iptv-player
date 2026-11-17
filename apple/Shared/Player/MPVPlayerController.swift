@@ -3,11 +3,11 @@ import Libmpv
 import UIKit
 
 /// libmpv, drawing into a Metal layer: the Apple counterpart of
-/// `aurora-player/src/mpv.rs` (docs/APPLE_PORT_AND_SYNC.md §2.3).
+/// `aurora-video/src/libmpv.rs` (docs/APPLE_PORT_AND_SYNC.md §2.3).
 ///
 /// What mpv is told about a stream is not decided here. Every tune's `mpvOptions` comes
-/// from `aurora_player::backend::LoadOptions::mpv_options`, the function that configures
-/// mpv on Windows, and is applied the same way: as properties, before `loadfile`. Only the
+/// from `aurora_video::Request::settings`, the function that configures mpv on Windows,
+/// and is applied the same way: as properties, before `loadfile`. Only the
 /// video output is Apple-specific — Vulkan through MoltenVK onto a `CAMetalLayer`, and
 /// VideoToolbox for decoding — following MPVKit's own demo.
 ///
@@ -143,14 +143,35 @@ final class MPVPlayerController: UIViewController {
 
     // MARK: Session steps (on `queue`)
 
+    /// A tune's settings, applied as Windows' engine applies them (`aurora-video`
+    /// `Engine::load`): every one, every file, so nothing from the last file lingers.
     private func apply(_ options: [MpvOption]) {
         guard let mpv else { return }
         for option in options {
-            let status = mpv_set_property_string(mpv, option.name, option.value)
+            let name: String
+            var status: Int32
+            switch option {
+            case .text(let key, let value):
+                name = key
+                status = mpv_set_property_string(mpv, key, value)
+                // `start=none` is how a file is told to start at the beginning; an mpv
+                // that doesn't take the word takes a zero (as on Windows).
+                if status < 0, key == "start" {
+                    status = mpv_set_property_string(mpv, "start", "0")
+                }
+            case .list(let key, let items):
+                name = key
+                // Cleared, then item by item: an empty list takes the last file's away,
+                // and an item holding a comma (a header value) is not split in two.
+                status = run(["change-list", key, "clr", ""])
+                for item in items where status >= 0 {
+                    status = run(["change-list", key, "append", item])
+                }
+            }
             if status < 0 {
-                // The same note Windows logs ("mpv rejected {key}"). Never the value: a
+                // The same note Windows logs ("mpv refused a setting"). Never the value: a
                 // header can carry a token.
-                NSLog("mpv rejected %@: %@", option.name, String(cString: mpv_error_string(status)))
+                NSLog("mpv rejected %@: %@", name, String(cString: mpv_error_string(status)))
             }
         }
     }
@@ -332,15 +353,20 @@ final class MPVPlayerController: UIViewController {
 
     /// On `queue`.
     private func command(_ name: String, _ args: String...) {
-        guard let mpv else { return }
-        let strings = [name] + args
-        var cArgs: [UnsafePointer<CChar>?] = strings.map { UnsafePointer(strdup($0)) }
-        cArgs.append(nil)
-        defer { cArgs.forEach { free(UnsafeMutableRawPointer(mutating: $0)) } }
-        let status = mpv_command(mpv, &cArgs)
+        let status = run([name] + args)
         if status < 0 {
             NSLog("mpv %@ failed: %@", name, String(cString: mpv_error_string(status)))
         }
+    }
+
+    /// An mpv command and its status. Its arguments are never logged: a URL or a header
+    /// can carry the provider's password.
+    private func run(_ strings: [String]) -> Int32 {
+        guard let mpv else { return MPV_ERROR_UNINITIALIZED.rawValue }
+        var cArgs: [UnsafePointer<CChar>?] = strings.map { UnsafePointer(strdup($0)) }
+        cArgs.append(nil)
+        defer { cArgs.forEach { free(UnsafeMutableRawPointer(mutating: $0)) } }
+        return mpv_command(mpv, &cArgs)
     }
 }
 

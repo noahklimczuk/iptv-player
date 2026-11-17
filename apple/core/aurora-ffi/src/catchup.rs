@@ -3,14 +3,14 @@
 //! Which programmes can be replayed, and the URL that replays one, are decided by the
 //! shared `aurora_core::catchup` (`Mode::parse`, `is_available`, `url_for`). This module
 //! only finds the channel's stream and catch-up settings, and mirrors
-//! `aurora-app/src/window.rs` `catchup_channel` and `resolve_catchup`.
+//! the `What::Catchup` arm of `aurora-app/src/play/resolve.rs` `resolve`.
 
 use std::collections::HashMap;
 
 use aurora_core::catchup;
 use aurora_core::model::MediaKind;
 use aurora_db::rusqlite::OptionalExtension;
-use aurora_player::backend::{LoadOptions, Playing};
+use aurora_video::Request;
 
 use crate::error::{AuroraError, Result};
 use crate::playback::{mpv_options, stream_url, MpvOption, StreamRef};
@@ -71,7 +71,7 @@ impl AuroraCore {
         let now = now_unix();
         let db = self.db.lock();
 
-        // The channel's best source, as `catchup_channel` picks it.
+        // The channel's best source, as Windows' `What::Catchup` picks it.
         let (name, mode, source, days, stream) = db
             .query_row(
                 "SELECT c.name, c.catchup_mode, c.catchup_source, c.catchup_days,
@@ -143,15 +143,11 @@ impl AuroraCore {
             ))
         })?;
 
-        let options = LoadOptions {
-            is_live: false,
+        // A past programme has a beginning and an end: played like a film, seekable end
+        // to end, as on Windows (H3).
+        let options = Request {
+            live: false,
             cache_secs: VOD_CACHE_SECS,
-            title: Some(name.clone()),
-            playing: Some(Playing {
-                kind: aurora_player::state::MediaKind::Live,
-                id: channel_id,
-                channel_id: Some(channel_id),
-            }),
             ..Default::default()
         };
         Ok(CatchupTune {

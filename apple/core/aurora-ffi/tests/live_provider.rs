@@ -146,7 +146,7 @@ fn a_real_panel_is_imported_listed_guided_and_tuned() {
     assert!(tune
         .mpv_options
         .iter()
-        .any(|o| o.name == "cache-secs" && o.value == "8"));
+        .any(|o| o.name() == "cache-secs" && o.text() == Some("8")));
 
     // The guide grid answers one row per channel on screen, in order.
     let ids: Vec<i64> = first.iter().take(20).map(|c| c.id).collect();

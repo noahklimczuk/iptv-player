@@ -39,19 +39,18 @@ fn quoted(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// `pub const NAME: u32 = N;` in `aurora-app/src/play/resolve.rs`, as N.
+fn resolve_const(name: &str) -> u32 {
+    let resolve = app_src("play/resolve.rs");
+    between(&resolve, &format!("pub const {name}: u32 ="), ";")
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("{name} in play/resolve.rs is not a plain number"))
+}
+
 #[test]
 fn the_live_buffer_is_the_one_windows_uses() {
-    let window = app_src("window.rs");
-    let body = between(
-        &window,
-        "pub fn cache_secs_for(is_live: bool) -> u32 {",
-        "} else {",
-    );
-    let windows: u32 = body
-        .split(|c: char| !c.is_ascii_digit())
-        .find(|s| !s.is_empty())
-        .and_then(|n| n.parse().ok())
-        .expect("a number in the live branch of cache_secs_for");
+    let windows = resolve_const("LIVE_BUFFER_SECS");
     assert_eq!(
         crate::playback::LIVE_CACHE_SECS,
         windows,
@@ -61,17 +60,7 @@ fn the_live_buffer_is_the_one_windows_uses() {
 
 #[test]
 fn the_vod_buffer_is_the_one_windows_uses() {
-    let window = app_src("window.rs");
-    let body = between(
-        &window,
-        "pub fn cache_secs_for(is_live: bool) -> u32 {",
-        "\n}",
-    );
-    let after_else = between(body, "} else {", "}");
-    let windows: u32 = after_else
-        .trim()
-        .parse()
-        .expect("a number in the VOD branch of cache_secs_for");
+    let windows = resolve_const("FILM_BUFFER_SECS");
     assert_eq!(
         crate::vod::VOD_CACHE_SECS,
         windows,
@@ -117,8 +106,8 @@ fn a_provider_is_saved_with_the_same_columns() {
 
 #[test]
 fn catch_up_picks_the_channel_source_windows_picks() {
-    // `catchup_channel` chooses the source a replay is built from. If Windows changes
-    // which one (or which columns it reads), catchup.rs must follow.
+    // Windows' `What::Catchup` arm chooses the source a replay is built from. If it
+    // changes which one (or which columns it reads), catchup.rs must follow.
     fn sql(block: &str) -> String {
         let from = block.find("SELECT").expect("a SELECT");
         block[from..]
@@ -126,8 +115,10 @@ fn catch_up_picks_the_channel_source_windows_picks() {
             .collect::<Vec<_>>()
             .join(" ")
     }
-    let window = app_src("window.rs");
-    let windows = sql(between(&window, "pub fn catchup_channel(", "LIMIT 1"));
+    // Anchored on the query itself: `What::Catchup` appears more than once there.
+    const QUERY: &str = "SELECT c.name, c.catchup_mode";
+    let resolve = app_src("play/resolve.rs");
+    let windows = sql(&format!("{QUERY}{}", between(&resolve, QUERY, "LIMIT 1")));
     let ours = sql(between(
         include_str!("catchup.rs"),
         "// The channel's best source",
@@ -135,7 +126,7 @@ fn catch_up_picks_the_channel_source_windows_picks() {
     ));
     assert_eq!(
         ours, windows,
-        "aurora-app window.rs catchup_channel picks its source differently now; update catchup.rs"
+        "aurora-app play/resolve.rs picks a catch-up source differently now; update catchup.rs"
     );
 }
 

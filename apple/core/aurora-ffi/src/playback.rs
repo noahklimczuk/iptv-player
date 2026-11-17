@@ -1,14 +1,14 @@
 //! Turning a channel into something MPVKit can open.
 //!
 //! The player itself is Swift (MPVKit in a SwiftUI view), but what it is told stays
-//! here. [`LiveTune::mpv_options`] is `aurora_player::backend::LoadOptions::mpv_options`
-//! — the same function that configures mpv on Windows — so probe sizes, cache depth and
-//! the User-Agent are identical on both platforms. Swift sets each pair with
-//! `mpv_set_option_string` before `loadfile`.
+//! here. [`LiveTune::mpv_options`] is `aurora_video::Request::settings` — the same
+//! function that configures mpv on Windows — so probe sizes, cache depth and the
+//! User-Agent are identical on both platforms. Swift sets each one as a property before
+//! `loadfile`, as Windows' engine does.
 //!
-//! Mirrors `aurora-app/src/window.rs` `live_sources` and `aurora-app/src/streams.rs`
-//! `playable`. The failover loop around them (`aurora-app/src/playback.rs`) is not here
-//! yet: Swift tries [`LiveTune::sources`] in order and reports each outcome through
+//! Mirrors the live arm of `aurora-app/src/play/resolve.rs` `resolve` and
+//! `aurora-app/src/streams.rs` `playable`. The failover loop around them
+//! (`aurora-app/src/play/session.rs`) is not here yet: Swift tries [`LiveTune::sources`] in order and reports each outcome through
 //! [`AuroraCore::report_source`], which feeds the same ranking Windows uses.
 
 use std::collections::HashMap;
@@ -17,15 +17,15 @@ use aurora_core::model::MediaKind;
 use aurora_db::repo::{channels, sources};
 use aurora_db::rusqlite::{params, Connection, OptionalExtension};
 use aurora_ingest::credentials::CredentialStore;
-use aurora_player::backend::{LoadOptions, Playing};
+use aurora_video::request::{Request, Setting};
 
 use crate::error::{AuroraError, Result};
 use crate::{now_unix, AuroraCore};
 
 /// Network buffer for live TV, in seconds (README §6.1).
 ///
-/// Mirrors `aurora-app/src/window.rs` `cache_secs_for(true)`; `mirrors.rs` fails
-/// if the two disagree.
+/// Mirrors `aurora-app/src/play/resolve.rs` `LIVE_BUFFER_SECS`; `mirrors.rs` fails if
+/// the two disagree.
 pub(crate) const LIVE_CACHE_SECS: u32 = 8;
 
 /// One address a channel can be played from.
@@ -38,11 +38,31 @@ pub struct PlayableSource {
     pub url: String,
 }
 
-/// One mpv option, as `name=value`.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct MpvOption {
-    pub name: String,
-    pub value: String,
+/// One mpv setting, as Windows' engine applies it (`aurora_video::request::Setting`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum MpvOption {
+    /// A plain property: set it to `value`.
+    Text { name: String, value: String },
+    /// A list property, item by item: an item may hold the comma a single string would
+    /// be split on (an HTTP header value, say). An empty list clears it.
+    List { name: String, items: Vec<String> },
+}
+
+impl MpvOption {
+    /// The mpv property this sets.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Text { name, .. } | Self::List { name, .. } => name,
+        }
+    }
+
+    /// The value, when this is a plain property.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text { value, .. } => Some(value),
+            Self::List { .. } => None,
+        }
+    }
 }
 
 /// Everything needed to start a live channel.
@@ -96,15 +116,10 @@ impl AuroraCore {
             }));
         }
 
-        let options = LoadOptions {
-            is_live: true,
+        // The URL is not part of it: Swift loads each source in turn under these.
+        let options = Request {
+            live: true,
             cache_secs: LIVE_CACHE_SECS,
-            title: Some(channel.name.clone()),
-            playing: Some(Playing {
-                kind: aurora_player::state::MediaKind::Live,
-                id: channel_id,
-                channel_id: Some(channel_id),
-            }),
             ..Default::default()
         };
 
@@ -200,12 +215,21 @@ pub(crate) fn stream_url(
     ))
 }
 
-/// The options shared by every tune, as Swift applies them.
-pub(crate) fn mpv_options(options: &LoadOptions) -> Vec<MpvOption> {
-    options
-        .mpv_options()
+/// A tune's settings, as Swift applies them.
+pub(crate) fn mpv_options(request: &Request) -> Vec<MpvOption> {
+    request
+        .settings()
         .into_iter()
-        .map(|(name, value)| MpvOption { name, value })
+        .map(|setting| match setting {
+            Setting::Text(name, value) => MpvOption::Text {
+                name: name.to_string(),
+                value,
+            },
+            Setting::List(name, items) => MpvOption::List {
+                name: name.to_string(),
+                items,
+            },
+        })
         .collect()
 }
 
@@ -256,16 +280,27 @@ mod tests {
         ));
     }
 
-    /// The mpv options come from the shared `LoadOptions`, so a live tune on Apple is
+    /// The mpv options come from the shared `Request`, so a live tune on Apple is
     /// configured exactly as one on Windows: low-latency probing and a User-Agent.
     #[test]
     fn live_options_are_the_shared_ones() {
-        let shared = aurora_player::backend::LoadOptions {
-            is_live: true,
+        use super::MpvOption;
+        let options = super::mpv_options(&aurora_video::Request {
+            live: true,
             cache_secs: super::LIVE_CACHE_SECS,
             ..Default::default()
-        }
-        .mpv_options();
-        assert!(shared.iter().any(|(k, _)| k == "user-agent"));
+        });
+        let text = |key: &str| {
+            options.iter().find_map(|o| match o {
+                MpvOption::Text { name, value } if name == key => Some(value.clone()),
+                _ => None,
+            })
+        };
+        assert!(text("user-agent").is_some_and(|ua| !ua.is_empty()));
+        assert_eq!(text("cache-secs").as_deref(), Some("8"));
+        assert_eq!(text("demuxer-lavf-probesize").as_deref(), Some("1000000"));
+        // Said even when empty, so one provider's headers never reach the next (E5).
+        assert!(options.iter().any(|o| matches!(o,
+            MpvOption::List { name, items } if name == "http-header-fields" && items.is_empty())));
     }
 }
