@@ -191,19 +191,24 @@ export function HeroBillboard({
       <AnimatePresence>
         <motion.div
           key={item.id}
-          initial={{ opacity: 0, scale: 1 }}
-          // A slow drift on the still backdrop, not a response to the trailer: the
-          // trailer covers this element, so a zoom that only ran while one was playing
-          // was a zoom nobody could see. It is what keeps the hero from looking like a
-          // screenshot while a title waits its turn.
-          animate={{ opacity: 1, scale: animations ? 1.03 : 1 }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{
-            opacity: { duration: animations ? 0.5 : 0 },
-            scale: { duration: animations ? 24 : 0, ease: 'linear' },
-          }}
+          transition={{ opacity: { duration: animations ? 0.5 : 0 } }}
           style={{ position: 'absolute', inset: 0 }}
         >
+          {/* A slow drift on the still backdrop, not a response to the trailer: the
+              trailer covers this element, so a zoom that only ran while one was playing
+              was a zoom nobody could see. It is what keeps the hero from looking like a
+              screenshot while a title waits its turn.
+
+              A stepped CSS animation (styles/hero.css), not framer-motion's `scale`.
+              Framer wrote the transform from JavaScript every frame, forever (the
+              billboard rotates before the 24 s run ends), and every frame the backdrop
+              moved, the glass over it had to be blurred again. Moving the zoom to the
+              compositor only moved that cost into the GPU process; updating it four
+              times a second instead of sixty is what makes idle Home cheap. */}
+          <div className={animations ? 'hero-drift' : undefined} style={{ position: 'absolute', inset: 0 }}>
           {/* A backdrop if there is one, the poster blown out behind glass if not.
               Backdrops come from TMDB enrichment, so on a library without an API key
               there are none at all — and the most prominent thing on the home screen
@@ -238,6 +243,7 @@ export function HeroBillboard({
               }}
             />
           )}
+          </div>
         </motion.div>
       </AnimatePresence>
 
