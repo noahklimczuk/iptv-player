@@ -135,7 +135,12 @@ export function Rail({
 
   const sync = useCallback(() => {
     const el = scroller.current;
-    if (!el) return;
+    // Not laid out: the page is `display: none` under the player. Everything measures
+    // zero, and "near the end" was true of a width of zero -- so every rail fetched its
+    // next page, the append measured again, and it fetched again, for as long as
+    // anything played. On a real library that was a rail of thirty thousand titles
+    // growing under the picture until the page could not answer a pause.
+    if (!el || el.clientWidth === 0) return;
     setAtStart(el.scrollLeft <= 2);
     setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 2);
     if (el.scrollLeft + el.clientWidth >= el.scrollWidth - PREFETCH_CARDS * (CARD_W + GAP)) {

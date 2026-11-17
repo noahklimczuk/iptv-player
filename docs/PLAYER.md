@@ -266,3 +266,12 @@ behind Skip and Up Next (`useEpisodeAids`: which marker is active, auto-skip, le
 from the viewer's seeks) is kept, because it is not interface and carries fixes that
 are each tested (R-149 among them). Enter now commits a typed number, and a number with
 no channel says so.
+
+Step 4 is `tests-host/scenarios/real_matrix.py`: one import of the panel into the harness's
+own profile, then each case started the way a viewer starts it (a channel number and
+Enter, a film from the search palette, an episode from its show's page, P for PiP) and
+checked on the desktop, where the video is, rather than in the page. Its first runs found
+the page under the player busy 66-94% of the time while anything played from Home --
+every rail paging through itself while hidden, and Home rendered again on every player
+state -- which left a pause unanswered for minutes. Both are fixed, with journeys in
+`home-feed.spec.ts` and `render-churn.spec.ts`. On 2026-11-17 all eight cases passed.

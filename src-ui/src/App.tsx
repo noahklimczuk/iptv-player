@@ -338,7 +338,7 @@ export default function App() {
   }, [onGuide]);
 
   const play = useCallback(async (item: CatalogItem, episodeId?: number) => {
-    ui.openDetail(null);
+    openDetail(null);
     try {
       if (item.kind === 'series') {
         /*
@@ -382,7 +382,7 @@ export default function App() {
       // Opening a black player and saying nothing is what this used to do.
       report(`Could not play ${item.title}`)(e);
     }
-  }, [ui, profileId]);
+  }, [openDetail, profileId]);
 
   /**
    * Play a finished recording.
@@ -613,13 +613,10 @@ export default function App() {
       else if (playerOpen && !pipOn && fullscreen.fullscreen) fullscreen.leave();
       else if (playerOpen) closePlayer();
     },
-    onPlayPause: () => {
-      const s = useUi.getState().player?.status;
-      if (s) {
-        invoke(s === 'playing' ? 'player.pause' : 'player.resume')
-          .catch(report('The player did not respond'));
-      }
-    },
+    // The controls' own toggle, so loading and buffering count as playing here too.
+    // This one had its own copy that read Loading as paused: Space pressed while a
+    // film opened from Home, focus still on the Play button, sent `resume`.
+    onPlayPause: () => control.togglePause(),
     /**
      * `T` on live TV: pausing is what puts the viewer behind live, so this pauses when
      * at the edge — and when already behind it, the useful thing is the way back
@@ -735,6 +732,71 @@ export default function App() {
     const t = window.setTimeout(hideBanner, Math.max(0, bannerUntil - Date.now()));
     return () => window.clearTimeout(t);
   }, [bannerUntil, hideBanner]);
+
+  /**
+   * The pages, built once per change that concerns them, and not on a player state.
+   *
+   * `App` reads `player`, and the host pushes a new one several times a second while
+   * anything plays. Built inline, the route elements were new JSX each time, so the page
+   * under the player -- `display: none`, but still mounted -- was rendered again on every
+   * push. On a real library Home is tens of thousands of titles: measured on the line,
+   * with Home underneath the page spent 73% of its time in long tasks while a channel
+   * played, against none with the playlist underneath, and a pause there left it too
+   * busy to answer at all. The same element from one render to the next is one React
+   * does not descend into, so a push now stops at `App`.
+   */
+  const guidePictureReady = showingPicture(player) && !playerOpen;
+  const routes = useMemo(
+    () => (
+      <Routes>
+        <Route path="/" element={<HomePage onOpen={openDetail} onPlay={play} onTune={tune} />} />
+        <Route path="/live" element={<LivePage onTune={tune} />} />
+        <Route
+          path="/guide"
+          element={
+            <GuidePage
+              onTune={tune}
+              // The same tune, without surfacing the player: the picture is going
+              // into a box on a page the viewer is still reading.
+              onPreview={(ch) => tune(ch, { reveal: false })}
+              pictureReady={guidePictureReady}
+              onInlay={setGuideInlay}
+              onCatchup={playCatchup}
+              onSearch={(q) => setPalette(true, q)}
+            />
+          }
+        />
+        <Route path="/movies" element={<BrowsePage mode="movies" onOpen={openDetail} onPlay={play} />} />
+        <Route path="/series" element={<BrowsePage mode="series" onOpen={openDetail} onPlay={play} />} />
+        <Route path="/recordings" element={<RecordingsPage onPlay={playRecording} />} />
+        <Route
+          path="/multiview"
+          element={
+            <MosaicPage
+              layoutsVersion={layoutsVersion}
+              onOpened={() => {
+                setPlayerOpen(false);
+                invoke('mosaic.state').then(setMosaic).catch(() => {});
+              }}
+            />
+          }
+        />
+        <Route
+          path="/assistant"
+          element={<AssistantPage onPlay={playChatItem} onOpen={openChatItem} />}
+        />
+        <Route path="/playlist" element={<PlaylistPage />} />
+        <Route
+          path="/settings"
+          element={<SettingsPage onAddProvider={() => setAddingProvider(true)} />}
+        />
+      </Routes>
+    ),
+    [
+      openDetail, play, tune, guidePictureReady, playCatchup, setPalette, playRecording,
+      layoutsVersion, playChatItem, openChatItem,
+    ],
+  );
 
   // Hold the launch screen until the two questions that decide the first screen have
   // been answered. Both are asked once, at mount, and both are quick — but neither is
@@ -891,49 +953,7 @@ export default function App() {
             panel that is twenty thousand. */}
         <div key={location.pathname} className="aurora-page" style={{ height: '100%' }}>
         <Suspense fallback={<BootScreen label="Opening…" />}>
-        <Routes>
-          <Route path="/" element={<HomePage onOpen={ui.openDetail} onPlay={play} onTune={tune} />} />
-          <Route path="/live" element={<LivePage onTune={tune} />} />
-          <Route
-            path="/guide"
-            element={
-              <GuidePage
-                onTune={tune}
-                // The same tune, without surfacing the player: the picture is going
-                // into a box on a page the viewer is still reading.
-                onPreview={(ch) => tune(ch, { reveal: false })}
-                pictureReady={showingPicture(ui.player) && !playerOpen}
-                onInlay={setGuideInlay}
-                onCatchup={playCatchup}
-                onSearch={(q) => ui.setPalette(true, q)}
-              />
-            }
-          />
-          <Route path="/movies" element={<BrowsePage mode="movies" onOpen={ui.openDetail} onPlay={play} />} />
-          <Route path="/series" element={<BrowsePage mode="series" onOpen={ui.openDetail} onPlay={play} />} />
-          <Route path="/recordings" element={<RecordingsPage onPlay={playRecording} />} />
-          <Route
-            path="/multiview"
-            element={
-              <MosaicPage
-                layoutsVersion={layoutsVersion}
-                onOpened={() => {
-                  setPlayerOpen(false);
-                  invoke('mosaic.state').then(setMosaic).catch(() => {});
-                }}
-              />
-            }
-          />
-          <Route
-            path="/assistant"
-            element={<AssistantPage onPlay={playChatItem} onOpen={openChatItem} />}
-          />
-          <Route path="/playlist" element={<PlaylistPage />} />
-          <Route
-            path="/settings"
-            element={<SettingsPage onAddProvider={() => setAddingProvider(true)} />}
-          />
-        </Routes>
+        {routes}
         </Suspense>
         </div>
       </main>
