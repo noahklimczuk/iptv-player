@@ -55,11 +55,20 @@ async function wake(page: Page) {
 /** Into fullscreen with the dock's button, and confirmed by what the page asked for. */
 async function goFullscreen(page: Page) {
   await wake(page);
+  await page.evaluate(() => {
+    const w = window as unknown as { __fsEntered?: boolean };
+    w.__fsEntered = false;
+    document.addEventListener('fullscreenchange', () => { w.__fsEntered = true; }, { once: true });
+  });
   await page.getByRole('button', { name: 'Fullscreen' }).click();
   await expect(page.getByRole('button', { name: 'Leave fullscreen' })).toBeVisible();
   // The browser enters fullscreen on its own time, and reports it with an event that
-  // would otherwise land in the middle of the test.
-  await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+  // would otherwise land in the middle of the test. The event, not `fullscreenElement`:
+  // the element is set a frame before the event is sent, and on CI an Escape pressed in
+  // that frame had its exit undone by the late "now fullscreen", so the next Escape
+  // only left fullscreen again (C16, failed on main after #176).
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __fsEntered?: boolean }).__fsEntered === true)).toBe(true);
   await clearCalls(page);
 }
 
@@ -263,6 +272,19 @@ test('C24: opening a stream shows a spinner and the title, not a black screen', 
   await page.evaluate(() => (window as unknown as { __auroraPlayerStatus: (p: unknown) => void })
     .__auroraPlayerStatus({ status: 'playing' }));
   await expect(waiting).toHaveCount(0);
+});
+
+test('C24: Space while a film opens pauses it, wherever the focus is', async ({ page }) => {
+  await playFilm(page);
+  await page.evaluate(() => (window as unknown as { __auroraPlayerStatus: (p: unknown) => void })
+    .__auroraPlayerStatus({ status: 'loading' }));
+  // On the real app the focus is still on the Play button that opened the film, so the
+  // press reaches the window's own shortcut, not the player's controls.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await clearCalls(page);
+  await page.keyboard.press('Space');
+  await expect.poll(() => calls(page, 'player.pause')).toHaveLength(1);
+  expect(await calls(page, 'player.resume')).toHaveLength(0);
 });
 
 /* ── C32–C34: input ─────────────────────────────────────────────────────── */

@@ -613,13 +613,10 @@ export default function App() {
       else if (playerOpen && !pipOn && fullscreen.fullscreen) fullscreen.leave();
       else if (playerOpen) closePlayer();
     },
-    onPlayPause: () => {
-      const s = useUi.getState().player?.status;
-      if (s) {
-        invoke(s === 'playing' ? 'player.pause' : 'player.resume')
-          .catch(report('The player did not respond'));
-      }
-    },
+    // The controls' own toggle, so loading and buffering count as playing here too.
+    // This one had its own copy that read Loading as paused: Space pressed while a
+    // film opened from Home, focus still on the Play button, sent `resume`.
+    onPlayPause: () => control.togglePause(),
     /**
      * `T` on live TV: pausing is what puts the viewer behind live, so this pauses when
      * at the edge — and when already behind it, the useful thing is the way back
