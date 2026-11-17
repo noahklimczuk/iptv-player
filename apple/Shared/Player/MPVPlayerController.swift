@@ -38,6 +38,48 @@ final class MPVPlayerController: UIViewController {
 
     /// Told what is happening, on the main thread.
     var onStatus: ((PlayerStatus) -> Void)?
+    /// Where playback is and what the file offers, on the main thread: at most four
+    /// times a second while it plays, at once when anything else changes.
+    var onState: ((PlaybackState) -> Void)?
+    /// The file played to its end, on the main thread.
+    var onEnded: (() -> Void)?
+
+    /// What the controls show. Read from mpv on `queue`, handed over whole.
+    struct PlaybackState: Equatable {
+        var position = 0.0
+        /// 0 when the stream doesn't say, which a provider's stream often doesn't.
+        var duration = 0.0
+        var paused = false
+        var speed = 1.0
+        var audioTracks: [Track] = []
+        var subtitleTracks: [Track] = []
+        var audioId: Int64?
+        var subtitleId: Int64?
+        /// The file is open: before this mpv has no chapters or tracks to tell.
+        var loaded = false
+    }
+
+    /// An audio or subtitle track, as Windows' menu lists it (`model.ts` `Track`).
+    struct Track: Identifiable, Equatable {
+        let id: Int64
+        let title: String?
+        let language: String?
+        let codec: String?
+        let channels: String?
+
+        /// `trackName` in `model.ts`.
+        var name: String { title ?? language ?? "Track \(id)" }
+        var detail: String { [language, codec, channels].compactMap { $0 }.joined(separator: " · ") }
+    }
+
+    private var loaded = false
+    private var tracks: (audio: [Track], subtitles: [Track], audioId: Int64?, subtitleId: Int64?) = ([], [], nil, nil)
+    private var lastPublished = Date.distantPast
+
+    /// What each observed property is, in mpv's `reply_userdata`.
+    private enum Observed: UInt64 {
+        case position, duration, pause, speed, tracks
+    }
 
     enum PlayerStatus: Equatable {
         case opening(source: Int, of: Int)
@@ -81,6 +123,7 @@ final class MPVPlayerController: UIViewController {
         queue.async { [self] in
             self.core = core
             session = .live(tune, sourceIndex: 0)
+            resetFile()
             apply(tune.mpvOptions)
             loadLiveSource()
         }
@@ -91,6 +134,7 @@ final class MPVPlayerController: UIViewController {
         queue.async { [self] in
             self.core = core
             session = .vod(tune, profileId: profileId, lastSaved: .distantPast)
+            resetFile()
             apply(tune.mpvOptions)
             DispatchQueue.main.async { self.onStatus?(.opening(source: 1, of: 1)) }
             // Can carry the provider's password (R-126): handed to mpv, never logged.
@@ -103,6 +147,7 @@ final class MPVPlayerController: UIViewController {
         queue.async { [self] in
             self.core = core
             session = .replay(tune)
+            resetFile()
             apply(tune.mpvOptions)
             DispatchQueue.main.async { self.onStatus?(.opening(source: 1, of: 1)) }
             // Can carry the provider's password (R-126): handed to mpv, never logged.
@@ -126,6 +171,75 @@ final class MPVPlayerController: UIViewController {
             var next: Int32 = paused == 0 ? 1 : 0
             mpv_set_property(mpv, "pause", MPV_FORMAT_FLAG, &next)
             if next == 1 { saveProgress(force: true) }
+        }
+    }
+
+    func setPaused(_ paused: Bool) {
+        queue.async { [self] in
+            guard let mpv else { return }
+            var flag: Int32 = paused ? 1 : 0
+            mpv_set_property(mpv, "pause", MPV_FORMAT_FLAG, &flag)
+            if paused { saveProgress(force: true) }
+        }
+    }
+
+    /// Playback speed, kept to what the menu offers (`clamp_speed`).
+    func setSpeed(_ speed: Double) {
+        queue.async { [self] in
+            guard let mpv else { return }
+            var value = clampSpeed(speed: speed)
+            mpv_set_property(mpv, "speed", MPV_FORMAT_DOUBLE, &value)
+        }
+    }
+
+    func setAudioTrack(_ id: Int64) {
+        queue.async { [self] in
+            guard let mpv else { return }
+            mpv_set_property_string(mpv, "aid", String(id))
+        }
+    }
+
+    /// `nil` turns subtitles off.
+    func setSubtitleTrack(_ id: Int64?) {
+        queue.async { [self] in
+            guard let mpv else { return }
+            mpv_set_property_string(mpv, "sid", id.map(String.init) ?? "no")
+        }
+    }
+
+    /// The picture's shape, with the properties Windows sets for it
+    /// (`aurora_video::Aspect::mpv`, through `aspect_options`).
+    func setAspect(_ aspect: PictureAspect) {
+        queue.async { [self] in apply(aspectOptions(aspect: aspect)) }
+    }
+
+    /// Jump to `seconds` from the start. Films, episodes and catch-up only.
+    func seek(to seconds: Double) {
+        queue.async { [self] in
+            switch session {
+            case .vod?, .replay?: break
+            case .live?, nil: return
+            }
+            command("seek", String(max(0, seconds)), "absolute")
+        }
+    }
+
+    /// The open file's chapters, for `sync_chapters`. Empty before the file is open.
+    func chapters(_ done: @escaping ([ChapterMark]) -> Void) {
+        queue.async { [self] in
+            var marks: [ChapterMark] = []
+            if let mpv {
+                var count: Int64 = 0
+                if mpv_get_property(mpv, "chapter-list/count", MPV_FORMAT_INT64, &count) >= 0 {
+                    for i in 0..<count {
+                        var time = 0.0
+                        guard mpv_get_property(mpv, "chapter-list/\(i)/time", MPV_FORMAT_DOUBLE, &time) >= 0
+                        else { continue }
+                        marks.append(ChapterMark(title: string("chapter-list/\(i)/title"), startSecs: time))
+                    }
+                }
+            }
+            DispatchQueue.main.async { done(marks) }
         }
     }
 
@@ -183,7 +297,17 @@ final class MPVPlayerController: UIViewController {
         command("loadfile", tune.sources[index].url, "replace")
     }
 
+    /// A new file is starting: nothing of the last one's state carries over.
+    private func resetFile() {
+        loaded = false
+        tracks = ([], [], nil, nil)
+        publish(force: true)
+    }
+
     private func fileLoaded() {
+        loaded = true
+        readTracks()
+        publish(force: true)
         switch session {
         case .live(let tune, let index)?:
             if index < tune.sources.count { report(tune.sources[index].sourceId, opened: true) }
@@ -194,6 +318,78 @@ final class MPVPlayerController: UIViewController {
             ? .noPicture("The picture couldn't start on this device's graphics, so only the sound is playing.")
             : .playing
         DispatchQueue.main.async { self.onStatus?(status) }
+    }
+
+    /// Hand the controls where playback is. On `queue`.
+    private func publish(force: Bool) {
+        guard force || Date().timeIntervalSince(lastPublished) >= 0.25 else { return }
+        lastPublished = Date()
+        var state = PlaybackState()
+        state.loaded = loaded
+        if loaded, let mpv {
+            mpv_get_property(mpv, "time-pos", MPV_FORMAT_DOUBLE, &state.position)
+            mpv_get_property(mpv, "duration", MPV_FORMAT_DOUBLE, &state.duration)
+            var paused: Int32 = 0
+            mpv_get_property(mpv, "pause", MPV_FORMAT_FLAG, &paused)
+            state.paused = paused != 0
+            mpv_get_property(mpv, "speed", MPV_FORMAT_DOUBLE, &state.speed)
+        }
+        if !state.position.isFinite { state.position = 0 }
+        if !state.duration.isFinite { state.duration = 0 }
+        state.audioTracks = tracks.audio
+        state.subtitleTracks = tracks.subtitles
+        state.audioId = tracks.audioId
+        state.subtitleId = tracks.subtitleId
+        DispatchQueue.main.async { self.onState?(state) }
+    }
+
+    /// The file's audio and subtitle tracks, and which of each is on. On `queue`.
+    private func readTracks() {
+        guard let mpv else { return }
+        var count: Int64 = 0
+        guard mpv_get_property(mpv, "track-list/count", MPV_FORMAT_INT64, &count) >= 0 else { return }
+        var audio: [Track] = [], subtitles: [Track] = []
+        var audioId: Int64?, subtitleId: Int64?
+        for i in 0..<count {
+            let base = "track-list/\(i)"
+            var id: Int64 = 0
+            guard mpv_get_property(mpv, "\(base)/id", MPV_FORMAT_INT64, &id) >= 0 else { continue }
+            var selected: Int32 = 0
+            mpv_get_property(mpv, "\(base)/selected", MPV_FORMAT_FLAG, &selected)
+            var channels: String?
+            var channelCount: Int64 = 0
+            if mpv_get_property(mpv, "\(base)/demux-channel-count", MPV_FORMAT_INT64, &channelCount) >= 0,
+               channelCount > 0 {
+                channels = string("\(base)/demux-channels") ?? "\(channelCount) ch"
+            }
+            let track = Track(
+                id: id,
+                title: string("\(base)/title"),
+                language: string("\(base)/lang"),
+                codec: string("\(base)/codec"),
+                channels: channels
+            )
+            switch string("\(base)/type") {
+            case "audio":
+                audio.append(track)
+                if selected != 0 { audioId = id }
+            case "sub":
+                subtitles.append(Track(id: id, title: track.title, language: track.language,
+                                       codec: track.codec, channels: nil))
+                if selected != 0 { subtitleId = id }
+            default:
+                break
+            }
+        }
+        tracks = (audio, subtitles, audioId, subtitleId)
+    }
+
+    /// A string property, or nil when mpv has none (or an empty one). On `queue`.
+    private func string(_ name: String) -> String? {
+        guard let mpv, let raw = mpv_get_property_string(mpv, name) else { return nil }
+        defer { mpv_free(raw) }
+        let value = String(cString: raw)
+        return value.isEmpty ? nil : value
     }
 
     /// Whether the file has a picture to show at all: a radio stream has none, and
@@ -309,8 +505,15 @@ final class MPVPlayerController: UIViewController {
             onStatus?(.failed("The video player could not start."))
             return
         }
-        // Position changes drive the periodic progress save.
-        mpv_observe_property(handle, 0, "time-pos", MPV_FORMAT_DOUBLE)
+        // Position changes drive the periodic progress save and the controls; the rest
+        // only the controls. The track list's selections change with `aid` and `sid`.
+        mpv_observe_property(handle, Observed.position.rawValue, "time-pos", MPV_FORMAT_DOUBLE)
+        mpv_observe_property(handle, Observed.duration.rawValue, "duration", MPV_FORMAT_DOUBLE)
+        mpv_observe_property(handle, Observed.pause.rawValue, "pause", MPV_FORMAT_FLAG)
+        mpv_observe_property(handle, Observed.speed.rawValue, "speed", MPV_FORMAT_DOUBLE)
+        mpv_observe_property(handle, Observed.tracks.rawValue, "track-list", MPV_FORMAT_NONE)
+        mpv_observe_property(handle, Observed.tracks.rawValue, "aid", MPV_FORMAT_NONE)
+        mpv_observe_property(handle, Observed.tracks.rawValue, "sid", MPV_FORMAT_NONE)
         mpv_set_wakeup_callback(handle, { context in
             guard let context else { return }
             let controller = Unmanaged<MPVPlayerController>.fromOpaque(context).takeUnretainedValue()
@@ -332,10 +535,20 @@ final class MPVPlayerController: UIViewController {
                 } else if end.reason == MPV_END_FILE_REASON_EOF {
                     // Played to the end: the last position is the duration.
                     saveProgress(force: true)
+                    DispatchQueue.main.async { self.onEnded?() }
                 }
                 // `replace` and `stop` also end the previous file; neither is a failure.
             case MPV_EVENT_PROPERTY_CHANGE:
-                saveProgress(force: false)
+                switch Observed(rawValue: event.reply_userdata) {
+                case .position?:
+                    saveProgress(force: false)
+                    publish(force: false)
+                case .tracks?:
+                    if loaded { readTracks() }
+                    publish(force: true)
+                case .duration?, .pause?, .speed?, nil:
+                    publish(force: true)
+                }
             case MPV_EVENT_LOG_MESSAGE:
                 #if DEBUG
                 if let data = event.data {

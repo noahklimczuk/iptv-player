@@ -27,12 +27,30 @@ enum PlayerItem: Identifiable, Hashable {
 
 /// Full-screen playback.
 ///
-/// Siri Remote: click or Play/Pause toggles pause, left/right skip on films and episodes,
-/// Menu goes back. On iPhone and iPad a tap toggles pause and the close button goes back.
+/// Siri Remote, controls hidden: left and right skip back 10 and forward 30 seconds on
+/// films and episodes, a click or up/down shows the controls, Play/Pause pauses. With the
+/// controls up the remote moves between them, and Menu closes a panel, then the
+/// controls, then the player. On iPhone and iPad a tap shows or hides the controls.
 struct PlayerScreen: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
     let item: PlayerItem
+
+    var body: some View {
+        if let core = model.core {
+            PlayerContent(item: item, core: core, profileId: model.profileId)
+        }
+    }
+}
+
+private struct PlayerContent: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var session: PlayerSession
+    @State private var controller: MPVPlayerController?
+    /// The tune and the item it is for: Up Next swaps the item in place.
+    @State private var resolved: (item: PlayerItem, tune: Resolved)?
+    @State private var startedItem: PlayerItem?
+    @FocusState private var focus: PlayerFocus?
 
     private enum Resolved {
         case live(LiveTune)
@@ -40,83 +58,83 @@ struct PlayerScreen: View {
         case replay(CatchupTune)
     }
 
-    @State private var status: MPVPlayerController.PlayerStatus?
-    @State private var controller: MPVPlayerController?
-    @State private var resolved: Resolved?
-    @State private var started = false
+    init(item: PlayerItem, core: AuroraCore, profileId: Int64) {
+        _session = State(initialValue: PlayerSession(item: item, core: core, profileId: profileId))
+    }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            MPVPlayerView(controller: $controller, onStatus: { status = $0 })
-                .ignoresSafeArea()
-            overlay
+        ZStack {
+            MPVPlayerView(
+                controller: $controller,
+                onStatus: { session.status = $0 },
+                onState: { session.update($0) },
+                onEnded: { if !session.ended() { dismiss() } }
+            )
+            .ignoresSafeArea()
+            backdrop
+            PlayerOverlay(session: session, focus: $focus, close: { dismiss() })
         }
-        .task { await resolve() }
+        .task(id: session.item) { await resolve(session.item) }
         // Whichever arrives second — the tune or the player view — starts playback.
         .onChange(of: controller != nil) { playIfReady() }
-        .onChange(of: resolved != nil) { playIfReady() }
+        .onChange(of: resolved?.item) { playIfReady() }
+        .onChange(of: session.sleptAt) { if session.sleptAt != nil { dismiss() } }
+        .onAppear {
+            session.start()
+            focus = .playPause
+        }
         .onDisappear {
+            session.stop()
             controller?.stop()
             Task { await model.reload() }
         }
         #if os(tvOS)
-        .focusable()
-        .onPlayPauseCommand { controller?.togglePause() }
-        .onMoveCommand { direction in
-            switch direction {
-            case .left: controller?.seek(by: -10)
-            case .right: controller?.seek(by: 30)
-            default: break
+        .onPlayPauseCommand { session.togglePause() }
+        .onExitCommand {
+            if session.panel != nil {
+                session.panel = nil
+            } else if session.controlsVisible {
+                session.hideControls()
+            } else {
+                dismiss()
             }
         }
-        .onExitCommand { dismiss() }
-        #else
-        .onTapGesture { controller?.togglePause() }
         #endif
     }
 
-    @ViewBuilder private var overlay: some View {
-        switch status {
-        case .opening(let source, let total):
-            Label(total > 1 ? "Opening \(item.title) (source \(source) of \(total))" : "Opening \(item.title)",
-                  systemImage: "dot.radiowaves.left.and.right")
-                .padding()
-                .background(.ultraThinMaterial, in: Capsule())
-                .padding()
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Could not play \(item.title)").font(.headline)
-                Text(message)
-                Button("Close") { dismiss() }
+    /// Under the controls: on tvOS what the remote talks to while they are hidden, on
+    /// iPhone and iPad what a tap on the picture lands on.
+    @ViewBuilder private var backdrop: some View {
+        #if os(tvOS)
+        if !session.controlsVisible && session.panel == nil {
+            Button { session.poke() } label: {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding()
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .padding()
-        case .noPicture(let message):
-            HStack {
-                #if os(iOS)
-                Button("Close", systemImage: "xmark") { dismiss() }
-                    .labelStyle(.iconOnly)
-                #endif
-                Label(message, systemImage: "speaker.wave.2")
-                    .padding()
-                    .background(.ultraThinMaterial, in: Capsule())
+            .buttonStyle(BareButtonStyle())
+            .focused($focus, equals: .backdrop)
+            .onMoveCommand { direction in
+                switch direction {
+                case .left: session.nudge(by: -10)
+                case .right: session.nudge(by: 30)
+                default: session.poke()
+                }
             }
-            .padding()
-        case .playing, nil:
-            #if os(iOS)
-            Button("Close", systemImage: "xmark") { dismiss() }
-                .labelStyle(.iconOnly)
-                .padding()
-            #endif
+            .ignoresSafeArea()
         }
+        #else
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if session.panel != nil { session.panel = nil } else { session.toggleControls() }
+            }
+            .ignoresSafeArea()
+        #endif
     }
 
-    private func resolve() async {
-        guard let core = model.core else { return }
-        let item = item
+    private func resolve(_ item: PlayerItem) async {
+        let core = session.core
         do {
-            resolved = try await Task.detached { () throws -> Resolved in
+            let tune = try await Task.detached { () throws -> Resolved in
                 switch item {
                 case .channel(let id, _): .live(try core.tuneLive(channelId: id))
                 case .movie(let id, _, let startAt): .vod(try core.tuneMovie(movieId: id, startAtSecs: startAt))
@@ -125,19 +143,25 @@ struct PlayerScreen: View {
                     .replay(try core.tuneCatchup(channelId: id, start: start, stop: stop))
                 }
             }.value
+            guard item == session.item else { return }
+            resolved = (item, tune)
         } catch {
-            status = .failed(error.viewerMessage)
+            session.status = .failed(error.viewerMessage)
         }
     }
 
     private func playIfReady() {
-        guard !started, let resolved, let controller, let core = model.core else { return }
-        started = true
-        switch resolved {
+        guard let resolved, resolved.item != startedItem, let controller else { return }
+        startedItem = resolved.item
+        session.controller = controller
+        let core = session.core
+        switch resolved.tune {
         case .live(let tune): controller.play(tune, core: core)
         case .vod(let tune): controller.play(tune, core: core, profileId: model.profileId)
         case .replay(let tune): controller.play(tune, core: core)
         }
+        // The picture's shape is the viewer's, not the file's: it carries to the next one.
+        if session.aspect != .auto { controller.setAspect(session.aspect) }
     }
 }
 
@@ -145,15 +169,19 @@ struct PlayerScreen: View {
 struct MPVPlayerView: UIViewControllerRepresentable {
     @Binding var controller: MPVPlayerController?
     var onStatus: (MPVPlayerController.PlayerStatus) -> Void
+    var onState: (MPVPlayerController.PlaybackState) -> Void
+    var onEnded: () -> Void
 
     func makeUIViewController(context: Context) -> MPVPlayerController {
         let player = MPVPlayerController()
-        player.onStatus = onStatus
+        updateUIViewController(player, context: context)
         DispatchQueue.main.async { controller = player }
         return player
     }
 
     func updateUIViewController(_ player: MPVPlayerController, context: Context) {
         player.onStatus = onStatus
+        player.onState = onState
+        player.onEnded = onEnded
     }
 }
