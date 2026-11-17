@@ -50,10 +50,28 @@ pub struct Browse {
     pub sort: BrowseSort,
     /// The provider's own shelf (its category), or every shelf.
     pub category: Option<String>,
+    /// One genre, as [`BrowseFacets::genres`] names it, or every genre.
+    pub genre: Option<String>,
     /// Narrow by title.
     pub query: Option<String>,
+    /// Titles starting with this letter, or `#` for those starting with anything else.
+    /// A filter rather than a scroll position, because the list is paged.
+    pub letter: Option<String>,
     pub limit: u32,
     pub offset: u32,
+}
+
+/// What a browse screen can narrow by, and how much the current filters match: Windows'
+/// `library_browse_facets`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BrowseFacets {
+    /// The provider's own shelves, biggest first.
+    pub categories: Vec<Shelf>,
+    /// Genres for this kind only (films and series don't share a list: offering the
+    /// other's is a filter that matches nothing), commonest first.
+    pub genres: Vec<Shelf>,
+    /// Everything these filters match, not just the page on screen.
+    pub total: u32,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -144,7 +162,7 @@ impl From<library::EpisodeRow> for Episode {
 }
 
 /// A provider shelf and how much is on it.
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Shelf {
     pub name: String,
     pub count: u32,
@@ -220,6 +238,17 @@ impl AuroraCore {
 
     pub fn series_shelves(&self) -> Result<Vec<Shelf>> {
         self.shelves(Kind::Series)
+    }
+
+    /// The shelves and genres a film screen can narrow by, and how many films `browse`
+    /// matches (its sort, limit and offset are ignored).
+    pub fn movie_facets(&self, browse: Browse) -> Result<BrowseFacets> {
+        self.facets(Kind::Movies, browse)
+    }
+
+    /// As [`Self::movie_facets`], for series.
+    pub fn series_facets(&self, browse: Browse) -> Result<BrowseFacets> {
+        self.facets(Kind::Series, browse)
     }
 
     pub fn series_detail(&self, series_id: i64) -> Result<Series> {
@@ -318,6 +347,31 @@ impl AuroraCore {
 }
 
 impl AuroraCore {
+    /// Mirrors `aurora-app/src/commands.rs` `library_browse_facets`.
+    fn facets(&self, kind: Kind, browse: Browse) -> Result<BrowseFacets> {
+        let db = self.db.lock();
+        // The letter counts too: the total is of what is on screen.
+        let q = browse_query(&db, Browse { limit: 1, offset: 0, ..browse })?;
+        let shelf = |c: library::Category| Shelf {
+            name: c.name,
+            count: c.count,
+        };
+        Ok(BrowseFacets {
+            categories: library::categories(&db, kind, &q.library)?
+                .into_iter()
+                .map(shelf)
+                .collect(),
+            genres: library::genres(&db, kind, &q.library)?
+                .into_iter()
+                .map(shelf)
+                .collect(),
+            total: match kind {
+                Kind::Series => library::count_series(&db, &q)?,
+                _ => library::count_movies(&db, &q)?,
+            },
+        })
+    }
+
     fn shelves(&self, kind: Kind) -> Result<Vec<Shelf>> {
         let db = self.db.lock();
         let filter = LibraryFilter::load(&db)?;
@@ -404,12 +458,29 @@ fn browse_query(db: &aurora_db::rusqlite::Connection, b: Browse) -> Result<Brows
     Ok(BrowseQuery {
         sort: b.sort.into(),
         category: b.category,
+        genre: b.genre.filter(|g| !g.trim().is_empty()),
         query: b.query.filter(|q| !q.trim().is_empty()),
+        letter: b.letter.as_deref().and_then(browse_letter),
         limit: b.limit.clamp(1, 500),
         offset: b.offset,
         library: LibraryFilter::load(db)?,
         ..Default::default()
     })
+}
+
+/// One letter, upper-cased, or `#`; anything else is no filter. Mirrors Windows'
+/// `browse_query`: this reaches a SQL comparison against a title's first letter, so "Th"
+/// would match nothing and look broken.
+fn browse_letter(raw: &str) -> Option<String> {
+    let mut chars = raw.trim().chars();
+    let first = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    if first == '#' {
+        return Some("#".into());
+    }
+    first.is_alphabetic().then(|| first.to_uppercase().to_string())
 }
 
 #[cfg(test)]
@@ -421,10 +492,78 @@ mod tests {
         Browse {
             sort: BrowseSort::RecentlyAdded,
             category: None,
+            genre: None,
             query: None,
+            letter: None,
             limit: 50,
             offset: 0,
         }
+    }
+
+    /// Films straight into the table: (title, shelf, genres as JSON).
+    fn films(core: &AuroraCore, rows: &[(&str, &str, &str)]) {
+        let db = core.db.lock();
+        db.execute(
+            "INSERT INTO providers (id, name, kind, base_url, created_at) VALUES (1, 'P', 'm3u', 'http://p', 0)",
+            [],
+        )
+        .unwrap();
+        for (i, (title, shelf, genres)) in rows.iter().enumerate() {
+            db.execute(
+                "INSERT INTO movies (provider_id, provider_key, title, match_key, group_title,
+                                     url, genres, added_at, last_seen_at)
+                 VALUES (1, ?1, ?2, lower(?2), ?3, 'http://p/m.mp4', ?4, ?5, 0)",
+                aurora_db::rusqlite::params![format!("k{i}"), title, shelf, genres, i as i64],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_letter_is_one_letter_or_hash() {
+        assert_eq!(browse_letter("s").as_deref(), Some("S"));
+        assert_eq!(browse_letter(" # ").as_deref(), Some("#"));
+        assert_eq!(browse_letter("Th"), None);
+        assert_eq!(browse_letter("7"), None);
+        assert_eq!(browse_letter(""), None);
+    }
+
+    #[test]
+    fn genre_and_letter_narrow_the_list_and_the_total_agrees() {
+        let (core, _dir) = core();
+        films(
+            &core,
+            &[
+                ("Alien", "Sci-Fi Films", r#"["Science Fiction","Horror"]"#),
+                ("Arrival", "Sci-Fi Films", r#"["Science Fiction","Drama"]"#),
+                ("Brooklyn", "Dramas", r#"["Drama"]"#),
+                ("9 to 5", "Comedies", r#"["Comedy"]"#),
+            ],
+        );
+        let titles = |b: Browse| -> Vec<String> {
+            let mut t: Vec<_> = core.movies(b).unwrap().into_iter().map(|m| m.title).collect();
+            t.sort();
+            t
+        };
+
+        let drama = Browse { genre: Some("Drama".into()), ..browse() };
+        assert_eq!(titles(drama.clone()), ["Arrival", "Brooklyn"]);
+        assert_eq!(core.movie_facets(drama).unwrap().total, 2);
+
+        let a = Browse { letter: Some("a".into()), ..browse() };
+        assert_eq!(titles(a.clone()), ["Alien", "Arrival"]);
+        assert_eq!(core.movie_facets(a).unwrap().total, 2);
+
+        let hash = Browse { letter: Some("#".into()), ..browse() };
+        assert_eq!(titles(hash), ["9 to 5"]);
+
+        let facets = core.movie_facets(browse()).unwrap();
+        assert_eq!(facets.total, 4);
+        assert_eq!(facets.categories.len(), 3);
+        let drama = facets.genres.iter().find(|g| g.name == "Drama").unwrap();
+        assert_eq!(drama.count, 2);
+        // Films' genres only: there are no series, so no series genre can be offered.
+        assert!(core.series_facets(browse()).unwrap().genres.is_empty());
     }
 
     #[test]

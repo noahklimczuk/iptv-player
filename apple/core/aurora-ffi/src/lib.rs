@@ -21,6 +21,7 @@ uniffi::setup_scaffolding!();
 
 mod catchup;
 mod error;
+mod filters;
 mod guide;
 mod library;
 #[cfg(test)]
@@ -43,6 +44,7 @@ use parking_lot::Mutex;
 
 pub use catchup::CatchupTune;
 pub use error::{AuroraError, Result};
+pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
 pub use guide::{GuideCell, GuideRow, NowNext, Programme};
 pub use library::{Channel, ChannelGroup};
 pub use mylist::{ItemMarks, ListKind, MyList};
@@ -52,7 +54,7 @@ pub use providers::{ImportContent, ImportListener, ImportPhase, ImportReport, Pr
 pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};
 pub use vod::{
-    Browse, BrowseSort, Episode, Movie, Series, SeriesResume, Shelf, VodKind, VodTune,
+    Browse, BrowseFacets, BrowseSort, Episode, Movie, Series, SeriesResume, Shelf, VodKind, VodTune,
     WatchProgress,
 };
 

@@ -52,7 +52,7 @@ final class AppModel {
             core = try AuroraCore.open(dataDir: Self.dataDirectory().path, secrets: KeychainSecretStore())
         } catch {
             core = nil
-            self.error = "Aurora could not open its library. \(error.localizedDescription)"
+            self.error = "Aurora could not open its library. \(error.viewerMessage)"
         }
     }
 
@@ -75,7 +75,7 @@ final class AppModel {
             self.providers = providers
             self.groups = groups
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.viewerMessage
         }
     }
 
@@ -88,7 +88,7 @@ final class AppModel {
             }.value
             await refresh(providerId: id, content: content)
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.viewerMessage
         }
     }
 
@@ -98,7 +98,7 @@ final class AppModel {
             let id = try await Task.detached { try core.addM3u(name: name, url: url) }.value
             await refresh(providerId: id, content: content)
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.viewerMessage
         }
     }
 
@@ -116,7 +116,7 @@ final class AppModel {
                 try core.refresh(providerId: providerId, content: content, listener: listener)
             }.value
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.viewerMessage
         }
         await reload()
     }
@@ -163,8 +163,9 @@ final class AppModel {
         await call([]) { try $0.movies(browse: browse) }
     }
 
-    func movieShelves() async -> [Shelf] {
-        await call([]) { try $0.movieShelves() }
+    /// The shelves and genres films can be narrowed by, and how many `browse` matches.
+    func movieFacets(_ browse: Browse) async -> BrowseFacets? {
+        await call(nil) { try $0.movieFacets(browse: browse) }
     }
 
     func series(_ browse: Browse) async -> [Series] {
@@ -175,8 +176,25 @@ final class AppModel {
         await call(nil) { try $0.seriesDetail(seriesId: seriesId) }
     }
 
-    func seriesShelves() async -> [Shelf] {
-        await call([]) { try $0.seriesShelves() }
+    func seriesFacets(_ browse: Browse) async -> BrowseFacets? {
+        await call(nil) { try $0.seriesFacets(browse: browse) }
+    }
+
+    // MARK: Library filters
+
+    func libraryFilters() async -> LibraryFilters? {
+        await call(nil) { try $0.libraryFilters() }
+    }
+
+    /// Save the library-wide filters. Every list reads them, so every screen starts over.
+    func setLibraryFilters(_ filters: LibraryFilters) async -> LibraryFilters? {
+        let saved = await call(nil) { try $0.setLibraryFilters(filters: filters) }
+        if saved != nil { libraryVersion += 1 }
+        return saved
+    }
+
+    func filterCounts(_ kind: LibraryKind) async -> FilterCounts? {
+        await call(nil) { try $0.filterCounts(kind: kind) }
     }
 
     func episodes(seriesId: Int64, season: UInt16?) async -> [Episode] {
@@ -285,16 +303,41 @@ final class AppModel {
         do {
             return try await Task.detached { try body(core) }.value
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.viewerMessage
             return fallback
         }
     }
 }
 
-extension Browse {
-    /// The first page of a shelf, newest first.
-    static func shelf(_ category: String?, query: String? = nil, offset: UInt32 = 0) -> Browse {
-        Browse(sort: .recentlyAdded, category: category, query: query, limit: 120, offset: offset)
+/// What a film or series screen is narrowed by: the browse side of Windows'
+/// `useBrowse`. My List is a different list altogether, not a filter on this one.
+struct BrowseFilters: Equatable {
+    var sort: BrowseSort = .recentlyAdded
+    var shelf: String?
+    var genre: String?
+    var letter: String?
+    var search = ""
+    var myList = false
+
+    /// How many titles one page holds, as on Windows.
+    static let pageSize: UInt32 = 120
+
+    func browse(offset: UInt32 = 0) -> Browse {
+        Browse(sort: sort, category: shelf, genre: genre, query: search, letter: letter,
+               limit: Self.pageSize, offset: offset)
+    }
+}
+
+extension BrowseSort {
+    static let all: [BrowseSort] = [.recentlyAdded, .title, .year, .rating]
+
+    var label: String {
+        switch self {
+        case .recentlyAdded: "Recently added"
+        case .title: "A–Z"
+        case .year: "Year"
+        case .rating: "Rating"
+        }
     }
 }
 

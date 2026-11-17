@@ -262,7 +262,7 @@ final class MPVPlayerController: UIViewController {
                 positionSecs: Int64(position), durationSecs: Int64(duration)
             )
         } catch {
-            NSLog("could not save the position: %@", error.localizedDescription)
+            NSLog("could not save the position: %@", error.viewerMessage)
         }
     }
 
@@ -272,7 +272,7 @@ final class MPVPlayerController: UIViewController {
         } catch {
             // Ranking is a hint for the next tune; failing to record it must not stop
             // this one.
-            NSLog("could not record the source outcome: %@", error.localizedDescription)
+            NSLog("could not record the source outcome: %@", error.viewerMessage)
         }
     }
 

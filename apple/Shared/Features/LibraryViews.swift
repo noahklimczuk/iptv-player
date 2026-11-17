@@ -4,40 +4,67 @@ import SwiftUI
 
 struct MoviesView: View {
     @Environment(AppModel.self) private var model
-    @State private var shelves: [Shelf] = []
-    @State private var shelf: String?
+    @State private var filters = BrowseFilters()
+    @State private var facets: BrowseFacets?
     @State private var movies: [Movie] = []
-    @State private var search = ""
     @State private var selected: Movie?
-    @State private var myList = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                ShelfPicker(shelves: shelves, selection: $shelf, myList: $myList)
-                PosterGrid(items: movies.map { PosterItem(id: $0.id, title: $0.title, year: $0.year, poster: $0.poster) }) { id in
-                    selected = movies.first { $0.id == id }
+                ShelfPicker(shelves: facets?.categories ?? [], selection: $filters.shelf, myList: $filters.myList)
+                if !filters.myList {
+                    FilterBar(filters: $filters, facets: facets, noun: ("film", "films"))
                 }
-                if movies.isEmpty && myList {
+                PosterGrid(items: movies.map { PosterItem(id: $0.id, title: $0.title, year: $0.year, poster: $0.poster) },
+                           onSelect: { id in selected = movies.first { $0.id == id } },
+                           onReachEnd: { Task { await loadMore() } })
+                if movies.isEmpty && filters.myList {
                     ContentUnavailableView("Nothing on My List", systemImage: "plus",
                                            description: Text("Add a film from its page."))
+                } else if movies.isEmpty && filters.narrowed {
+                    ContentUnavailableView("No films match", systemImage: "line.3.horizontal.decrease",
+                                           description: Text("Try another letter, genre or shelf."))
                 } else if movies.isEmpty {
                     ContentUnavailableView("No films", systemImage: "film",
                                            description: Text("Import films from a provider in Live TV → Add provider."))
                 }
             }
             .navigationTitle("Films")
-            .searchable(text: $search)
-            .task(id: "\(myList)|\(shelf ?? "")|\(search)|\(selected == nil)|\(model.libraryVersion)") {
+            .searchable(text: $filters.search)
+            .task(id: ReloadKey(filters: filters, library: model.libraryVersion, extra: selected == nil)) {
                 // Reloaded when a film's page closes, so My List shows what was just added.
                 guard selected == nil else { return }
-                movies = myList
-                    ? await model.myList()?.movies ?? []
-                    : await model.movies(.shelf(shelf, query: search))
+                await reload()
             }
-            .task(id: model.libraryVersion) { shelves = await model.movieShelves() }
             .sheet(item: $selected) { MovieDetail(movie: $0) }
         }
+    }
+
+    private func reload() async {
+        let asked = filters
+        if asked.myList {
+            movies = await model.myList()?.movies ?? []
+            if facets == nil { facets = await model.movieFacets(BrowseFilters().browse()) }
+            return
+        }
+        async let page = model.movies(asked.browse())
+        async let counted = model.movieFacets(asked.browse())
+        let (rows, f) = await (page, counted)
+        guard asked == filters else { return }
+        movies = rows
+        facets = f
+    }
+
+    /// The next page, when the last poster comes on screen and there is more.
+    private func loadMore() async {
+        let asked = filters
+        guard !asked.myList, let total = facets?.total, movies.count < Int(total) else { return }
+        let more = await model.movies(asked.browse(offset: UInt32(movies.count)))
+        // The filters may have changed while this was on its way: then it's another list.
+        guard asked == filters else { return }
+        let known = Set(movies.map(\.id))
+        movies += more.filter { !known.contains($0.id) }
     }
 }
 
@@ -76,39 +103,183 @@ struct MovieDetail: View {
 
 struct SeriesView: View {
     @Environment(AppModel.self) private var model
-    @State private var shelves: [Shelf] = []
-    @State private var shelf: String?
+    @State private var filters = BrowseFilters()
+    @State private var facets: BrowseFacets?
     @State private var series: [Series] = []
-    @State private var search = ""
-    @State private var myList = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                ShelfPicker(shelves: shelves, selection: $shelf, myList: $myList)
+                ShelfPicker(shelves: facets?.categories ?? [], selection: $filters.shelf, myList: $filters.myList)
+                if !filters.myList {
+                    FilterBar(filters: $filters, facets: facets, noun: ("series", "series"))
+                }
                 PosterGrid(items: series.map { PosterItem(id: $0.id, title: $0.title, year: $0.year, poster: $0.poster) },
-                           destination: { id in SeriesDetail(seriesId: id) })
-                if series.isEmpty && myList {
+                           destination: { id in SeriesDetail(seriesId: id) },
+                           onReachEnd: { Task { await loadMore() } })
+                if series.isEmpty && filters.myList {
                     ContentUnavailableView("Nothing on My List", systemImage: "plus",
                                            description: Text("Add a series from its page."))
+                } else if series.isEmpty && filters.narrowed {
+                    ContentUnavailableView("No series match", systemImage: "line.3.horizontal.decrease",
+                                           description: Text("Try another letter, genre or shelf."))
                 } else if series.isEmpty {
                     ContentUnavailableView("No series", systemImage: "rectangle.stack",
                                            description: Text("Import series from a provider in Live TV → Add provider."))
                 }
             }
             .navigationTitle("Series")
-            .searchable(text: $search)
-            .task(id: "\(myList)|\(shelf ?? "")|\(search)|\(model.libraryVersion)") {
-                series = myList
-                    ? await model.myList()?.series ?? []
-                    : await model.series(.shelf(shelf, query: search))
-            }
+            .searchable(text: $filters.search)
+            .task(id: ReloadKey(filters: filters, library: model.libraryVersion)) { await reload() }
             .onAppear {
                 // Back from a series page, which may have added or removed it.
-                guard myList else { return }
+                guard filters.myList else { return }
                 Task { series = await model.myList()?.series ?? [] }
             }
-            .task(id: model.libraryVersion) { shelves = await model.seriesShelves() }
+        }
+    }
+
+    private func reload() async {
+        let asked = filters
+        if asked.myList {
+            series = await model.myList()?.series ?? []
+            if facets == nil { facets = await model.seriesFacets(BrowseFilters().browse()) }
+            return
+        }
+        async let page = model.series(asked.browse())
+        async let counted = model.seriesFacets(asked.browse())
+        let (rows, f) = await (page, counted)
+        guard asked == filters else { return }
+        series = rows
+        facets = f
+    }
+
+    private func loadMore() async {
+        let asked = filters
+        guard !asked.myList, let total = facets?.total, series.count < Int(total) else { return }
+        let more = await model.series(asked.browse(offset: UInt32(series.count)))
+        guard asked == filters else { return }
+        let known = Set(series.map(\.id))
+        series += more.filter { !known.contains($0.id) }
+    }
+}
+
+/// What a browse screen reloads on: its filters, the library, and one thing of its own.
+private struct ReloadKey: Equatable {
+    var filters: BrowseFilters
+    var library: Int
+    var extra = false
+}
+
+extension BrowseFilters {
+    /// Narrowed by more than the shelf: an empty list then means "nothing matches",
+    /// not "nothing imported".
+    var narrowed: Bool { shelf != nil || genre != nil || letter != nil || !search.isEmpty }
+}
+
+/// Sort, genre and the total on one row, the letters under it: the browse filters
+/// Windows' film and series pages have.
+struct FilterBar: View {
+    @Binding var filters: BrowseFilters
+    let facets: BrowseFacets?
+    let noun: (one: String, many: String)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Sort, genre and the total on one line where they fit (a TV, an iPad); on a
+            // phone the total goes underneath rather than squeezing the genre to "A…".
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) {
+                    sortMenu
+                    genreMenu
+                    Spacer(minLength: 16)
+                    total
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 12) {
+                        sortMenu
+                        genreMenu
+                    }
+                    total
+                }
+            }
+            #if os(tvOS)
+            // The two menus sit at the left, so moving up from a letter on the right
+            // would otherwise find nothing above it and jump past them to the shelves.
+            .focusSection()
+            #endif
+            LetterBar(selection: $filters.letter)
+        }
+        .buttonStyle(.bordered)
+        .padding(.horizontal)
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(BrowseSort.all, id: \.self) { sort in
+                Button {
+                    filters.sort = sort
+                } label: {
+                    if filters.sort == sort { Label(sort.label, systemImage: "checkmark") } else { Text(sort.label) }
+                }
+            }
+        } label: {
+            Label(filters.sort.label, systemImage: "arrow.up.arrow.down")
+                .lineLimit(1)
+        }
+        .fixedSize()
+    }
+
+    private var genreMenu: some View {
+        Menu {
+            Button("All genres") { filters.genre = nil }
+            // Commonest first, with how many: on a real panel most of a few hundred
+            // genres hold two titles or fewer.
+            ForEach(facets?.genres ?? [], id: \.name) { genre in
+                Button {
+                    filters.genre = genre.name
+                } label: {
+                    if filters.genre == genre.name {
+                        Label("\(genre.name) (\(genre.count))", systemImage: "checkmark")
+                    } else {
+                        Text("\(genre.name) (\(genre.count))")
+                    }
+                }
+            }
+        } label: {
+            // One line: a long genre name is cut short, not wrapped.
+            Label(filters.genre ?? "All genres", systemImage: "theatermasks")
+                .lineLimit(1)
+        }
+        // A library without TMDB data has shelves but no genres.
+        .disabled(facets?.genres.isEmpty ?? true)
+    }
+
+    @ViewBuilder
+    private var total: some View {
+        if let total = facets?.total {
+            Text("\(total.formatted()) \(total == 1 ? noun.one : noun.many)")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+}
+
+/// A–Z, and `#` for titles starting with anything else. A filter, not a jump: the list
+/// is paged, so "jump to W" can't be answered without reading every page before it.
+struct LetterBar: View {
+    @Binding var selection: String?
+    private static let letters = ["#"] + (UnicodeScalar("A").value...UnicodeScalar("Z").value)
+        .compactMap { UnicodeScalar($0).map { String($0) } }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterChip(title: "All", selected: selection == nil) { selection = nil }
+                ForEach(Self.letters, id: \.self) { letter in
+                    FilterChip(title: letter, selected: selection == letter) { selection = letter }
+                }
+            }
         }
     }
 }
@@ -232,9 +403,28 @@ struct ShelfPicker: View {
     }
 
     private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.bordered)
-            .tint(selected ? .accentColor : .secondary)
+        FilterChip(title: title, selected: selected, action: action)
+    }
+}
+
+/// One choice in a row of them, tinted when chosen.
+struct FilterChip: View {
+    let title: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        // tvOS draws a bordered button the same whatever its tint, so the choice shows in
+        // the label's weight too. One button either way: swapping styles on selection would
+        // replace the focused view and throw the focus off it.
+        Button(action: action) {
+            // Weight, not colour: a colour set here would also stay on the white focus
+            // background, where tvOS otherwise turns the label dark.
+            Text(title).fontWeight(selected ? .heavy : .regular)
+        }
+        .buttonStyle(.bordered)
+        .tint(selected ? .accentColor : .secondary)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -276,17 +466,23 @@ struct PosterGrid<Destination: View>: View {
     let items: [PosterItem]
     var onSelect: ((Int64) -> Void)?
     var destination: ((Int64) -> Destination)?
+    /// The last poster came on screen: time for the next page, if there is one.
+    var onReachEnd: (() -> Void)?
 
-    init(items: [PosterItem], onSelect: @escaping (Int64) -> Void) where Destination == EmptyView {
+    init(items: [PosterItem], onSelect: @escaping (Int64) -> Void,
+         onReachEnd: (() -> Void)? = nil) where Destination == EmptyView {
         self.items = items
         self.onSelect = onSelect
         self.destination = nil
+        self.onReachEnd = onReachEnd
     }
 
-    init(items: [PosterItem], destination: @escaping (Int64) -> Destination) {
+    init(items: [PosterItem], destination: @escaping (Int64) -> Destination,
+         onReachEnd: (() -> Void)? = nil) {
         self.items = items
         self.onSelect = nil
         self.destination = destination
+        self.onReachEnd = onReachEnd
     }
 
     #if os(tvOS)
@@ -298,12 +494,17 @@ struct PosterGrid<Destination: View>: View {
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: width), spacing: 16)], spacing: 24) {
             ForEach(items) { item in
-                if let destination {
-                    NavigationLink { destination(item.id) } label: { PosterCard(item: item) }
-                        .tileButtonStyle()
-                } else {
-                    Button { onSelect?(item.id) } label: { PosterCard(item: item) }
-                        .tileButtonStyle()
+                Group {
+                    if let destination {
+                        NavigationLink { destination(item.id) } label: { PosterCard(item: item) }
+                            .tileButtonStyle()
+                    } else {
+                        Button { onSelect?(item.id) } label: { PosterCard(item: item) }
+                            .tileButtonStyle()
+                    }
+                }
+                .onAppear {
+                    if item.id == items.last?.id { onReachEnd?() }
                 }
             }
         }

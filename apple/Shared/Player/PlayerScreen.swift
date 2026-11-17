@@ -126,7 +126,7 @@ struct PlayerScreen: View {
                 }
             }.value
         } catch {
-            status = .failed(error.localizedDescription)
+            status = .failed(error.viewerMessage)
         }
     }
 

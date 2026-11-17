@@ -27,16 +27,19 @@ screens. The app can:
   channel keeps an archive (catch-up, up to a week back),
 - keep films and series on My List, and like them,
 - search channels, what's on now and later, films and series in one box,
-- browse films and series by the provider's shelves, with search,
-- list providers in Settings with what each holds, and refresh one,
+- browse films and series by the provider's shelves, genre and first letter, sorted
+  newest, A–Z, by year or by rating, with search, a page at a time and with the true
+  total,
+- filter the whole library as Windows does: English only, also hide what's untagged,
+  and one copy per title, each with what it would hide (Settings),
+- list providers in Settings with what each holds, and refresh or remove one,
 - open a series on the episode to resume, list its seasons and episodes,
 - play a channel, film or episode through mpv (MPVKit). A channel tries each of its
   sources in turn. Films and episodes resume, and save their position every 15 s and
   on pause or stop.
 
-Not yet: profile age and daily
-limits (being fixed on Windows first; the Apple app will follow the same rule), named
-favourite lists, removing a provider, library filters, recordings, and sync (Phase 3).
+Not yet: profile age and daily limits (being fixed on Windows first; the Apple app will
+follow the same rule), named favourite lists, recordings, and sync (Phase 3).
 
 The app targets **iOS 26 and tvOS 26 only**.
 

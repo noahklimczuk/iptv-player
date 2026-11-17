@@ -5,6 +5,8 @@
 #   apple/scripts/sim-demo.sh ios        iPhone simulator
 #   apple/scripts/sim-demo.sh tv --play  ...and play the first channel
 #   apple/scripts/sim-demo.sh tv --fresh ...from an empty library (reinstalls the app)
+#   apple/scripts/sim-demo.sh tv --vod   ...importing films and series too (added to a
+#                                         library that has only live TV)
 #   apple/scripts/sim-demo.sh tv --tab guide  ...opening on a tab (live, guide, films,
 #                                             series, settings, search)
 #
@@ -20,12 +22,13 @@ ENV_FILE="${AURORA_TEST_PROVIDER_FILE:-$HOME/.config/aurora-tv/test-provider.env
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
-PLATFORM=tv; PLAY=NO; FRESH=0; TAB=live
+PLATFORM=tv; PLAY=NO; FRESH=0; TAB=live; CONTENT=live
 while (( $# )); do
   case "$1" in
     tv|ios) PLATFORM=$1 ;;
     --play) PLAY=YES ;;
     --fresh) FRESH=1 ;;
+    --vod) CONTENT=all ;;
     --tab) TAB=${2:?--tab needs a name}; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -64,5 +67,5 @@ xcrun simctl launch "$DEVICE" "$BUNDLE" \
   -AuroraDemoXtreamURL "$AURORA_TEST_XTREAM_URL" \
   -AuroraDemoXtreamUser "$AURORA_TEST_XTREAM_USER" \
   -AuroraDemoXtreamPass "$AURORA_TEST_XTREAM_PASS" \
-  -AuroraAutoplay "$PLAY" -AuroraTab "$TAB" >/dev/null
+  -AuroraAutoplay "$PLAY" -AuroraTab "$TAB" -AuroraDemoContent "$CONTENT" >/dev/null
 echo "==> Launched. A first run imports the panel's live TV (a few minutes for a big one)."
