@@ -34,11 +34,11 @@ SLACK = 2
 
 
 def _surface(hwnd):
-    """mpv's child window, which is the one STATIC child at the back of the z-order."""
+    """mpv's child window: the video surface at the back of the z-order."""
     order = wp.children_front_to_back(hwnd)
-    statics = [h for h in order if wp.class_name(h).lower() == "static"]
+    statics = [h for h in order if wp.is_video_surface(h)]
     assert statics, (
-        "no STATIC child window, so mpv's surface was never attached. Children: "
+        "no video surface child window, so mpv's surface was never attached. Children: "
         f"{[wp.describe(h) for h in order]}"
     )
     return statics[0]

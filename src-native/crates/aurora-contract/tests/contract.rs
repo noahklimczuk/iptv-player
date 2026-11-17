@@ -278,13 +278,13 @@ fn the_fields_the_host_sends_are_the_ones_the_contract_declares() {
     let pairs: Vec<(&str, serde_json::Value)> = vec![
         (
             "PlayerState",
-            v(aurora_player::PlayerState::default()).unwrap(),
+            v(aurora_video::PlayerState::default()).unwrap(),
         ),
         (
             "Track",
-            v(aurora_player::Track {
+            v(aurora_video::Track {
                 id: 1,
-                kind: aurora_player::TrackKind::Audio,
+                kind: aurora_video::TrackKind::Audio,
                 title: None,
                 language: None,
                 codec: None,
@@ -441,12 +441,12 @@ fn the_csp_allows_the_image_schemes_providers_actually_use() {
 
 /// The Phase 0 spike must stay wired.
 ///
-/// `attach`, `attach_video_surface` and `pump` were each written, each correct as far
-/// as anyone could tell, and each called from nowhere — so a Windows run showed no
+/// The surface, the engine's state and recovery were each, at one time, written,
+/// correct as far as anyone could tell, and called from nowhere — so a Windows run showed no
 /// video for reasons that had nothing to do with compositing, and the OSD would have
 /// frozen after the first frame because nothing drained mpv's event queue. They were
-/// unreachable structurally: the app layer holds a `Box<dyn PlayerBackend>`, and
-/// neither method was on the trait.
+/// unreachable structurally: the app layer held the old player behind a trait, and
+/// neither method was on it.
 ///
 /// This reads the sources rather than running anything, because the thing that went
 /// wrong is not behaviour — it is a call that does not exist. Nothing on this machine
@@ -458,29 +458,30 @@ fn the_video_surface_and_the_event_pump_are_actually_called() {
 
     let main = read("main.rs");
     assert!(
-        main.contains("window::attach_video_surface("),
-        "nothing creates the video surface, so mpv has nowhere to draw"
+        main.contains("play::video::start("),
+        "nothing opens the video engine on the window, so mpv has nowhere to draw"
     );
     assert!(
-        main.contains("tauri::WindowEvent::Resized"),
+        main.contains("tauri::WindowEvent::Resized") && main.contains("player.resized("),
         "nothing repositions the video surface, so it tears away from the WebView"
     );
-
-    let window = read("window.rs");
     assert!(
-        window.contains("player.attach("),
-        "attach_video_surface no longer attaches anything"
-    );
-    assert!(
-        window.contains(".hwnd()"),
-        "the surface is not given the host window's handle"
+        main.contains(".on_state(") && main.contains("spawn_loop()"),
+        "the session's states never reach the page, or nothing runs recovery"
     );
 
-    let playback = read("playback.rs");
+    let video = read("play/video.rs");
+    for call in [".hwnd()", "Surface::create(", "wid: Some(surface.wid())"] {
+        assert!(
+            video.contains(call),
+            "the engine is not given a surface inside the host window ({call} is gone)"
+        );
+    }
+
+    let session = read("play/session.rs");
     assert!(
-        playback.contains("player.pump("),
-        "the heartbeat reads a state that nothing produces: position, tracks, \
-         buffering, errors and the timeshift window all arrive as backend events"
+        session.contains("engine.on_change("),
+        "nothing listens to the engine, so the page sees one state and never another"
     );
 }
 

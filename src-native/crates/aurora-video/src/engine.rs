@@ -237,7 +237,11 @@ impl Engine {
     pub fn set_paused(&self, paused: bool) -> Result<Report, VideoError> {
         self.intend(
             |r| match (r.status, paused) {
-                (Status::Playing | Status::Buffering, true) => r.status = Status::Paused,
+                // Loading too: pressing pause while it opens is honoured (mpv opens it
+                // paused), and saying so is what lets the next press resume it.
+                (Status::Loading | Status::Playing | Status::Buffering, true) => {
+                    r.status = Status::Paused
+                }
                 (Status::Paused, false) => r.status = Status::Playing,
                 _ => {}
             },
@@ -760,6 +764,10 @@ impl<D: Driver> Run<D> {
             }
             Event::Property { name, value } => self.property(&name, value),
             Event::Log { prefix, text } => {
+                // Into the app's log as well: a video output that fails while the sound
+                // carries on is not a playback failure, so the ring below is never shown
+                // for it, and the log is the only place it can be seen.
+                tracing::warn!(target: "mpv", "{prefix}: {}", text.trim());
                 if self.log.len() == LOG_LINES {
                     self.log.pop_front();
                 }
@@ -952,16 +960,18 @@ impl<D: Driver> Run<D> {
         if self.r.error.is_some() && self.current == Current::Idle {
             return Status::Error;
         }
+        // Paused while it opens says Paused, so the page shows it paused and its next
+        // press resumes. The stall watch does not go by this: see `opening`.
+        if self.opening() {
+            return if self.paused {
+                Status::Paused
+            } else {
+                Status::Loading
+            };
+        }
         match self.current {
             Current::Idle => Status::Idle,
             Current::Waiting(_) => Status::Loading,
-            Current::Started(_) if !self.loaded || !self.restarted => {
-                if self.paused && self.loaded {
-                    Status::Paused
-                } else {
-                    Status::Loading
-                }
-            }
             Current::Started(_) => {
                 if self.paused || self.eof {
                     Status::Paused
@@ -971,6 +981,15 @@ impl<D: Driver> Run<D> {
                     Status::Playing
                 }
             }
+        }
+    }
+
+    /// The file has been asked for and is not yet playing: no picture to pause on yet.
+    fn opening(&self) -> bool {
+        match self.current {
+            Current::Idle => false,
+            Current::Waiting(_) => true,
+            Current::Started(_) => !self.loaded || !self.restarted,
         }
     }
 
@@ -1077,7 +1096,11 @@ impl<D: Driver> Run<D> {
             }
         }
         let status = self.status();
+        // A stream paused before it has even opened is still being opened, and one that
+        // never answers must still be given up (E25). Once the file is open, a pause is
+        // a rest like any other (E27).
         let phase = match status {
+            _ if self.opening() && !self.loaded => Phase::Opening,
             Status::Loading => Phase::Opening,
             Status::Buffering => Phase::Buffering,
             Status::Playing => Phase::Playing,

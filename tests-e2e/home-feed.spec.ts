@@ -7,7 +7,7 @@
  * heading counts the whole rail, scrolling reaches past the first page, and a title the
  * viewer says "not for me" about leaves every rail at once.
  */
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 interface MockCall { name: string; args: Record<string, unknown> }
 
@@ -24,6 +24,25 @@ async function centre(page: Page, rail: string) {
   const r = page.getByRole('region', { name: rail });
   await r.evaluate((el) => el.scrollIntoView({ block: 'center' }));
   return r;
+}
+
+/**
+ * Until the expanded card has stopped growing.
+ *
+ * A click jumps the pointer to the button. While the card is still scaling up, that
+ * point can be outside it: the card collapses, the button goes, and the pointer never
+ * re-enters, so the click waited out the whole timeout (seen on CI, from the trace).
+ */
+async function settled(target: Locator) {
+  let last = '';
+  await expect
+    .poll(async () => {
+      const now = JSON.stringify(await target.boundingBox());
+      const same = now === last;
+      last = now;
+      return same;
+    }, { intervals: [150], message: 'the expanded card never stopped moving' })
+    .toBe(true);
 }
 
 const cards = (page: Page, rail: string) =>
@@ -57,6 +76,7 @@ test('not for me takes a title off every rail at once', async ({ page }) => {
   await first.hover();
   const notForMe = first.getByRole('button', { name: `Not for me: ${title}` });
   await expect(notForMe).toBeVisible();
+  await settled(notForMe);
   await notForMe.click();
 
   await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
@@ -72,4 +92,25 @@ test('rails further down are drawn as they come near', async ({ page }) => {
   await page.getByRole('region', { name: 'Documentary' }).scrollIntoViewIfNeeded();
   await expect(cards(page, 'Documentary').first()).toBeVisible();
   expect(await placeholders.count()).toBeLessThan(before);
+});
+
+test('a rail under the player does not page through itself', async ({ page }) => {
+  // Under a picture the page is `display: none`, so a rail's scroller measures nothing,
+  // and "within eight cards of the end" was true of a width of zero. Every rail asked for
+  // its next page, the append measured again, and it asked again -- for as long as
+  // anything played. On a real library that is a rail of 29,942 titles growing without
+  // end under the picture, and a page too busy to answer a pause.
+  // `?video` before the hash: it is read from the query, and makes the page behave as
+  // it does over the host's surface -- `<main>` hidden while the picture shows.
+  await page.goto('/?video#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  const pages = async () => (await calls(page)).filter((c) => c.name === 'library.railPage').length;
+  // Settled, and nothing scrolled: no rail is near its end, so nothing has been paged.
+  await page.waitForTimeout(1_000);
+  const before = await pages();
+  await page.getByRole('button', { name: 'Play' }).first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  await page.waitForTimeout(3_000);
+  const asked = (await pages()) - before;
+  expect(asked, `${asked} rail pages were asked for while the player covered Home`).toBe(0);
 });

@@ -16,6 +16,7 @@ import {
   onIngestProgress as onMockIngestProgress,
   onMosaicState as onMockMosaicState,
   onSleepState as onMockSleepState,
+  onSleepFired as onMockSleepFired,
   onAssistantStep as onMockAssistantStep,
   onPlayerState as onMockPlayerState,
 } from './mock';
@@ -104,6 +105,15 @@ export function onPlayerState(fn: (s: PlayerState) => void): () => void {
 export function onSleepState(fn: (s: Events['sleep.state']) => void): () => void {
   if (!isNativeHost()) return onMockSleepState(fn);
   return subscribe<Events['sleep.state']>('sleep.state', fn);
+}
+
+/**
+ * The sleep timer went off. The host has already done what it was set to do; the page
+ * closes the player when that was stopping playback (C15).
+ */
+export function onSleepFired(fn: (d: Events['sleep.fired']) => void): () => void {
+  if (!isNativeHost()) return onMockSleepFired(fn);
+  return subscribe<Events['sleep.fired']>('sleep.fired', fn);
 }
 
 /** How far the update installer has got (docs/DECISIONS.md D17). */

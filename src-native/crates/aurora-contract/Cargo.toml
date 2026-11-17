@@ -13,5 +13,5 @@ description = "Mechanical checks on the IPC contract — text analysis, no host 
 serde_json.workspace = true
 aurora-core.workspace = true
 aurora-db.workspace = true
-aurora-player.workspace = true
+aurora-video.workspace = true
 aurora-ingest.workspace = true

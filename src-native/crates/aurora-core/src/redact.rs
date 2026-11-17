@@ -1,9 +1,10 @@
 //! Stripping credentials out of a URL before it reaches a log line (README C10).
 //!
 //! In `aurora-core` rather than in `aurora-ingest`, where it used to live, because
-//! `aurora-player` needs it and cannot depend on a crate that carries `reqwest`. That
-//! was not a tidiness problem: `mpv.rs` logged mpv's own output, which names the URL it
-//! failed to open, through no redaction at all, and `docs/PRIVACY.md` says plainly that
+//! the old player crate needed it and could not depend on a crate that carries
+//! `reqwest`. That was not a tidiness problem: it logged mpv's own output, which names
+//! the URL it failed to open, through no redaction at all (`aurora-video` now never puts
+//! a stream address in a log line, writing `<address>` instead), and `docs/PRIVACY.md` says plainly that
 //! "every URL written to the log goes through `http::redact` first" (R-62).
 //!
 //! Pure string work, like everything else here. `http::redact` is re-exported from this

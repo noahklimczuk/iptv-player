@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests-host"))
 from driver import WD  # noqa: E402
 from fakegithub import FakeGitHub  # noqa: E402
 
-# Windows is what this project ships, and the only host where `aurora-player` compiles
+# Windows is what this project ships, and the only host where the video engine runs
 # libmpv in at all, so the harness runs there too. It differs in three places: there is
 # already a desktop, so no Xvfb; the WebView is WebView2, so `tauri-driver` drives it
 # through msedgedriver rather than WebKitWebDriver; and a file that is still open cannot
@@ -445,6 +445,10 @@ def driver_env(github):
     # stop agreeing -- which is the shape R-164 had, where cleanup asked `cmdkey` to
     # delete from `AuroraTV` while every secret was filed under `AuroraTV-tests-host`.
     env.setdefault("AURORA_CREDENTIAL_SERVICE", CREDENTIAL_SERVICE)
+    # And the web view's own profile. Tauri puts it under
+    # `%LOCALAPPDATA%\tv.aurora.player\EBWebView` whatever `portable.txt` says, which is
+    # the installed copy's: its cookies, storage and cache, shared with every run.
+    env.setdefault("WEBVIEW2_USER_DATA_FOLDER", os.path.join(DATA, "EBWebView"))
     return env
 
 

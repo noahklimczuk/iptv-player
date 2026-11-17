@@ -125,7 +125,13 @@ impl Request {
             Some(ts) => {
                 out.push(Text("cache", "yes".into()));
                 out.push(Text("cache-on-disk", "yes".into()));
-                out.push(Text("cache-dir", ts.dir.to_string_lossy().into_owned()));
+                // `demuxer-cache-dir`: mpv has no `cache-dir`, and a setting it does not
+                // know is refused, which leaves the buffer in memory (found on a real
+                // channel: 76 MB of RAM and nothing on disk).
+                out.push(Text(
+                    "demuxer-cache-dir",
+                    ts.dir.to_string_lossy().into_owned(),
+                ));
                 out.push(Text("demuxer-seekable-cache", "yes".into()));
                 // Ahead as well as behind. Paused live TV is the playhead falling
                 // behind while the channel goes on arriving, and all of that arrives
@@ -137,7 +143,7 @@ impl Request {
             None => {
                 out.push(Text("cache", if self.live { "yes" } else { "auto" }.into()));
                 out.push(Text("cache-on-disk", "no".into()));
-                out.push(Text("cache-dir", String::new()));
+                out.push(Text("demuxer-cache-dir", String::new()));
                 out.push(Text("demuxer-seekable-cache", "auto".into()));
                 out.push(Text("demuxer-max-bytes", DEFAULT_AHEAD_BYTES.to_string()));
                 out.push(Text(
@@ -279,7 +285,7 @@ mod tests {
     fn a_buffered_channel_keeps_its_history_on_disk() {
         let s = buffered().settings();
         assert_eq!(text(&s, "cache-on-disk"), "yes");
-        assert_eq!(text(&s, "cache-dir"), "C:/buf");
+        assert_eq!(text(&s, "demuxer-cache-dir"), "C:/buf");
         assert_eq!(
             text(&s, "demuxer-max-back-bytes"),
             Budget::default().bytes.to_string()
@@ -311,7 +317,7 @@ mod tests {
     fn turning_the_buffer_off_puts_the_defaults_back() {
         let s = channel().settings();
         assert_eq!(text(&s, "cache-on-disk"), "no");
-        assert_eq!(text(&s, "cache-dir"), "");
+        assert_eq!(text(&s, "demuxer-cache-dir"), "");
         assert_eq!(
             text(&s, "demuxer-max-back-bytes"),
             DEFAULT_BEHIND_BYTES.to_string()

@@ -8,7 +8,7 @@ pub enum AppError {
     #[error(transparent)]
     Db(#[from] aurora_db::DbError),
     #[error(transparent)]
-    Player(#[from] aurora_player::PlayerError),
+    Video(#[from] aurora_video::VideoError),
     /// A newer tune replaced this one before it finished.
     ///
     /// Not a failure the viewer should be told about: they pressed a second button,

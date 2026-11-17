@@ -1,8 +1,8 @@
 """
 The Phase 0 spike, on a machine with a screen.
 
-Everything else in this repository stops where a picture would appear. `aurora-player`
-falls back to `NullBackend` off Windows, the browser journeys drive a mock, and the
+Everything else in this repository stops where a picture would appear. Off Windows the
+app has no video engine at all, the browser journeys drive a mock, and the
 Windows CI job compiles the mpv backend without ever running it — so
 `AUDIT/release-checklist.md` item 1 has stood open as "run it and look at it", with
 three questions under it that no test could answer:
@@ -89,7 +89,7 @@ def wait_for_playing(d, timeout=45):
 
 def run(d, ctx):
     if sys.platform != "win32":
-        raise Skipped("mpv is Windows-only; this platform has NullBackend")
+        raise Skipped("mpv is Windows-only; this platform has no video engine")
     if not M3U:
         raise Skipped("no AURORA_TEST_STREAM_M3U in the environment")
 
@@ -111,15 +111,17 @@ def run(d, ctx):
     d.click(d.by_text("button", "Start watching"))
     time.sleep(3)
 
-    # The log's own account, before anything is asked of the screen. `create_backend`
-    # falls back to `NullBackend` when libmpv will not load, which would make every
-    # assertion below fail for a reason that has nothing to do with compositing.
+    # The log's own account, before anything is asked of the screen. The app starts
+    # with no video engine when libmpv will not load or the surface cannot be made,
+    # which would make every assertion below fail for a reason that has nothing to do
+    # with compositing.
     log = ctx.log()
-    assert "libmpv unavailable" not in log, (
-        "libmpv did not load, so this is NullBackend and there is nothing to see. "
-        "Is libmpv-2.dll beside the exe?"
+    assert "no video engine" not in log and "no video surface" not in log, (
+        "the app started without video, so there is nothing to see. "
+        "Is libmpv-2.dll beside the exe? "
+        f"{[ln for ln in log.splitlines() if 'no video' in ln]}"
     )
-    assert "video surface attached" in log, (
+    assert "video engine ready" in log, (
         "the surface was never created; the log says "
         f"{[ln for ln in log.splitlines() if 'surface' in ln]}"
     )
@@ -172,9 +174,9 @@ def run(d, ctx):
 
     order = wp.children_front_to_back(hwnd)
     assert order, "the window has no children at all, so nothing was ever attached"
-    surface = [h for h in order if wp.class_name(h).lower() == "static"]
+    surface = [h for h in order if wp.is_video_surface(h)]
     assert surface, (
-        "no STATIC child window: mpv's surface is not there. Children: "
+        "no video surface child window: mpv's surface is not there. Children: "
         f"{[wp.describe(h) for h in order]}"
     )
     surface = surface[0]

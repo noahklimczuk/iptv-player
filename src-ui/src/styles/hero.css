@@ -7,3 +7,25 @@
    Nothing here shrinks; `HeroBillboard` gives up synopsis lines instead until the
    whole column fits. */
 .hero-text > * { flex-shrink: 0; }
+
+/* The backdrop's slow drift. A keyframe animation of `transform` alone runs on the
+   compositor, with no script or style work on the main thread.
+
+   It is stepped, not smooth. The glass surfaces over the hero blur whatever is under
+   them, so every frame the backdrop moves, the GPU process re-blurs them all; a smooth
+   zoom asked for that sixty times a second, forever (the billboard rotates before the
+   run ends). 96 steps over 24 s is four updates a second, each a quarter of a pixel at
+   the edges, which still reads as a drift. Measured on idle Home in WebView2, % of one
+   core: smooth 41.6, steps(96) 16.6, no zoom 8.1.
+
+   `HeroBillboard` only adds the class while animations are on; the reduce-motion rule
+   is here as well so a stale class can never move. */
+@keyframes hero-drift {
+  from { transform: scale(1); }
+  to { transform: scale(1.03); }
+}
+.hero-drift {
+  animation: hero-drift 24s steps(96) forwards;
+  will-change: transform;
+}
+:root[data-motion='off'] .hero-drift { animation: none; }

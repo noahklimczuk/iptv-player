@@ -250,14 +250,14 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
 
     hwnd = wp.find("Aurora")
     assert hwnd, "no window titled Aurora on the desktop"
-    # Visible STATIC children only, and there should be exactly one before a mosaic
+    # Visible video surfaces only, and there should be exactly one before a mosaic
     # exists. Taking the frontmost without filtering picked a hidden sibling and reported
     # "already hidden before any mosaic", which was the lookup being wrong rather than the
     # app. `video_surface` is the scenario that pins the z-order itself.
     visible = [
         c
         for c in wp.children_front_to_back(hwnd)
-        if wp.class_name(c).lower() == "static" and wp.is_visible(c)
+        if wp.is_video_surface(c) and wp.is_visible(c)
     ]
     assert len(visible) == 1, (
         "expected one visible video surface before any mosaic; found "
@@ -317,10 +317,10 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
     # (F-36). `children_front_to_back` is front-first, so the tile must come before the
     # main surface in that list.
     #
-    # Polled past the player's own start timeout, not up to it. `aurora_player`'s
-    # watchdog fails a stream that never starts after DEFAULT_START_TIMEOUT_SECS (20),
-    # and `Mosaic::tick` turns that into the tile's `error` — so at exactly 20 seconds
-    # this loop was giving up in the same moment the app was deciding. On a line having a
+    # Polled past the engine's own start limit, not up to it. `aurora_video` fails a
+    # stream that never starts after OPEN_LIMIT_SECS (25), and `Mosaic::tick` turns that
+    # into the tile's `error` — so a loop that stopped at the limit would give up in the
+    # same moment the app was deciding. On a line having a
     # bad minute that produced "no tile surface", which reads like the z-order bug and
     # was the provider refusing a second connection: seen once here, with the same run's
     # recording managing 5.0 MB where a healthy one gets 29.
@@ -337,7 +337,7 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
         order = [
             c
             for c in wp.children_front_to_back(hwnd)
-            if wp.class_name(c).lower() == "static" and wp.is_visible(c)
+            if wp.is_video_surface(c) and wp.is_visible(c)
         ]
         if len(order) > 1 and order.index(main) > 0:
             ordered = True
@@ -368,7 +368,7 @@ def _a_mosaic_gets_the_main_surface_out_of_the_way(d, ctx):
     tiles = [
         c
         for c in wp.children_front_to_back(hwnd)
-        if wp.class_name(c).lower() == "static" and wp.is_visible(c) and c != main
+        if wp.is_video_surface(c) and wp.is_visible(c) and c != main
     ]
     rects = [wp.window_rect(t) for t in tiles]
     print(f"   mosaic: {len(tiles)} visible surface(s) at {[(r[0] - cx, r[1] - cy, r[2], r[3]) for r in rects]}")

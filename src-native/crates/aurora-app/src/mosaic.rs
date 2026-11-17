@@ -37,19 +37,18 @@ use aurora_core::failover;
 use aurora_core::mosaic::{Budget, Demand, Layout, Rect};
 use aurora_db::repo::{channels, mosaic as repo};
 use aurora_db::rusqlite::Connection;
-use aurora_player::{PlayerBackend, PlayerStatus};
+use aurora_video::{Request, Status};
 use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::error::{AppError, Result};
-
-/// How a tile's backend is made.
-///
-/// Injected rather than calling `create_backend` directly so the service can be driven
-/// by `NullBackend`s in a test: everything here except the decoding — the budget, the
-/// geometry, which tile has audio, what happens to a channel with no sources — is
-/// logic that would otherwise only ever run on Windows with a subscription.
-pub type TileFactory = Arc<dyn Fn() -> Box<dyn PlayerBackend> + Send + Sync>;
+use crate::play::resolve::{self, What};
+/// How a tile's player is made: injected, so the mosaic can be driven by fakes in a
+/// test. Everything here except the decoding — the budget, the geometry, which tile has
+/// audio, what happens to a channel with no sources — is logic that would otherwise only
+/// ever run on Windows with a subscription.
+pub use crate::play::tile::TileFactory;
+use crate::play::tile::TileVideo;
 
 /// One tile, as the UI draws it.
 #[derive(Debug, Clone, Serialize)]
@@ -61,7 +60,7 @@ pub struct TileView {
     pub name: Option<String>,
     /// Whether this is the tile with audio.
     pub focused: bool,
-    pub status: PlayerStatus,
+    pub status: Status,
     /// Whether this tile is the one holding the picture.
     ///
     /// Always true of a filled tile in an ordinary mosaic, where every tile has its own
@@ -128,8 +127,11 @@ pub struct BudgetView {
 struct Tile {
     channel_id: Option<i64>,
     name: Option<String>,
-    player: Option<Box<dyn PlayerBackend>>,
+    player: Option<Box<dyn TileVideo>>,
     error: Option<String>,
+    /// Whether this tile's current stream has been seen playing, so the source is
+    /// credited once, when it is, rather than when the load was merely accepted.
+    credited: bool,
     /// Every URL this tile's channel has, best bet first, with the source id each came
     /// from so an outcome can be recorded against it.
     ///
@@ -141,8 +143,9 @@ struct Tile {
     candidates: Vec<(i64, String)>,
     /// Where this tile has got to in `candidates`, and what it has already tried.
     attempt: aurora_core::failover::Attempt,
-    /// What to hand `load`, kept so a reload does not have to re-derive it.
-    options: aurora_player::backend::LoadOptions,
+    /// What to hand `load` apart from the address, kept so a reload does not have to
+    /// re-derive it.
+    request: Request,
     /// Where this tile's surface goes, kept so recovery can build a new instance when
     /// the old one is gone.
     rect: Rect,
@@ -156,9 +159,10 @@ impl Tile {
             name,
             player: None,
             error,
+            credited: false,
             candidates: Vec::new(),
             attempt: aurora_core::failover::Attempt::default(),
-            options: aurora_player::backend::LoadOptions::default(),
+            request: Request::default(),
             rect: Rect {
                 x: 0,
                 y: 0,
@@ -173,13 +177,13 @@ impl Tile {
 ///
 /// Named because `tick` carries a vector of them across the gap where the session lock
 /// is released, and the tuple spelt out there is the sort of type nobody reads twice.
-type Opened = (usize, std::result::Result<Box<dyn PlayerBackend>, String>);
+type Opened = (usize, std::result::Result<Box<dyn TileVideo>, String>);
 
 /// One tile's reconnection: taken under the session lock, performed without it.
 struct Reload {
     index: usize,
     source: (i64, String),
-    options: aurora_player::backend::LoadOptions,
+    request: Request,
     rect: Rect,
 }
 
@@ -241,8 +245,8 @@ pub struct Mosaic {
     /// The window tiles are children of, recorded when the main video surface attached.
     ///
     /// Zero until then, and zero for ever off Windows, where there is no surface to be
-    /// a child of. A tile whose backend renders nothing does not need one, which is why
-    /// this is not an error — `NullBackend::attach` is never called at all.
+    /// a child of. Off Windows a tile draws nothing and is refused before it is made, so
+    /// this is not an error in itself.
     parent: AtomicIsize,
     /// The client area to divide. Updated on resize.
     size: Mutex<(u32, u32)>,
@@ -275,8 +279,12 @@ pub struct Mosaic {
     /// shown again, and holding it means those two cannot drift apart. Done from the
     /// commands instead, `open`, `open_saved`, `close` and `promote` would each have to
     /// remember, and the one that forgot would be a mosaic nobody can see.
-    main: Arc<Mutex<Box<dyn PlayerBackend>>>,
+    main: SinkMain,
 }
+
+/// Sends the main player's surface, full size, beneath the tiles
+/// (`crate::play::player::Player::sink_under_tiles`).
+pub type SinkMain = Arc<dyn Fn(u32, u32) + Send + Sync>;
 
 impl Mosaic {
     /// Put the main player's surface underneath the tiles.
@@ -308,9 +316,7 @@ impl Mosaic {
             width: w.max(1),
             height: h.max(1),
         };
-        if let Err(e) = self.main.lock().place(rect) {
-            tracing::warn!("could not put the main video surface under the tiles: {e}");
-        }
+        (self.main)(rect.width, rect.height);
     }
 
     pub fn new(
@@ -318,7 +324,7 @@ impl Mosaic {
         dvr: Arc<crate::dvr::Dvr>,
         factory: TileFactory,
         data_dir: PathBuf,
-        main: Arc<Mutex<Box<dyn PlayerBackend>>>,
+        main: SinkMain,
         credentials: Arc<dyn aurora_ingest::credentials::CredentialStore>,
     ) -> Self {
         Self {
@@ -525,7 +531,7 @@ impl Mosaic {
     /// channel with no sources, and a stream the provider refuses are three ordinary
     /// things, and one of them must not take the other eight tiles down with it.
     ///
-    /// Tries every URL the channel has, in the order `live_sources` puts them — which is
+    /// Tries every URL the channel has, in the order the plan puts them — which is
     /// the order that encodes what worked last time. It used to take the first and stop,
     /// so a tile reported "this often means the line has hit its connection limit" on a
     /// channel the main player would have tuned on its second source.
@@ -542,69 +548,74 @@ impl Mosaic {
             return Tile::blank(None, None, None);
         };
 
-        let resolved = {
+        // The same plan the main player tunes from: every source the channel has, best
+        // bet first, each address rebuilt where the library holds a stream id rather
+        // than a URL (R-126), and the provider's own User-Agent and Referer. A source
+        // whose provider has no saved password is left out, and the plan says so when
+        // none is left.
+        let planned = {
             let db = self.db.lock();
-            crate::window::live_sources(&db, channel_id, now)
+            resolve::plan(
+                &db,
+                self.credentials.as_ref(),
+                What::Channel(channel_id),
+                None,
+                now,
+            )
         };
-        let (sources, mut options) = match resolved {
-            Ok(pair) => pair,
+        let plan = match planned {
+            Ok(plan) => plan,
             Err(e) => {
                 let name = channel_name(&self.db.lock(), channel_id);
                 return Tile::blank(Some(channel_id), name, Some(e.to_string()));
             }
         };
-        let name = options.title.clone();
-
-        // Tiles are not the main player: no timeshift buffer, because nine on-disk ring
-        // buffers is a disk fire and nobody rewinds a tile; and muted by default, with
-        // `apply_audio` turning exactly one back on.
-        options.timeshift = None;
-
-        // Each candidate's address, rebuilt where the library holds a stream id instead
-        // of a URL (R-126). A source whose provider has no saved password is dropped
-        // rather than failing the tile, exactly as in `play_live`: the others may still
-        // play, and the refusal below says what happened when none of them can.
-        let (candidates, refusal) = {
-            let db = self.db.lock();
-            let mut access = std::collections::HashMap::new();
-            let mut out = Vec::new();
-            let mut refusal = None;
-            for s in sources {
-                match crate::streams::playable(
-                    &db,
-                    self.credentials.as_ref(),
-                    &mut access,
-                    aurora_core::model::MediaKind::Live,
-                    &crate::streams::StreamRef::from(&s),
-                ) {
-                    Ok(url) => out.push((s.id, url)),
-                    Err(e) => refusal = Some(e.to_string()),
-                }
-            }
-            (out, refusal)
-        };
+        let name = plan
+            .label
+            .title
+            .clone()
+            .or_else(|| channel_name(&self.db.lock(), channel_id));
+        let candidates: Vec<(i64, String)> = plan
+            .candidates
+            .iter()
+            // A channel's sources always have an id; only films and episodes, which
+            // never reach a tile, come without one.
+            .filter_map(|c| c.source_id.map(|id| (id, c.url.clone())))
+            .collect();
         if candidates.is_empty() {
             return Tile::blank(
                 Some(channel_id),
                 name,
-                Some(refusal.unwrap_or_else(|| {
-                    "Your provider listed this channel without a stream.".into()
-                })),
+                Some("Your provider listed this channel without a stream.".into()),
             );
         }
+        // Tiles are not the main player: no rewind buffer, because nine on-disk ring
+        // buffers is a disk fire and nobody rewinds a tile; and muted when opened, with
+        // `apply_audio` turning exactly one back on.
+        let request = Request {
+            url: String::new(),
+            headers: Vec::new(),
+            user_agent: plan.user_agent.clone(),
+            referrer: plan.referrer.clone(),
+            start_secs: None,
+            live: true,
+            cache_secs: plan.buffer_secs,
+            timeshift: None,
+        };
 
         let mut tile = Tile {
             channel_id: Some(channel_id),
             name,
             player: None,
             error: None,
+            credited: false,
             attempt: aurora_core::failover::Attempt {
                 current: 0,
                 sources: candidates.len(),
                 ..Default::default()
             },
             candidates,
-            options,
+            request,
             rect,
         };
 
@@ -620,13 +631,14 @@ impl Mosaic {
             tile.attempt.current = which;
             match self.open_candidate(
                 &tile.candidates[which],
-                &tile.options,
+                &tile.request,
                 tile.rect,
                 parent,
                 now,
             ) {
                 Ok(player) => {
                     tile.player = Some(player);
+                    tile.credited = false;
                     return tile;
                 }
                 Err(e) => last = Some(e),
@@ -655,13 +667,14 @@ impl Mosaic {
             tile.attempt.current = which;
             match self.open_candidate(
                 &tile.candidates[which],
-                &tile.options,
+                &tile.request,
                 tile.rect,
                 parent,
                 now,
             ) {
                 Ok(player) => {
                     tile.player = Some(player);
+                    tile.credited = false;
                     tile.error = None;
                     tile.attempt.retries = 0;
                     tile.attempt.failed_at = None;
@@ -676,55 +689,49 @@ impl Mosaic {
         tile.error = last;
     }
 
-    /// Open the candidate `tile.attempt.current` points at, into a fresh instance.
+    /// Open a candidate into a fresh instance.
     ///
-    /// The instance is made here rather than reused, because a backend that failed to
-    /// load is not a backend worth asking again — and dropping the one that did not work
-    /// is what releases the connection it may be holding on the way to saying so.
+    /// The instance is made here rather than reused, because one whose stream failed is
+    /// not worth asking again, and dropping it is what releases the connection it may be
+    /// holding.
     ///
-    /// Records the outcome against the source, which a tile never used to do. The order
-    /// `live_sources` returns is built from `fail_count` and `last_ok_at`, so a mosaic
-    /// that learned nothing left the next tune — in the main player, on the same
-    /// channel — starting from a URL this tile had already found dead.
+    /// `Err` is a refusal before anything opened (no window, no player, an address the
+    /// engine would not take), and is recorded against the source. A stream that fails
+    /// to open over the network arrives later, as an error in the tile's report, and
+    /// `tick` deals with it the same way it deals with one that dies. Success is
+    /// credited there too, once the stream is seen playing: the sources' order is built
+    /// from `fail_count` and `last_ok_at`, so what a tile learns orders the next tune in
+    /// the main player as well.
     fn open_candidate(
         &self,
         source: &(i64, String),
-        options: &aurora_player::backend::LoadOptions,
+        template: &Request,
         rect: Rect,
         parent: isize,
         now: i64,
-    ) -> std::result::Result<Box<dyn PlayerBackend>, String> {
+    ) -> std::result::Result<Box<dyn TileVideo>, String> {
         let (source_id, url) = source;
-
-        let mut player = (self.factory)();
-        if parent != 0 {
-            if let Err(e) = player.attach(parent, rect.width.max(1), rect.height.max(1)) {
-                return Err(format!("This tile has no video surface: {e}"));
-            }
-        }
-        if let Err(e) = player.place(rect) {
-            tracing::warn!("a mosaic tile could not be placed: {e}");
-        }
-        let _ = player.set_muted(true);
-
-        match player.load(url, options) {
-            Ok(()) => {
-                let db = self.db.lock();
-                let _ = aurora_db::repo::sources::record_ok(&db, *source_id, now);
-                Ok(player)
-            }
-            Err(e) => {
-                let db = self.db.lock();
-                let _ = aurora_db::repo::sources::record_failure(&db, *source_id, now);
-                drop(db);
-                // Classified rather than printed, because the commonest failure here is
-                // the one this module is about: a provider at its connection limit
-                // answers 403, and `NetFailure` already turns that into "This often
-                // means the line has hit its connection limit".
-                let failure = aurora_core::neterr::NetFailure::classify(&e.to_string());
-                Err(format!("{}. {}", failure.message, failure.cause))
-            }
-        }
+        let refused = |e: String| {
+            let db = self.db.lock();
+            let _ = aurora_db::repo::sources::record_failure(&db, *source_id, now);
+            e
+        };
+        let mut player = (self.factory)(parent, rect).map_err(refused)?;
+        player.place(rect);
+        player.set_muted(true);
+        player
+            .load(Request {
+                url: url.clone(),
+                ..template.clone()
+            })
+            .map_err(|e| {
+                // Classified rather than printed: `NetFailure` has words a viewer can
+                // act on, and the commonest failure here -- a provider at its
+                // connection limit answering 403 -- is the one this module is about.
+                let failure = aurora_core::neterr::NetFailure::classify(&e);
+                refused(format!("{}. {}", failure.message, failure.cause))
+            })?;
+        Ok(player)
     }
 
     /// Close the mosaic, dropping every instance and with them every connection.
@@ -732,12 +739,9 @@ impl Mosaic {
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(mut session) = self.session.lock().take() {
             for tile in &mut session.tiles {
-                if let Some(player) = tile.player.as_mut() {
-                    let _ = player.stop();
-                }
                 // Dropped here rather than at the end of the function so a nine-tile
-                // mosaic releases its connections one at a time as it goes, rather than
-                // all at once after the last `stop` has been waited for.
+                // mosaic releases its connections one at a time as it goes. Dropping a
+                // tile shuts its player down, which closes its stream.
                 tile.player = None;
             }
         }
@@ -868,9 +872,6 @@ impl Mosaic {
             // connection at the same time — on a line with exactly enough for the
             // layout, building first would be one over the limit for as long as the
             // load takes.
-            if let Some(player) = session.tiles[index].player.as_mut() {
-                let _ = player.stop();
-            }
             session.tiles[index].player = None;
 
             // Claimed while the lock is held, so the next caller counts it.
@@ -938,7 +939,7 @@ impl Mosaic {
         let rects = session.layout.rects_now((width.max(1), height.max(1)));
         for (tile, rect) in session.tiles.iter_mut().zip(rects) {
             if let Some(player) = tile.player.as_mut() {
-                let _ = player.place(rect);
+                player.place(rect);
             }
         }
         // Every tile has just gone to the bottom of the z-order, so the main surface has
@@ -969,23 +970,29 @@ impl Mosaic {
         // Phase one, under the lock: pump every tile, notice what died, and decide. All
         // cheap -- no loads, no network, no instances made.
         let mut reloads: Vec<Reload> = Vec::new();
-        let mut retired: Vec<Box<dyn PlayerBackend>> = Vec::new();
+        let mut retired: Vec<Box<dyn TileVideo>> = Vec::new();
         for (index, tile) in session.tiles.iter_mut().enumerate() {
             let Some(player) = tile.player.as_mut() else {
                 continue;
             };
-            player.pump(0.0);
-            let state = player.state();
+            let state = player.report();
 
-            if state.status != PlayerStatus::Error {
+            if state.status != Status::Error {
                 // Playing again. The error has to go, or a tile that recovered on its
                 // own keeps the sentence explaining why it has no picture for the life
                 // of the session -- which is what `tile.error.is_none()` used to
                 // guarantee, since nothing ever cleared it.
-                if state.status == PlayerStatus::Playing {
+                if state.status == Status::Playing {
                     tile.error = None;
                     tile.attempt.retries = 0;
                     tile.attempt.failed_at = None;
+                    if !tile.credited {
+                        tile.credited = true;
+                        if let Some((source_id, _)) = tile.candidates.get(tile.attempt.current) {
+                            let db = self.db.lock();
+                            let _ = aurora_db::repo::sources::record_ok(&db, *source_id, now);
+                        }
+                    }
                 }
                 continue;
             }
@@ -1042,7 +1049,7 @@ impl Mosaic {
                     reloads.push(Reload {
                         index,
                         source: tile.candidates[tile.attempt.current].clone(),
-                        options: tile.options.clone(),
+                        request: tile.request.clone(),
                         rect: tile.rect,
                     });
                 }
@@ -1069,7 +1076,7 @@ impl Mosaic {
                         source: tile.candidates
                             [tile.attempt.current.min(tile.candidates.len() - 1)]
                         .clone(),
-                        options: tile.options.clone(),
+                        request: tile.request.clone(),
                         rect: tile.rect,
                     });
                     session.rotation = Some(Rotation {
@@ -1105,7 +1112,7 @@ impl Mosaic {
                     r.index,
                     r.source.0
                 );
-                let outcome = self.open_candidate(&r.source, &r.options, r.rect, parent, now);
+                let outcome = self.open_candidate(&r.source, &r.request, r.rect, parent, now);
                 (r.index, outcome)
             })
             .collect();
@@ -1126,6 +1133,7 @@ impl Mosaic {
                 match outcome {
                     Ok(player) => {
                         tile.player = Some(player);
+                        tile.credited = false;
                         tile.error = None;
                     }
                     Err(e) => tile.error = Some(e),
@@ -1183,7 +1191,7 @@ fn apply_audio(session: &mut Session) {
     let focused = session.focused;
     for (index, tile) in session.tiles.iter_mut().enumerate() {
         if let Some(player) = tile.player.as_mut() {
-            let _ = player.set_muted(index != focused);
+            player.set_muted(index != focused);
         }
     }
 }
@@ -1218,11 +1226,11 @@ fn view_of(session: &Session, rects: &[Rect]) -> MosaicView {
                 name: tile.name.clone(),
                 focused: index == session.focused,
                 showing: showing.map_or(tile.player.is_some(), |s| s == index),
-                status: tile.player.as_ref().map(|p| p.state().status).unwrap_or(
+                status: tile.player.as_ref().map(|p| p.report().status).unwrap_or(
                     if tile.error.is_some() {
-                        PlayerStatus::Error
+                        Status::Error
                     } else {
-                        PlayerStatus::Idle
+                        Status::Idle
                     },
                 ),
                 error: tile.error.clone(),
@@ -1346,7 +1354,7 @@ pub fn mosaic_check(services: State<'_, Services>, args: LayoutArgs) -> Result<B
 #[tauri::command(async)]
 pub fn mosaic_open(services: State<'_, Services>, args: OpenArgs) -> Result<MosaicView> {
     let layout = layout_of(&args.layout)?;
-    let _ = services.playback.stop();
+    let _ = services.player.stop();
     services
         .mosaic
         .open(layout, &args.channel_ids, crate::now_unix())
@@ -1360,7 +1368,7 @@ pub fn mosaic_open(services: State<'_, Services>, args: OpenArgs) -> Result<Mosa
 #[tauri::command(async)]
 pub fn mosaic_open_rotating(services: State<'_, Services>, args: OpenArgs) -> Result<MosaicView> {
     let layout = layout_of(&args.layout)?;
-    let _ = services.playback.stop();
+    let _ = services.player.stop();
     services
         .mosaic
         .open_rotating(layout, &args.channel_ids, crate::now_unix())
@@ -1402,13 +1410,15 @@ pub fn mosaic_set_tile(services: State<'_, Services>, args: SetTileArgs) -> Resu
 pub fn mosaic_promote(
     services: State<'_, Services>,
     args: TileArgs,
-) -> Result<aurora_player::PlayerState> {
+) -> Result<aurora_video::PlayerState> {
     let channel_id = services.mosaic.channel_at(args.index)?;
     // Released before tuning, not after: on a line with exactly enough connections for
     // the layout, the main player's stream would be one over for as long as the tiles
     // were still up, and the provider would refuse the one the viewer just asked for.
     services.mosaic.close();
-    services.playback.play_live(channel_id, crate::now_unix())
+    services
+        .player
+        .play(crate::play::resolve::What::Channel(channel_id), None)
 }
 
 #[tauri::command(async)]
@@ -1436,7 +1446,7 @@ pub fn mosaic_open_saved(services: State<'_, Services>, args: IdArgs) -> Result<
     .ok_or_else(|| AppError::Other("That saved layout is gone.".into()))?;
 
     let layout = layout_of(&saved.layout)?;
-    let _ = services.playback.stop();
+    let _ = services.player.stop();
     services
         .mosaic
         .open(layout, &saved.channels, crate::now_unix())
@@ -1451,12 +1461,38 @@ pub fn mosaic_delete_layout(services: State<'_, Services>, args: IdArgs) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aurora_player::NullBackend;
+    use crate::play::tile::TileVideo;
+    use aurora_video::Report;
+
+    /// A tile that plays whatever it is given, at once: no decoding, but every decision
+    /// the mosaic makes is real.
+    #[derive(Default)]
+    struct Null {
+        loaded: bool,
+    }
+
+    impl TileVideo for Null {
+        fn load(&mut self, _: Request) -> std::result::Result<(), String> {
+            self.loaded = true;
+            Ok(())
+        }
+        fn report(&self) -> Report {
+            Report {
+                status: if self.loaded {
+                    Status::Playing
+                } else {
+                    Status::Idle
+                },
+                ..Report::default()
+            }
+        }
+        fn place(&mut self, _: Rect) {}
+        fn set_muted(&mut self, _: bool) {}
+    }
 
     const NOW: i64 = 1_760_000_000;
 
-    /// A mosaic wired to `NullBackend`s: no decoding, but every decision this module
-    /// makes is real.
+    /// A mosaic wired to `Null` tiles.
     fn mosaic(limit: Option<i64>) -> (Mosaic, Arc<crate::dblock::TimedMutex<Connection>>) {
         let db = aurora_db::open_memory().unwrap();
         db.execute(
@@ -1473,14 +1509,15 @@ mod tests {
             std::env::temp_dir(),
             std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
         ));
-        let factory: TileFactory = Arc::new(|| Box::new(NullBackend::default()));
+        let factory: TileFactory =
+            Arc::new(|_, _| Ok(Box::new(Null::default()) as Box<dyn TileVideo>));
         (
             Mosaic::new(
                 Arc::clone(&db),
                 dvr,
                 factory,
                 std::env::temp_dir(),
-                Arc::new(Mutex::new(Box::new(NullBackend::default()))),
+                Arc::new(|_, _| {}),
                 std::sync::Arc::new(aurora_ingest::credentials::MemoryStore::default()),
             ),
             db,
@@ -1490,7 +1527,7 @@ mod tests {
     /// The same, with a fake handle for the main surface and every tile placement
     /// recorded.
     ///
-    /// `NullBackend` has no window and reports no handle, so it cannot answer the
+    /// `Null` has no window and records nothing, so it cannot answer the
     /// question this is about: was each tile ordered *above* the main player's surface,
     /// or sent to the bottom of the z-order behind it.
     /// Every placement, in the order they were asked for, tagged with who was moved.
@@ -1510,17 +1547,26 @@ mod tests {
         let (m, db) = mosaic(limit);
         let placed: Placements = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&placed);
-        let main: Arc<Mutex<Box<dyn PlayerBackend>>> = Arc::new(Mutex::new(Box::new(Spy {
-            who: "main",
-            placed: Arc::clone(&placed),
-            gate: None,
-        })));
-        let factory: TileFactory = Arc::new(move || {
-            Box::new(Spy {
+        let main: SinkMain = {
+            let placed = Arc::clone(&placed);
+            Arc::new(move |width, height| {
+                placed.lock().push((
+                    "main",
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                    },
+                ))
+            })
+        };
+        let factory: TileFactory = Arc::new(move |_, _| {
+            Ok(Box::new(Spy {
                 who: "tile",
                 placed: Arc::clone(&log),
                 gate: None,
-            })
+            }) as Box<dyn TileVideo>)
         });
         (Mosaic { main, factory, ..m }, placed, db)
     }
@@ -1544,12 +1590,8 @@ mod tests {
         armed: Arc<std::sync::atomic::AtomicBool>,
     }
 
-    impl PlayerBackend for Spy {
-        fn load(
-            &mut self,
-            _: &str,
-            _: &aurora_player::backend::LoadOptions,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
+    impl TileVideo for Spy {
+        fn load(&mut self, _: Request) -> std::result::Result<(), String> {
             // `build_tile` runs outside the session lock, which is the whole point of
             // the finding: a tile loading is a tile not yet counted.
             if let Some(gate) = &self.gate {
@@ -1560,76 +1602,13 @@ mod tests {
             }
             Ok(())
         }
-        fn stop(&mut self) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
+        fn report(&self) -> Report {
+            Report::default()
         }
-        fn set_paused(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn seek(&mut self, _: f64, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_volume(&mut self, _: u32) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_muted(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_speed(&mut self, _: f64) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_audio_track(
-            &mut self,
-            _: Option<i64>,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_subtitle_track(
-            &mut self,
-            _: Option<i64>,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_aspect(
-            &mut self,
-            _: aurora_player::state::Aspect,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn pump(&mut self, _: f64) {}
-        fn state(&self) -> aurora_player::PlayerState {
-            aurora_player::PlayerState::default()
-        }
-        fn chapters(&self) -> Vec<aurora_core::markers::Chapter> {
-            Vec::new()
-        }
-        fn resize(
-            &mut self,
-            _: u32,
-            _: u32,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn place(&mut self, rect: Rect) -> std::result::Result<(), aurora_player::PlayerError> {
+        fn place(&mut self, rect: Rect) {
             self.placed.lock().push((self.who, rect));
-            Ok(())
         }
-        /// Nothing is hidden any more, so nothing has to be restored.
-        ///
-        /// Hiding the main surface was the first fix for the bug below, and it could not
-        /// be undone: `SetWindowPos` on a window whose sibling belongs to a thread with
-        /// no message loop does not return (AUDIT/findings.md F-36), so the window stayed
-        /// black after closing. Panicking here is how these tests say that approach must
-        /// not come back.
-        fn set_surface_visible(
-            &mut self,
-            visible: bool,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            panic!(
-                "asked to set the {} surface visible={visible}; see F-36",
-                self.who
-            );
-        }
+        fn set_muted(&mut self, _: bool) {}
     }
 
     /// What every instance a test made was asked to load, and which URLs misbehave.
@@ -1667,15 +1646,15 @@ mod tests {
     impl Flaky {
         fn factory(ledger: &Shared) -> TileFactory {
             let ledger = Arc::clone(ledger);
-            Arc::new(move || {
+            Arc::new(move |_, _| {
                 let mut l = ledger.lock();
                 l.live += 1;
                 l.peak = l.peak.max(l.live);
                 drop(l);
-                Box::new(Flaky {
+                Ok(Box::new(Flaky {
                     ledger: Arc::clone(&ledger),
                     url: None,
-                })
+                }) as Box<dyn TileVideo>)
             })
         }
     }
@@ -1686,85 +1665,32 @@ mod tests {
         }
     }
 
-    impl PlayerBackend for Flaky {
-        fn load(
-            &mut self,
-            url: &str,
-            _: &aurora_player::backend::LoadOptions,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
+    impl TileVideo for Flaky {
+        fn load(&mut self, request: Request) -> std::result::Result<(), String> {
+            let url = request.url;
             let mut l = self.ledger.lock();
-            if l.refuse.iter().any(|u| u == url) {
-                return Err(aurora_player::PlayerError::Command(format!(
-                    "refused {url}"
-                )));
+            if l.refuse.contains(&url) {
+                return Err(format!("refused {url}"));
             }
-            l.loaded.push(url.to_string());
-            self.url = Some(url.to_string());
+            l.loaded.push(url.clone());
+            self.url = Some(url);
             Ok(())
         }
-        fn state(&self) -> aurora_player::PlayerState {
+        fn report(&self) -> Report {
             let status = match &self.url {
                 // Asked of the ledger on every call rather than cached at load time, so
                 // a test can let a stream come back without touching the tile.
-                Some(u) if self.ledger.lock().dying.iter().any(|d| d == u) => PlayerStatus::Error,
-                Some(_) => PlayerStatus::Playing,
-                None => PlayerStatus::Idle,
+                Some(u) if self.ledger.lock().dying.iter().any(|d| d == u) => Status::Error,
+                Some(_) => Status::Playing,
+                None => Status::Idle,
             };
-            aurora_player::PlayerState {
+            Report {
                 status,
-                ..Default::default()
+                ..Report::default()
             }
         }
-        fn stop(&mut self) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_paused(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn seek(&mut self, _: f64, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_volume(&mut self, _: u32) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_muted(&mut self, _: bool) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_speed(&mut self, _: f64) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_audio_track(
-            &mut self,
-            _: Option<i64>,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_subtitle_track(
-            &mut self,
-            _: Option<i64>,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn set_aspect(
-            &mut self,
-            _: aurora_player::state::Aspect,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn pump(&mut self, _: f64) {}
-        fn chapters(&self) -> Vec<aurora_core::markers::Chapter> {
-            Vec::new()
-        }
-        fn resize(
-            &mut self,
-            _: u32,
-            _: u32,
-        ) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
-        fn place(&mut self, _: Rect) -> std::result::Result<(), aurora_player::PlayerError> {
-            Ok(())
-        }
+        fn place(&mut self, _: Rect) {}
+        fn set_muted(&mut self, _: bool) {}
     }
 
     /// A mosaic whose tiles can be made to fail, plus the ledger they all report to.
@@ -2419,7 +2345,7 @@ mod tests {
         for (i, tile) in view.tiles.iter().enumerate() {
             assert_eq!(tile.channel_id, Some(i as i64 + 1));
             assert_eq!(tile.name.as_deref(), Some(&*format!("Channel {}", i + 1)));
-            assert_eq!(tile.status, PlayerStatus::Playing, "tile {i}");
+            assert_eq!(tile.status, Status::Playing, "tile {i}");
             assert!(tile.error.is_none(), "tile {i}: {:?}", tile.error);
         }
     }
@@ -2492,7 +2418,7 @@ mod tests {
             2
         );
         for tile in &view.tiles[2..] {
-            assert_eq!(tile.status, PlayerStatus::Idle);
+            assert_eq!(tile.status, Status::Idle);
             assert!(tile.error.is_none());
         }
     }
@@ -2589,13 +2515,14 @@ mod tests {
             .open(Layout::Grid2x2, &[Some(1), Some(2), Some(3), None], NOW)
             .unwrap();
 
-        assert_eq!(view.tiles[0].status, PlayerStatus::Playing);
-        assert_eq!(view.tiles[2].status, PlayerStatus::Playing);
+        assert_eq!(view.tiles[0].status, Status::Playing);
+        assert_eq!(view.tiles[2].status, Status::Playing);
 
         let bad = &view.tiles[1];
-        assert_eq!(bad.status, PlayerStatus::Error);
+        assert_eq!(bad.status, Status::Error);
         let message = bad.error.clone().expect("a reason");
-        assert!(message.contains("without a stream"), "{message}");
+        // The main player's words for it, from the plan both of them tune from.
+        assert!(message.contains("no stream address"), "{message}");
         // And it is still named, so the viewer knows which channel failed.
         assert_eq!(bad.name.as_deref(), Some("No Source"));
     }
@@ -2610,8 +2537,8 @@ mod tests {
             .open(Layout::Grid2x2, &[Some(1), Some(404), None, None], NOW)
             .unwrap();
 
-        assert_eq!(view.tiles[0].status, PlayerStatus::Playing);
-        assert_eq!(view.tiles[1].status, PlayerStatus::Error);
+        assert_eq!(view.tiles[0].status, Status::Playing);
+        assert_eq!(view.tiles[1].status, Status::Error);
         assert!(view.tiles[1].error.is_some());
     }
 
@@ -2690,8 +2617,8 @@ mod tests {
         let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let placed: Placements = Arc::new(Mutex::new(Vec::new()));
         let gate_armed = Arc::clone(&armed);
-        let factory: TileFactory = Arc::new(move || {
-            Box::new(Spy {
+        let factory: TileFactory = Arc::new(move |_, _| {
+            Ok(Box::new(Spy {
                 who: "tile",
                 placed: Arc::clone(&placed),
                 gate: Some(Gate {
@@ -2699,7 +2626,7 @@ mod tests {
                     release: Arc::clone(&wait),
                     armed: Arc::clone(&gate_armed),
                 }),
-            })
+            }) as Box<dyn TileVideo>)
         });
         let m = Arc::new(Mosaic { factory, ..m });
 

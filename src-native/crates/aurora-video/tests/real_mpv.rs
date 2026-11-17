@@ -75,6 +75,38 @@ fn a_local_film_plays_seeks_pauses_and_gives_a_frame() {
 
 #[test]
 #[ignore]
+fn paused_before_it_opens_it_opens_paused_and_resumes() {
+    let e = engine();
+    e.load(Request {
+        url: video(),
+        cache_secs: 10,
+        ..Request::default()
+    })
+    .unwrap();
+    // At once, as Space pressed on the way in does: before mpv has opened the file.
+    assert_eq!(e.set_paused(true).unwrap().status, Status::Paused);
+    let r = until(&e, "opened, still paused", 20, |r| {
+        r.status == Status::Paused && r.duration_secs > 1.0
+    });
+    std::thread::sleep(Duration::from_millis(1500));
+    let held = e.report();
+    assert_eq!(held.status, Status::Paused);
+    assert!(
+        (held.position_secs - r.position_secs).abs() < 0.2,
+        "it played while paused: {} then {}",
+        r.position_secs,
+        held.position_secs
+    );
+    e.set_paused(false).unwrap();
+    until(&e, "playing with a picture", 20, |r| {
+        r.status == Status::Playing && r.has_picture && r.position_secs > held.position_secs
+    });
+    e.stop().unwrap();
+    e.shutdown();
+}
+
+#[test]
+#[ignore]
 fn nothing_listening_is_an_error_with_a_reason() {
     let e = engine();
     e.load(Request {
@@ -112,4 +144,52 @@ fn a_load_replacing_a_load_ends_on_the_second() {
     });
     assert!(r.error.is_none(), "{r:?}");
     assert!(!r.is_live);
+}
+
+/// Every per-file setting the engine sends is one this mpv knows, with and without a
+/// rewind buffer. A name mpv does not know is refused, and the engine carries on
+/// without it: `cache-dir` (mpv only has `demuxer-cache-dir`) silently kept the
+/// rewind buffer in memory instead of on disk.
+#[test]
+#[ignore = "needs libmpv-2.dll"]
+fn every_setting_the_engine_sends_is_one_mpv_accepts() {
+    use aurora_core::timeshift::Budget;
+    use aurora_video::request::Setting;
+    use aurora_video::{Driver, Timeshift};
+
+    let mut mpv = LibMpv::open(&Config {
+        wid: None,
+        headless: true,
+    })
+    .expect("libmpv");
+    let dir = std::env::temp_dir().join("aurora-real-mpv-settings");
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = Request {
+        url: "http://example.invalid/live.ts".into(),
+        live: true,
+        cache_secs: 8,
+        headers: vec![("X-Test".into(), "1".into())],
+        ..Request::default()
+    };
+    let buffered = Request {
+        timeshift: Some(Timeshift {
+            budget: Budget::default(),
+            dir,
+        }),
+        ..plain.clone()
+    };
+    let film = Request {
+        live: false,
+        start_secs: Some(12.5),
+        ..plain.clone()
+    };
+    for req in [plain, buffered, film] {
+        for s in req.settings() {
+            let applied = match &s {
+                Setting::Text(n, v) => mpv.set(n, v),
+                Setting::List(n, items) => mpv.set_list(n, items),
+            };
+            assert!(applied.is_ok(), "mpv refused {}: {applied:?}", s.name());
+        }
+    }
 }

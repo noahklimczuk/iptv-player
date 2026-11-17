@@ -130,7 +130,7 @@ says otherwise — where a scenario can open them. `run.py` writes that marker i
 
 ## What it cannot show, off Windows
 
-libmpv — on Linux. `aurora-player` falls back to `NullBackend` here, so video
+libmpv — on Linux. The app runs with no video engine here, so video
 compositing, the Win32 child surface and the `HWND_BOTTOM` ordering stay Windows-only
 questions. This covers everything up to the point where a picture would appear —
 which, as it turns out, is where most of the bugs were.

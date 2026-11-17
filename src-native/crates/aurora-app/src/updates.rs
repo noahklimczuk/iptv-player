@@ -426,11 +426,20 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
         return Ok(current);
     }
 
-    let check = run(&services, crate::now_unix(), false)?;
-    let release = check
-        .latest
-        .filter(|_| check.available)
-        .ok_or_else(|| AppError::Other("There is no newer build to download".into()))?;
+    let kind = asset_kind();
+    let newer = |check: UpdateCheck| check.latest.filter(|_| check.available);
+    let mut release = newer(run(&services, crate::now_unix(), false)?);
+    // The remembered answer can predate the release's files: GitHub shows a release the
+    // moment it is created, and its files arrive after. An app that checked in that gap
+    // was told "no portable build" and, holding on to it for six hours, refused every
+    // click. So an answer missing the file this copy needs is asked again before it is
+    // believed.
+    if release.as_ref().is_some_and(|r| r.asset(kind).is_none()) {
+        tracing::info!("the remembered release has no file for this copy; asking GitHub again");
+        release = newer(run(&services, crate::now_unix(), true)?);
+    }
+    let release =
+        release.ok_or_else(|| AppError::Other("There is no newer build to download".into()))?;
 
     // Already have it, verified, from an earlier click.
     if current.status == DownloadStatus::Ready
@@ -441,8 +450,7 @@ pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) ->
     }
 
     // Whichever asset matches how this copy was installed. Never the other one: see
-    // `asset_kind`.
-    let kind = asset_kind();
+    // `asset_kind`. (`kind` was worked out above.)
     // Logged before it can fail, because every refusal below is invisible from a bug
     // report otherwise. "It says there is an update and the button does nothing" is
     // the shape these arrive in, and the two things worth knowing — which copy this

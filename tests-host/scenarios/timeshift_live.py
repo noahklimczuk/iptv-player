@@ -297,6 +297,7 @@ def run(d, ctx):
             # the working set. This used to print a NOTE saying mpv was "keeping it
             # somewhere the viewer did not choose", which was a guess from an absence --
             # and the opposite of what asking mpv turned out to say.
+            on_file = ((after.get("stats") or {}).get("cacheFileBytes"))
             if grew > expected * 0.5 and on_file is None:
                 print(
                     "   NOTE: the buffer is growing in memory rather than in a file, "

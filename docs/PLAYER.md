@@ -85,9 +85,10 @@ are kept, so that nothing outside the player has to change. Everything behind th
   padding skipped, never enlarged, nonsense sizes refused.
 
 ### Other instances
-- **E32** PiP, each multi-view tile and seek-preview grabbing use their own instances
-  through the same API. Multi-view tiles open per tile and close per tile, so a closed
-  tile releases its provider connection.
+- **E32** Each multi-view tile uses its own instance through the same API, opened and
+  closed per tile, so a closed tile releases its provider connection. PiP and the seek
+  preview's pictures use the main player, not instances of their own: a provider line
+  commonly allows one connection, and a second stream would knock the first off.
 
 ---
 
@@ -253,3 +254,24 @@ are kept, so that nothing outside the player has to change. Everything behind th
    live, VOD (MKV, MP4), an episode with Up Next, catch-up, timeshift, PiP, multi-view.
 
 Each step is its own PR and merges only on green CI.
+
+Step 3 is two PRs. **3a** is the overlay: `PlayerOverlay`, `Dock`, `Scrub`, `Panels`,
+`WatchMenu`, `useChrome`, the rules in `model.ts` and the commands in `playerControl.ts`,
+with the key map (`useHotkeys`) and fullscreen (`useFullscreen`) it depends on. It covers
+C1–C18, C24–C29 and C31–C34; `tests-e2e/player-rebuild.spec.ts` has a test for each one
+no older journey covers. **3b** is the pieces around it: the channel banner and number
+entry (C19–C21), Skip and Up Next (C22, C23), PiP and the guide preview (C30). The
+banner, number entry, Skip, Up Next and the PiP frame are new components; the logic
+behind Skip and Up Next (`useEpisodeAids`: which marker is active, auto-skip, learning
+from the viewer's seeks) is kept, because it is not interface and carries fixes that
+are each tested (R-149 among them). Enter now commits a typed number, and a number with
+no channel says so.
+
+Step 4 is `tests-host/scenarios/real_matrix.py`: one import of the panel into the harness's
+own profile, then each case started the way a viewer starts it (a channel number and
+Enter, a film from the search palette, an episode from its show's page, P for PiP) and
+checked on the desktop, where the video is, rather than in the page. Its first runs found
+the page under the player busy 66-94% of the time while anything played from Home --
+every rail paging through itself while hidden, and Home rendered again on every player
+state -- which left a pause unanswered for minutes. Both are fixed, with journeys in
+`home-feed.spec.ts` and `render-churn.spec.ts`. On 2026-11-17 all eight cases passed.

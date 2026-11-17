@@ -1,12 +1,15 @@
 // Release builds must not pop a console window behind the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use aurora_app::play::commands as play;
+use aurora_app::play::player::Player;
+use aurora_app::play::sleep::{SleepAction, SleepDeadline};
 use aurora_app::{
-    assistant, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, pip, playlist,
+    assistant, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, playlist,
     profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
-    timeshift, updates, window,
+    updates, window,
 };
 
 /// Send the log somewhere a person can read it.
@@ -40,9 +43,39 @@ fn init_logging(data_dir: &std::path::Path) {
     }
 }
 
-/// How often the player's state is read. Fast enough that the OSD's clock and buffer
-/// readout look live, slow enough to be free.
+/// How often the mosaic's tiles and the sleep timer are looked at. The main player
+/// pushes its own state; this is only for what still has to be asked.
 const PLAYER_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How often the seek preview considers taking a picture.
+const PREVIEW_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The sleep timer came due: stop, and then whatever else was chosen (H20).
+fn sleep_fired(app: &tauri::AppHandle, player: &Player, deadline: SleepDeadline, now: i64) {
+    tracing::info!(action = ?deadline.action, "the sleep timer came due");
+    if let Err(e) = player.stop() {
+        tracing::warn!("the sleep timer could not stop playback: {e}");
+    }
+    aurora_app::emit(app, "sleep.state", &player.sleep_state(now));
+    aurora_app::emit(app, "sleep.fired", &deadline);
+    match deadline.action {
+        SleepAction::StopPlayback => {}
+        SleepAction::QuitApp => app.exit(0),
+        SleepAction::ShutDownPc => {
+            // Only reachable by being chosen by name, after a minute's warning with a
+            // cancel on it. Twenty seconds rather than none, so a person who woke at the
+            // wrong moment can still run `shutdown /a`; Aurora quits either way.
+            match std::process::Command::new("shutdown")
+                .args(["/s", "/t", "20"])
+                .spawn()
+            {
+                Ok(_) => tracing::info!("shutdown requested in 20s"),
+                Err(e) => tracing::error!("could not shut down: {e}"),
+            }
+            app.exit(0);
+        }
+    }
+}
 
 /// How long after launch the update check runs. Far enough back to be out of the way
 /// of the first frame, near enough that Settings has an answer by the time anyone
@@ -196,7 +229,24 @@ fn main() {
                 tracing::info!("web view folder at launch: {reap_note}");
             }
 
-            let services = Services::new(data_dir)?;
+            // The video engine draws into a surface under the main window's web view, and
+            // mpv is handed that surface when it starts, so the window comes first.
+            // Anything that goes wrong leaves an engine that says it renders nothing
+            // (E30): an app with no picture and a reason in Settings beats no app.
+            let main_window = app.get_webview_window("main");
+            let video = match &main_window {
+                Some(w) => {
+                    // Before the surface exists, so it is made the size the window will
+                    // actually be.
+                    window::place_in_middle(w);
+                    aurora_app::play::video::start(w)
+                }
+                None => {
+                    tracing::error!("no main window at setup; video cannot composite");
+                    aurora_app::play::video::Video::none(Some("there is no main window".into()))
+                }
+            };
+            let services = Services::new(data_dir, video)?;
 
             // Let the WebView read the artwork cache off disk (README §12, checklist
             // item 7). The scope is granted here rather than in `tauri.conf.json`
@@ -217,46 +267,22 @@ fn main() {
             }
             let services_db = std::sync::Arc::clone(&services.db);
             let scheduler = std::sync::Arc::clone(&services.dvr);
-            let playback_handle = std::sync::Arc::clone(&services.playback);
             let mosaic_handle = std::sync::Arc::clone(&services.mosaic);
-            let sleep_handle = std::sync::Arc::clone(&services.sleep);
-            let player_backend = std::sync::Arc::clone(&services.player);
-            let frames_handle = std::sync::Arc::clone(&services.frames);
-            let frames_player = std::sync::Arc::clone(&services.player);
+            let player = std::sync::Arc::clone(&services.player);
 
-            // The Phase 0 spike, finally connected (docs/ROADMAP.md). `attach` creates
-            // the child window mpv draws into and hands it the handle; without it there
-            // is no surface and mpv has nowhere to put a frame. It was written, and
-            // unreachable, because the app layer holds a `Box<dyn PlayerBackend>` and
-            // the method was not on the trait.
-            //
-            // A failure here is not a reason to refuse to start: an app running with no
-            // picture and a line in the log is something a person can report; a window
-            // that never appears is not.
-            match app.get_webview_window("main") {
-                Some(main_window) => {
-                    // Before the surface is attached, so it is sized for where the
-                    // window will actually be.
-                    window::place_in_middle(&main_window);
-                    {
-                        let mut player = player_backend.lock();
-                        match window::attach_video_surface(&main_window, player.as_mut()) {
-                            Ok(()) => tracing::info!("video surface ready"),
-                            Err(e) => tracing::error!("no video surface: {e}"),
-                        }
-                    }
+            // Every state the session reaches goes to the page as it happens.
+            {
+                let handle = app.handle().clone();
+                player.session.on_state(Box::new(move |state| {
+                    aurora_app::emit(&handle, "player.state", state);
+                }));
+                player.session.spawn_loop();
+            }
 
-                    // Multi-view's tiles are children of the same window (README §7.4),
-                    // so the mosaic needs its handle and its size. Recorded here rather
-                    // than asked for on open, because by then the only thing holding a
-                    // reference to the window is Tauri's own state and the mosaic would
-                    // have to be handed an `AppHandle` to get at it.
-                    window::record_mosaic_window(&main_window, &services.mosaic);
-                    if let Ok(size) = main_window.inner_size() {
-                        services.pip.set_window(size.width, size.height);
-                    }
-                }
-                None => tracing::error!("no main window at setup; video cannot composite"),
+            // Multi-view's tiles are children of the same window (README §7.4), so the
+            // mosaic needs its handle and its size.
+            if let Some(w) = &main_window {
+                window::record_mosaic_window(w, &services.mosaic);
             }
 
             app.manage(services);
@@ -328,98 +354,51 @@ fn main() {
             // stream that died leaves the interface showing it playing — and nothing
             // would ever notice a live channel needs rolling to its next source.
 
-            let playback = std::sync::Arc::clone(&playback_handle);
+            // The seek preview's pictures, on a thread of their own: a grab can take a
+            // moment, and recovery should never wait behind one.
+            {
+                let player = std::sync::Arc::clone(&player);
+                std::thread::Builder::new()
+                    .name("aurora-preview".into())
+                    .spawn(move || loop {
+                        std::thread::sleep(PREVIEW_TICK);
+                        let now = player.session.now();
+                        supervised("seek preview", || player.preview_tick(now));
+                    })
+                    .expect("spawning the preview thread");
+            }
+
             let mosaic = std::sync::Arc::clone(&mosaic_handle);
-            let sleep_at = std::sync::Arc::clone(&sleep_handle);
             let player_handle = app.handle().clone();
             std::thread::Builder::new()
-                .name("aurora-player".into())
-                .spawn(move || loop {
-                    std::thread::sleep(PLAYER_TICK);
-                    supervised("player", || {
-                        if let Some(state) = playback.tick(now_unix()) {
-                            aurora_app::emit(&player_handle, "player.state", &state);
-                        }
-                    });
-                    // The seek preview's pictures of what has played. Usually nothing:
-                    // one small grab every few seconds of playback at most.
-                    supervised("seek preview", || frames_handle.observe(&frames_player));
-                    // The tiles share the heartbeat rather than having one each: `pump`
-                    // is the only thing that turns a tile's stream dying into something
-                    // the UI can be told about, and nine threads doing it four times a
-                    // second would cost more than the mosaic does.
-                    supervised("mosaic", || {
-                        if let Some(view) = mosaic.tick(aurora_app::now_unix()) {
-                            aurora_app::emit(&player_handle, "mosaic.state", &view);
-                        }
-                    });
-                    // The sleep timer rides this heartbeat rather than owning a thread.
-                    //
-                    // It has to be the host that keeps this time. A `setTimeout` in the
-                    // front end is the short way to write it and the wrong place to keep
-                    // it: the timer exists to act on somebody who has fallen asleep,
-                    // which is exactly when nothing is touching the window -- and a
-                    // renderer that has been backgrounded, throttled or reloaded has lost
-                    // its timer while the stream plays on all night.
-                    //
-                    // The state is emitted every tick there is a timer, so the countdown
-                    // and the sixty-second warning are drawn from the same clock the
-                    // deadline was set against rather than from the viewer's own.
-                    supervised("sleep", || {
-                        let now = aurora_app::now_unix();
-                        let armed = *sleep_at.lock();
-                        let Some(deadline) = armed else { return };
-                        if !deadline.due(now) {
-                            aurora_app::emit(
-                                &player_handle,
-                                "sleep.state",
-                                &aurora_app::sleep::SleepState::of(Some(deadline), now),
-                            );
-                            return;
-                        }
-                        // Disarmed before acting, so a slow stop cannot be fired twice by
-                        // the next tick arriving first.
-                        *sleep_at.lock() = None;
-                        tracing::info!(
-                            action = deadline.action.as_str(),
-                            "the sleep timer came due"
-                        );
-                        if let Err(e) = playback.stop() {
-                            tracing::warn!("the sleep timer could not stop playback: {e}");
-                        }
-                        aurora_app::emit(
-                            &player_handle,
-                            "sleep.state",
-                            &aurora_app::sleep::SleepState::of(None, now),
-                        );
-                        aurora_app::emit(&player_handle, "sleep.fired", &deadline);
-                        match deadline.action {
-                            aurora_app::sleep::SleepAction::StopPlayback => {}
-                            aurora_app::sleep::SleepAction::QuitApp => {
-                                player_handle.exit(0);
+                .name("aurora-heartbeat".into())
+                .spawn(move || {
+                    let mut last_sleep_emit = 0;
+                    loop {
+                        std::thread::sleep(PLAYER_TICK);
+                        // The tiles share one heartbeat rather than a thread each.
+                        supervised("mosaic", || {
+                            if let Some(view) = mosaic.tick(now_unix()) {
+                                aurora_app::emit(&player_handle, "mosaic.state", &view);
                             }
-                            aurora_app::sleep::SleepAction::ShutDownPc => {
-                                // The viewer chose this by name -- it is its own variant
-                                // precisely so nothing can reach it by accident -- and
-                                // the sixty-second warning has already been on screen
-                                // with a cancel on it.
-                                //
-                                // `/t 20` rather than `/t 0`: this is a command nobody can
-                                // take back, and twenty seconds leaves a person who woke
-                                // up at the wrong moment time to run `shutdown /a`. The
-                                // app quits either way, so a refused shutdown does not
-                                // leave Aurora playing to an empty room.
-                                let spawned = std::process::Command::new("shutdown")
-                                    .args(["/s", "/t", "20"])
-                                    .spawn();
-                                match spawned {
-                                    Ok(_) => tracing::info!("shutdown requested in 20s"),
-                                    Err(e) => tracing::error!("could not shut down: {e}"),
-                                }
-                                player_handle.exit(0);
+                        });
+                        // The sleep timer is kept here, by the host: it exists to act on
+                        // somebody who has fallen asleep, which is exactly when a
+                        // renderer is backgrounded or throttled (H20).
+                        supervised("sleep", || {
+                            let now = now_unix();
+                            if let Some(deadline) = player.sleep_due(now) {
+                                sleep_fired(&player_handle, &player, deadline, now);
+                            } else if player.sleep_armed() && now != last_sleep_emit {
+                                last_sleep_emit = now;
+                                aurora_app::emit(
+                                    &player_handle,
+                                    "sleep.state",
+                                    &player.sleep_state(now),
+                                );
                             }
-                        }
-                    });
+                        });
+                    }
                 })
                 .expect("spawning the player thread");
 
@@ -493,6 +472,8 @@ fn main() {
                 tauri::WindowEvent::CloseRequested { .. } => {
                     if let Some(services) = win.try_state::<Services>() {
                         services.dvr.shutdown(now_unix());
+                        // mpv stops before the window it draws into goes away.
+                        services.player.session.engine().shutdown();
                     }
                 }
                 // The video surface is a sibling of the WebView2, not a child of it, so
@@ -500,15 +481,9 @@ fn main() {
                 // resize arrives on is what stops the two tearing apart (README §2.1).
                 tauri::WindowEvent::Resized(size) => {
                     if let Some(services) = win.try_state::<Services>() {
-                        // Through `Pip` rather than straight to the backend: `resize`
-                        // means "fill the client area" and has no origin to put a corner
-                        // at, so with picture-in-picture on it is exactly the wrong call
-                        // — it would snap the small picture back to full-window on the
-                        // first drag of a window edge. `Pip::relayout` decides which of
-                        // the two the surface should get.
-                        if let Err(e) = services.pip.relayout(size.width, size.height) {
-                            tracing::warn!("could not resize the video surface: {e}");
-                        }
+                        // The player first, then the tiles, which put the player's
+                        // surface back beneath them.
+                        services.player.resized(size.width, size.height);
                         // And every mosaic tile, for the same reason: the surfaces are
                         // siblings of the WebView and nothing moves them on their own.
                         services.mosaic.relayout(size.width, size.height);
@@ -540,20 +515,20 @@ fn main() {
             commands::library_series_prefs,
             commands::library_set_series_prefs,
             commands::search_query,
-            commands::player_play,
-            commands::player_play_catchup,
-            commands::player_pause,
-            commands::player_resume,
-            commands::player_stop,
-            commands::player_seek,
-            commands::player_back_to_live,
-            commands::player_set_volume,
-            commands::player_set_muted,
-            commands::player_set_audio_track,
-            commands::player_set_subtitle_track,
-            commands::player_set_aspect,
-            commands::player_state,
-            aurora_app::seekpreview::player_seek_preview,
+            play::player_play,
+            play::player_play_catchup,
+            play::player_pause,
+            play::player_resume,
+            play::player_stop,
+            play::player_seek,
+            play::player_back_to_live,
+            play::player_set_volume,
+            play::player_set_muted,
+            play::player_set_audio_track,
+            play::player_set_subtitle_track,
+            play::player_set_aspect,
+            play::player_state,
+            play::player_seek_preview,
             commands::progress_save,
             mosaic::mosaic_check,
             mosaic::mosaic_open,
@@ -620,7 +595,7 @@ fn main() {
             providers::providers_credentials,
             providers::providers_update,
             providers::providers_delete,
-            commands::player_set_speed,
+            play::player_set_speed,
             aurora_app::logging::app_about,
             aurora_app::logging::app_diagnostics,
             aurora_app::logging::logs_export,
@@ -648,22 +623,22 @@ fn main() {
             assistant::assistant_history,
             assistant::assistant_send,
             assistant::assistant_clear,
-            pip::pip_state,
-            pip::pip_toggle,
-            pip::pip_set_enabled,
-            pip::pip_set_corner,
-            pip::preview_place,
-            pip::preview_clear,
+            play::pip_state,
+            play::pip_toggle,
+            play::pip_set_enabled,
+            play::pip_set_corner,
+            play::preview_place,
+            play::preview_clear,
             gemini::gemini_status,
             gemini::gemini_set_key,
             gemini::gemini_set_enabled,
-            commands::sleep_state,
-            commands::sleep_set,
-            commands::sleep_cancel,
-            commands::sleep_extend,
-            timeshift::timeshift_settings,
-            timeshift::timeshift_set_settings,
-            timeshift::timeshift_clear,
+            play::sleep_state,
+            play::sleep_set,
+            play::sleep_cancel,
+            play::sleep_extend,
+            play::timeshift_settings,
+            play::timeshift_set_settings,
+            play::timeshift_clear,
             updates::updates_check,
             updates::updates_set_automatic,
             updates::updates_open_releases,

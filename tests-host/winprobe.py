@@ -305,3 +305,13 @@ class Image:
                 + chunk(b"IEND", b"")
             )
         return path
+
+
+#: The window classes a video surface can have: the engine's own, and `STATIC`, which is
+#: what the older multi-view tiles still attach mpv to.
+SURFACE_CLASSES = ("auroravideosurface", "static")
+
+
+def is_video_surface(hwnd):
+    """Whether this child window is one mpv draws into."""
+    return class_name(hwnd).lower() in SURFACE_CLASSES

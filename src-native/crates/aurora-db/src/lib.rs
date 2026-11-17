@@ -54,7 +54,44 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     if !has_statistics(&conn)? {
         analyze(&conn)?;
     }
+    shrink_log(&conn);
     Ok(conn)
+}
+
+/// The most the write-ahead log keeps on disk once a checkpoint has emptied it.
+///
+/// SQLite never shrinks the `-wal` file by itself: it reuses it from the start, at the
+/// size of the largest write it ever held. The `VACUUM` above writes the whole library
+/// into it, so a viewer's `library.db-wal` sat at 740 MB beside a 735 MB library, for
+/// good, holding 526 live frames (about 2 MB). This is the ceiling it is cut back to.
+pub const LOG_LIMIT_BYTES: i64 = 64 * 1024 * 1024;
+
+/// Empty the write-ahead log into the library and cut the file to nothing.
+///
+/// Here, before the app opens its read connections: a `TRUNCATE` checkpoint has to wait
+/// for every reader, and at this point there are none, so it is quick and certain. A
+/// failure costs disk space, not data -- the log is still a valid log -- so it is
+/// logged and opening carries on.
+fn shrink_log(conn: &Connection) {
+    let shrunk = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    });
+    match shrunk {
+        Ok((0, _, _)) => {}
+        Ok((busy, log, done)) => {
+            tracing::warn!(
+                busy,
+                log,
+                done,
+                "the write-ahead log could not be emptied on open"
+            )
+        }
+        Err(e) => tracing::warn!("the write-ahead log could not be emptied on open: {e}"),
+    }
 }
 
 /// A second, read-only connection to a library `open` has already prepared.
@@ -97,6 +134,13 @@ pub fn open_memory() -> Result<Connection> {
 fn configure(conn: &Connection) -> Result<()> {
     // journal_mode returns a row, so it needs query_row rather than execute.
     let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+    // A row as well. After a checkpoint empties the log, SQLite cuts the file back to
+    // this; without it the file stays as large as the largest write it ever held.
+    let _: i64 = conn.query_row(
+        &format!("PRAGMA journal_size_limit = {LOG_LIMIT_BYTES}"),
+        [],
+        |r| r.get(0),
+    )?;
     conn.execute_batch(
         "PRAGMA synchronous = NORMAL;
          PRAGMA foreign_keys = ON;
@@ -744,6 +788,53 @@ mod tests {
         );
         // The username stays: it is on the `providers` row, which the app has to show.
         assert!(count_bytes(&after, b"bob") > 0);
+    }
+
+    /// A library whose write-ahead log was left huge is cut back when it is opened.
+    ///
+    /// The viewer's `library.db-wal` was 740 MB beside a 735 MB library with about 2 MB
+    /// of it live: the upgrade `VACUUM` had written the whole library through it, and
+    /// SQLite never shrinks the file on its own. The app keeps its connection open, so
+    /// the clean-up a last close would do never came either.
+    #[test]
+    fn opening_cuts_an_oversized_write_ahead_log_back() {
+        let dir = scratch("wal");
+        let path = dir.join("library.db");
+        let wal = dir.join("library.db-wal");
+        {
+            let conn = open(&path).unwrap();
+            conn.execute_batch("PRAGMA wal_autocheckpoint = 0; CREATE TABLE filler (x BLOB)")
+                .unwrap();
+            let tx = conn.unchecked_transaction().unwrap();
+            for _ in 0..600 {
+                tx.execute("INSERT INTO filler VALUES (zeroblob(32768))", [])
+                    .unwrap();
+            }
+            tx.commit().unwrap();
+            // Never closed, as the app never closes it: a close would checkpoint and
+            // delete the log, which is the one thing that never happened for real.
+            std::mem::forget(conn);
+        }
+        let before = std::fs::metadata(&wal).unwrap().len();
+        assert!(
+            before > 15_000_000,
+            "the fixture left only {before} bytes of log"
+        );
+
+        let conn = open(&path).unwrap();
+        let after = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        assert!(
+            after < 1_000_000,
+            "the log is still {after} bytes after opening"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM filler", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 600, "emptying the log lost what was in it");
+        let limit: i64 = conn
+            .query_row("PRAGMA journal_size_limit", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(limit, LOG_LIMIT_BYTES);
     }
 
     fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {

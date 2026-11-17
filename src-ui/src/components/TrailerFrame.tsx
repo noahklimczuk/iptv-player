@@ -80,6 +80,40 @@ export function TrailerFrame({
     send(muted ? 'mute' : 'unMute');
   }, [muted, ready]);
 
+  // A preview without controls never keeps focus. YouTube can focus its own page: on
+  // CI, and for anyone it suspects of being a bot (a VPN is enough), the embed shows a
+  // "Sign in to confirm you're not a bot" dialog that takes focus. Keystrokes then go
+  // to YouTube instead of Aurora, so Space, k and the arrows did nothing on Home and in
+  // the player opened over it. `inert` on the wrapper keeps Tab out, but not the
+  // frame's own script. So remember where focus was, and put it back.
+  useEffect(() => {
+    if (controls) return;
+    let last: HTMLElement | null = null;
+    const remember = (e: FocusEvent) => {
+      if (e.target instanceof HTMLElement && e.target !== frame.current) last = e.target;
+    };
+    const restore = () => {
+      // After the browser has moved focus, which is when `activeElement` says where.
+      window.setTimeout(() => {
+        if (document.activeElement !== frame.current) return;
+        // Nothing was focused before (the body), or it is gone: blur the frame, which
+        // leaves focus on the page. Focusing the body would not take it from the frame.
+        if (last && last !== document.body && last.isConnected) {
+          last.focus({ preventScroll: true });
+        } else {
+          frame.current?.blur();
+        }
+      }, 0);
+    };
+    if (document.activeElement instanceof HTMLElement) last = document.activeElement;
+    document.addEventListener('focusin', remember);
+    window.addEventListener('blur', restore);
+    return () => {
+      document.removeEventListener('focusin', remember);
+      window.removeEventListener('blur', restore);
+    };
+  }, [controls]);
+
   // Everything here is deliberate:
   //   autoplay=1   a preview nobody asked to start
   //   mute=1/0     the initial state; later changes go through postMessage above

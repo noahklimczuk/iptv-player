@@ -10,11 +10,10 @@ Neither could be caught anywhere else in this repository. The browser journeys d
 `src-ui/src/ipc/mock.ts`, which answers `player.pause` out of its own memory and always
 agrees with the UI that asked. Only a real host can disagree.
 
-libmpv is not on this platform, so `aurora-player` is `NullBackend` — no decoding, no
-picture. That is fine for these two questions, because neither is about video: they are
-about whether a click reaches the host at all, and whether closing the overlay stops
-what is playing. `NullBackend` models status, position and volume exactly as the real
-one reports them, and every control writes a `player control control=… status=…` line
+Off Windows the app has no video engine — no decoding, no picture. That is fine for
+these two questions, because neither is about video: they are about whether a click
+reaches the host at all, and whether closing the overlay stops what is playing. Every
+control writes a `player control control=… status=…` line
 to `aurora.log` on its way through, so the host's own account of what it was asked to
 do is readable from outside the window.
 """
@@ -45,12 +44,10 @@ def controls(ctx):
 def wait_for_status(d, want, timeout=60):
     """Poll the host for what it is doing *now*, until that is one of `want`.
 
-    Deliberately `player_state` rather than the log, and this is the whole difference
-    between a real backend and `NullBackend`. The `player control` line records the
-    status **at the moment the command was issued** — which for `NullBackend` is already
-    `Playing`, because it has nothing to load, and for mpv is always `Loading`, because
-    opening a stream is asynchronous and `play` returns long before a frame does. Read
-    from the log, this scenario could only ever pass on the platform that has no video.
+    Deliberately `player_state` rather than the log. The `player control` line records
+    the status **at the moment the command was issued**, which for mpv is always
+    `Loading`, because opening a stream is asynchronous and `play` returns long before a
+    frame does.
 
     Polling, rather than sleeping, for the same reason: a real panel's stream takes
     longer to open than the fixture's, and how much longer is not this suite's to guess.

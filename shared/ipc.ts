@@ -326,7 +326,7 @@ export interface SearchResults {
   people: SearchHit[];
 }
 
-/** Mirrors aurora-player's PlayerBackend state. */
+/** What the player reports (`aurora_video::Status`). */
 export interface PlayerState {
   status: 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | 'error';
   /** What is loaded, for the OSD title. */
@@ -360,6 +360,12 @@ export interface PlayerState {
    * file is opened, a second or so before there is a picture; the window may only be
    * made transparent once this is true, or the viewer sees through it to the desktop.
    */
+  /**
+   * The stream dropped and Aurora is getting it back: a source failed and the next is
+   * being tried, or a retry is waiting out its backoff. Shown as a quiet
+   * "Reconnecting…", never as an error; `error` stays null until Aurora gives up.
+   */
+  reconnecting: boolean;
   hasPicture: boolean;
 }
 
