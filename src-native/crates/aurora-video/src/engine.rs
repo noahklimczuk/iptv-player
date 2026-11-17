@@ -760,6 +760,10 @@ impl<D: Driver> Run<D> {
             }
             Event::Property { name, value } => self.property(&name, value),
             Event::Log { prefix, text } => {
+                // Into the app's log as well: a video output that fails while the sound
+                // carries on is not a playback failure, so the ring below is never shown
+                // for it, and the log is the only place it can be seen.
+                tracing::warn!(target: "mpv", "{prefix}: {}", text.trim());
                 if self.log.len() == LOG_LINES {
                     self.log.pop_front();
                 }

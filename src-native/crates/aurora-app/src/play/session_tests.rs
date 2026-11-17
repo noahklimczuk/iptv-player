@@ -75,6 +75,17 @@ impl Rig {
         }
     }
 
+    /// Wait until `n` plays and stops have taken their generation: a tune on another
+    /// thread has started and is now stuck on whatever the test is holding. Sleeping
+    /// for it instead lost the race on a loaded machine.
+    fn taken(&self, n: u64) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.session.generation.load(Ordering::SeqCst) < n {
+            assert!(Instant::now() < deadline, "no tune took generation {n}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     fn plays(&self, position: f64) {
         self.mpv.plays();
         self.mpv.prop("time-pos", Node::Double(position));
@@ -148,18 +159,83 @@ fn h4_a_later_tune_wins_however_slowly_the_earlier_one_resolves() {
         let s = r.session.clone();
         std::thread::spawn(move || s.play(What::Channel(1), None))
     };
-    std::thread::sleep(Duration::from_millis(50));
+    r.taken(1);
     let second = {
         let s = r.session.clone();
         std::thread::spawn(move || s.play(What::Movie(1), None))
     };
-    std::thread::sleep(Duration::from_millis(50));
+    r.taken(2);
     drop(held);
     let first = first.join().unwrap();
     let second = second.join().unwrap();
     assert!(matches!(first, Err(AppError::Superseded)), "{first:?}");
     assert_eq!(second.unwrap().title.as_deref(), Some("A Film"));
     assert_eq!(r.opened(), vec![FILM], "the replaced tune still loaded");
+}
+
+#[test]
+fn h4_the_same_play_pressed_again_while_it_opens_does_not_reopen_it() {
+    // Space on the Resume button that still had focus sent this five times in ten
+    // seconds on the real line, and each one restarted the stream.
+    let r = rig();
+    r.session.play(What::Movie(1), Some(43.0)).unwrap();
+    r.until("loading", |s| s.report.status == Status::Loading);
+    for _ in 0..4 {
+        let s = r.session.play(What::Movie(1), Some(43.0)).unwrap();
+        assert_eq!(s.title.as_deref(), Some("A Film"));
+    }
+    assert_eq!(r.opened(), vec![FILM], "a repeat press reopened the stream");
+    r.plays(43.0);
+}
+
+#[test]
+fn h4_the_same_play_again_still_replaces_another_tune_in_flight() {
+    // Film opening, then a channel asked for (stuck resolving), then the film's Play
+    // pressed again: the film was asked for last, so the channel must not load.
+    let r = rig();
+    r.session.play(What::Movie(1), None).unwrap();
+    r.until("loading", |s| s.report.status == Status::Loading);
+    let held = r.db.lock();
+    let channel = {
+        let s = r.session.clone();
+        std::thread::spawn(move || s.play(What::Channel(1), None))
+    };
+    r.taken(2);
+    let again = r.session.play(What::Movie(1), None).unwrap();
+    assert_eq!(again.title.as_deref(), Some("A Film"));
+    drop(held);
+    assert!(matches!(channel.join().unwrap(), Err(AppError::Superseded)));
+    assert_eq!(r.opened(), vec![FILM]);
+}
+
+#[test]
+fn h4_another_start_point_while_it_opens_is_a_new_request() {
+    let r = rig();
+    r.session.play(What::Movie(1), Some(43.0)).unwrap();
+    r.until("loading", |s| s.report.status == Status::Loading);
+    r.session.play(What::Movie(1), Some(600.0)).unwrap();
+    assert_eq!(r.opened(), vec![FILM, FILM]);
+    assert_eq!(r.mpv.last_set("start").as_deref(), Some("600.000"));
+}
+
+#[test]
+fn h4_playing_it_again_once_it_plays_still_reloads() {
+    let r = rig();
+    r.session.play(What::Movie(1), None).unwrap();
+    r.plays(10.0);
+    r.session.play(What::Movie(1), None).unwrap();
+    assert_eq!(r.opened(), vec![FILM, FILM]);
+}
+
+#[test]
+fn h4_pressing_play_while_it_reconnects_reopens_it_now() {
+    let r = rig();
+    r.session.play(What::Movie(1), Some(43.0)).unwrap();
+    r.plays(50.0);
+    r.dies("connection refused");
+    let before = r.opened().len();
+    r.session.play(What::Movie(1), Some(43.0)).unwrap();
+    assert!(r.opened().len() > before, "Retry did nothing");
 }
 
 #[test]
@@ -170,7 +246,7 @@ fn h4_stopping_during_a_slow_tune_leaves_the_player_stopped() {
         let s = r.session.clone();
         std::thread::spawn(move || s.play(What::Channel(1), None))
     };
-    std::thread::sleep(Duration::from_millis(50));
+    r.taken(1);
     r.session.stop().unwrap();
     drop(held);
     assert!(matches!(tune.join().unwrap(), Err(AppError::Superseded)));

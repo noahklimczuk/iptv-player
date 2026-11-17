@@ -68,6 +68,9 @@ struct Inner {
 
 struct Current {
     plan: Plan,
+    /// The start point the page asked for, before the plan adjusted it: what a repeat
+    /// press is compared against.
+    asked: Option<f64>,
     recovery: Recovery,
     timeshift: Option<Timeshift>,
 }
@@ -249,6 +252,12 @@ impl Session {
     /// plays arrives in later states.
     pub fn play(&self, what: What, start_secs: Option<f64>) -> Result<PlayerState> {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        // After taking a generation, not before: the repeat is still the latest request,
+        // so a different tune resolving in the meantime has been replaced by it (H4).
+        if let Some(state) = self.still_opening(what, start_secs) {
+            tracing::info!(?what, "play: already opening this, the repeat is ignored");
+            return Ok(state);
+        }
         let planned = {
             let db = self.db.lock();
             resolve::plan(
@@ -289,6 +298,7 @@ impl Session {
             i.current = Some(Current {
                 recovery: Recovery::new(plan.live, plan.candidates.len()),
                 plan,
+                asked: start_secs,
                 timeshift,
             });
         }
@@ -296,6 +306,34 @@ impl Session {
         let state = self.state();
         self.publish(&state);
         Ok(state)
+    }
+
+    /// The same Play pressed again while the first press is still opening the stream.
+    ///
+    /// Reloading would throw away the connection that is nearly there and open another,
+    /// and a line that allows one connection makes the provider sit on the second until
+    /// the first times out: every extra press made the start slower, from ~3 s to 45 s
+    /// on the real line. Space and Enter on a still-focused Resume button sent exactly
+    /// this. A different title or start point is a new request and still wins (H4), and
+    /// once it plays, a deliberate replay reloads as before.
+    fn still_opening(&self, what: What, start_secs: Option<f64>) -> Option<PlayerState> {
+        let same = {
+            let i = self.inner();
+            i.failed.is_none()
+                && i.current
+                    .as_ref()
+                    .is_some_and(|c| c.plan.what == what && c.asked == start_secs)
+        };
+        // `state()` takes `inner` again, and the lock is not reentrant: released above.
+        if !same {
+            return None;
+        }
+        let state = self.state();
+        // Reconnecting after the stream died is not opening: a press then is the viewer
+        // asking for it now rather than after the backoff.
+        let opening = matches!(state.report.status, Status::Loading | Status::Buffering)
+            && !state.reconnecting;
+        opening.then_some(state)
     }
 
     /// Stop, and forget what was playing (H4: this also cancels a tune in flight).
