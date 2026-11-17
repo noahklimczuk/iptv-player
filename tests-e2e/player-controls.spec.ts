@@ -114,6 +114,8 @@ test('after touching a slider, Space pauses, M mutes, and the arrows seek', asyn
   const vb = await settled(page, 'Volume');
   await page.mouse.click(vb.x + vb.width * 0.3, vb.y + vb.height / 2);
   await expect(volume).toBeFocused();
+  // The click's volume is sent on the next frame; read it once the host has it.
+  await expect.poll(async () => (await state(page)).volume).toBe(Number(await volume.inputValue()));
   const level = (await state(page)).volume;
 
   await page.keyboard.press('Space');

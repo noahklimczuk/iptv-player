@@ -510,6 +510,20 @@ export function onSleepState(fn: (s: SleepState) => void) {
   return () => clearInterval(timer);
 }
 
+/** The host's `sleep_fired`: disarm, do what was asked, then say so. */
+export function onSleepFired(fn: (d: NonNullable<SleepState['armed']>) => void) {
+  const timer = setInterval(() => {
+    if (!mockSleep || mockSleep.atUnix > Math.floor(Date.now() / 1000)) return;
+    const fired = mockSleep;
+    mockSleep = null;
+    if (fired.action === 'stopPlayback') {
+      setPlayer({ status: 'idle', title: null, itemId: null, channelId: null, timeshift: null });
+    }
+    fn(fired);
+  }, 500);
+  return () => clearInterval(timer);
+}
+
 const ingestListeners = new Set<(p: IngestProgress) => void>();
 function emitIngest(p: IngestProgress) {
   ingestListeners.forEach((l) => l(p));
@@ -1862,8 +1876,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     // pretend one — in a browser the page *is* the whole surface.
     const want = fullscreen ?? !document.fullscreenElement;
     try {
-      if (want) void document.documentElement.requestFullscreen?.();
-      else void document.exitFullscreen?.();
+      if (want) document.documentElement.requestFullscreen?.()?.catch(() => undefined);
+      else if (document.fullscreenElement) document.exitFullscreen?.()?.catch(() => undefined);
     } catch {
       /* a browser may refuse without a user gesture; the state below still answers */
     }
@@ -2209,7 +2223,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       timeshift: windowFor(liveEdgeSecs),
     });
   },
-  'player.setVolume': ({ volume }) => setPlayer({ volume: Math.max(0, Math.min(200, volume)) }),
+  // The host's limit (`player_set_volume`: `volume.min(100)`).
+  'player.setVolume': ({ volume }) => setPlayer({ volume: Math.max(0, Math.min(100, volume)) }),
   'player.setMuted': ({ muted }) => setPlayer({ muted }),
   'player.setSpeed': ({ speed }) => setPlayer({ speed }),
   'player.setAudioTrack': ({ trackId }) => setPlayer({ activeAudioTrack: trackId }),
@@ -3159,6 +3174,11 @@ let mockNoPicture = false;
 export function setNoPictureMock(on: boolean): PlayerState {
   mockNoPicture = on;
   return setPlayer({});
+}
+
+/** Put the player into a state a fixture does not reach on its own: opening, refilling. */
+export function setPlayerStatusMock(patch: Pick<Partial<PlayerState>, 'status' | 'reconnecting'>): PlayerState {
+  return setPlayer(patch);
 }
 
 export function setPlayerErrorMock(error: PlayerState['error']): PlayerState {

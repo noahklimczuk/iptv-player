@@ -30,6 +30,8 @@ interface UiState {
   banner: { channelId: number; until: number } | null;
   /** Digits typed for direct channel entry (README §7.2). */
   digits: string;
+  /** The player's stats panel (C18), here because `I` toggles it from the key map. */
+  playerStats: boolean;
   /**
    * Bumped whenever something has happened that the library screens should re-read.
    *
@@ -61,6 +63,7 @@ interface UiState {
   releasePlayer: () => void;
   showBanner: (channelId: number) => void;
   hideBanner: () => void;
+  togglePlayerStats: (open?: boolean) => void;
   pushDigit: (d: string) => void;
   /** Say that the library has moved. */
   bumpCatalog: () => void;
@@ -215,6 +218,7 @@ export const useUi = create<UiState>((set, get) => ({
   player: null,
   banner: null,
   digits: '',
+  playerStats: false,
   catalogVersion: 0,
 
   setTheme: (theme) => {
@@ -261,6 +265,7 @@ export const useUi = create<UiState>((set, get) => ({
   showBanner: (channelId) =>
     set({ banner: { channelId, until: Date.now() + 5000 } }),
   hideBanner: () => set({ banner: null }),
+  togglePlayerStats: (open) => set((s) => ({ playerStats: open ?? !s.playerStats })),
   pushDigit: (d) => set((s) => ({ digits: (s.digits + d).slice(0, 4) })),
   bumpCatalog: () => set((s) => ({ catalogVersion: s.catalogVersion + 1 })),
   clearDigits: () => set({ digits: '' }),

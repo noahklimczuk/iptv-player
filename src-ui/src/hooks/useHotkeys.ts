@@ -1,13 +1,12 @@
 /**
- * Global keyboard map (README §14.1). This hook is the single place they are
- * interpreted.
+ * The global key map (README §14.1, docs/PLAYER.md C31–C34). The one place keys are
+ * read as commands.
  *
- * It used to say "Every binding here is remappable in Settings in the shipped product".
- * Settings → Keyboard is a read-only list, and remapping is not built -- `docs/ROADMAP.md`
- * is honest about that, which made this comment the only place that overstated it
- * (R-143).
+ * Registered once for the life of the app (C34): the handlers are read through a ref
+ * when a key arrives, so a parent re-rendering, which while something plays is several
+ * times a second, never removes and re-adds the listener.
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 export interface HotkeyHandlers {
   onDigit: (d: string) => void;
@@ -18,108 +17,108 @@ export interface HotkeyHandlers {
   onPalette: () => void;
   onBack: () => void;
   onPlayPause: () => void;
-  /** README §14.1: `T` — pause live TV into the buffer, or rejoin the live edge. */
+  /** `T`: pause live TV into the buffer, or rejoin the live edge. */
   onTimeshift: () => void;
   onSeek: (secs: number) => void;
   onVolume: (delta: number) => void;
   onMute: () => void;
   onFullscreen: () => void;
-  /** README §14.1: `P` — the small picture, in a corner, while you use the rest. */
+  /** `P`: the small picture, in a corner. */
   onPip: () => void;
   onInfo: () => void;
   onNavigate: (to: string) => void;
 }
 
-/** True when focus is in a text field, where single-key shortcuts must not fire. */
 /**
- * Whether this keystroke belongs to a text field.
+ * Whether a keystroke belongs to a text field, where single-key shortcuts must not fire
+ * (C31).
  *
- * Exported because the player's OSD wakes on key input and has to draw the same line:
- * two answers to "is somebody typing?" is one more than this app needs.
+ * The player's own sliders are not text fields (C32): after touching the seek or volume
+ * bar, Space still pauses, M still mutes and the arrows still seek. Any other range, such
+ * as a slider in Settings, keeps its keys.
  */
 export function isTyping(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
-  if (!el) return false;
-  const tag = el.tagName;
-  if (tag === 'INPUT') {
-    // The player's own sliders take the keys only the player means: arrows seek and
-    // change the volume, Space pauses, M mutes. Treating them as somewhere to type
-    // turned every shortcut off the moment the seek or volume bar had been touched --
-    // and left the arrows moving whichever slider it was ("the controls don't really
-    // work"). Elsewhere -- the glass transparency slider in Settings, say -- a range
-    // keeps its keys.
+  if (!el?.tagName) return false;
+  if (el.tagName === 'INPUT') {
     const type = (el as HTMLInputElement).type;
-    if (type === 'range' && el.closest('[data-player-overlay]')) return false;
-    if (type === 'range') return true;
+    if (type === 'range') return !el.closest('[data-player-overlay]');
     return !['checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file'].includes(type);
   }
-  return tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  return el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
 }
 
-/** Space and Enter on a focused button press that button; the shortcut must not too. */
-function activatesFocused(e: KeyboardEvent): boolean {
+/** Space or Enter on a focused control presses that control, and nothing else (C6). */
+function pressesFocused(e: KeyboardEvent): boolean {
   if (e.key !== ' ' && e.key !== 'Enter') return false;
   const el = e.target as HTMLElement | null;
-  if (!el?.closest) return false;
-  return !!el.closest('button, [role="button"], [role="switch"], [role="tab"], a[href], input[type="checkbox"], input[type="radio"]');
+  return !!el?.closest?.(
+    'button, [role="button"], [role="switch"], [role="tab"], [role="option"], a[href], input[type="checkbox"], input[type="radio"]',
+  );
 }
 
-export function useHotkeys(h: HotkeyHandlers, enabled = true) {
-  useEffect(() => {
-    if (!enabled) return;
+const SECTIONS = ['/', '/live', '/guide', '/movies', '/series'] as const;
 
+export function useHotkeys(handlers: HotkeyHandlers, enabled = true) {
+  const h = useRef(handlers);
+  h.current = handlers;
+  const on = useRef(enabled);
+  on.current = enabled;
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Ctrl/Cmd combos work everywhere, including while typing.
+      if (!on.current || e.defaultPrevented) return;
+      const k = h.current;
+      // Ctrl/Cmd+K works everywhere, typing included.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        h.onPalette();
+        k.onPalette();
         return;
       }
-      if (isTyping(e.target)) return;
-      if (activatesFocused(e)) return;
-      // On a player slider the shortcut replaces the slider's own arrow handling,
-      // rather than both moving at once.
+      if (isTyping(e.target) || pressesFocused(e)) return;
+      // On a player slider the arrows are the player's, not the slider's (C32).
       if ((e.target as HTMLInputElement | null)?.type === 'range' && e.key.startsWith('Arrow')) {
         e.preventDefault();
       }
       if (e.altKey && /^[1-5]$/.test(e.key)) {
         e.preventDefault();
-        h.onNavigate(['/', '/live', '/guide', '/movies', '/series'][Number(e.key) - 1]!);
+        k.onNavigate(SECTIONS[Number(e.key) - 1]!);
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        k.onDigit(e.key);
+        return;
+      }
 
-      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); h.onDigit(e.key); return; }
-
-      switch (e.key) {
+      // Letters whatever the case, so Caps Lock does not turn the shortcuts off.
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      switch (key) {
         case ' ':
-        case 'k': e.preventDefault(); h.onPlayPause(); break;
-        case 'Escape': h.onBack(); break;
-        case 'Backspace': e.preventDefault(); h.onLastChannel(); break;
-        case 'PageUp': e.preventDefault(); h.onChannelUp(); break;
-        case 'PageDown': e.preventDefault(); h.onChannelDown(); break;
-        case 'ArrowLeft': h.onSeek(e.shiftKey ? -30 : -10); break;
-        case 'ArrowRight': h.onSeek(e.shiftKey ? 30 : 10); break;
-        case 'ArrowUp': h.onVolume(5); break;
-        case 'ArrowDown': h.onVolume(-5); break;
-        case 'j': h.onSeek(-10); break;
-        case 'l': h.onSeek(10); break;
-        case 'm': h.onMute(); break;
-        case 't': h.onTimeshift(); break;
-        // Both, because README §14.1 assigns `F11` and the implementation took `f`.
-        // Binding the one that was declared costs a line, and leaves nothing that the
-        // table promises unbound.
+        case 'k': e.preventDefault(); k.onPlayPause(); break;
+        case 'Escape': k.onBack(); break;
+        case 'Backspace': e.preventDefault(); k.onLastChannel(); break;
+        case 'PageUp': e.preventDefault(); k.onChannelUp(); break;
+        case 'PageDown': e.preventDefault(); k.onChannelDown(); break;
+        case 'ArrowLeft': k.onSeek(e.shiftKey ? -30 : -10); break;
+        case 'ArrowRight': k.onSeek(e.shiftKey ? 30 : 10); break;
+        case 'ArrowUp': k.onVolume(5); break;
+        case 'ArrowDown': k.onVolume(-5); break;
+        case 'j': k.onSeek(e.shiftKey ? -30 : -10); break;
+        case 'l': k.onSeek(e.shiftKey ? 30 : 10); break;
+        case 'm': k.onMute(); break;
+        case 't': k.onTimeshift(); break;
         case 'f':
-        case 'F11': e.preventDefault(); h.onFullscreen(); break;
-        case 'p': h.onPip(); break;
-        case 'i': h.onInfo(); break;
-        case 'g': h.onGuide(); break;
-        case '/': e.preventDefault(); h.onPalette(); break;
+        case 'F11': e.preventDefault(); k.onFullscreen(); break;
+        case 'p': k.onPip(); break;
+        case 'i': k.onInfo(); break;
+        case 'g': k.onGuide(); break;
+        case '/': e.preventDefault(); k.onPalette(); break;
         default: break;
       }
     };
-
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [h, enabled]);
+  }, []);
 }

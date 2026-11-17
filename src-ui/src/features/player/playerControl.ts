@@ -1,31 +1,21 @@
 /**
- * Player commands that show their result at once.
+ * Every command the controls send, in one place.
  *
- * Reported as "the player controls are very laggy". The commands themselves were not
- * slow -- each one returns the player's new state within a few milliseconds -- but the
- * screen threw that answer away and waited for the host's next state tick, up to a
- * quarter of a second later (`PLAYER_TICK`), before the pause button changed or the
- * mute icon flipped. The volume slider was worse: it is drawn from the player state, so
- * between ticks every drag was put back to the old value and the knob stuttered after
- * the pointer.
- *
- * So every press now does three things:
- *   1. shows its result immediately (`useUi.holdPlayer`), held against ticks that were
- *      read before the command landed, until the host agrees or a moment passes;
- *   2. sends the command;
- *   3. adopts the state the command returns, rather than waiting for the next tick.
- * If the command fails the hold is dropped and the real state read back, so a refused
- * pause never leaves a pause icon on a playing stream.
+ * Each one shows its effect at once (`holdPlayer`), sends the command, and adopts the
+ * state the host answers with. The hold stops a heartbeat that was read before the
+ * command landed from undoing what the viewer just did. If the host refuses, the hold
+ * is dropped, the host's own state is read back, and the viewer is told why.
  */
 import type { PlayerState } from '@shared/ipc';
 import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { useUi } from '@/state/ui';
+import { clampVolume } from './model';
 
-const current = () => useUi.getState().player;
+const now = () => useUi.getState().player;
 
-function adopt(sent: Promise<PlayerState>, failure: string) {
-  sent
+function settle(sent: Promise<PlayerState>, failure: string): Promise<void> {
+  return sent
     .then((s) => useUi.getState().setPlayer(s))
     .catch((e: unknown) => {
       useUi.getState().releasePlayer();
@@ -36,76 +26,146 @@ function adopt(sent: Promise<PlayerState>, failure: string) {
     });
 }
 
+/* ── Transport ── */
+
 export function pause() {
   useUi.getState().holdPlayer({ status: 'paused' });
-  adopt(invoke('player.pause'), 'The player did not respond');
+  void settle(invoke('player.pause'), 'The player did not respond');
 }
 
 export function resume() {
   useUi.getState().holdPlayer({ status: 'playing' });
-  adopt(invoke('player.resume'), 'The player did not respond');
+  void settle(invoke('player.resume'), 'The player did not respond');
 }
 
+/** C6. Buffering counts as playing: the viewer pressing pause wants it stopped. */
 export function togglePause() {
-  if (current()?.status === 'playing') pause();
+  const p = now();
+  if (!p || p.status === 'idle' || p.status === 'error') return;
+  if (p.status === 'playing' || p.status === 'buffering') pause();
   else resume();
 }
 
+/** C7: relative, so a press is never computed from a stale position. */
+export function seekBy(secs: number) {
+  const p = now();
+  if (!p || p.status === 'idle') return;
+  if (!p.isLive && p.durationSecs > 0) {
+    useUi.getState().holdPlayer({
+      positionSecs: Math.min(p.durationSecs, Math.max(0, p.positionSecs + secs)),
+    });
+  }
+  void settle(invoke('player.seek', { positionSecs: secs, relative: true }), 'Could not seek');
+}
+
+/** C8: one absolute seek, sent when a drag is let go. */
+export function seekTo(positionSecs: number, failure = 'Could not seek') {
+  const p = now();
+  if (!p || p.status === 'idle' || !Number.isFinite(positionSecs)) return;
+  const to = Math.max(0, positionSecs);
+  if (!p.isLive) useUi.getState().holdPlayer({ positionSecs: to });
+  void settle(invoke('player.seek', { positionSecs: to }), failure);
+}
+
+/** C10. */
+export function backToLive() {
+  void settle(invoke('player.backToLive'), 'Could not return to live');
+}
+
+/* ── Volume (C12) ── */
+
 export function setMuted(muted: boolean) {
   useUi.getState().holdPlayer({ muted });
-  adopt(invoke('player.setMuted', { muted }), 'Could not change the volume');
+  void settle(invoke('player.setMuted', { muted }), 'Could not change the volume');
 }
 
 export function toggleMute() {
-  setMuted(!(current()?.muted ?? false));
+  setMuted(!(now()?.muted ?? false));
 }
 
 /**
- * Volume, shown at once and sent at most once a frame.
+ * The volume, shown at once and sent at most once a frame.
  *
- * A drag of the slider fires an input event for every pixel; each was a round trip, and
- * they queued up behind one another so the sound lagged the knob. Now the latest value
- * wins: whatever the slider says when the frame comes round is what is sent.
+ * A slider drag produces a value per pixel. Each is shown immediately; only the latest
+ * is sent, on the next frame. Turning the volume up while muted unmutes, which is what
+ * anybody turning it up wants.
  */
 let pendingVolume: number | null = null;
 let volumeFrame = 0;
 export function setVolume(volume: number) {
-  const v = Math.min(200, Math.max(0, Math.round(volume)));
-  useUi.getState().holdPlayer({ volume: v });
+  const v = clampVolume(volume);
+  const p = now();
+  const unmute = !!p?.muted && v > p.volume;
+  useUi.getState().holdPlayer(unmute ? { volume: v, muted: false } : { volume: v });
+  if (unmute) void settle(invoke('player.setMuted', { muted: false }), 'Could not change the volume');
   pendingVolume = v;
   if (volumeFrame) return;
   const send = () => {
     volumeFrame = 0;
     const next = pendingVolume;
     pendingVolume = null;
-    if (next == null) return;
-    adopt(invoke('player.setVolume', { volume: next }), 'Could not change the volume');
+    if (next != null) {
+      void settle(invoke('player.setVolume', { volume: next }), 'Could not change the volume');
+    }
   };
-  volumeFrame =
-    typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(send)
-      : (setTimeout(send, 16) as unknown as number);
+  volumeFrame = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame(send)
+    : (setTimeout(send, 16) as unknown as number);
 }
 
 export function changeVolume(delta: number) {
-  // From the value on screen, which may be ahead of the host's, so held keys and wheel
-  // notches add up instead of all starting from the same stale number.
-  setVolume((current()?.volume ?? 70) + delta);
+  setVolume((now()?.volume ?? 70) + delta);
 }
 
-/** Relative seek: the playhead moves on screen now, the host catches up. */
-export function seekBy(secs: number) {
-  const p = current();
-  if (p && !p.isLive && p.durationSecs) {
-    useUi.getState().holdPlayer({
-      positionSecs: Math.min(p.durationSecs, Math.max(0, p.positionSecs + secs)),
+/* ── Menus (C13) ── */
+
+export function setSpeed(speed: number) {
+  useUi.getState().holdPlayer({ speed });
+  void settle(invoke('player.setSpeed', { speed }), 'Could not change the speed');
+}
+
+export function setAspect(aspect: PlayerState['aspect']) {
+  useUi.getState().holdPlayer({ aspect });
+  void settle(invoke('player.setAspect', { aspect }), 'Could not change the aspect ratio');
+}
+
+export function setAudioTrack(trackId: number) {
+  useUi.getState().holdPlayer({ activeAudioTrack: trackId });
+  void settle(invoke('player.setAudioTrack', { trackId }), 'Could not switch the audio track');
+}
+
+/** `null` is Off. */
+export function setSubtitleTrack(trackId: number | null) {
+  useUi.getState().holdPlayer({ activeSubtitleTrack: trackId });
+  void settle(invoke('player.setSubtitleTrack', { trackId }), 'Could not switch the subtitles');
+}
+
+/* ── Errors (C25) ── */
+
+/**
+ * Ask for what failed again, from where it failed.
+ *
+ * Retry and Try another source both come here. For live, the host re-reads the ranked
+ * sources on a deliberate tune, and the failures it just recorded have moved the bad one
+ * down, so this does land on another source when there is one. The error is cleared at
+ * once, so the panel goes when the button is pressed rather than when the stream opens.
+ */
+export function playAgain(): Promise<void> {
+  const p = now();
+  if (!p || p.itemKind == null || p.itemId == null) return Promise.resolve();
+  useUi.getState().holdPlayer({ error: null, status: 'loading' });
+  return invoke('player.play', {
+    kind: p.itemKind,
+    id: p.itemId,
+    positionSecs: p.isLive ? undefined : Math.max(0, Math.floor(p.positionSecs)),
+  })
+    .then((s) => {
+      useUi.getState().releasePlayer();
+      useUi.getState().setPlayer(s);
+    })
+    .catch((e: unknown) => {
+      useUi.getState().releasePlayer();
+      invoke('player.state').then((s) => useUi.getState().setPlayer(s)).catch(() => undefined);
+      report('Could not start it again')(e);
     });
-  }
-  adopt(invoke('player.seek', { positionSecs: secs, relative: true }), 'Could not seek');
-}
-
-export function seekTo(positionSecs: number, failure = 'Could not seek') {
-  const p = current();
-  if (p && !p.isLive) useUi.getState().holdPlayer({ positionSecs });
-  adopt(invoke('player.seek', { positionSecs }), failure);
 }
