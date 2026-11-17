@@ -154,6 +154,18 @@ jobs:
         # Fails the job on a high or critical only: a moderate in a dev-only tool is
         # worth knowing about and not worth blocking a pull request over.
         #
+        # Accepted advisories live in `package.json` under `pnpm.auditConfig`, which
+        # cannot hold comments, so the reasoning for each is here:
+        #
+        # - GHSA-fc5q-39xc-vjpf (high, published 2026-11-17): ReDoS in picomatch
+        #   <= 4.0.7 on single-branch repeated extglobs, with no patched release at
+        #   all -- every published version is in range, and vite 8.3.8, vitest 5.1.0
+        #   and typescript-eslint 8.73.0 all still depend on it. It is reached only
+        #   through build and lint tooling, matching glob patterns this repository
+        #   wrote against its own files; nothing in the shipped app depends on it and
+        #   no pattern comes from outside. Accepted on 2026-11-17 so pull requests can
+        #   merge. REMOVE the ignore as soon as a fixed picomatch is published.
+        #
         # Guarded like the steps below it, and for the same reason: one ecosystem's
         # advisory should not decide whether the other ecosystem gets checked at all.
         if: ${{ !cancelled() }}
