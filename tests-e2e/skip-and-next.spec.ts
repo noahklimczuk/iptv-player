@@ -89,6 +89,8 @@ test('Skip Intro appears inside the intro and seeks past it', async ({ page }) =
   await seekTo(page, 45);
   const skip = page.getByRole('button', { name: 'Skip Intro' });
   await expect(skip).toBeVisible();
+  // A marker from the file's own chapters is not one the viewer taught.
+  await expect(skip).not.toContainText('Learned');
   await page.screenshot({ path: `${SHOTS}/15-skip-intro.png` });
 
   await skip.click();
@@ -432,6 +434,8 @@ test('a drag past the titles teaches Skip Intro on a show with no chapters', asy
   await seekTo(page, 60);
   const skip = page.getByRole('button', { name: 'Skip Intro' });
   await expect(skip).toBeVisible();
+  // C22: a marker the viewer taught says so.
+  await expect(skip).toContainText('Learned from your skips');
   await page.screenshot({ path: `${SHOTS}/20-skip-intro-learned.png` });
 
   // And it does what it says.

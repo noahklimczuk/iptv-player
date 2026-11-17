@@ -108,10 +108,18 @@ test('a late guide slice still reaches the rows that asked for it', async ({ pag
   // The grid scrolls both ways in one container, so the wheel moves the rows rather
   // than the clock: changing `from` is the one thing that *should* discard a reply
   // (R-91), and this test is about the thing that should not.
+  //
+  // Two steps, so a failure says which. The grid has to have moved -- a wheel that lands
+  // while the page is still laying out scrolls nothing, and is not what this is about --
+  // and then the rows it moved to have to be asked for.
+  const grid = page.getByTestId('guide-row').first().locator('xpath=ancestor::div[contains(@style,"overflow: auto")][1]');
   await page.getByTestId('guide-row').first().hover();
-  await page.mouse.wheel(0, 2000);
+  await expect.poll(async () => {
+    await page.mouse.wheel(0, 2000);
+    return grid.evaluate((el) => el.scrollTop);
+  }).toBeGreaterThan(0);
   await expect.poll(async () => sent(page, 'epg.gridSlice')).toBeGreaterThan(1);
-  await page.mouse.wheel(0, -2000);
+  await page.mouse.wheel(0, -4000);
 
   await expect
     .poll(async () => page.getByTestId('programme').count(), { timeout: 20_000 })

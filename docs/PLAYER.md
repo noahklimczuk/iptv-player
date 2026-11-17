@@ -260,4 +260,9 @@ Step 3 is two PRs. **3a** is the overlay: `PlayerOverlay`, `Dock`, `Scrub`, `Pan
 with the key map (`useHotkeys`) and fullscreen (`useFullscreen`) it depends on. It covers
 C1–C18, C24–C29 and C31–C34; `tests-e2e/player-rebuild.spec.ts` has a test for each one
 no older journey covers. **3b** is the pieces around it: the channel banner and number
-entry (C19–C21), Skip and Up Next (C22, C23), PiP and the guide preview (C30).
+entry (C19–C21), Skip and Up Next (C22, C23), PiP and the guide preview (C30). The
+banner, number entry, Skip, Up Next and the PiP frame are new components; the logic
+behind Skip and Up Next (`useEpisodeAids`: which marker is active, auto-skip, learning
+from the viewer's seeks) is kept, because it is not interface and carries fixes that
+are each tested (R-149 among them). Enter now commits a typed number, and a number with
+no channel says so.

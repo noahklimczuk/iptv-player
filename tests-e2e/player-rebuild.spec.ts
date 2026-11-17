@@ -323,3 +323,57 @@ test('C34: the key handler is not re-registered while something plays', async ({
   const after = await page.evaluate(() => (window as unknown as { __keydownAdds: number }).__keydownAdds);
   expect(after).toBe(settled);
 });
+
+/* ── 3b: the banner, numbers and zapping (C19–C21) ──────────────────────── */
+
+const playerChannel = async (page: Page) => (await page.evaluate(() =>
+  (window as unknown as { __auroraInvoke: (c: string) => Promise<{ channelId: number | null }> })
+    .__auroraInvoke('player.state'))).channelId;
+
+test('C19: a zap shows the number, name, what is on with its times, and what is next', async ({ page }) => {
+  await watchLive(page);
+  const banner = page.getByTestId('channel-banner');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText(/\d{2}:\d{2}–\d{2}:\d{2}/);
+  await expect(banner.getByRole('progressbar', { name: 'Programme progress' })).toBeVisible();
+  await expect(banner).toContainText('Next:');
+  const name = await page.evaluate(() =>
+    (window as unknown as { __auroraInvoke: (c: string) => Promise<{ title: string }> })
+      .__auroraInvoke('player.state')).then((s) => s.title);
+  await expect(banner).toContainText(name);
+});
+
+test('C20: Enter tunes a typed number at once, without waiting for the pause', async ({ page }) => {
+  await page.goto('/#/live');
+  await expect(page.getByTestId('channel-row').first()).toBeVisible();
+  await clearCalls(page);
+  for (const d of '203') await page.keyboard.press(d);
+  await page.keyboard.press('Enter');
+  // Well inside the two-second pause that would otherwise commit it.
+  await expect.poll(() => calls(page, 'channels.byNumber'), { timeout: 800 }).toEqual([{ number: 203 }]);
+  await expect(page.getByRole('status', { name: 'Channel 203' })).toHaveCount(0);
+  await expect(pause(page)).toBeVisible();
+});
+
+test('C20: a number with no channel says so', async ({ page }) => {
+  await page.goto('/#/live');
+  await expect(page.getByTestId('channel-row').first()).toBeVisible();
+  for (const d of '987') await page.keyboard.press(d);
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('notices')).toContainText('There is no channel 987');
+  await expect(overlay(page)).toHaveCount(0);
+});
+
+test('C21: PageDown and PageUp change channel, and Backspace goes back to the last one', async ({ page }) => {
+  await watchLive(page);
+  const first = await playerChannel(page);
+  await page.keyboard.press('PageDown');
+  await expect.poll(() => playerChannel(page)).not.toBe(first);
+  const second = await playerChannel(page);
+  await page.keyboard.press('Backspace');
+  await expect.poll(() => playerChannel(page)).toBe(first);
+  await page.keyboard.press('Backspace');
+  await expect.poll(() => playerChannel(page)).toBe(second);
+  await page.keyboard.press('PageUp');
+  await expect.poll(() => playerChannel(page)).toBe(first);
+});

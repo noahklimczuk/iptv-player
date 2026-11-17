@@ -1,15 +1,14 @@
 /**
- * "Up Next" autoplay card (README §9): when an episode reaches its credits, a corner
- * card counts down to the next episode over the tail of the current one, with
- * "Play now" and "Cancel".
+ * Up Next (docs/PLAYER.md C23): at the credits, a card counts down to the next episode.
+ * Play now starts it at once; Cancel stops the countdown for this episode.
  *
- * Cancelling is remembered for this episode, so dismissing it once does not mean
- * fighting it every few seconds until the credits end.
+ * The countdown runs against a deadline rather than by counting ticks, so a slow or
+ * throttled timer cannot stretch it, and it plays the next episode exactly once.
  */
-import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import './player.css';
+import { useEffect, useRef, useState } from 'react';
 import type { Episode } from '@shared/ipc';
-import { Button } from '@/components/Primitives';
+import { Icon } from '@/components/Icon';
 import { runtime } from '@/lib/format';
 
 export const COUNTDOWN_SECS = 10;
@@ -21,130 +20,66 @@ export function UpNextCard({
   visible: boolean;
   onPlay: () => void;
   onCancel: () => void;
-  /** When off, the card still offers the next episode but never plays it by itself. */
+  /** Off: the card offers the next episode but never plays it by itself. */
   autoplay: boolean;
 }) {
-  const [remaining, setRemaining] = useState(COUNTDOWN_SECS);
+  const shown = visible && episode != null;
+  const [left, setLeft] = useState(COUNTDOWN_SECS);
+  const play = useRef(onPlay);
+  play.current = onPlay;
 
   useEffect(() => {
-    if (!visible || !autoplay) {
-      setRemaining(COUNTDOWN_SECS);
-      return;
-    }
-    setRemaining(COUNTDOWN_SECS);
-    const id = setInterval(() => {
-      setRemaining((r) => {
-        if (r <= 1) {
-          clearInterval(id);
-          onPlay();
-          return 0;
-        }
-        return r - 1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [visible, autoplay, onPlay]);
+    setLeft(COUNTDOWN_SECS);
+    if (!shown || !autoplay) return;
+    const deadline = Date.now() + COUNTDOWN_SECS * 1000;
+    let done = false;
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setLeft(remaining);
+      if (remaining === 0 && !done) {
+        done = true;
+        window.clearInterval(id);
+        play.current();
+      }
+    };
+    const id = window.setInterval(tick, 250);
+    return () => { done = true; window.clearInterval(id); };
+  }, [shown, autoplay, episode?.id]);
 
-  const progress = ((COUNTDOWN_SECS - remaining) / COUNTDOWN_SECS) * 100;
+  if (!shown) return null;
+  const progress = ((COUNTDOWN_SECS - left) / COUNTDOWN_SECS) * 100;
 
   return (
-    <AnimatePresence>
-      {visible && episode && (
-        <motion.aside
-          initial={{ opacity: 0, x: 16 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 16 }}
-          transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-          aria-label="Up next"
-          style={{
-            width: 380,
-            borderRadius: 26,
-            overflow: 'hidden',
-            background: 'var(--dock-bg)',
-            color: 'var(--dock-text)',
-            boxShadow: 'var(--shadow-dock)',
-          }}
+    <aside className="pl-upnext" aria-label="Up next">
+      <div className="pl-upnext-body">
+        {episode.still && <img src={episode.still} alt="" className="pl-upnext-still" />}
+        <div className="pl-upnext-text">
+          <div className="pl-card-kicker">{autoplay ? `Up next in ${left}s` : 'Up next'}</div>
+          <div className="pl-upnext-title">{episode.title ?? `Episode ${episode.episode}`}</div>
+          <div className="pl-upnext-meta">
+            S{episode.season} E{episode.episode}
+            {episode.runtimeMins ? ` · ${runtime(episode.runtimeMins)}` : ''}
+          </div>
+        </div>
+      </div>
+      <div className="pl-upnext-actions">
+        <button type="button" className="pl-upnext-play" onClick={onPlay}>
+          <Icon name="play" size={14} filled /> Play now
+        </button>
+        <button type="button" className="pl-upnext-cancel" onClick={onCancel}>Cancel</button>
+      </div>
+      {autoplay && (
+        <div
+          className="pl-upnext-bar"
+          role="progressbar"
+          aria-label="Countdown"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress)}
         >
-          <div style={{ display: 'flex', gap: 'var(--sp-3)', padding: 14 }}>
-            {episode.still && (
-              <img
-                src={episode.still}
-                alt=""
-                style={{
-                  width: 132,
-                  aspectRatio: '16/9',
-                  objectFit: 'cover',
-                  borderRadius: 14,
-                  flexShrink: 0,
-                }}
-              />
-            )}
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div
-                style={{
-                  fontSize: 'var(--fs-xs)',
-                  fontWeight: 800,
-                  letterSpacing: '0.05em',
-                  textTransform: 'uppercase',
-                  color: 'var(--dock-accent)',
-                  marginBottom: 3,
-                }}
-              >
-                {autoplay ? `Up next in ${remaining}s` : 'Up next'}
-              </div>
-              <div
-                style={{
-                  fontWeight: 800,
-                  fontSize: 'var(--fs-lg)',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {episode.title ?? `Episode ${episode.episode}`}
-              </div>
-              <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, color: 'var(--dock-muted)' }}>
-                S{episode.season} E{episode.episode}
-                {episode.runtimeMins ? ` · ${runtime(episode.runtimeMins)}` : ''}
-              </div>
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              gap: 'var(--sp-2)',
-              padding: '0 14px 14px',
-            }}
-          >
-            <Button variant="primary" size="sm" icon="play" iconFilled onClick={onPlay}>
-              Play now
-            </Button>
-            <Button size="sm" onClick={onCancel} style={{ background: 'var(--dock-btn)', color: 'var(--dock-text)', boxShadow: 'none' }}>
-              Cancel
-            </Button>
-          </div>
-
-          {autoplay && (
-            <div
-              style={{ height: 4, background: 'var(--dock-track)' }}
-              role="progressbar"
-              aria-valuenow={Math.round(progress)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div
-                style={{
-                  height: '100%',
-                  width: `${progress}%`,
-                  background: 'var(--accent)',
-                  transition: 'width 1s linear',
-                }}
-              />
-            </div>
-          )}
-        </motion.aside>
+          <div style={{ width: `${progress}%` }} />
+        </div>
       )}
-    </AnimatePresence>
+    </aside>
   );
 }
