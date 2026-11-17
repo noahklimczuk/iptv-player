@@ -290,9 +290,16 @@ struct SeriesDetail: View {
     let seriesId: Int64
     @State private var detail: Series?
     @State private var season: UInt16?
-    @State private var episodes: [Episode] = []
+    /// Every episode of every season, every copy of the show merged (the core does that).
+    /// The season picker comes from these, not from the show's row, as on Windows: a
+    /// season only a hidden duplicate has is still reachable.
+    @State private var allEpisodes: [Episode] = []
+    @State private var loading = true
     @State private var resume: SeriesResume?
     @State private var playing: PlayerItem?
+
+    private var seasons: [UInt16] { Array(Set(allEpisodes.map(\.season))).sorted() }
+    private var episodes: [Episode] { allEpisodes.filter { $0.season == season } }
 
     var body: some View {
         List {
@@ -301,7 +308,7 @@ struct SeriesDetail: View {
                     MarkButtons(kind: .series, id: seriesId)
                     if let overview = detail.overview { Text(overview) }
                     CastAndCrew(kind: .series, id: seriesId, genres: detail.genres)
-                    if let resume, let episode = episodes.first(where: { $0.id == resume.episodeId }) {
+                    if let resume, let episode = allEpisodes.first(where: { $0.id == resume.episodeId }) {
                         Button(resume.positionSecs > 0 ? "Resume \(label(episode))" : "Play \(label(episode))",
                                systemImage: "play.fill") {
                             playing = .episode(id: episode.id, title: label(episode),
@@ -309,9 +316,9 @@ struct SeriesDetail: View {
                         }
                     }
                 }
-                if detail.seasons.count > 1 {
+                if seasons.count > 1 {
                     Picker("Season", selection: $season) {
-                        ForEach(detail.seasons, id: \.self) { Text("Season \($0)").tag(Optional($0)) }
+                        ForEach(seasons, id: \.self) { Text("Season \($0)").tag(Optional($0)) }
                     }
                 }
             }
@@ -329,23 +336,25 @@ struct SeriesDetail: View {
                     }
                 }
             } footer: {
-                if episodes.isEmpty {
-                    Text("This show's episode list has not been fetched yet.")
+                if loading && allEpisodes.isEmpty {
+                    // The first time a show is opened its listing comes from the provider.
+                    ProgressView("Fetching episodes…")
+                } else if allEpisodes.isEmpty {
+                    Text("The provider doesn't list any episodes for this show yet.")
                 }
             }
         }
         .navigationTitle(detail?.title ?? "")
         .task {
-            detail = await loadDetail()
-            season = detail?.seasons.first
+            detail = await model.seriesDetail(seriesId: seriesId)
+            allEpisodes = await model.episodes(seriesId: seriesId, season: nil)
+            loading = false
+            // Where the viewer is, or the first season.
+            let resumeSeason = allEpisodes.first { $0.id == resume?.episodeId }?.season
+            season = resumeSeason ?? seasons.first
         }
-        .task(id: season) { episodes = await model.episodes(seriesId: seriesId, season: season) }
         .task(id: playing == nil) { resume = await model.seriesResume(seriesId: seriesId) }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
-    }
-
-    private func loadDetail() async -> Series? {
-        await model.seriesDetail(seriesId: seriesId)
     }
 
     private func label(_ e: Episode) -> String {

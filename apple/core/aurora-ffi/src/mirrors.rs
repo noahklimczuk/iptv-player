@@ -179,3 +179,23 @@ fn a_new_profile_follows_the_windows_editors_rules() {
         "ProfilePicker.tsx no longer checks a PIN with `{pin}`; update profiles.rs PIN_DIGITS"
     );
 }
+
+/// `pub const NAME: TYPE = EXPR;` in `aurora-app/src/series.rs`, as the text of EXPR.
+fn series_const(name: &str) -> String {
+    let series = app_src("series.rs");
+    let decl = between(&series, &format!("pub const {name}:"), ";");
+    decl.split_once('=').map(|(_, v)| v.trim().to_string()).unwrap_or_default()
+}
+
+#[test]
+fn episode_listing_waits_and_batches_as_windows_does() {
+    assert_eq!(series_const("SWEEP_BATCH"), crate::series::SWEEP_BATCH.to_string());
+    assert_eq!(series_const("SWEEP_CONCURRENCY"), crate::series::SWEEP_CONCURRENCY.to_string());
+    assert_eq!(series_const("LISTING_RETRY_AFTER_SECS"), "6 * 3600");
+    assert_eq!(crate::series::LISTING_RETRY_AFTER_SECS, 6 * 3600);
+    assert_eq!(
+        series_const("LISTING_FRESH_FOR"),
+        "std::time::Duration::from_secs(6 * 3600)"
+    );
+    assert_eq!(crate::series::LISTING_FRESH_FOR.as_secs(), 6 * 3600);
+}

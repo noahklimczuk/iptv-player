@@ -54,6 +54,7 @@ final class AppModel {
     }
     private(set) var metadataProgress: MetadataProgress?
     private var metadataTask: Task<Void, Never>?
+    private var listingTask: Task<Void, Never>?
 
     init() {
         do {
@@ -62,8 +63,11 @@ final class AppModel {
             core = nil
             self.error = "Aurora could not open its library. \(error.viewerMessage)"
         }
-        // Windows starts a sweep at launch too: whatever the last one didn't reach.
-        Task { self.fetchMetadata() }
+        // Windows starts both sweeps at launch too: whatever the last ones didn't reach.
+        Task {
+            self.fetchMetadata()
+            self.listEpisodes()
+        }
     }
 
     /// Application Support, which the system does not purge — unlike Caches, which is
@@ -130,8 +134,31 @@ final class AppModel {
         }
         await reload()
         // An import leaves new titles bare; fetch their artwork and cast straight away,
-        // as Windows does, rather than waiting for someone to find the button.
+        // as Windows does, rather than waiting for someone to find the button. Episode
+        // listings likewise: an import stores each show without them.
         fetchMetadata()
+        listEpisodes()
+    }
+
+    /// Fill in the episode listings an import left out, in the background and quietly,
+    /// as Windows' `sweep_in_background` does. Opening a show fetches its own listing
+    /// regardless; this is what gives the rest their seasons.
+    func listEpisodes() {
+        guard let core, listingTask == nil else { return }
+        let relay = MetadataRelay { _, _ in }
+        listingTask = Task {
+            defer { listingTask = nil }
+            do {
+                let report = try await withTaskCancellationHandler {
+                    try await Task.detached { try core.listEpisodes(listener: relay) }.value
+                } onCancel: {
+                    relay.cancel()
+                }
+                Self.log.notice("episode listings: asked \(report.asked) listed \(report.listed) failed \(report.failed)")
+            } catch {
+                Self.log.notice("episode listing sweep stopped: \(error.viewerMessage, privacy: .public)")
+            }
+        }
     }
 
     // MARK: Metadata
@@ -414,8 +441,9 @@ extension BrowseSort {
     }
 }
 
-/// Hands metadata progress to a closure, and tells the core when to stop.
-private final class MetadataRelay: MetadataListener, @unchecked Sendable {
+/// Hands a sweep's progress to a closure, and tells the core when to stop. Serves both
+/// the metadata and the episode listing sweeps, which report the same way.
+private final class MetadataRelay: MetadataListener, ListingListener, @unchecked Sendable {
     private let onProgress: @Sendable (UInt64, UInt64) -> Void
     private let stopped = OSAllocatedUnfairLock(initialState: false)
 

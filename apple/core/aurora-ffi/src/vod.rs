@@ -258,15 +258,6 @@ impl AuroraCore {
             .ok_or_else(|| AuroraError::not_found("This series is no longer in your library."))
     }
 
-    /// One season's episodes, or every episode when `season` is empty.
-    pub fn episodes(&self, series_id: i64, season: Option<u16>) -> Result<Vec<Episode>> {
-        let db = self.db.lock();
-        Ok(library::episodes_for(&db, series_id, season)?
-            .into_iter()
-            .map(Episode::from)
-            .collect())
-    }
-
     /// Everything needed to play a film, starting at `start_at_secs` if given.
     pub fn tune_movie(&self, movie_id: i64, start_at_secs: Option<f64>) -> Result<VodTune> {
         self.tune_vod(VodKind::Movie, movie_id, start_at_secs)

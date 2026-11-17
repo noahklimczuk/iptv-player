@@ -33,6 +33,7 @@ mod profiles;
 mod providers;
 mod search;
 mod secrets;
+mod series;
 mod vod;
 
 use std::path::PathBuf;
@@ -55,6 +56,7 @@ pub use profiles::{PinChange, PinOutcome, Profile};
 pub use providers::{ImportContent, ImportListener, ImportPhase, ImportReport, Provider};
 pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};
+pub use series::{ListingListener, ListingReport};
 pub use vod::{
     Browse, BrowseFacets, BrowseSort, Episode, Movie, Series, SeriesResume, Shelf, VodKind, VodTune,
     WatchProgress,

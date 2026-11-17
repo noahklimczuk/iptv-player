@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use aurora_ffi::{
-    AuroraCore, ImportContent, ImportListener, ImportPhase, SecretError, SecretStore,
+    AuroraCore, Browse, BrowseSort, ImportContent, ImportListener, ImportPhase, ListingListener,
+    SecretError, SecretStore,
 };
 
 struct Panel {
@@ -183,6 +184,70 @@ fn a_real_panel_is_imported_listed_guided_and_tuned() {
 }
 
 /// An error message with the login taken out, in case one ever carries a URL.
+/// Stops a sweep once it has finished `limit` shows: enough to see it work without
+/// asking a real panel about thousands of them.
+struct StopAfter(u64);
+impl ListingListener for StopAfter {
+    fn progress(&self, done: u64, _total: u64) -> bool {
+        done < self.0
+    }
+}
+
+/// Opening a show fetches its episodes from the panel (an import stores only the show),
+/// and the background sweep lists others.
+#[test]
+fn a_real_panels_show_lists_its_episodes_when_opened() {
+    let Some(panel) = panel() else {
+        eprintln!("live_provider: no ~/.config/aurora-tv/test-provider.env; skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let core = AuroraCore::open(dir.path().display().to_string(), std::sync::Arc::new(Secrets::default())).unwrap();
+    let id = core
+        .add_xtream("Live test".into(), panel.url.clone(), panel.user.clone(), panel.pass.clone())
+        .unwrap();
+    let report = core
+        .refresh(id, ImportContent { live: false, vod: false, series: true }, std::sync::Arc::new(Quiet))
+        .unwrap_or_else(|e| panic!("the import failed: {}", redact(&e.to_string(), &panel)));
+    assert!(report.series > 0, "the panel listed no series");
+
+    let shows = core
+        .series_list(Browse {
+            sort: BrowseSort::RecentlyAdded,
+            category: None,
+            genre: None,
+            query: None,
+            letter: None,
+            limit: 10,
+            offset: 0,
+        })
+        .unwrap();
+    // The first of the newest shows that lists anything: a panel can carry a show with
+    // no episodes yet.
+    let (show, episodes) = shows
+        .iter()
+        .find_map(|s| {
+            let eps = core.episodes(s.id, None).ok()?;
+            (!eps.is_empty()).then(|| (s.id, eps))
+        })
+        .expect("none of the ten newest shows listed an episode");
+    eprintln!("live_provider: show {show} listed {} episodes", episodes.len());
+    assert!(episodes.windows(2).all(|w| (w[0].season, w[0].episode) <= (w[1].season, w[1].episode)));
+    // A season asked for on its own is a subset.
+    let season = episodes[0].season;
+    assert!(core.episodes(show, Some(season)).unwrap().iter().all(|e| e.season == season));
+    // And it plays.
+    let tune = core.tune_episode(episodes[0].id, None).unwrap();
+    assert!(!tune.url.is_empty());
+
+    let swept = core
+        .list_episodes(std::sync::Arc::new(StopAfter(6)))
+        .unwrap_or_else(|e| panic!("the sweep failed: {}", redact(&e.to_string(), &panel)));
+    eprintln!("live_provider: sweep asked {} listed {} failed {}", swept.asked, swept.listed, swept.failed);
+    assert!(swept.asked >= 6, "the sweep stopped before asking about six shows");
+    assert!(swept.asked <= 6 + 4, "the sweep ran on after being told to stop");
+}
+
 fn redact(message: &str, panel: &Panel) -> String {
     message
         .replace(&panel.pass, "***")
