@@ -42,6 +42,10 @@ for arg in "$@"; do
 done
 
 export PATH="$HOME/.cargo/bin:$PATH"
+# The app's minimum OS (project.yml). rustc and the C code in dependencies (ring,
+# SQLite) read these, so the core doesn't silently require a newer OS than the app.
+export IPHONEOS_DEPLOYMENT_TARGET=26.0
+export TVOS_DEPLOYMENT_TARGET=26.0
 command -v cargo >/dev/null || { echo "cargo not found: install Rust with rustup" >&2; exit 1; }
 command -v xcodebuild >/dev/null || { echo "xcodebuild not found: install Xcode" >&2; exit 1; }
 

@@ -43,17 +43,8 @@ struct LiveView: View {
             .sheet(isPresented: $addingProvider) {
                 NavigationStack { AddProviderView() }
             }
-            .alert("Something went wrong", isPresented: errorShown) {
-                Button("OK") { model.error = nil }
-            } message: {
-                Text(model.error ?? "")
-            }
             .task { await model.reload() }
         }
-    }
-
-    private var errorShown: Binding<Bool> {
-        Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })
     }
 }
 

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// The app's one handle on the Rust core, and the state the screens draw from.
 ///
@@ -13,7 +14,18 @@ final class AppModel {
     private(set) var groups: [ChannelGroup] = []
     private(set) var importProgress: ImportProgress?
     private(set) var lastImport: ImportReport?
-    var error: String?
+    /// Goes up whenever the library may have changed (an import, a provider removed).
+    /// Screens that load once key their loading on it, so a finished import shows up
+    /// without leaving the screen.
+    private(set) var libraryVersion = 0
+    /// The last thing that failed, for the app-wide alert (`RootView`). Also logged:
+    /// the core redacts credentials before building these messages (`error.rs`), so the
+    /// log is a safe place for them, and a scripted run can see a failure without a
+    /// screenshot.
+    var error: String? {
+        didSet { if let error { Self.log.error("\(error, privacy: .public)") } }
+    }
+    private static let log = Logger(subsystem: "tv.aurora", category: "error")
 
     /// Whose favourites, My List and progress these are. Falls back to 1, which exists in
     /// every library (an `aurora-db` migration creates it), as on Windows.
@@ -57,6 +69,9 @@ final class AppModel {
             let (providers, groups) = try await Task.detached {
                 (try core.providers(), try core.channelGroups())
             }.value
+            // Closing the player reloads too; only a real change (an import's counts and
+            // time, a provider added or removed) should make screens start over.
+            if providers != self.providers { libraryVersion += 1 }
             self.providers = providers
             self.groups = groups
         } catch {
@@ -117,6 +132,11 @@ final class AppModel {
     func toggleFavorite(channelId: Int64) async -> Bool? {
         let profile = profileId
         return await call(nil) { try $0.toggleFavorite(profileId: profile, channelId: channelId) }
+    }
+
+    /// The guide grid for the channels on screen, over `from..to`.
+    func guideRows(channelIds: [Int64], from: Int64, to: Int64) async -> [GuideRow] {
+        await call([]) { try $0.guideRows(channelIds: channelIds, from: from, to: to) }
     }
 
     /// Which of these programmes can be replayed now, by id.

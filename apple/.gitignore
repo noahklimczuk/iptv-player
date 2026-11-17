@@ -12,3 +12,6 @@
 xcuserdata/
 *.xcuserstate
 DerivedData/
+
+# apple/scripts/sim-demo.sh builds here.
+/.build/

@@ -20,6 +20,9 @@ screens. The app can:
 - import it with progress: live TV only (the tvOS default) or with films and series,
 - list channels by group, with now/next from the guide,
 - keep favourite channels per profile (long-press a channel),
+- show the guide grid (channels down, time across), fetching only the rows on screen
+  as Windows does since R-130; choosing what's on plays the channel, choosing what
+  already aired replays it where the archive allows,
 - show a channel's schedule a day at a time, and replay what already aired where the
   channel keeps an archive (catch-up, up to a week back),
 - keep films and series on My List, and like them,
@@ -31,7 +34,7 @@ screens. The app can:
   sources in turn. Films and episodes resume, and save their position every 15 s and
   on pause or stop.
 
-Not yet: the full guide grid, profile age and daily
+Not yet: profile age and daily
 limits (being fixed on Windows first; the Apple app will follow the same rule), named
 favourite lists, removing a provider, library filters, recordings, and sync (Phase 3).
 
@@ -44,11 +47,13 @@ Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 | Shared crates build for `aarch64-apple-ios` (iPhone/iPad) | ✅ unmodified, including `ring`/rustls and bundled SQLite |
 | Shared crates build for `x86_64-apple-ios` (simulator on Intel) | ✅ |
 | Shared crates build for `aarch64-apple-tvos` (Apple TV) | ✅ on **stable** Rust. The plan's risk 1 (`ring` on tvOS) didn't happen. |
-| `cargo test` in `apple/core` | ✅ 33 tests, including an import → list → favourite → search → tune → catch-up run over HTTP |
+| `cargo test` in `apple/core` | ✅ 36 tests, including an import → list → favourite → search → guide → tune → catch-up run over HTTP, and the same run against a real Xtream panel (`tests/live_provider.rs`, skipped unless `~/.config/aurora-tv/test-provider.env` exists) |
 | `AuroraMobile` and `AuroraTV` build for their simulators | ✅ |
 | Runs in the simulator: opens its library, imports an M3U over HTTP, lists it, keeps it across launches | ✅ iOS 26.5 and tvOS 26.5 |
 | mpv in the app: the shared `LoadOptions` applied (user agent, the 8 s live buffer), HLS opened and decoded, sound playing | ✅ tvOS 26.5 simulator |
-| mpv's **picture** | ⏳ the simulator on an Intel Mac has no Vulkan driver for MoltenVK (`VK_ERROR_INCOMPATIBLE_DRIVER`), so the app says "only the sound is playing". Needs a real Apple TV/iPhone, or an Apple-silicon Mac |
+| mpv's **picture** | ⏳ not on the simulator on an Intel Mac. There MoltenVK used to fail cleanly (`VK_ERROR_INCOMPATIBLE_DRIVER`); as of 2026-11-17 the simulator's Metal driver crashes the app while MoltenVK probes it, so Intel simulator builds don't start the picture at all (`vid=no`) and the app says "only the sound is playing". Needs a real Apple TV/iPhone, or an Apple-silicon Mac |
+| Guide grid against the real Xtream panel (6,699 channels): rows fetched as they scroll in, "No guide" rows, Earlier/Later, the now line, replay marked only where the channel keeps an archive | ✅ tvOS 26.5 simulator, driven with the remote |
+| Live and catch-up playback from the guide, left running | ✅ sound plays, no crash. A panel that has no archive for a programme gets "archive would not play" (MS NOW's 404s on the test panel) |
 | iPhone tab bar on the iOS 26 simulator | ⚠️ draws as an empty glass shape on this Intel Mac; the same `TabView` draws correctly on tvOS. To check on a device |
 | Playback on a real Apple TV, import time for a big panel, zap time | ⏳ needs hardware: the remaining Phase 2 exit criteria |
 

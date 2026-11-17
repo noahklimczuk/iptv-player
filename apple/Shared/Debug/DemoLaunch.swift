@@ -8,18 +8,28 @@ import Foundation
 ///       -AuroraDemoPlaylist http://127.0.0.1:8000/demo.m3u -AuroraAutoplay YES
 ///
 /// `-AuroraDemoPlaylist <url>` adds that M3U and imports it (live TV only) when the
-/// library has no providers. `-AuroraAutoplay YES` then plays its first channel.
+/// library has no providers; `-AuroraDemoXtreamURL`, `-AuroraDemoXtreamUser` and
+/// `-AuroraDemoXtreamPass` do the same for an Xtream panel (`apple/scripts/sim-demo.sh`
+/// reads them from a local file). `-AuroraAutoplay YES` then plays the first channel.
 /// Arguments of the form `-Key value` land in UserDefaults' argument domain, so nothing
 /// here parses the command line.
 enum DemoLaunch {
     @MainActor
     static func prepare(_ model: AppModel) async -> PlayerItem? {
         let defaults = UserDefaults.standard
-        guard let url = defaults.string(forKey: "AuroraDemoPlaylist") else { return nil }
+        let liveOnly = ImportContent(live: true, vod: false, series: false)
+        let playlist = defaults.string(forKey: "AuroraDemoPlaylist")
+        let panel = defaults.string(forKey: "AuroraDemoXtreamURL")
+        guard playlist != nil || panel != nil else { return nil }
         await model.reload()
         if model.providers.isEmpty {
-            await model.addM3u(name: "Demo", url: url,
-                               content: ImportContent(live: true, vod: false, series: false))
+            if let panel, let user = defaults.string(forKey: "AuroraDemoXtreamUser"),
+               let pass = defaults.string(forKey: "AuroraDemoXtreamPass") {
+                await model.addXtream(name: "Test panel", url: panel, username: user, password: pass,
+                                      content: liveOnly)
+            } else if let playlist {
+                await model.addM3u(name: "Demo", url: playlist, content: liveOnly)
+            }
         }
         guard defaults.bool(forKey: "AuroraAutoplay"),
               let first = await model.channels(group: nil, limit: 1).first

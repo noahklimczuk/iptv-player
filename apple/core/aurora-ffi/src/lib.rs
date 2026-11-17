@@ -43,7 +43,7 @@ use parking_lot::Mutex;
 
 pub use catchup::CatchupTune;
 pub use error::{AuroraError, Result};
-pub use guide::{NowNext, Programme};
+pub use guide::{GuideCell, GuideRow, NowNext, Programme};
 pub use library::{Channel, ChannelGroup};
 pub use mylist::{ItemMarks, ListKind, MyList};
 pub use playback::{LiveTune, MpvOption, PlayableSource};

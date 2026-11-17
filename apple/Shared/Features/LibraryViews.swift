@@ -28,14 +28,14 @@ struct MoviesView: View {
             }
             .navigationTitle("Films")
             .searchable(text: $search)
-            .task(id: "\(myList)|\(shelf ?? "")|\(search)|\(selected == nil)") {
+            .task(id: "\(myList)|\(shelf ?? "")|\(search)|\(selected == nil)|\(model.libraryVersion)") {
                 // Reloaded when a film's page closes, so My List shows what was just added.
                 guard selected == nil else { return }
                 movies = myList
                     ? await model.myList()?.movies ?? []
                     : await model.movies(.shelf(shelf, query: search))
             }
-            .task { shelves = await model.movieShelves() }
+            .task(id: model.libraryVersion) { shelves = await model.movieShelves() }
             .sheet(item: $selected) { MovieDetail(movie: $0) }
         }
     }
@@ -98,7 +98,7 @@ struct SeriesView: View {
             }
             .navigationTitle("Series")
             .searchable(text: $search)
-            .task(id: "\(myList)|\(shelf ?? "")|\(search)") {
+            .task(id: "\(myList)|\(shelf ?? "")|\(search)|\(model.libraryVersion)") {
                 series = myList
                     ? await model.myList()?.series ?? []
                     : await model.series(.shelf(shelf, query: search))
@@ -108,7 +108,7 @@ struct SeriesView: View {
                 guard myList else { return }
                 Task { series = await model.myList()?.series ?? [] }
             }
-            .task { shelves = await model.seriesShelves() }
+            .task(id: model.libraryVersion) { shelves = await model.seriesShelves() }
         }
     }
 }

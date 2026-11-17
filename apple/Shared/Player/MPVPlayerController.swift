@@ -270,6 +270,14 @@ final class MPVPlayerController: UIViewController {
         mpv_set_option_string(handle, "gpu-context", "moltenvk")
         mpv_set_option_string(handle, "hwdec", "videotoolbox")
         mpv_set_option_string(handle, "video-rotate", "no")
+        #if targetEnvironment(simulator) && arch(x86_64)
+        // The simulator on an Intel Mac has no GPU MoltenVK can draw with, and as of
+        // 2026-11-17 its Metal driver crashes the app (EXC_BAD_ACCESS in MTLSimDriver's
+        // -newIndirectArgumentBufferLayoutWithStructType:) while MoltenVK probes it. Don't
+        // start the picture there: the sound still plays, and since no video output
+        // starts, the player shows its "only the sound is playing" notice.
+        mpv_set_option_string(handle, "vid", "no")
+        #endif
         #if DEBUG
         // `-AuroraMpvLog v` (or `debug`) at launch for mpv's full story; warnings otherwise.
         mpv_request_log_messages(handle, UserDefaults.standard.string(forKey: "AuroraMpvLog") ?? "warn")

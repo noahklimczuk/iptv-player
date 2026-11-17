@@ -27,6 +27,27 @@ pub struct CatchupTune {
     pub mpv_options: Vec<MpvOption>,
 }
 
+/// How many days back this channel's archive reaches, or `None` if it has no catch-up
+/// the shared rule understands. One place for the guide grid and the schedule to ask.
+pub(crate) fn archive_days(
+    db: &aurora_db::rusqlite::Connection,
+    channel_id: i64,
+) -> Result<Option<u16>> {
+    let row: Option<(Option<String>, i64)> = db
+        .query_row(
+            "SELECT catchup_mode, catchup_days FROM channels WHERE id = ?1",
+            [channel_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(match row {
+        Some((Some(mode), days)) if catchup::Mode::parse(&mode).is_some() => {
+            Some(days.clamp(0, i64::from(u16::MAX)) as u16)
+        }
+        _ => None,
+    })
+}
+
 #[uniffi::export]
 impl AuroraCore {
     /// For each programme start time on this channel, whether it can be replayed now,
@@ -34,18 +55,8 @@ impl AuroraCore {
     /// work, decided by the shared rule (`catchup::is_available`) rather than in Swift.
     pub fn catch_up_available(&self, channel_id: i64, starts: Vec<i64>) -> Result<Vec<bool>> {
         let db = self.db.lock();
-        let row: Option<(Option<String>, i64)> = db
-            .query_row(
-                "SELECT catchup_mode, catchup_days FROM channels WHERE id = ?1",
-                [channel_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let days = match row {
-            Some((Some(mode), days)) if catchup::Mode::parse(&mode).is_some() => {
-                days.clamp(0, i64::from(u16::MAX)) as u16
-            }
-            _ => return Ok(vec![false; starts.len()]),
+        let Some(days) = archive_days(&db, channel_id)? else {
+            return Ok(vec![false; starts.len()]);
         };
         let now = now_unix();
         Ok(starts
