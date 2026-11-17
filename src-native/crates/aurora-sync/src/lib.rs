@@ -23,6 +23,7 @@ pub mod error;
 pub mod local;
 pub mod record;
 pub mod transport;
+pub mod vault;
 
 pub use engine::{Engine, Report};
 pub use error::{Result, SyncError};
