@@ -277,18 +277,33 @@ not even which films are on the list.
 
 ### 3.6 The protocol
 
-**Local side (new migration in `aurora-db`):**
+**Local side (migration 18, `sync_capture` — built):**
 
-- `sync_id` columns on `providers` and `profiles` (§3.3).
-- `sync_outbox(record_id, sync_key, payload, hlc, attempts)`. Every user mutation that
-  touches synced data writes its outbox row **in the same transaction** as the change.
-  That makes "edited offline, app killed" safe.
-- `sync_state(key, value)`: the pull cursor, this device's id, and the last successful
-  sync.
+- `sync_id` columns on `providers`, `profiles` and `recording_rules` (§3.3), minted by
+  trigger on insert and backfilled for existing rows. `sync_item_keys` is a view that
+  gives the `ch:` / `mv:` / `sr:` / `ep:` key of any catalogue row.
+- `sync_outbox(sync_key, kind, ident, hlc, attempts)`, written **by trigger, in the same
+  transaction** as the change. That makes "edited offline, app killed" safe, and a new
+  write site cannot forget to enqueue. The row says *which* record changed and when;
+  `ident` is its device-independent identity as JSON (`{"pf":…,"list":…,"item":…}`), and
+  the record key is `{kind}:{ident}`. The payload is read from the row at push time, so
+  the outbox coalesces: an hour of playback is one pending record.
+- `sync_shadow(sync_key, record)`: the last merged state of each record with a clock per
+  field. The field-by-field merge compares against it, and a push diffs the row against
+  it to know which fields this device changed.
+- `sync_state(key, value)`: `enabled`, `applying`, `hlc`, the pull cursor, this device's
+  id, and the last successful sync. Capture is off until `enabled` is set, so a device
+  that never signs in behaves as before; it is suspended while `applying`, so a pulled
+  change is not echoed back.
 - `sync_pending`: parked references (§3.3).
 - **Hybrid logical clocks** for every merge timestamp, rather than wall time alone. A
   Windows PC whose clock runs two minutes fast must not win every conflict for two
-  minutes. The HLC is inside the encrypted payload, and merging is done on the client.
+  minutes. The triggers stamp `max(last + 1, now_ms << 16)`, and the engine folds every
+  pulled clock into `sync_state.hlc`. The HLC is inside the encrypted payload, and merging
+  is done on the client.
+- Settings keys are classified `Personal` or `Device` in `aurora_core::sync_settings`;
+  `aurora-contract/tests/sync_settings.rs` fails on any key the sources use that the
+  table does not name.
 
 **Push.** The outbox drains in batches of up to 500 writes (Firestore's limit) via
 `documents:commit`. Each write sets `serverTime` with a `REQUEST_TIME` field transform.

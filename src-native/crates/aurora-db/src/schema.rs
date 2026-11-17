@@ -848,6 +848,493 @@ CREATE INDEX idx_movies_tmdb ON movies(tmdb_id) WHERE tmdb_id IS NOT NULL;
 CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
 "#,
     },
+    Migration {
+        version: 18,
+        name: "sync_capture",
+        sql: SYNC_CAPTURE,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 17;
+pub const LATEST_VERSION: u32 = 18;
+
+/// Migration 18: what sync needs from the local database (`docs/APPLE_PORT_AND_SYNC.md`
+/// §3.3 and §3.6).
+///
+/// Three parts.
+///
+/// **Identity.** Row ids are local: movie 4,812 here is not movie 4,812 on the TV. Rows
+/// that sync are named by *sync keys* built from things that mean the same on every
+/// device -- a UUID minted once per provider and profile, and the provider's own stream
+/// key. `sync_item_keys` builds them, so there is one definition of "which film is this"
+/// rather than one per table.
+///
+/// **Capture.** Every user mutation of synced data lands in `sync_outbox` *in the same
+/// transaction as the change*, by trigger. Triggers rather than calls at each write site
+/// because there are more than thirty write sites across three crates, and a sync that
+/// misses one is a sync that silently forgets an edit; a trigger cannot be forgotten by a
+/// new command. The outbox is coalesced on the key: a film played for an hour is one
+/// pending row, not seven hundred.
+///
+/// Capture is off until sync is turned on (`sync_state.enabled`), so a device that never
+/// signs in carries nothing but an idle trigger, and it is suspended while the sync
+/// engine applies a pulled change (`sync_state.applying`), so applying a remote edit does
+/// not echo it straight back.
+///
+/// **Clock.** Each capture stamps a hybrid logical clock: wall-clock milliseconds in the
+/// high bits and a counter in the low sixteen, never going backwards. The engine merges
+/// remote clocks into the same `sync_state.hlc` on pull, so a PC whose clock runs two
+/// minutes fast cannot win every conflict for two minutes.
+///
+/// The outbox holds *which record* changed and when, not its contents. The engine reads
+/// the row as it is at push time, which is both smaller and always current. The `ident`
+/// is the record's identity in device-independent terms -- the same JSON the receiving
+/// device resolves back to its own rows -- and is captured at change time, because after
+/// a delete there is no row left to read it from.
+const SYNC_CAPTURE: &str = r#"
+-- Identity --------------------------------------------------------------------------
+
+ALTER TABLE providers       ADD COLUMN sync_id TEXT;
+ALTER TABLE profiles        ADD COLUMN sync_id TEXT;
+ALTER TABLE recording_rules ADD COLUMN sync_id TEXT;
+
+-- `randomblob` is evaluated per row, so every existing row gets its own id.
+UPDATE providers       SET sync_id = lower(hex(randomblob(16))) WHERE sync_id IS NULL;
+UPDATE profiles        SET sync_id = lower(hex(randomblob(16))) WHERE sync_id IS NULL;
+UPDATE recording_rules SET sync_id = lower(hex(randomblob(16))) WHERE sync_id IS NULL;
+
+CREATE UNIQUE INDEX idx_providers_sync_id       ON providers(sync_id);
+CREATE UNIQUE INDEX idx_profiles_sync_id        ON profiles(sync_id);
+CREATE UNIQUE INDEX idx_recording_rules_sync_id ON recording_rules(sync_id);
+
+-- The sync key of every catalogue item, by local kind and id.
+--
+-- `provider_key` is the provider's own stream id or URL hash, already stable across
+-- refreshes, so `mv:{provider}:{provider_key}` is the same film on every device that
+-- imported the same line. An episode is named by its series and its place in it, which
+-- is the `UNIQUE (series_id, season, episode)` the table already enforces.
+--
+-- A lookup by (kind, id) touches one arm: SQLite pushes the WHERE into each branch of a
+-- UNION ALL view and the other three fail on the constant `kind` at once.
+-- `sync_lookups_use_the_primary_keys` checks that stays true.
+CREATE VIEW sync_item_keys (kind, id, key) AS
+    SELECT 'channel', c.id, 'ch:' || p.sync_id || ':' || c.provider_key
+      FROM channels c JOIN providers p ON p.id = c.provider_id
+    UNION ALL
+    SELECT 'movie', m.id, 'mv:' || p.sync_id || ':' || m.provider_key
+      FROM movies m JOIN providers p ON p.id = m.provider_id
+    UNION ALL
+    SELECT 'series', s.id, 'sr:' || p.sync_id || ':' || s.provider_key
+      FROM series s JOIN providers p ON p.id = s.provider_id
+    UNION ALL
+    SELECT 'episode', e.id,
+           'ep:sr:' || p.sync_id || ':' || s.provider_key
+                    || ':s' || e.season || 'e' || e.episode
+      FROM episodes e
+      JOIN series s    ON s.id = e.series_id
+      JOIN providers p ON p.id = s.provider_id;
+
+-- Sync's own state --------------------------------------------------------------------
+
+-- Small key/value store: `enabled`, `applying`, `hlc`, the pull cursor, this device's id.
+CREATE TABLE sync_state (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+
+-- Records changed here and not yet pushed. One row per record, however often it changed.
+CREATE TABLE sync_outbox (
+    sync_key  TEXT    PRIMARY KEY,
+    kind      TEXT    NOT NULL,
+    ident     TEXT    NOT NULL,     -- JSON, device-independent
+    hlc       INTEGER NOT NULL,     -- when it last changed here
+    attempts  INTEGER NOT NULL DEFAULT 0
+);
+
+-- The last merged state of every record this device knows, with a clock per field.
+-- What a field-by-field merge compares against, and how a push tells which fields of a
+-- row this device actually changed.
+CREATE TABLE sync_shadow (
+    sync_key  TEXT PRIMARY KEY,
+    record    TEXT NOT NULL         -- JSON
+);
+
+-- Records that refer to something not imported here yet -- a favourite of a channel from
+-- a provider this device has not refreshed. Parked, never dropped, and retried after the
+-- next import (§3.3).
+CREATE TABLE sync_pending (
+    sync_key   TEXT    PRIMARY KEY,
+    record     TEXT    NOT NULL,    -- JSON
+    parked_at  INTEGER NOT NULL
+);
+
+-- The next clock value: never behind the wall clock, never behind the last value issued.
+CREATE VIEW sync_next_hlc (hlc) AS
+SELECT MAX(
+    COALESCE((SELECT CAST(value AS INTEGER) FROM sync_state WHERE key = 'hlc'), 0) + 1,
+    CAST(unixepoch('subsec') * 1000 AS INTEGER) * 65536
+);
+
+-- The one place a change is recorded. Table triggers insert (kind, ident) here, and this
+-- decides whether sync is on, stamps the clock and coalesces into the outbox. An ident
+-- with a null in it names something that cannot be identified across devices -- an item
+-- whose provider is gone, a row whose profile was deleted in the same statement -- and
+-- is skipped; the deletion of the parent is what other devices will act on.
+CREATE VIEW sync_enqueue (kind, ident) AS SELECT NULL, NULL WHERE 0;
+
+CREATE TRIGGER sync_enqueue_capture INSTEAD OF INSERT ON sync_enqueue
+WHEN EXISTS (SELECT 1 FROM sync_state WHERE key = 'enabled')
+ AND NOT EXISTS (SELECT 1 FROM sync_state WHERE key = 'applying')
+ AND NEW.ident IS NOT NULL
+ AND NOT EXISTS (SELECT 1 FROM json_each(NEW.ident) WHERE type = 'null')
+BEGIN
+    INSERT INTO sync_state (key, value)
+        SELECT 'hlc', hlc FROM sync_next_hlc WHERE true
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value;
+    INSERT INTO sync_outbox (sync_key, kind, ident, hlc)
+        VALUES (NEW.kind || ':' || NEW.ident, NEW.kind, NEW.ident,
+                (SELECT CAST(value AS INTEGER) FROM sync_state WHERE key = 'hlc'))
+        ON CONFLICT (sync_key) DO UPDATE SET hlc = excluded.hlc, attempts = 0;
+END;
+
+-- Providers ---------------------------------------------------------------------------
+
+CREATE TRIGGER sync_providers_insert AFTER INSERT ON providers
+BEGIN
+    UPDATE providers SET sync_id = lower(hex(randomblob(16)))
+     WHERE id = NEW.id AND sync_id IS NULL;
+    INSERT INTO sync_enqueue VALUES ('provider',
+        json_object('p', (SELECT sync_id FROM providers WHERE id = NEW.id)));
+END;
+
+-- Not `last_refresh_at`, `expires_at` or `credential_ref`: those are this device's.
+CREATE TRIGGER sync_providers_update AFTER UPDATE OF
+    name, kind, base_url, username, user_agent, referrer, enabled, max_connections, sort_order
+    ON providers
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('provider', json_object('p', NEW.sync_id));
+END;
+
+CREATE TRIGGER sync_providers_delete AFTER DELETE ON providers
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('provider', json_object('p', OLD.sync_id));
+END;
+
+-- Profiles and parental controls ------------------------------------------------------
+
+CREATE TRIGGER sync_profiles_insert AFTER INSERT ON profiles
+BEGIN
+    UPDATE profiles SET sync_id = lower(hex(randomblob(16)))
+     WHERE id = NEW.id AND sync_id IS NULL;
+    INSERT INTO sync_enqueue VALUES ('profile',
+        json_object('pf', (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.id)));
+END;
+
+CREATE TRIGGER sync_profiles_update AFTER UPDATE OF
+    name, avatar, is_kids, pin_hash, max_rating, allow_unrated, daily_limit_min, sort_order
+    ON profiles
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('profile', json_object('pf', 'pf:' || NEW.sync_id));
+END;
+
+CREATE TRIGGER sync_profiles_delete AFTER DELETE ON profiles
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('profile', json_object('pf', 'pf:' || OLD.sync_id));
+END;
+
+CREATE TRIGGER sync_parental_update AFTER UPDATE OF master_pin, hide_adult, lock_settings
+    ON parental
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('parental', json_object());
+END;
+
+CREATE TRIGGER sync_parental_locks_insert AFTER INSERT ON parental_locks
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('parental_lock', json_object('kind', NEW.kind,
+        'value', CASE NEW.kind
+            WHEN 'channel' THEN (SELECT key FROM sync_item_keys
+                                  WHERE kind = 'channel' AND id = CAST(NEW.value AS INTEGER))
+            ELSE NEW.value END));
+END;
+
+CREATE TRIGGER sync_parental_locks_delete AFTER DELETE ON parental_locks
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('parental_lock', json_object('kind', OLD.kind,
+        'value', CASE OLD.kind
+            WHEN 'channel' THEN (SELECT key FROM sync_item_keys
+                                  WHERE kind = 'channel' AND id = CAST(OLD.value AS INTEGER))
+            ELSE OLD.value END));
+END;
+
+-- Watch progress ----------------------------------------------------------------------
+--
+-- Recordings are files on this PC and their progress means nothing elsewhere.
+
+CREATE TRIGGER sync_progress_insert AFTER INSERT ON watch_progress
+WHEN NEW.item_kind <> 'recording'
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('progress', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = NEW.item_kind AND id = NEW.item_id)));
+END;
+
+CREATE TRIGGER sync_progress_update AFTER UPDATE ON watch_progress
+WHEN NEW.item_kind <> 'recording'
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('progress', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = NEW.item_kind AND id = NEW.item_id)));
+END;
+
+CREATE TRIGGER sync_progress_delete AFTER DELETE ON watch_progress
+WHEN OLD.item_kind <> 'recording'
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('progress', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = OLD.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = OLD.item_kind AND id = OLD.item_id)));
+END;
+
+-- Favourites, My List, Not interested ------------------------------------------------
+--
+-- Each membership is its own record, and a removal is a tombstone of that record. That
+-- is what keeps a removal on the TV from being resurrected by the PC's older copy.
+
+CREATE TRIGGER sync_favorites_insert AFTER INSERT ON favorites
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('favorite', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'list', NEW.list_name,
+        'item', (SELECT key FROM sync_item_keys WHERE kind = NEW.item_kind AND id = NEW.item_id)));
+END;
+
+-- A rename moves rows between lists, which is a removal from one and an addition to the
+-- other; a reorder changes one field. Enqueueing both sides covers both.
+CREATE TRIGGER sync_favorites_update AFTER UPDATE ON favorites
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('favorite', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = OLD.profile_id),
+        'list', OLD.list_name,
+        'item', (SELECT key FROM sync_item_keys WHERE kind = OLD.item_kind AND id = OLD.item_id)));
+    INSERT INTO sync_enqueue VALUES ('favorite', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'list', NEW.list_name,
+        'item', (SELECT key FROM sync_item_keys WHERE kind = NEW.item_kind AND id = NEW.item_id)));
+END;
+
+CREATE TRIGGER sync_favorites_delete AFTER DELETE ON favorites
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('favorite', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = OLD.profile_id),
+        'list', OLD.list_name,
+        'item', (SELECT key FROM sync_item_keys WHERE kind = OLD.item_kind AND id = OLD.item_id)));
+END;
+
+CREATE TRIGGER sync_my_list_insert AFTER INSERT ON my_list
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('my_list', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = NEW.item_kind AND id = NEW.item_id)));
+END;
+
+CREATE TRIGGER sync_my_list_delete AFTER DELETE ON my_list
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('my_list', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = OLD.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = OLD.item_kind AND id = OLD.item_id)));
+END;
+
+CREATE TRIGGER sync_not_interested_insert AFTER INSERT ON not_interested
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('not_interested', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = NEW.item_kind AND id = NEW.item_id)));
+END;
+
+CREATE TRIGGER sync_not_interested_delete AFTER DELETE ON not_interested
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('not_interested', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = OLD.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = OLD.item_kind AND id = OLD.item_id)));
+END;
+
+-- Series preferences ------------------------------------------------------------------
+
+CREATE TRIGGER sync_series_prefs_insert AFTER INSERT ON series_prefs
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('series_prefs', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'series' AND id = NEW.series_id)));
+END;
+
+CREATE TRIGGER sync_series_prefs_update AFTER UPDATE ON series_prefs
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('series_prefs', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = NEW.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'series' AND id = NEW.series_id)));
+END;
+
+CREATE TRIGGER sync_series_prefs_delete AFTER DELETE ON series_prefs
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('series_prefs', json_object(
+        'pf',   (SELECT 'pf:' || sync_id FROM profiles WHERE id = OLD.profile_id),
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'series' AND id = OLD.series_id)));
+END;
+
+-- Playlist edits ----------------------------------------------------------------------
+--
+-- Only the viewer's override columns. The importer's upsert never names them (see
+-- `repo::channels::upsert_batch`), and the WHEN skips a write that changed nothing, so a
+-- refresh of 117k films enqueues nothing at all.
+
+CREATE TRIGGER sync_channel_override AFTER UPDATE OF
+    custom_name, custom_number, custom_logo, custom_group, hidden ON channels
+WHEN OLD.custom_name   IS NOT NEW.custom_name
+  OR OLD.custom_number IS NOT NEW.custom_number
+  OR OLD.custom_logo   IS NOT NEW.custom_logo
+  OR OLD.custom_group  IS NOT NEW.custom_group
+  OR OLD.hidden        IS NOT NEW.hidden
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('override', json_object(
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'channel' AND id = NEW.id)));
+END;
+
+CREATE TRIGGER sync_movie_override AFTER UPDATE OF custom_title, hidden ON movies
+WHEN OLD.custom_title IS NOT NEW.custom_title OR OLD.hidden IS NOT NEW.hidden
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('override', json_object(
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'movie' AND id = NEW.id)));
+END;
+
+CREATE TRIGGER sync_series_override AFTER UPDATE OF custom_title, hidden ON series
+WHEN OLD.custom_title IS NOT NEW.custom_title OR OLD.hidden IS NOT NEW.hidden
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('override', json_object(
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'series' AND id = NEW.id)));
+END;
+
+-- Rules and manual guide mappings -----------------------------------------------------
+
+CREATE TRIGGER sync_rules_insert AFTER INSERT ON rules
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('rule', json_object('id', NEW.id));
+END;
+
+CREATE TRIGGER sync_rules_update AFTER UPDATE ON rules
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('rule', json_object('id', OLD.id));
+    INSERT INTO sync_enqueue VALUES ('rule', json_object('id', NEW.id));
+END;
+
+CREATE TRIGGER sync_rules_delete AFTER DELETE ON rules
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('rule', json_object('id', OLD.id));
+END;
+
+CREATE TRIGGER sync_epg_map_insert AFTER INSERT ON epg_manual_map
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('epg_map', json_object(
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'channel' AND id = NEW.channel_id)));
+END;
+
+CREATE TRIGGER sync_epg_map_update AFTER UPDATE ON epg_manual_map
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('epg_map', json_object(
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'channel' AND id = NEW.channel_id)));
+END;
+
+CREATE TRIGGER sync_epg_map_delete AFTER DELETE ON epg_manual_map
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('epg_map', json_object(
+        'item', (SELECT key FROM sync_item_keys WHERE kind = 'channel' AND id = OLD.channel_id)));
+END;
+
+-- Recording rules, reminders and mosaic layouts ---------------------------------------
+--
+-- Recording rules sync so a rule made on the phone records on the PC; only Windows acts
+-- on them. A reminder's `fired` is this device's, so it is not a trigger column.
+
+CREATE TRIGGER sync_recording_rules_insert AFTER INSERT ON recording_rules
+BEGIN
+    UPDATE recording_rules SET sync_id = lower(hex(randomblob(16)))
+     WHERE id = NEW.id AND sync_id IS NULL;
+    INSERT INTO sync_enqueue VALUES ('recording_rule',
+        json_object('id', (SELECT sync_id FROM recording_rules WHERE id = NEW.id)));
+END;
+
+CREATE TRIGGER sync_recording_rules_update AFTER UPDATE OF
+    title, channel_id, new_only, weekdays, around_local_minute, time_slack_secs,
+    pre_padding_secs, post_padding_secs, keep_episodes, priority, enabled
+    ON recording_rules
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('recording_rule', json_object('id', NEW.sync_id));
+END;
+
+CREATE TRIGGER sync_recording_rules_delete AFTER DELETE ON recording_rules
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('recording_rule', json_object('id', OLD.sync_id));
+END;
+
+CREATE TRIGGER sync_reminders_insert AFTER INSERT ON reminders
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('reminder', json_object(
+        'item',  (SELECT key FROM sync_item_keys WHERE kind = 'channel' AND id = NEW.channel_id),
+        'start', NEW.start,
+        'title', NEW.title));
+END;
+
+CREATE TRIGGER sync_reminders_delete AFTER DELETE ON reminders
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('reminder', json_object(
+        'item',  (SELECT key FROM sync_item_keys WHERE kind = 'channel' AND id = OLD.channel_id),
+        'start', OLD.start,
+        'title', OLD.title));
+END;
+
+CREATE TRIGGER sync_mosaic_insert AFTER INSERT ON mosaic_layouts
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('mosaic', json_object('name', NEW.name));
+END;
+
+CREATE TRIGGER sync_mosaic_update AFTER UPDATE ON mosaic_layouts
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('mosaic', json_object('name', OLD.name));
+    INSERT INTO sync_enqueue VALUES ('mosaic', json_object('name', NEW.name));
+END;
+
+CREATE TRIGGER sync_mosaic_delete AFTER DELETE ON mosaic_layouts
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('mosaic', json_object('name', OLD.name));
+END;
+
+-- Settings ----------------------------------------------------------------------------
+--
+-- Every key is captured; the engine drops the device-local ones at push time against
+-- `aurora_core::sync_settings`, which is where the allowlist lives. A profile-scoped
+-- setting is named by the profile's sync key, since profile 2 here is not profile 2 there.
+
+CREATE TRIGGER sync_settings_insert AFTER INSERT ON settings
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('setting', json_object(
+        'scope', CASE NEW.scope WHEN 'global' THEN 'global'
+                 ELSE (SELECT 'pf:' || sync_id FROM profiles WHERE id = CAST(NEW.scope AS INTEGER))
+                 END,
+        'key', NEW.key));
+END;
+
+CREATE TRIGGER sync_settings_update AFTER UPDATE ON settings
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('setting', json_object(
+        'scope', CASE NEW.scope WHEN 'global' THEN 'global'
+                 ELSE (SELECT 'pf:' || sync_id FROM profiles WHERE id = CAST(NEW.scope AS INTEGER))
+                 END,
+        'key', NEW.key));
+END;
+
+CREATE TRIGGER sync_settings_delete AFTER DELETE ON settings
+BEGIN
+    INSERT INTO sync_enqueue VALUES ('setting', json_object(
+        'scope', CASE OLD.scope WHEN 'global' THEN 'global'
+                 ELSE (SELECT 'pf:' || sync_id FROM profiles WHERE id = CAST(OLD.scope AS INTEGER))
+                 END,
+        'key', OLD.key));
+END;
+"#;
