@@ -23,6 +23,7 @@ mod catchup;
 mod error;
 mod filters;
 mod guide;
+mod home;
 mod library;
 mod metadata;
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub use catchup::CatchupTune;
 pub use error::{AuroraError, Result};
 pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
 pub use guide::{GuideCell, GuideRow, NowNext, Programme};
+pub use home::{CatalogItem, Rail, RailItem, RailPage, RailProgress};
 pub use library::{Channel, ChannelGroup};
 pub use metadata::{Coverage, Credit, MetadataListener, MetadataReport, MetadataStatus};
 pub use mylist::{ItemMarks, ListKind, MyList};
@@ -77,6 +79,8 @@ pub struct AuroraCore {
     http: Arc<HttpClient>,
     credentials: Arc<dyn CredentialStore>,
     data_dir: PathBuf,
+    /// The home feed last built (`home.rs`).
+    home: Mutex<Option<home::HomeCache>>,
 }
 
 #[uniffi::export]
@@ -106,6 +110,7 @@ impl AuroraCore {
             http,
             credentials: Arc::new(secrets::Bridged(secrets)),
             data_dir,
+            home: Mutex::new(None),
         }))
     }
 

@@ -7,12 +7,12 @@ import SwiftUI
 /// button beside the bar. The app targets iOS 26 and tvOS 26 only.
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @State private var tab: AppTab = .live
+    @State private var tab: AppTab = .home
     #if DEBUG
     @State private var demo: PlayerItem?
     #endif
 
-    enum AppTab: String { case live, guide, films, series, settings, search }
+    enum AppTab: String { case home, live, guide, films, series, settings, search }
 
     var body: some View {
         Group {
@@ -36,6 +36,7 @@ struct RootView: View {
 
     private var tabs: some View {
         TabView(selection: $tab) {
+            Tab("Home", systemImage: "house", value: .home) { HomeView() }
             Tab("Live TV", systemImage: "tv", value: .live) { LiveView() }
             Tab("Guide", systemImage: "calendar", value: .guide) { GuideView() }
             Tab("Films", systemImage: "film", value: .films) { MoviesView() }

@@ -117,6 +117,11 @@ fn concurrency(conn: &Connection) -> u32 {
 impl AuroraCore {
     /// The viewer's key first: someone who went and got one wants it used, with its own
     /// rate limit rather than the build's shared one.
+    /// A client on the key `tmdb_key` picks, or none without one.
+    pub(crate) fn tmdb_client(&self) -> Option<TmdbClient> {
+        self.tmdb_key().map(|key| TmdbClient::new(Arc::clone(&self.http), key))
+    }
+
     fn tmdb_key(&self) -> Option<String> {
         self.credentials
             .get(CREDENTIAL_KEY)

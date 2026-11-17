@@ -26,6 +26,10 @@ screens. The app can:
 - show a channel's schedule a day at a time, and replay what already aired where the
   channel keeps an archive (catch-up, up to a week back),
 - keep films and series on My List, and like them,
+- open on Home, as Windows does: Continue Watching, then the personal feed the shared
+  core builds (Top Picks, Because you watched…, Trending with a metadata key, the
+  shelves), each rail paging as it scrolls; long-press a card for "Not interested", or
+  to take it off Continue Watching,
 - search channels, what's on now and later, films and series in one box,
 - browse films and series by the provider's shelves, genre and first letter, sorted
   newest, A–Z, by year or by rating, with search, a page at a time and with the true

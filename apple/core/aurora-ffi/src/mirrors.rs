@@ -199,3 +199,26 @@ fn episode_listing_waits_and_batches_as_windows_does() {
     );
     assert_eq!(crate::series::LISTING_FRESH_FOR.as_secs(), 6 * 3600);
 }
+
+/// `const NAME: TYPE = EXPR;` (public or not) in an `aurora-app` source, as EXPR's text.
+fn app_const(file: &str, name: &str) -> String {
+    let src = app_src(file);
+    let decl = between(&src, &format!("const {name}:"), ";");
+    decl.split_once('=').map(|(_, v)| v.trim().to_string()).unwrap_or_default()
+}
+
+#[test]
+fn the_home_feed_pages_and_refreshes_as_windows_does() {
+    use crate::home::*;
+    assert_eq!(app_const("home.rs", "FIRST_PAGE"), FIRST_PAGE.to_string());
+    assert_eq!(app_const("home.rs", "PAGE"), PAGE.to_string());
+    assert_eq!(app_const("home.rs", "MAX_PAGE"), MAX_PAGE.to_string());
+    assert_eq!(app_const("home.rs", "CONTINUE_LIMIT"), CONTINUE_LIMIT.to_string());
+    assert_eq!(app_const("home.rs", "FETCHES_PER_REFRESH"), FETCHES_PER_REFRESH.to_string());
+    assert_eq!(app_const("home.rs", "TRENDING_SHOWN_FOR"), "4 * 86_400");
+    assert_eq!(TRENDING_SHOWN_FOR, 4 * 86_400);
+    assert_eq!(app_const("home.rs", "TRENDING_REFRESH"), "86_400");
+    assert_eq!(TRENDING_REFRESH, 86_400);
+    assert_eq!(app_const("home.rs", "ALSO_LIKED_REFRESH"), "14 * 86_400");
+    assert_eq!(ALSO_LIKED_REFRESH, 14 * 86_400);
+}

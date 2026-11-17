@@ -397,6 +397,44 @@ final class AppModel {
         return await call(nil) { try $0.myList(profileId: profile) }
     }
 
+    // MARK: Home
+
+    /// The home feed's shuffle for this run of the app, as Windows keeps one per session:
+    /// the same rails while the app is open, a different mix next time.
+    let homeSeed = UInt64(Date().timeIntervalSince1970)
+
+    func homeRails() async -> [Rail] {
+        let profile = profileId, seed = homeSeed
+        return await call([]) { try $0.homeRails(profileId: profile, seed: seed) }
+    }
+
+    func railPage(_ railId: String, offset: Int) async -> RailPage? {
+        let profile = profileId, seed = homeSeed
+        return await call(nil) {
+            try $0.homeRailPage(profileId: profile, railId: railId, offset: UInt32(offset), limit: nil, seed: seed)
+        }
+    }
+
+    /// Returns whether it is hidden now.
+    func setNotInterested(_ kind: ListKind, id: Int64, _ on: Bool = true) async -> Bool? {
+        let profile = profileId
+        return await call(nil) { try $0.setNotInterested(profileId: profile, kind: kind, id: id, on: on) }
+    }
+
+    /// Take a film or show off Continue Watching. Returns whether anything went.
+    func forgetProgress(_ kind: ListKind, id: Int64) async -> Bool? {
+        let profile = profileId
+        return await call(nil) { try $0.forgetProgress(profileId: profile, kind: kind, id: id) }
+    }
+
+    /// Fetch TMDB trending and "also liked" lists where they are due. Quiet, as on
+    /// Windows: a failure only means the feed is built from what is already kept.
+    func refreshHomeSignals() async -> UInt32 {
+        guard let core else { return 0 }
+        let profile = profileId
+        return (try? await Task.detached { try core.refreshHomeSignals(profileId: profile) }.value) ?? 0
+    }
+
     /// Run one core call off the main actor; on failure, say why and return `fallback`.
     private func call<T: Sendable>(_ fallback: T, _ body: @escaping @Sendable (AuroraCore) throws -> T) async -> T {
         guard let core else { return fallback }
