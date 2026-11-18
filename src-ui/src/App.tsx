@@ -3,6 +3,7 @@ import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { CatalogItem, MosaicRect, MosaicView, PipView, Recording, SearchHit } from '@shared/ipc';
 import { DetailModal } from '@/components/DetailModal';
 import { NoticeStack } from '@/components/NoticeStack';
+import { ParentalPinDialog } from '@/features/parental/ParentalPinDialog';
 import { TabBar } from '@/components/TabBar';
 import { useLiquidGlass } from '@/components/liquidGlass';
 import { Icon, type IconName } from '@/components/Icon';
@@ -832,7 +833,13 @@ export default function App() {
   // "Who's watching?" comes after setup — there is no point choosing a profile for
   // an empty library.
   if (profile.picking || !profile.active) {
-    return <ProfilePicker />;
+    return (
+      <>
+        <ProfilePicker />
+        {/* Adding or removing a profile needs the parental PIN once one is set. */}
+        <ParentalPinDialog />
+      </>
+    );
   }
 
   // Playing, with libmpv rendering into a window behind this page. The shell has to
@@ -1093,6 +1100,7 @@ export default function App() {
       {/* Above the player overlay, because most of what fails here fails while
           something is playing and the whole point is that it is visible. */}
       <NoticeStack />
+      <ParentalPinDialog />
 
       <CommandPalette
         open={ui.paletteOpen}

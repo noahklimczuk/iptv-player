@@ -7,7 +7,7 @@ import type {
   DetectedSource,
   ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
   MetadataReport, MetadataStatus, MosaicBudget, MosaicLayout, MosaicRect,
-  MosaicView, ParentalSettings, PipCorner, PipView, PinOutcome, Profile, SavedMosaicLayout,
+  MosaicView, ParentalLock, ParentalSettings, ParentalState, PipCorner, PipView, PinOutcome, Profile, SavedMosaicLayout,
   Recording, RecordingConflict, RecordingRule, Reminder,
   Alternate, FilterCounts, LibraryFilters, PlaylistEntry, PlaylistKind, PlaylistShow,
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
@@ -20,6 +20,7 @@ import type {
 import type { SyncJoined, SyncRound, SyncStatus } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
 import * as fx from './fixtures';
+import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE } from './parentalMessages';
 
 /**
  * A pretend published build, one patch ahead of whatever this bundle was built from.
@@ -331,6 +332,38 @@ const pinLockouts = new Map<number, number>();
 let mockParental: ParentalSettings = {
   hasMasterPin: false, hideAdult: true, lockSettings: false,
 };
+
+/**
+ * The parental gate, as `aurora_db::repo::parental` keeps it: who is watching, until when
+ * the PIN has opened things, and the locks. Only the locks are applied to the fixture's
+ * lists and playback -- the fixture has no adult categories and no certifications to
+ * hold back -- and they are applied in the host's own words, so the PIN dialog that
+ * answers them is exercised exactly as on Windows.
+ */
+let mockSession: number | null = null;
+let mockUnlockedUntil = 0;
+let mockLocks: ParentalLock[] = [];
+let mockHideLocked = false;
+const nowSecs = () => Math.floor(Date.now() / 1000);
+/** Locks apply only while there is a PIN to open them with, as on the host. */
+const parentalOpen = () => mockMasterPin == null || mockUnlockedUntil > nowSecs();
+function requireParent(): void {
+  if (mockMasterPin != null && mockUnlockedUntil <= nowSecs()) {
+    throw new Error(PIN_REQUIRED_MESSAGE);
+  }
+}
+function channelLocked(c: { id: number; group: string | null }): boolean {
+  return mockLocks.some((l) => (l.kind === 'channel' && l.value === String(c.id))
+    || (l.kind === 'category' && c.group != null && l.value === c.group));
+}
+function parentalState(): ParentalState {
+  return {
+    profileId: mockSession,
+    unlockedUntil: mockUnlockedUntil > nowSecs() ? mockUnlockedUntil : null,
+    hideLocked: mockHideLocked,
+    restricted: mockLocks.length > 0 && mockMasterPin != null,
+  };
+}
 
 let player: PlayerState = {
   status: 'idle',
@@ -667,7 +700,8 @@ function applyFilters<T extends { id: number; quality: string | null; lang?: str
 }
 
 const visibleChannels = (): Channel[] =>
-  applyFilters(editedChannels(), 'live', (c) => c.name, () => null);
+  applyFilters(editedChannels(), 'live', (c) => c.name, () => null)
+    .filter((c) => !(mockHideLocked && !parentalOpen() && channelLocked(c)));
 /**
  * The browse filters, applied the way the host applies them.
  *
@@ -2232,6 +2266,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'player.play': ({ kind, id, positionSecs }) => {
     if (kind === 'live') {
       const ch = fx.channels.find((c) => c.id === id);
+      if (ch && channelLocked(ch) && !parentalOpen()) throw new Error(LOCKED_MESSAGE);
       const nn = ch ? nowNext(ch, Math.floor(Date.now() / 1000)) : { now: null, next: null };
       // A zap starts the buffer over: nothing of the previous channel is reachable.
       liveEdgeSecs = 0;
@@ -2647,6 +2682,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
 
   'profiles.list': () => mockProfiles,
   'profiles.create': ({ name, avatar, isKids, maxAge, dailyLimitMin }) => {
+    requireParent();
     const id = Math.max(0, ...mockProfiles.map((p) => p.id)) + 1;
     mockProfiles.push({
       id, name, avatar: avatar ?? null, isKids, hasPin: false,
@@ -2658,6 +2694,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return id;
   },
   'profiles.delete': ({ profileId }) => {
+    requireParent();
     if (mockProfiles.length <= 1) return false;
     const i = mockProfiles.findIndex((p) => p.id === profileId);
     if (i < 0) return false;
@@ -2669,10 +2706,12 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (p) p.name = name;
   },
   'profiles.setLimits': ({ profileId, maxAge, allowUnrated, dailyLimitMin }) => {
+    requireParent();
     const p = mockProfiles.find((x) => x.id === profileId);
     if (p) Object.assign(p, { maxAge, allowUnrated, dailyLimitMin });
   },
   'profiles.setPin': ({ profileId, pin }) => {
+    if (mockSession !== profileId) requireParent();
     const p = mockProfiles.find((x) => x.id === profileId);
     if (p) { p.hasPin = pin !== null; mockPins.set(profileId, pin); }
   },
@@ -2711,6 +2750,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
   'profiles.parental': (): ParentalSettings => mockParental,
   'profiles.setParental': ({ hideAdult, lockSettings, masterPin }) => {
+    requireParent();
+    if (masterPin) mockUnlockedUntil = nowSecs() + 30 * 60;
     mockParental = {
       hideAdult, lockSettings,
       hasMasterPin: masterPin !== undefined ? masterPin !== null : mockParental.hasMasterPin,
@@ -2718,6 +2759,53 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     if (masterPin !== undefined) mockMasterPin = masterPin;
   },
   'profiles.watchedToday': () => 42,
+  'profiles.select': ({ profileId, pin }) => {
+    const p = mockProfiles.find((x) => x.id === profileId);
+    if (!p) throw new Error('That profile no longer exists.');
+    if (pin === undefined && p.hasPin) throw new Error(`${p.name} needs its PIN.`);
+    const outcome: PinOutcome = pin === undefined
+      ? 'notRequired'
+      : handlers['profiles.verifyPin']({ profileId, pin }) as PinOutcome;
+    if (outcome === 'ok' || outcome === 'notRequired') {
+      mockSession = profileId;
+      mockUnlockedUntil = 0;
+    }
+    return outcome;
+  },
+
+  'parental.state': () => parentalState(),
+  'parental.unlock': ({ pin }) => {
+    if (mockMasterPin == null) {
+      throw new Error('There is no parental PIN yet. Set one in Settings → Parental controls.');
+    }
+    const outcome = handlers['profiles.verifyPin']({ pin }) as PinOutcome;
+    if (outcome === 'ok') mockUnlockedUntil = nowSecs() + 30 * 60;
+    return outcome;
+  },
+  'parental.relock': () => {
+    mockUnlockedUntil = 0;
+    return parentalState();
+  },
+  'parental.locks': () => mockLocks,
+  'parental.setLock': ({ kind, value, locked }) => {
+    requireParent();
+    if (locked && mockMasterPin == null) {
+      throw new Error('Set a parental PIN first: a lock is opened with it, so without one nothing locked could be watched.');
+    }
+    mockLocks = mockLocks.filter((l) => !(l.kind === kind && l.value === value));
+    if (locked) {
+      const label = kind === 'channel'
+        ? fx.channels.find((c) => String(c.id) === value)?.name ?? 'A channel no longer in the playlist'
+        : value;
+      mockLocks.push({ kind, value, label });
+    }
+    return mockLocks;
+  },
+  'parental.setHideLocked': ({ hide }) => {
+    requireParent();
+    mockHideLocked = hide;
+    return parentalState();
+  },
 
   /* ── DVR ────────────────────────────────────────────────────────────────── */
 

@@ -31,7 +31,8 @@ import { invoke } from '@/ipc';
 import { report } from '@/lib/errors';
 import { progressPct } from '@/lib/format';
 import { useClockTime } from '@/hooks/useClockTime';
-import { activeProfileId } from '@/state/profile';
+import { isChannelLocked, useParental } from '@/state/parental';
+import { activeProfileId, useProfile } from '@/state/profile';
 import { type NowNext, useNowNext } from './useNowNext';
 
 /** Row height and grid tile height, which the virtualiser needs up front. */
@@ -42,6 +43,12 @@ const TILE_H = 192;
 const TILE_MIN_W = 250;
 
 export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
+  // A padlock on what a parent locked (README §11). Only while there is a parental PIN:
+  // without one the host does not apply locks at all, so a padlock would be a lie.
+  const locks = useParental((s) => s.locks);
+  const loadParental = useParental((s) => s.load);
+  const pinSet = useProfile((s) => s.parental?.hasMasterPin ?? false);
+  useEffect(() => { loadParental().catch(() => {}); }, [loadParental]);
   const [group, setGroup] = useState<string | undefined>(undefined);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   /**
@@ -492,6 +499,7 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
                     <ChannelRow
                       key={c.id}
                       channel={c}
+                      locked={pinSet && isChannelLocked(locks, c)}
                       guide={guide.get(c.id) ?? null}
                       onTune={onTune}
                       onToggleFavorite={toggleFavorite}
@@ -534,7 +542,7 @@ export function LivePage({ onTune }: { onTune: (c: Channel) => void }) {
 const NUMBER = new Intl.NumberFormat('en-US');
 
 function ChannelRow({
-  channel, guide, onTune, onToggleFavorite, onAddToNewList,
+  channel, guide, onTune, onToggleFavorite, onAddToNewList, locked = false,
   draggable = false, dragging = false, onDragStart, onDragEnd, onDropOn,
 }: {
   channel: Channel;
@@ -542,6 +550,8 @@ function ChannelRow({
   guide: NowNext | null;
   onTune: (c: Channel) => void;
   onToggleFavorite: (c: Channel) => void;
+  /** Locked by a parent: playing it asks for the parental PIN. */
+  locked?: boolean;
   /** Put this channel in a list that does not exist yet (README §4). */
   onAddToNewList?: (c: Channel) => void;
   /** Only in the favourites view, where the order is the viewer's own. */
@@ -567,7 +577,7 @@ function ChannelRow({
       role="button"
       tabIndex={0}
       data-testid="channel-row"
-      aria-label={`Watch ${channel.name}`}
+      aria-label={`Watch ${channel.name}${locked ? ', locked' : ''}`}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -622,6 +632,11 @@ function ChannelRow({
           >
             {channel.name}
           </strong>
+          {locked && (
+            <span title="Locked: needs the parental PIN" style={{ flexShrink: 0, display: 'inline-flex' }}>
+              <Icon name="lock" size={14} />
+            </span>
+          )}
           {channel.quality && (
             <span style={{ flexShrink: 0 }}>
               <Badge tone="neutral">
