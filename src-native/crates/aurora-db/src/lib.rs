@@ -436,12 +436,27 @@ fn should_refuse(error: &DbError) -> bool {
 /// The old file is renamed rather than deleted. It holds favourites, watch progress and
 /// recordings metadata that somebody might want recovered, and deleting the one copy of
 /// that to make an error message go away is not a trade this should make on its own.
+///
+/// **The full check runs only when [`verify`] has found damage.** It used to run on every
+/// launch, before the window could appear: `PRAGMA integrity_check` reads every page, and
+/// on a 735 MB library that was 20 seconds of an empty screen from a warm cache and over a
+/// minute from a cold one, growing with the library ("it took a really long time"). A file
+/// that is not a database at all, or whose header or schema is damaged, still fails in
+/// `open` and is recovered here at once. Damage deeper in the file is what [`verify`]
+/// looks for after the launch, and it leaves a marker that makes the next launch run the
+/// full check before using the file.
 pub fn open_or_recover(path: impl AsRef<Path>) -> Result<(Connection, Opened)> {
     let path = path.as_ref();
+    let marker = suspect_marker(path);
 
     let failure = match open(path) {
+        Ok(conn) if !marker.exists() => return Ok((conn, Opened::Intact)),
         Ok(conn) => match integrity_check(&conn) {
-            Ok(true) => return Ok((conn, Opened::Intact)),
+            Ok(true) => {
+                // A false alarm, or damage SQLite repaired on the way in.
+                let _ = std::fs::remove_file(&marker);
+                return Ok((conn, Opened::Intact));
+            }
             Ok(false) => "failed its integrity check".to_string(),
             Err(e) => format!("could not be checked: {e}"),
         },
@@ -485,7 +500,56 @@ pub fn open_or_recover(path: impl AsRef<Path>) -> Result<(Connection, Opened)> {
     }
 
     let conn = open(path)?;
+    // The marker was about the file just moved aside.
+    let _ = std::fs::remove_file(&marker);
     Ok((conn, Opened::Replaced { corrupt_copy }))
+}
+
+/// Beside the library when [`verify`] found it damaged: `library.db.suspect`, holding
+/// what SQLite reported.
+fn suspect_marker(path: &Path) -> std::path::PathBuf {
+    with_suffix(path, ".suspect")
+}
+
+/// Check the library for damage, after the launch rather than before it.
+///
+/// `PRAGMA quick_check` on a read-only connection of its own: every page and every
+/// record, but not whether each index agrees with its table, which is what makes the
+/// full check ten times slower (6 s against 64 s on a 723 MB file, cold). Nothing waits on
+/// it, and nothing is changed. If it finds damage it leaves the marker that makes the
+/// next [`open_or_recover`] run the full check and, if that fails too, move the file
+/// aside. Returns whether the library was fine.
+pub fn verify(path: impl AsRef<Path>) -> Result<bool> {
+    let path = path.as_ref();
+    let conn = open_reader(path)?;
+    let checked: rusqlite::Result<Vec<String>> = conn
+        .prepare("PRAGMA quick_check(10)")
+        .and_then(|mut q| q.query_map([], |r| r.get(0))?.collect());
+    let report = match checked {
+        Ok(report) => report,
+        // Damage bad enough that the check cannot read past it is reported as an error
+        // rather than as a row, and it is the clearest answer of all.
+        Err(rusqlite::Error::SqliteFailure(e, message))
+            if matches!(
+                e.code,
+                rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+            ) =>
+        {
+            vec![message.unwrap_or_else(|| e.to_string())]
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if report.len() == 1 && report[0] == "ok" {
+        return Ok(true);
+    }
+    tracing::error!(
+        "the library database is damaged; the next launch checks it in full: {}",
+        report.join("; ")
+    );
+    if let Err(e) = std::fs::write(suspect_marker(path), report.join("\n")) {
+        tracing::error!("could not leave the marker for a full check next launch: {e}");
+    }
+    Ok(false)
 }
 
 /// `library.db` → `library.corrupt-1760000000.db`, and never over something that is
@@ -1004,6 +1068,76 @@ mod tests {
             std::fs::read(&corrupt_copy).unwrap(),
             b"this is not a database at all, it is just bytes"
         );
+    }
+
+    /// The launch no longer reads the whole file first, so damage past the schema opens
+    /// as if nothing were wrong. The background check is what finds it, and the launch
+    /// after that recovers -- as every launch used to, but without the wait.
+    #[test]
+    fn damage_past_the_header_is_found_after_the_launch_and_recovered_on_the_next() {
+        let dir = scratch("deep");
+        let path = dir.join("library.db");
+        {
+            let conn = open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE padding (id INTEGER PRIMARY KEY, body BLOB);
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+                 INSERT INTO padding (body) SELECT randomblob(400) FROM n;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .unwrap();
+        }
+        // Scribble over a page near the end, which holds `padding` rows.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let page = 4096;
+        let at = bytes.len() - 3 * page;
+        for b in &mut bytes[at..at + page] {
+            *b = 0x41;
+        }
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (conn, how) = open_or_recover(&path).unwrap();
+        assert!(
+            matches!(how, Opened::Intact),
+            "the launch does not read every page"
+        );
+        drop(conn);
+
+        assert!(!verify(&path).unwrap());
+        assert!(suspect_marker(&path).exists());
+
+        let (conn, how) = open_or_recover(&path).unwrap();
+        assert!(matches!(how, Opened::Replaced { .. }));
+        assert!(integrity_check(&conn).unwrap());
+        assert!(!suspect_marker(&path).exists());
+    }
+
+    #[test]
+    fn a_false_alarm_clears_itself_and_keeps_the_library() {
+        let dir = scratch("alarm");
+        let path = dir.join("library.db");
+        {
+            let conn = open(&path).unwrap();
+            conn.execute("CREATE TABLE kept (x)", []).unwrap();
+        }
+        assert!(verify(&path).unwrap());
+        assert!(
+            !suspect_marker(&path).exists(),
+            "a sound file leaves no marker"
+        );
+
+        std::fs::write(suspect_marker(&path), "damaged once, perhaps").unwrap();
+        let (conn, how) = open_or_recover(&path).unwrap();
+        assert!(matches!(how, Opened::Intact));
+        assert!(!suspect_marker(&path).exists());
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'kept'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

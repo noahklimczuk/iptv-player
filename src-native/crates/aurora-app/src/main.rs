@@ -106,6 +106,10 @@ const REFRESH_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_se
 /// from Task Manager is a far worse failure than an ugly first second.
 const LAUNCH_REVEAL_FALLBACK: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long after launch the library is checked for damage. Long enough that the first
+/// screen's queries and artwork are not competing with a read of the whole file.
+const LIBRARY_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Ask GitHub whether there is a newer build.
 ///
 /// On its own thread and after a pause, because nothing about this is urgent and the
@@ -182,15 +186,22 @@ fn take_staged_update() -> bool {
 }
 
 fn main() {
+    // How long a launch takes before the window can appear, logged once the logger
+    // exists: the target is a window on screen within two seconds of the click.
+    let launched = std::time::Instant::now();
     // Before the logger, because the logger opens a file in the folder being replaced.
     if take_staged_update() {
         return;
     }
+    // A loading screen within milliseconds; the real window takes WebView2's start-up
+    // to appear (`splash`). Closed when that window is shown.
+    aurora_app::splash::show();
     // Before the window: a web view left behind by an Aurora that has gone stops this
     // one's from starting, and a transparent window with no page in it is invisible.
     let (reaped, reap_note) = aurora_app::webview_reap::user_data_dir()
         .map(|dir| aurora_app::webview_reap::reap(&dir))
         .unwrap_or((0, "no web view folder".into()));
+    let reap_ms = launched.elapsed().as_millis() as u64;
 
     tauri::Builder::default()
         .setup(move |app| {
@@ -216,6 +227,9 @@ fn main() {
             // did is waiting in a file rather than in the log.
             updates::report_last_apply(&data_dir);
             tracing::info!(
+                reap_ms,
+                setup_at_ms = launched.elapsed().as_millis() as u64,
+                splash_ms = aurora_app::splash::painted_after_ms(),
                 "Aurora TV {} starting, data in {}",
                 env!("CARGO_PKG_VERSION"),
                 data_dir.display()
@@ -246,7 +260,34 @@ fn main() {
                     aurora_app::play::video::Video::none(Some("there is no main window".into()))
                 }
             };
+            let opening = std::time::Instant::now();
             let services = Services::new(data_dir, video)?;
+            tracing::info!(
+                ms = opening.elapsed().as_millis() as u64,
+                "library and services ready"
+            );
+
+            // The library's damage check, which used to hold the window back for as
+            // long as it took to read every page (`aurora_db::open_or_recover`). After
+            // the launch, once the first screen has had the disk to itself.
+            {
+                let library = services.data_dir.join("library.db");
+                std::thread::Builder::new()
+                    .name("aurora-library-check".into())
+                    .spawn(move || {
+                        std::thread::sleep(LIBRARY_CHECK_DELAY);
+                        let started = std::time::Instant::now();
+                        match aurora_db::verify(&library) {
+                            Ok(true) => tracing::info!(
+                                ms = started.elapsed().as_millis() as u64,
+                                "library checked: no damage"
+                            ),
+                            Ok(false) => {} // `verify` says what it found.
+                            Err(e) => tracing::warn!("the library could not be checked: {e}"),
+                        }
+                    })
+                    .expect("spawning the library check thread");
+            }
 
             // Let the WebView read the artwork cache off disk (README §12, checklist
             // item 7). The scope is granted here rather than in `tauri.conf.json`
@@ -302,6 +343,7 @@ fn main() {
                             );
                             let _ = main_window.show();
                             let _ = main_window.set_focus();
+                            aurora_app::splash::close();
                         }
                     })
                     .expect("spawning the reveal thread");
