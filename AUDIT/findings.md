@@ -48,6 +48,7 @@ commit and the test that would catch a regression.
 | F-33 | Low | build | `option_env!("AURORA_TMDB_KEY")` is untracked, so a warm cache can ship the previous key | Fixed |
 | F-34 | High | player | Without `libmpv-2.dll` the app dies in the loader with no window, no log and no message; the `NullBackend` fallback is unreachable | Fixed |
 | F-35 | Medium | artwork | Prefetching an unordered `LIMIT` caches an arbitrary subset, so the cache never holds what is on screen | Fixed |
+| F-36 | Critical | parental | No parental control reached a list or the player: a kids profile showed and played everything | Fixed |
 
 ---
 
@@ -1177,3 +1178,57 @@ they say so.
 when — the main surface has to be last, or it is on top. `tests-host/scenarios/surfaces.py`
 measures the other three placements in the window tree, and `real_panel`'s mosaic step
 measures this one.
+
+---
+
+## F-36 — Critical — No parental control reached a list or the player
+
+**Found by** going to build the screen for per-channel locks, which the roadmap listed as
+the one thing Phase 9 lacked, and looking for what read them. Nothing did.
+
+**Where.** Everywhere a list is built or something is played. `profiles::may_watch` was
+the only code that combined a profile's age limit, "hide adult categories" and a
+certification, and it had no callers outside its own tests. `parental_locks` was written
+by sync and read by nothing.
+
+**What.** Every parental setting was stored and none was applied:
+
+- a kids profile's age limit (12 by default) hid nothing and refused nothing;
+- "hide adult categories" -- on by default, and README §11's promise that adult content is
+  hidden on a fresh install -- hid nothing;
+- per-channel and per-category locks had no screen and no effect;
+- the profile PIN was checked by the picker's screen, not the host, and nothing stopped a
+  child from lifting their own limit, adding an unrestricted profile, or removing a
+  parent's profile PIN: none of those commands asked for anything.
+
+There was no screen for the master PIN, "hide adult", locks or age limits either, so the
+roadmap's "Phase 9 — Done" described data, not behaviour.
+
+**Fix.** `aurora_db::repo::parental` and the `parental_gate` view (schema migration 19):
+
+- the host keeps who is watching (`profiles.select`, which checks the profile's PIN itself)
+  in an unsynced `session` row, emptied at every launch;
+- `LibraryFilter::where_sql` -- already on nearly every list query -- carries the gate, so
+  channels, films, series, search, rails, recommendations, the feed and the playlist
+  editor all apply the same rule, and the home cache's stamp includes it;
+- playback asks the same view before it plans (`resolve::plan_for_viewer`), for the player
+  and the mosaic; the recorder does not, so a parent's scheduled recording still runs while
+  a kids profile is on screen;
+- with no profile chosen the strictest profile's limits apply;
+- changes to profiles and parental settings need the parental PIN once one exists;
+- Settings → Parental controls is the screen for all of it, and one dialog under `invoke`
+  answers every "locked" and "needs the PIN" refusal and retries the command.
+
+The design is `docs/DECISIONS.md` D29.
+
+**Cost, measured** over 117,510 films (`gate_cost`, release build): a full count went from
+82.7 ms to 108.6 ms with adult categories hidden, 88.8 ms for a kids profile and 97.1 ms
+with ten categories locked and hidden. The first cut cost 157 ms; the difference was two
+string copies per row in `looks_adult`, now gone.
+
+**Regression tests.** `repo::parental`'s tests (lists and playback for each rule, the
+strictest-profile fallback, the PIN's expiry, locks needing a PIN, the fingerprint), the
+app's `with_a_parental_pin_set_changes_wait_for_it_and_your_own_pin_does_not`,
+`a_profile_with_a_pin_is_chosen_only_with_it` and
+`a_locked_channel_is_refused_to_the_viewer_but_not_to_the_recorder`, and
+`tests-e2e/parental.spec.ts` for the screens.

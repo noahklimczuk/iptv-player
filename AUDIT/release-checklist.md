@@ -71,8 +71,8 @@ licence obligation met, and advisories checked on both ecosystems in CI.
 | **Zap time** | **1.92s against the 1.5s in README §16, now measured on a real subscription** and not only a public CDN — the two agree to within 10ms, so the number is the app's and not the network's. Reported rather than asserted. Where the time goes has not been measured, and that is the thing to do before anything is optimised. |
 
 **Not built, by choice:** Stalker portals; drag-to-reorder, custom logos, named favourite
-lists and the rules engine; PiP, sleep timer, tray, backup/restore; a UI for the
-per-channel locks already stored; media keys and global shortcuts. The phase table in
+lists and the rules engine; PiP, sleep timer, tray, backup/restore; media keys and global
+shortcuts. Parental locks are built (F-36). The phase table in
 `docs/ROADMAP.md` is the authority on each.
 
 ---
