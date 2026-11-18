@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Observation
 
@@ -55,6 +56,14 @@ final class PlayerSession {
         let id: Int64
         let name: String
         let number: UInt32?
+        var logo: String? = nil
+    }
+
+    /// The channel banner (Windows' `ChannelBanner`): the channel just tuned, what is on
+    /// it now and next. `guide` is nil until the guide has answered.
+    struct ChannelBanner: Equatable {
+        var channel: Tuned
+        var guide: NowNext?
     }
 
     let zap = zapRules()
@@ -62,8 +71,10 @@ final class PlayerSession {
     private(set) var digits = ""
     /// The channel before this one, for "last channel".
     private(set) var lastChannel: Tuned?
-    /// Names the channel just tuned (or says a number reached nothing) for a moment,
-    /// without raising the controls: the next press of up or down zaps again.
+    /// Names the channel just tuned for a moment, without raising the controls: the next
+    /// press of up or down zaps again.
+    private(set) var channelBanner: ChannelBanner?
+    /// Says something instead, for the same moment: that a number reached nothing.
     private(set) var banner: String?
     private var bannerUntil: Date?
     private var current: Tuned?
@@ -117,6 +128,9 @@ final class PlayerSession {
 
     func start() {
         nameCurrent()
+        // Opening a channel is a tune like any other: Windows' zapper raises the banner
+        // for the channel the player opens on too.
+        if let current { showBanner(current) }
         ticker?.invalidate()
         ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -137,7 +151,14 @@ final class PlayerSession {
         }
         // The remote's jump hint goes after its moment, even when nothing else redraws.
         if let until = seekHintUntil, Date() >= until { seekHintUntil = nil }
-        if let until = bannerUntil, Date() >= until { banner = nil; bannerUntil = nil }
+        if let until = bannerUntil, Date() >= until { banner = nil; channelBanner = nil; bannerUntil = nil }
+        #if os(iOS)
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastPreviewTick >= Double(previewTickMs()) / 1000 {
+            lastPreviewTick = now
+            previewTick(now)
+        }
+        #endif
         sleep = core.sleepState()
         if core.sleepDue() {
             controller?.stop()
@@ -175,6 +196,14 @@ final class PlayerSession {
 
     func update(_ new: MPVPlayerController.PlaybackState) {
         state = new
+        // The file's chapters name its moments on the seek preview (H25).
+        if state.loaded, chaptersFor != item.id, let controller {
+            chaptersFor = item.id
+            let asked = item.id
+            controller.chapters { [weak self] marks in
+                if self?.item.id == asked { self?.chapterMarks = marks }
+            }
+        }
         guard let episodeId else { return }
         watchForHandSeek(episodeId)
         refreshAids(episodeId)
@@ -377,6 +406,9 @@ final class PlayerSession {
 
     /// Forget what belonged to the item that was playing.
     private func startOver() {
+        frames = [:]
+        chapterMarks = []
+        chaptersFor = nil
         aids = nil
         aidsStage = nil
         autoSkipped = []
@@ -434,6 +466,7 @@ final class PlayerSession {
             let named = Tuned(found)
             if current?.id == named.id { current = named }
             if lastChannel?.id == named.id { lastChannel = named }
+            if channelBanner?.channel.id == named.id { channelBanner?.channel = named }
         }
     }
 
@@ -486,13 +519,88 @@ final class PlayerSession {
     }
 
     private func showBanner(_ channel: Tuned) {
-        say(channel.number.map { "\($0)  \(channel.name)" } ?? channel.name)
+        banner = nil
+        let kept = channelBanner?.channel.id == channel.id ? channelBanner?.guide : nil
+        channelBanner = ChannelBanner(channel: channel, guide: kept)
+        // As long as Windows' banner stays (`showBanner`).
+        bannerUntil = Date().addingTimeInterval(5)
+        guard kept == nil else { return }
+        let core = core
+        Task {
+            let answer = await Task.detached { try? core.nowNext(channelIds: [channel.id]) }.value
+            guard let guide = answer?.first, channelBanner?.channel.id == channel.id else { return }
+            channelBanner?.guide = guide
+        }
     }
 
     private func say(_ text: String) {
+        channelBanner = nil
         banner = text
-        // As long as Windows' banner stays (`showBanner`).
         bannerUntil = Date().addingTimeInterval(5)
+    }
+
+    // MARK: Seek preview (`preview.rs`, Windows' `preview_tick` and `seek_preview`)
+
+    /// The pictures kept for the seek preview, by the key the core handed out. Only the
+    /// bubble reads them, when it asks, so nothing redraws as they arrive.
+    @ObservationIgnored private var frames: [String: CGImage] = [:]
+    @ObservationIgnored private var grabbing = false
+    @ObservationIgnored private var lastPreviewTick = 0.0
+    @ObservationIgnored private var chapterMarks: [ChapterMark] = []
+    @ObservationIgnored private var chaptersFor: String?
+
+    /// What is playing, as the preview names it.
+    private var previewTitle: PreviewTitle? {
+        switch item {
+        case .channel(let id, _): .channel(id: id)
+        case .movie(let id, _, _): .movie(id: id)
+        case .episode(let id, _, _): .episode(id: id)
+        case .catchup(let channel, _, let start, let stop): .catchup(channel: channel, start: start, stop: stop)
+        }
+    }
+
+    private var previewSample: PreviewSample {
+        PreviewSample(
+            playing: state.loaded && !state.paused && status == .playing,
+            // `.noPicture` is sound alone: nothing to take a picture of.
+            hasPicture: status == .playing,
+            positionSecs: state.position,
+            durationSecs: state.duration,
+            speed: state.speed,
+            isLive: isLive,
+            window: state.rewind
+        )
+    }
+
+    /// Once a second: take a picture when the core says one is due.
+    private func previewTick(_ now: Double) {
+        guard !grabbing, let controller else { return }
+        let title = previewTitle
+        guard core.previewDue(title: title, sample: previewSample, now: now) else { return }
+        grabbing = true
+        controller.grabFrame(maxWidth: Int(previewMaxWidth())) { [weak self] image, at in
+            guard let self else { return }
+            grabbing = false
+            guard let image, let kept = core.previewKeep(title: title, atSecs: at, nowAt: state.position)
+            else { return }
+            frames[kept.key] = image
+            let held = Set(kept.kept)
+            frames = frames.filter { held.contains($0.key) }
+        }
+    }
+
+    /// What the bar would show at `position`: the picture nearest it, if one was taken,
+    /// and what that moment was.
+    func seekPreview(at position: Double) async -> (SeekPreview, CGImage?)? {
+        var channelId: Int64?
+        if case .channel(let id, _) = item { channelId = id }
+        let (core, title, sample, chapters, episodeId) = (core, previewTitle, previewSample, chapterMarks, episodeId)
+        let answer = await Task.detached {
+            try? core.seekPreview(title: title, positionSecs: position, sample: sample,
+                                  chapters: chapters, channelId: channelId, episodeId: episodeId)
+        }.value
+        guard let preview = answer else { return nil }
+        return (preview, preview.image.flatMap { frames[$0] })
     }
 
     // MARK: Sleep timer
@@ -538,6 +646,6 @@ func clock(_ seconds: Double) -> String {
 
 extension PlayerSession.Tuned {
     init(_ channel: Channel) {
-        self.init(id: channel.id, name: channel.name, number: channel.number)
+        self.init(id: channel.id, name: channel.name, number: channel.number, logo: channel.logo)
     }
 }
