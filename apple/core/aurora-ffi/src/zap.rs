@@ -119,8 +119,8 @@ mod tests {
                 .enumerate()
                 .map(|(i, n)| {
                     let mut e = PlaylistEntry::new(
-                        &format!("Channel {i}"),
-                        &format!("https://example.com/{i}.ts"),
+                        format!("Channel {i}"),
+                        format!("https://example.com/{i}.ts"),
                     );
                     e.number = *n;
                     e

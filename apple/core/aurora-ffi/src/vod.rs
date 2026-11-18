@@ -466,7 +466,6 @@ fn browse_query(db: &aurora_db::rusqlite::Connection, b: Browse) -> Result<Brows
         limit: b.limit.clamp(1, 500),
         offset: b.offset,
         library: LibraryFilter::load(db)?,
-        ..Default::default()
     })
 }
 
