@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Libmpv
 import UIKit
+import os
 
 /// libmpv, drawing into a Metal layer: the Apple counterpart of
 /// `aurora-video/src/libmpv.rs` (docs/APPLE_PORT_AND_SYNC.md §2.3).
@@ -17,6 +18,22 @@ import UIKit
 /// that worked. Films and episodes save their position through the core, which decides
 /// what counts as finished (`aurora_db::repo::progress::save`).
 final class MPVPlayerController: UIViewController {
+    nonisolated private static let mpvLog = Logger(subsystem: "tv.aurora", category: "mpv")
+
+    /// The video engine's own version ("mpv v0.40.0"), for Settings → Diagnostics: the
+    /// first thing to establish about "there is no picture" (Windows' `video::info`).
+    nonisolated static func engineVersion() -> String? {
+        guard let handle = mpv_create() else { return nil }
+        defer { mpv_terminate_destroy(handle) }
+        mpv_set_option_string(handle, "vo", "null")
+        mpv_set_option_string(handle, "ao", "null")
+        guard mpv_initialize(handle) >= 0, let text = mpv_get_property_string(handle, "mpv-version") else {
+            return nil
+        }
+        defer { mpv_free(text) }
+        return String(cString: text)
+    }
+
     private let metalLayer = MetalLayer()
     private var mpv: OpaquePointer?
     /// mpv's events are drained here, and all session state below is touched only here.
@@ -630,9 +647,13 @@ final class MPVPlayerController: UIViewController {
         // fall back to mpv's null output: silent, but time moves and seeking can be tested.
         mpv_set_option_string(handle, "ao", "audiounit,null")
         #endif
+        // mpv's warnings go into the log in every build, as Windows' engine logs them, so
+        // Settings → Diagnostics can export them. `-AuroraMpvLog v` (or `debug`) at
+        // launch for mpv's full story in a debug build.
         #if DEBUG
-        // `-AuroraMpvLog v` (or `debug`) at launch for mpv's full story; warnings otherwise.
         mpv_request_log_messages(handle, UserDefaults.standard.string(forKey: "AuroraMpvLog") ?? "warn")
+        #else
+        mpv_request_log_messages(handle, "warn")
         #endif
         guard mpv_initialize(handle) >= 0 else {
             mpv_terminate_destroy(handle)
@@ -690,12 +711,14 @@ final class MPVPlayerController: UIViewController {
                     publish(force: true)
                 }
             case MPV_EVENT_LOG_MESSAGE:
-                #if DEBUG
                 if let data = event.data {
                     let message = data.assumingMemoryBound(to: mpv_event_log_message.self).pointee
-                    NSLog("mpv [%@] %@", String(cString: message.prefix), String(cString: message.text))
+                    // mpv names the address it failed to open, and an Xtream address carries
+                    // the login: redacted before it is written, never after (docs/PRIVACY.md).
+                    let line = redactLog(text: "mpv [\(String(cString: message.prefix))] "
+                                         + String(cString: message.text).trimmingCharacters(in: .newlines))
+                    Self.mpvLog.notice("\(line, privacy: .public)")
                 }
-                #endif
             case MPV_EVENT_SHUTDOWN:
                 return
             default:

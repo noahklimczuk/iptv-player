@@ -20,11 +20,13 @@
 uniffi::setup_scaffolding!();
 
 mod catchup;
+mod diagnostics;
 mod error;
 mod filters;
 mod guide;
 mod home;
 mod library;
+mod log;
 mod metadata;
 #[cfg(test)]
 mod mirrors;
@@ -52,11 +54,13 @@ use aurora_ingest::http::{HttpClient, HttpConfig};
 use parking_lot::Mutex;
 
 pub use catchup::CatchupTune;
+pub use diagnostics::{AboutCore, Diagnostics};
 pub use error::{AuroraError, Result};
 pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
 pub use guide::{GuideCell, GuideRow, NowNext, Programme};
 pub use home::{CatalogItem, Rail, RailItem, RailPage, RailProgress};
 pub use library::{Channel, ChannelGroup, FavoriteList};
+pub use log::LogSink;
 pub use metadata::{Coverage, Credit, MetadataListener, MetadataReport, MetadataStatus};
 pub use mylist::{ItemMarks, ListKind, MyList};
 pub use playback::{LiveTune, MpvOption, PlayableSource};
@@ -100,6 +104,8 @@ pub struct AuroraCore {
     sleep: Mutex<sleep::SleepTimer>,
     /// Where the rewind buffer goes (`timeshift.rs`); beside the library until told.
     buffer_dir: Mutex<Option<PathBuf>>,
+    /// Where the unreadable library was moved when this launch started a new one.
+    replaced: Option<PathBuf>,
 }
 
 #[uniffi::export]
@@ -123,6 +129,10 @@ impl AuroraCore {
                 corrupt_copy.display()
             );
         }
+        let replaced = match opened {
+            aurora_db::Opened::Intact => None,
+            aurora_db::Opened::Replaced { corrupt_copy } => Some(corrupt_copy),
+        };
         let http = Arc::new(HttpClient::new(HttpConfig::default())?);
         Ok(Arc::new(Self {
             db: Mutex::new(db),
@@ -132,6 +142,7 @@ impl AuroraCore {
             home: Mutex::new(None),
             sleep: Mutex::new(sleep::SleepTimer::default()),
             buffer_dir: Mutex::new(None),
+            replaced,
         }))
     }
 
