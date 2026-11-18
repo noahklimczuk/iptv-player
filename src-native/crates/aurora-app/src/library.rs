@@ -338,6 +338,19 @@ pub fn progress_get(
         "recording" => progress::ItemKind::Recording,
         _ => progress::ItemKind::Movie,
     };
+    // Where another device stopped, before this PC answers from what it knows (§3.6).
+    // Recordings are this PC's own files and never sync.
+    let synced = match kind {
+        progress::ItemKind::Movie => Some("movie"),
+        progress::ItemKind::Episode => Some("episode"),
+        _ => None,
+    };
+    if let Some(item_kind) = synced {
+        let enabled = aurora_db::repo::sync::is_enabled(&services.read())?;
+        services
+            .sync
+            .refresh_progress(enabled, args.profile_id, item_kind, args.id);
+    }
     let db = services.read();
     Ok(progress::get(&db, args.profile_id, kind, args.id)?)
 }

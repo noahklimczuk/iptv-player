@@ -623,6 +623,17 @@ export interface SyncStatus {
   problem: SyncProblem | null;
   /** False where there is no OS credential store, so a sign-in lasts until Aurora closes. */
   secretsPersistent: boolean;
+  /**
+   * What this device has spent today of the free plan's daily quota: 50,000 document
+   * reads and 20,000 writes, shared by the household. "Today" ends when the quota resets,
+   * at midnight Pacific.
+   */
+  usage: { reads: number; writes: number };
+  /**
+   * Past its share of the quota, so this device sends watch progress and looks for
+   * other devices' changes every ten minutes instead of every one or two until it resets.
+   */
+  thrifty: boolean;
 }
 
 /** What one sync round did. */

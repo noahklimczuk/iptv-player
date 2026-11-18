@@ -25,6 +25,7 @@
 //! `exists: false` precondition so two devices setting up sync at once cannot each mint
 //! a key: the second is told one exists and unwraps that.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -326,10 +327,22 @@ struct Cursor {
     n: String,
 }
 
+/// Documents read and written, as the Spark plan's daily quotas count them (§3.7): a
+/// query is billed per document it returns and at least one read when it returns none,
+/// a get is one read whether or not the document exists, and every `update` in a commit
+/// is one write. Deletes have a quota of their own and are not counted here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Used {
+    pub reads: u64,
+    pub writes: u64,
+}
+
 pub struct FirestoreTransport<H: Http> {
     http: H,
     cfg: FirebaseConfig,
     session: Mutex<Session>,
+    reads: AtomicU64,
+    writes: AtomicU64,
 }
 
 impl<H: Http> FirestoreTransport<H> {
@@ -338,7 +351,22 @@ impl<H: Http> FirestoreTransport<H> {
             http,
             cfg,
             session: Mutex::new(session),
+            reads: AtomicU64::new(0),
+            writes: AtomicU64::new(0),
         }
+    }
+
+    /// What this transport has spent of the day's quota so far.
+    pub fn used(&self) -> Used {
+        Used {
+            reads: self.reads.load(Ordering::Relaxed),
+            writes: self.writes.load(Ordering::Relaxed),
+        }
+    }
+
+    fn spend(&self, reads: usize, writes: usize) {
+        self.reads.fetch_add(reads as u64, Ordering::Relaxed);
+        self.writes.fetch_add(writes as u64, Ordering::Relaxed);
     }
 
     /// The current session, for the host to save if the refresh token rotated.
@@ -413,6 +441,10 @@ impl<H: Http> FirestoreTransport<H> {
                 Some(json!({ "writes": chunk })),
             )?;
             Self::check(reply)?;
+            self.spend(
+                0,
+                chunk.iter().filter(|w| w.get("update").is_some()).count(),
+            );
         }
         Ok(())
     }
@@ -424,14 +456,16 @@ impl<H: Http> FirestoreTransport<H> {
             Some(json!({ "structuredQuery": query })),
         )?;
         let body = Self::check(reply)?;
-        Ok(body
+        let docs: Vec<Value> = body
             .as_array()
             .map(|a| {
                 a.iter()
                     .filter_map(|r| r.get("document").cloned())
                     .collect()
             })
-            .unwrap_or_default())
+            .unwrap_or_default();
+        self.spend(docs.len().max(1), 0);
+        Ok(docs)
     }
 
     fn envelope(doc: &Value) -> Option<Envelope> {
@@ -451,9 +485,11 @@ impl<H: Http> FirestoreTransport<H> {
             None,
         )?;
         if reply.status == 404 {
+            self.spend(1, 0);
             return Ok(None);
         }
         let doc = Self::check(reply)?;
+        self.spend(1, 0);
         let raw = doc["fields"]["wrapped"]["stringValue"]
             .as_str()
             .ok_or_else(|| SyncError::Protocol("vault document has no key".into()))?;
@@ -476,7 +512,10 @@ impl<H: Http> FirestoreTransport<H> {
             }]})),
         )?;
         match (reply.status, error_code(&reply.body).as_str()) {
-            (200, _) => Ok(true),
+            (200, _) => {
+                self.spend(0, 1);
+                Ok(true)
+            }
             (_, "FAILED_PRECONDITION") | (_, "ALREADY_EXISTS") => Ok(false),
             _ => Self::check(reply).map(|_| false),
         }
