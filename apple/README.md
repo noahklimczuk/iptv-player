@@ -40,10 +40,25 @@ screens. The app can:
 - open a series on the episode to resume, list its seasons and episodes,
 - play a channel, film or episode through mpv (MPVKit). A channel tries each of its
   sources in turn. Films and episodes resume, and save their position every 15 s and
-  on pause or stop.
+  on pause or stop,
+- control playback as Windows does: subtitles, audio track, speed, aspect and a sleep
+  timer; Skip Intro / Recap / Credits, learned from the viewer's own skips and the
+  file's chapters; Up Next at the credits; and per-series switches to always skip
+  intros or recaps and to play the next episode. On Apple TV the remote jumps back 10 s
+  and forward 30 s with the controls hidden, and Menu backs out one step at a time,
+- keep channels in named favourite lists, rename and empty them, and reorder them,
+- edit the playlist (Settings): rename, renumber, regroup or hide channels, films and
+  series, hide everything a search matches, see a title's other copies, and put any of
+  it back.
+
+On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
+Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
+under "More", whose navigation bar stacks on the tab's own and doubles every back
+button. iPad and Apple TV keep both as tabs.
 
 Not yet: profile age and daily limits (being fixed on Windows first; the Apple app will
-follow the same rule), named favourite lists, recordings, and sync (Phase 3).
+follow the same rule), recordings, live pause and rewind, channel-number entry, and
+sync (Phase 3).
 
 The app targets **iOS 26 and tvOS 26 only**.
 

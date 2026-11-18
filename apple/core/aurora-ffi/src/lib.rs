@@ -31,6 +31,7 @@ mod mirrors;
 mod mylist;
 mod playback;
 mod player;
+mod playlist;
 mod profiles;
 mod providers;
 mod search;

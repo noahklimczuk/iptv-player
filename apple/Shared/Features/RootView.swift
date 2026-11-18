@@ -8,6 +8,11 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var tab: AppTab = .home
+    @State private var showingSettings = false
+    @State private var showingSearch = false
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     #if DEBUG
     @State private var demo: PlayerItem?
     #endif
@@ -41,14 +46,26 @@ struct RootView: View {
             Tab("Guide", systemImage: "calendar", value: .guide) { GuideView() }
             Tab("Films", systemImage: "film", value: .films) { MoviesView() }
             Tab("Series", systemImage: "rectangle.stack", value: .series) { SeriesView() }
-            Tab("Settings", systemImage: "gear", value: .settings) { SettingsView() }
-            Tab(value: AppTab.search, role: .search) { SearchView() }
+            if !compact {
+                Tab("Settings", systemImage: "gear", value: .settings) { SettingsView() }
+                Tab(value: AppTab.search, role: .search) { SearchView() }
+            }
         }
+        // An iPhone's bar holds five, the search tab included; past that the rest go
+        // under "More", whose own navigation bar stacks on top of the tab's and doubles
+        // every back button. So there, as in Apple's TV app, Search and Settings open
+        // from Home's toolbar.
+        .environment(\.openSettings, compact ? { showingSettings = true } : nil)
+        .environment(\.openSearch, compact ? { showingSearch = true } : nil)
+        .sheet(isPresented: $showingSettings) { SettingsView(closable: true) }
+        .sheet(isPresented: $showingSearch) { SearchView(closable: true) }
         #if DEBUG
         // `-AuroraTab guide` at launch opens that tab (see DemoLaunch).
         .onAppear {
             if let name = UserDefaults.standard.string(forKey: "AuroraTab"), let start = AppTab(rawValue: name) {
-                tab = start
+                if compact && start == .settings { showingSettings = true }
+                else if compact && start == .search { showingSearch = true }
+                else { tab = start }
             }
         }
         #endif
@@ -62,7 +79,23 @@ struct RootView: View {
         }
     }
 
+    /// An iPhone, or an iPad in a narrow window.
+    private var compact: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
+
     private var errorShown: Binding<Bool> {
         Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })
     }
+}
+
+extension EnvironmentValues {
+    /// Opens Settings where it isn't a tab (an iPhone); nil where it is.
+    @Entry var openSettings: (() -> Void)? = nil
+    /// Opens Search where it isn't a tab (an iPhone); nil where it is.
+    @Entry var openSearch: (() -> Void)? = nil
 }

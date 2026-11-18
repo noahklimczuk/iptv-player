@@ -324,6 +324,49 @@ final class AppModel {
         await call(nil) { try $0.filterCounts(kind: kind) }
     }
 
+    // MARK: Playlist editor
+
+    func playlistPage(_ query: PlaylistQuery, limit: UInt32, offset: UInt32) async -> PlaylistPage? {
+        await call(nil) { try $0.playlistPage(query: query, limit: limit, offset: offset) }
+    }
+
+    func playlistGroups(_ kind: LibraryKind) async -> [PlaylistGroup] {
+        await call([]) { try $0.playlistGroups(kind: kind) }
+    }
+
+    /// Every edit changes what the other screens list, so they start over.
+    @discardableResult
+    func playlistUpdate(_ kind: LibraryKind, id: Int64, patch: PlaylistPatch) async -> Bool {
+        let done = await call(false) { try $0.playlistUpdate(kind: kind, id: id, patch: patch); return true }
+        if done { libraryVersion += 1 }
+        return done
+    }
+
+    @discardableResult
+    func playlistSetHidden(_ kind: LibraryKind, ids: [Int64], hidden: Bool) async -> UInt32 {
+        let changed = await call(0) { try $0.playlistSetHidden(kind: kind, ids: ids, hidden: hidden) }
+        if changed > 0 { libraryVersion += 1 }
+        return changed
+    }
+
+    @discardableResult
+    func playlistHideMatching(_ query: PlaylistQuery, hidden: Bool) async -> UInt32 {
+        let changed = await call(0) { try $0.playlistHideMatching(query: query, hidden: hidden) }
+        if changed > 0 { libraryVersion += 1 }
+        return changed
+    }
+
+    @discardableResult
+    func playlistReset(_ kind: LibraryKind, ids: [Int64]) async -> UInt32 {
+        let changed = await call(0) { try $0.playlistReset(kind: kind, ids: ids) }
+        if changed > 0 { libraryVersion += 1 }
+        return changed
+    }
+
+    func alternates(_ kind: LibraryKind, id: Int64) async -> [Alternate] {
+        await call([]) { try $0.alternates(kind: kind, id: id) }
+    }
+
     func episodes(seriesId: Int64, season: UInt16?) async -> [Episode] {
         await call([]) { try $0.episodes(seriesId: seriesId, season: season) }
     }

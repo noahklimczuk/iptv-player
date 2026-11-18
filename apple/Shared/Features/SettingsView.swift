@@ -4,6 +4,9 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var adding = false
+    /// Shown as a sheet (an iPhone), so it needs its own way out.
+    var closable = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -19,6 +22,15 @@ struct SettingsView: View {
                     Button("Add a provider", systemImage: "plus") { adding = true }
                 }
                 LibraryFiltersSection()
+                Section {
+                    NavigationLink {
+                        PlaylistEditorView()
+                    } label: {
+                        Label("Edit the playlist", systemImage: "list.bullet.rectangle")
+                    }
+                } footer: {
+                    Text("Rename, renumber, regroup or hide channels, films and series, and put them back.")
+                }
                 MetadataSection()
                 if let progress = model.importProgress {
                     Section("Importing") {
@@ -37,6 +49,11 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .toolbar {
+                if closable {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
+            }
             .sheet(isPresented: $adding) { NavigationStack { AddProviderView() } }
         }
     }

@@ -270,3 +270,16 @@ fn the_sleep_timer_keeps_windows_limits() {
     assert_eq!(app_const("play/sleep.rs", "MAX_MINUTES"), "12 * 60");
     assert_eq!(crate::sleep::MAX_MINUTES, 12 * 60);
 }
+
+#[test]
+fn a_typed_channel_number_is_read_as_windows_reads_it() {
+    // `channel_number_from_typed` (playlist.rs) repeats `numberPatch`: empty clears,
+    // ASCII digits only, anything else sends nothing.
+    let windows = ui_src("features/playlist/number.ts");
+    for needle in ["if (text === '') return { number: 0 };", "/^[0-9]+$/", "return undefined;"] {
+        assert!(
+            windows.contains(needle),
+            "number.ts no longer has `{needle}`; update channel_number_from_typed"
+        );
+    }
+}
