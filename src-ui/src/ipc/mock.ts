@@ -4,6 +4,7 @@
  */
 import type {
   CatalogItem, ChatItem, ChatMessage, Channel, CommandArgs, CommandName, CommandResult,
+  ParentalClockEvent,
   DetectedSource,
   ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
   MetadataReport, MetadataStatus, MosaicBudget, MosaicLayout, MosaicRect,
@@ -20,7 +21,7 @@ import type {
 import type { SyncJoined, SyncRound, SyncStatus } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
 import * as fx from './fixtures';
-import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE } from './parentalMessages';
+import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE } from './parentalMessages';
 
 /**
  * A pretend published build, one patch ahead of whatever this bundle was built from.
@@ -347,6 +348,50 @@ let mockHideLocked = false;
 const nowSecs = () => Math.floor(Date.now() / 1000);
 /** Locks apply only while there is a PIN to open them with, as on the host. */
 const parentalOpen = () => mockMasterPin == null || mockUnlockedUntil > nowSecs();
+/**
+ * Today's viewing on this device, by profile id (0: nobody chosen). The host's
+ * `watch_time`; nothing here plays, so it moves only through `setWatchedTodayMock`.
+ */
+const mockWatched = new Map<number, number>();
+
+/** The host's `time_left`: null when no daily limit applies. */
+function timeLeft(): number | null {
+  const watching = mockProfiles.find((p) => p.id === mockSession);
+  const limits = (watching ? [watching] : mockProfiles)
+    .map((p) => p.dailyLimitMin)
+    .filter((m): m is number => m != null);
+  if (limits.length === 0 || mockMasterPin == null || mockUnlockedUntil > nowSecs()) return null;
+  return Math.min(...limits) * 60 - (mockWatched.get(watching?.id ?? 0) ?? 0);
+}
+
+const clockListeners = new Set<(e: ParentalClockEvent) => void>();
+
+/** The host's `parental.clock` event. */
+export function onParentalClock(fn: (e: ParentalClockEvent) => void): () => void {
+  clockListeners.add(fn);
+  return () => clockListeners.delete(fn);
+}
+
+/**
+ * Say how long whoever is watching has watched today, as the host's heartbeat would
+ * have counted it, and act as the heartbeat does: a warning inside the last five
+ * minutes, and at the limit, playback stopped and `timeUp`.
+ */
+export function setWatchedTodayMock(secs: number): void {
+  const watching = mockProfiles.find((p) => p.id === mockSession);
+  mockWatched.set(watching?.id ?? 0, secs);
+  const left = timeLeft();
+  if (left == null) return;
+  let event: ParentalClockEvent | null = null;
+  if (left <= 0) {
+    setPlayer({ status: 'idle', title: null, itemId: null, channelId: null, timeshift: null });
+    event = { kind: 'timeUp' };
+  } else if (left <= 300) {
+    event = { kind: 'warning', secsLeft: left };
+  }
+  if (event) for (const fn of clockListeners) fn(event);
+}
+
 function requireParent(): void {
   if (mockMasterPin != null && mockUnlockedUntil <= nowSecs()) {
     throw new Error(PIN_REQUIRED_MESSAGE);
@@ -361,10 +406,13 @@ function parentalState(): ParentalState {
     profileId: mockSession,
     unlockedUntil: mockUnlockedUntil > nowSecs() ? mockUnlockedUntil : null,
     hideLocked: mockHideLocked,
-    restricted: (mockLocks.length > 0 && mockMasterPin != null) || ageRule().limit != null,
+    restricted: (mockLocks.length > 0 && mockMasterPin != null) || ageRule().limit != null
+      || timeLeft() != null,
     unratedHidden: unratedHidden(),
     ratedTitles: editedMovies().filter(rated).length + editedSeries().filter(rated).length,
     titles: editedMovies().length + editedSeries().length,
+    timeLeftSecs: timeLeft(),
+    watchedTodaySecs: mockWatched.get(mockProfiles.find((p) => p.id === mockSession)?.id ?? 0) ?? 0,
   };
 }
 
@@ -2302,6 +2350,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
 
   'player.play': ({ kind, id, positionSecs }) => {
+    const left = timeLeft();
+    if (left != null && left <= 0) throw new Error(TIME_UP_MESSAGE);
     if (kind === 'live') {
       const ch = fx.channels.find((c) => c.id === id);
       if (ch && channelLocked(ch) && !parentalOpen()) throw new Error(LOCKED_MESSAGE);

@@ -24,6 +24,10 @@ pub enum AppError {
     /// parental PIN, and tries again.
     #[error("This is locked. Enter the parental PIN to watch it.")]
     Locked,
+    /// Today's viewing time for the profile watching is used up (F-37). The UI
+    /// recognises the text, asks for the parental PIN, and tries again.
+    #[error("Today's viewing time is used up. Enter the parental PIN to keep watching.")]
+    TimeUp,
     /// A change to parental controls or profiles while a master PIN is set and has not
     /// been entered. The UI recognises the text and asks for it.
     #[error("Enter the parental PIN to change this.")]

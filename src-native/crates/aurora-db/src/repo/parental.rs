@@ -165,13 +165,16 @@ pub enum Verdict {
     NotAllowed,
     /// Locked by a parent, and the PIN has not been entered.
     Locked,
+    /// Today's viewing time for this profile is used up, and the PIN has not been
+    /// entered.
+    TimeUp,
 }
 
 /// Whether the profile watching may play `target` now.
 ///
 /// Something that is not in the library at all is `Allowed`: the resolver is the one that
 /// can say it has gone, in words that help.
-pub fn check(conn: &Connection, target: Target) -> Result<Verdict> {
+pub fn check(conn: &Connection, target: Target, now: i64) -> Result<Verdict> {
     let (kind, table, id) = match target {
         Target::Channel(id) => (Kind::Live, "channels", id),
         Target::Recording(id) => {
@@ -222,9 +225,92 @@ pub fn check(conn: &Connection, target: Target) -> Result<Verdict> {
     Ok(match row {
         None => Verdict::Allowed,
         Some((false, _, _)) => Verdict::NotAllowed,
+        _ if time_left(conn, now)?.is_some_and(|left| left <= 0) => Verdict::TimeUp,
         Some((true, true, false)) => Verdict::Locked,
         Some(_) => Verdict::Allowed,
     })
+}
+
+/* ── Daily viewing time ──────────────────────────────────────────────────── */
+
+/// Whose time is counted when nobody has been chosen on this device.
+const NOBODY: i64 = 0;
+
+/// Whose viewing time this device is counting, and that profile's daily limit in
+/// seconds. With nobody chosen, the time is nobody's and the limit is the smallest any
+/// profile has, the same fail-closed reading the gate gives an age limit.
+fn daily_limit(conn: &Connection) -> Result<(i64, Option<i64>)> {
+    let chosen: Option<(i64, Option<i64>)> = match active_profile(conn)? {
+        Some(id) => conn
+            .query_row(
+                "SELECT id, daily_limit_min FROM profiles WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?,
+        None => None,
+    };
+    Ok(match chosen {
+        Some((id, minutes)) => (id, minutes.map(|m| m * 60)),
+        None => {
+            let minutes: Option<i64> =
+                conn.query_row("SELECT MIN(daily_limit_min) FROM profiles", [], |r| {
+                    r.get(0)
+                })?;
+            (NOBODY, minutes.map(|m| m * 60))
+        }
+    })
+}
+
+/// Seconds watched today, on this device, by whoever is watching.
+pub fn watched_today(conn: &Connection, now: i64) -> Result<i64> {
+    let (who, _) = daily_limit(conn)?;
+    Ok(conn
+        .query_row(
+            "SELECT seconds FROM watch_time
+              WHERE profile_id = ?2 AND day = date(?1, 'unixepoch', 'localtime')",
+            params![now, who],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
+/// Count `secs` of viewing against whoever is watching, on the day `now` falls on.
+pub fn add_watch_time(conn: &Connection, now: i64, secs: i64) -> Result<()> {
+    if secs <= 0 {
+        return Ok(());
+    }
+    let (who, _) = daily_limit(conn)?;
+    conn.execute(
+        "INSERT INTO watch_time (profile_id, day, seconds)
+              VALUES (?2, date(?1, 'unixepoch', 'localtime'), ?3)
+         ON CONFLICT (profile_id, day) DO UPDATE SET seconds = seconds + excluded.seconds",
+        params![now, who, secs],
+    )?;
+    Ok(())
+}
+
+/// Seconds of today's viewing left for whoever is watching, or `None` when no daily
+/// limit applies: the profile has none, there is no parental PIN, or the PIN has been
+/// entered. Below zero once the limit is passed.
+///
+/// A limit needs a PIN for the same reason a lock does: without one, nothing could
+/// give more time, and the profile on the clock could lift its own limit anyway.
+pub fn time_left(conn: &Connection, now: i64) -> Result<Option<i64>> {
+    let (_, limit) = daily_limit(conn)?;
+    let Some(limit) = limit else {
+        return Ok(None);
+    };
+    let pin: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM parental WHERE id = 1 AND master_pin IS NOT NULL)",
+        [],
+        |r| r.get(0),
+    )?;
+    if !pin || is_unlocked(conn, now)? {
+        return Ok(None);
+    }
+    Ok(Some(limit - watched_today(conn, now)?))
 }
 
 /* ── Who is watching ─────────────────────────────────────────────────────── */
@@ -311,6 +397,11 @@ pub struct ParentalState {
     /// screens need these to say why.
     pub rated_titles: i64,
     pub titles: i64,
+    /// Seconds of today's viewing left for whoever is watching; `None` when no daily
+    /// limit applies (see [`time_left`]).
+    pub time_left_secs: Option<i64>,
+    /// Seconds watched today on this device by whoever is watching.
+    pub watched_today_secs: i64,
 }
 
 pub fn state(conn: &Connection, now: i64) -> Result<ParentalState> {
@@ -337,6 +428,8 @@ pub fn state(conn: &Connection, now: i64) -> Result<ParentalState> {
         unrated_hidden: unrated_hidden(rule),
         rated_titles,
         titles,
+        time_left_secs: time_left(conn, now)?,
+        watched_today_secs: watched_today(conn, now)?,
     })
 }
 
@@ -502,6 +595,82 @@ mod tests {
     }
 
     #[test]
+    fn a_daily_limit_counts_what_is_watched_and_stops_at_it_until_the_pin() {
+        let conn = library();
+        let sam = kid(&conn);
+        profiles::set_limits(&conn, sam, Some(12), false, Some(60)).unwrap();
+        select_profile(&conn, sam).unwrap();
+        assert_eq!(time_left(&conn, NOW).unwrap(), Some(3600));
+
+        add_watch_time(&conn, NOW, 3000).unwrap();
+        assert_eq!(
+            check(&conn, Target::Movie(1), NOW).unwrap(),
+            Verdict::Allowed
+        );
+        add_watch_time(&conn, NOW + 3000, 600).unwrap();
+        let later = NOW + 3600;
+        assert_eq!(time_left(&conn, later).unwrap(), Some(0));
+        assert_eq!(watched_today(&conn, later).unwrap(), 3600);
+        assert_eq!(
+            check(&conn, Target::Movie(1), later).unwrap(),
+            Verdict::TimeUp
+        );
+        assert_eq!(
+            check(&conn, Target::Channel(10), later).unwrap(),
+            Verdict::TimeUp
+        );
+        // Over the age limit is still that, not a matter of time.
+        assert_eq!(
+            check(&conn, Target::Movie(2), later).unwrap(),
+            Verdict::NotAllowed
+        );
+        assert_eq!(state(&conn, later).unwrap().time_left_secs, Some(0));
+
+        // The PIN gives more time, for as long as it gives anything.
+        unlock(&conn, later).unwrap();
+        assert_eq!(time_left(&conn, later).unwrap(), None);
+        assert_eq!(
+            check(&conn, Target::Movie(1), later).unwrap(),
+            Verdict::Allowed
+        );
+        relock(&conn).unwrap();
+
+        // The owner's time is the owner's, and the owner has no limit.
+        select_profile(&conn, 1).unwrap();
+        assert_eq!(time_left(&conn, later).unwrap(), None);
+        assert_eq!(watched_today(&conn, later).unwrap(), 0);
+
+        // Tomorrow is a new day.
+        select_profile(&conn, sam).unwrap();
+        assert_eq!(time_left(&conn, NOW + 86_400).unwrap(), Some(3600));
+
+        // Nobody chosen: the smallest limit any profile has, against nobody's own time.
+        clear_session(&conn).unwrap();
+        assert_eq!(time_left(&conn, later).unwrap(), Some(3600));
+        add_watch_time(&conn, later, 3600).unwrap();
+        assert_eq!(
+            check(&conn, Target::Movie(1), later).unwrap(),
+            Verdict::TimeUp
+        );
+    }
+
+    #[test]
+    fn without_a_parental_pin_a_daily_limit_stops_nothing() {
+        let conn = library();
+        profiles::set_master_pin(&conn, None, 0).unwrap();
+        let sam = kid(&conn);
+        profiles::set_limits(&conn, sam, Some(12), false, Some(30)).unwrap();
+        select_profile(&conn, sam).unwrap();
+        add_watch_time(&conn, NOW, 7200).unwrap();
+        assert_eq!(time_left(&conn, NOW).unwrap(), None);
+        assert_eq!(
+            check(&conn, Target::Movie(1), NOW).unwrap(),
+            Verdict::Allowed
+        );
+        assert_eq!(watched_today(&conn, NOW).unwrap(), 7200);
+    }
+
+    #[test]
     fn one_profile_sees_everything_but_the_adult_categories_hidden_by_default() {
         let conn = library();
         assert_eq!(
@@ -511,14 +680,17 @@ mod tests {
         );
         assert_eq!(ids(&conn, Kind::Live), [10, 12]);
         assert_eq!(
-            check(&conn, Target::Channel(11)).unwrap(),
+            check(&conn, Target::Channel(11), NOW).unwrap(),
             Verdict::NotAllowed
         );
 
         profiles::set_parental_flags(&conn, false, false, 0).unwrap();
         assert_eq!(ids(&conn, Kind::Movies), [1, 2, 3, 4]);
         assert_eq!(ids(&conn, Kind::Live), [10, 11, 12]);
-        assert_eq!(check(&conn, Target::Channel(11)).unwrap(), Verdict::Allowed);
+        assert_eq!(
+            check(&conn, Target::Channel(11), NOW).unwrap(),
+            Verdict::Allowed
+        );
         assert!(!state(&conn, NOW).unwrap().restricted);
     }
 
@@ -540,28 +712,46 @@ mod tests {
         // An age limit hides adult categories whatever the household setting says.
         assert_eq!(ids(&conn, Kind::Live), [10, 12]);
 
-        assert_eq!(check(&conn, Target::Movie(1)).unwrap(), Verdict::Allowed);
-        assert_eq!(check(&conn, Target::Movie(2)).unwrap(), Verdict::NotAllowed);
-        assert_eq!(check(&conn, Target::Movie(3)).unwrap(), Verdict::NotAllowed);
-        assert_eq!(check(&conn, Target::Episode(1)).unwrap(), Verdict::Allowed);
         assert_eq!(
-            check(&conn, Target::Episode(2)).unwrap(),
+            check(&conn, Target::Movie(1), NOW).unwrap(),
+            Verdict::Allowed
+        );
+        assert_eq!(
+            check(&conn, Target::Movie(2), NOW).unwrap(),
             Verdict::NotAllowed
         );
         assert_eq!(
-            check(&conn, Target::Channel(11)).unwrap(),
+            check(&conn, Target::Movie(3), NOW).unwrap(),
+            Verdict::NotAllowed
+        );
+        assert_eq!(
+            check(&conn, Target::Episode(1), NOW).unwrap(),
+            Verdict::Allowed
+        );
+        assert_eq!(
+            check(&conn, Target::Episode(2), NOW).unwrap(),
+            Verdict::NotAllowed
+        );
+        assert_eq!(
+            check(&conn, Target::Channel(11), NOW).unwrap(),
             Verdict::NotAllowed
         );
 
         // The PIN opens locks, not limits.
         unlock(&conn, NOW).unwrap();
-        assert_eq!(check(&conn, Target::Movie(2)).unwrap(), Verdict::NotAllowed);
+        assert_eq!(
+            check(&conn, Target::Movie(2), NOW).unwrap(),
+            Verdict::NotAllowed
+        );
 
         // Back to the owner: everything again.
         select_profile(&conn, 1).unwrap();
         assert_eq!(ids(&conn, Kind::Movies), [1, 2, 3, 4]);
         assert!(!state(&conn, NOW).unwrap().unrated_hidden);
-        assert_eq!(check(&conn, Target::Movie(2)).unwrap(), Verdict::Allowed);
+        assert_eq!(
+            check(&conn, Target::Movie(2), NOW).unwrap(),
+            Verdict::Allowed
+        );
     }
 
     #[test]
@@ -571,7 +761,10 @@ mod tests {
         kid(&conn);
         clear_session(&conn).unwrap();
         assert_eq!(ids(&conn, Kind::Movies), [1]);
-        assert_eq!(check(&conn, Target::Movie(2)).unwrap(), Verdict::NotAllowed);
+        assert_eq!(
+            check(&conn, Target::Movie(2), NOW).unwrap(),
+            Verdict::NotAllowed
+        );
 
         // A chosen profile that has since been deleted is nobody chosen.
         select_profile(&conn, 99).unwrap();
@@ -585,7 +778,10 @@ mod tests {
 
         // Shown with a padlock by default, refused until the PIN.
         assert_eq!(ids(&conn, Kind::Live), [10, 12]);
-        assert_eq!(check(&conn, Target::Channel(10)).unwrap(), Verdict::Locked);
+        assert_eq!(
+            check(&conn, Target::Channel(10), NOW).unwrap(),
+            Verdict::Locked
+        );
         unlock(&conn, NOW).unwrap();
         assert!(is_unlocked(&conn, NOW + UNLOCK_SECS - 1).unwrap());
         assert!(!is_unlocked(&conn, NOW + UNLOCK_SECS).unwrap());
@@ -600,11 +796,17 @@ mod tests {
             .as_secs() as i64;
         unlock(&conn, real_now).unwrap();
         assert_eq!(ids(&conn, Kind::Live), [10, 12]);
-        assert_eq!(check(&conn, Target::Channel(10)).unwrap(), Verdict::Allowed);
+        assert_eq!(
+            check(&conn, Target::Channel(10), NOW).unwrap(),
+            Verdict::Allowed
+        );
 
         // Choosing a profile closes it again.
         select_profile(&conn, 1).unwrap();
-        assert_eq!(check(&conn, Target::Channel(10)).unwrap(), Verdict::Locked);
+        assert_eq!(
+            check(&conn, Target::Channel(10), NOW).unwrap(),
+            Verdict::Locked
+        );
     }
 
     #[test]
@@ -616,7 +818,10 @@ mod tests {
         assert_eq!(ids(&conn, Kind::Movies), [1]);
         assert_eq!(ids(&conn, Kind::Series), [2]);
         assert_eq!(ids(&conn, Kind::Live), [10]);
-        assert_eq!(check(&conn, Target::Episode(1)).unwrap(), Verdict::Locked);
+        assert_eq!(
+            check(&conn, Target::Episode(1), NOW).unwrap(),
+            Verdict::Locked
+        );
 
         // The viewer's own regrouping is what a lock sees.
         conn.execute(
@@ -632,9 +837,15 @@ mod tests {
         let conn = library();
         set_lock(&conn, LockKind::Channel, "10", true).unwrap();
         set_hide_locked(&conn, true).unwrap();
-        assert_eq!(check(&conn, Target::Channel(10)).unwrap(), Verdict::Locked);
+        assert_eq!(
+            check(&conn, Target::Channel(10), NOW).unwrap(),
+            Verdict::Locked
+        );
         profiles::set_master_pin(&conn, None, 0).unwrap();
-        assert_eq!(check(&conn, Target::Channel(10)).unwrap(), Verdict::Allowed);
+        assert_eq!(
+            check(&conn, Target::Channel(10), NOW).unwrap(),
+            Verdict::Allowed
+        );
         assert_eq!(ids(&conn, Kind::Live), [10, 12]);
     }
 
@@ -647,9 +858,12 @@ mod tests {
                   VALUES (1, 10, 'News', 0, 60, 0, 60, 'completed', 0);",
         )
         .unwrap();
-        assert_eq!(check(&conn, Target::Recording(1)).unwrap(), Verdict::Locked);
         assert_eq!(
-            check(&conn, Target::Recording(2)).unwrap(),
+            check(&conn, Target::Recording(1), NOW).unwrap(),
+            Verdict::Locked
+        );
+        assert_eq!(
+            check(&conn, Target::Recording(2), NOW).unwrap(),
             Verdict::Allowed
         );
     }

@@ -55,7 +55,7 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
-import { invoke, onMosaicState, onSleepFired } from '@/ipc';
+import { invoke, onMosaicState, onParentalClock, onSleepFired } from '@/ipc';
 import { notify, report } from '@/lib/errors';
 import { useMarks } from '@/state/marks';
 import { useProfile } from '@/state/profile';
@@ -501,6 +501,17 @@ export default function App() {
   closePlayerNow.current = closePlayer;
   useEffect(() => onSleepFired((d) => {
     if (d.action === 'stopPlayback') closePlayerNow.current();
+  }), []);
+
+  // The daily limit (F-37): the host keeps the time and has already stopped playback
+  // when it says so. The page closes the player and says why.
+  useEffect(() => onParentalClock((e) => {
+    if (e.kind === 'timeUp') {
+      closePlayerNow.current();
+      notify("Today's viewing time is used up");
+    } else {
+      notify(`${Math.max(1, Math.round(e.secsLeft / 60))} minutes of viewing left today`);
+    }
   }), []);
 
   /**

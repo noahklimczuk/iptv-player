@@ -109,10 +109,11 @@ pub fn allowed(db: &Connection, what: What) -> Result<()> {
         What::Episode(id) => Target::Episode(id),
         What::Recording(id) => Target::Recording(id),
     };
-    match parental::check(db, target)? {
+    match parental::check(db, target, crate::now_unix())? {
         Verdict::Allowed => Ok(()),
         Verdict::NotAllowed => Err(AppError::NotAllowed),
         Verdict::Locked => Err(AppError::Locked),
+        Verdict::TimeUp => Err(AppError::TimeUp),
     }
 }
 

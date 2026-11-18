@@ -307,6 +307,8 @@ fn the_fields_the_host_sends_are_the_ones_the_contract_declares() {
                 unrated_hidden: true,
                 rated_titles: 0,
                 titles: 0,
+                time_left_secs: Some(300),
+                watched_today_secs: 0,
             })
             .unwrap(),
         ),

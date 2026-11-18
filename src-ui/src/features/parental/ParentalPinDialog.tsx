@@ -69,7 +69,9 @@ export function ParentalPinDialog() {
           layout="dialog"
           heading={asking.reason === 'watch'
             ? 'Enter the parental PIN to watch this'
-            : 'Enter the parental PIN'}
+            : asking.reason === 'time'
+              ? "Today's viewing time is used up. Enter the parental PIN to keep watching"
+              : 'Enter the parental PIN'}
           badge="🔒"
           badgeColor="var(--surface)"
           verify={(pin) => invoke('parental.unlock', { pin })}

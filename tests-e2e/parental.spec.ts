@@ -157,3 +157,42 @@ test('a profile that blocks unrated titles is told why its film library is empty
   await expect.poll(async () =>
     Number(await page.getByTestId('browse-grid').getAttribute('data-loaded') ?? 0)).toBeGreaterThan(0);
 });
+
+test('a daily limit warns, stops playback at the limit, and the PIN gives more time', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  // Choosing a profile closes what the PIN opened, so it comes first; setting the PIN
+  // then opens the parental settings for a while, as entering it would.
+  await invoke(page, 'profiles.select', { profileId: 1 });
+  await invoke(page, 'profiles.setParental', { hideAdult: true, lockSettings: false, masterPin: '2468' });
+
+  const section = await parentalSection(page);
+  await section.getByLabel('Daily limit for Me').selectOption({ label: '1 hour a day' });
+  await expect.poll(async () =>
+    (await invoke<{ dailyLimitMin: number | null }[]>(page, 'profiles.list'))[0]!.dailyLimitMin).toBe(60);
+  await invoke(page, 'parental.relock');
+  await page.goto('/#/');
+
+  const watched = (secs: number) => page.evaluate(
+    (s) => (window as unknown as { __auroraWatched: (s: number) => void }).__auroraWatched(s),
+    secs,
+  );
+  await watched(58 * 60);
+  await expect(page.getByText('2 minutes of viewing left today')).toBeVisible();
+
+  const films = await invoke<{ id: number }[]>(page, 'library.movies', { sort: 'title', limit: 1, offset: 0 });
+  await invoke(page, 'player.play', { kind: 'movie', id: films[0]!.id });
+  await watched(60 * 60);
+  await expect(page.getByText("Today's viewing time is used up").first()).toBeVisible();
+  await expect.poll(async () =>
+    (await invoke<{ status: string }>(page, 'player.state')).status).toBe('idle');
+
+  // Playing again asks for the PIN, and the PIN gives more time.
+  const again = invoke(page, 'player.play', { kind: 'movie', id: films[0]!.id });
+  const dialog = page.getByRole('dialog', { name: 'Parental PIN' });
+  await expect(dialog).toContainText("Today's viewing time is used up");
+  await typePin(page, '2468');
+  await again;
+  await expect.poll(async () =>
+    (await invoke<{ status: string }>(page, 'player.state')).status).toBe('playing');
+});

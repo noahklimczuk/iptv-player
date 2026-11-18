@@ -412,16 +412,58 @@ fn main() {
 
             let mosaic = std::sync::Arc::clone(&mosaic_handle);
             let player_handle = app.handle().clone();
+            let viewing_db = std::sync::Arc::clone(&services_db);
             std::thread::Builder::new()
                 .name("aurora-heartbeat".into())
                 .spawn(move || {
                     let mut last_sleep_emit = 0;
+                    let mut clock = aurora_app::parental::ViewingClock::default();
+                    let started = std::time::Instant::now();
+                    let mut last_viewing_sample = f64::NEG_INFINITY;
                     loop {
                         std::thread::sleep(PLAYER_TICK);
                         // The tiles share one heartbeat rather than a thread each.
                         supervised("mosaic", || {
                             if let Some(view) = mosaic.tick(now_unix()) {
                                 aurora_app::emit(&player_handle, "mosaic.state", &view);
+                            }
+                        });
+                        // The daily limit's clock (F-37), sampled once a second: asking the
+                        // engine for its state four times a second to count whole
+                        // seconds would be work for nothing.
+                        supervised("viewing time", || {
+                            let mono = started.elapsed().as_secs_f64();
+                            if mono - last_viewing_sample < 1.0 {
+                                return;
+                            }
+                            last_viewing_sample = mono;
+                            let watching = matches!(
+                                player.session.state().report.status,
+                                aurora_video::Status::Playing | aurora_video::Status::Buffering
+                            ) || mosaic.is_open();
+                            if !clock.sample(watching, mono) {
+                                return;
+                            }
+                            let now = now_unix();
+                            let said = {
+                                let db = viewing_db.lock();
+                                clock.flush(&db, now)
+                            };
+                            match said {
+                                Ok(Some(event)) => {
+                                    if event == aurora_app::parental::ClockEvent::TimeUp {
+                                        tracing::info!("today's viewing time is used up");
+                                        if let Err(e) = player.stop() {
+                                            tracing::warn!("could not stop playback at the daily limit: {e}");
+                                        }
+                                        if mosaic.is_open() {
+                                            mosaic.close();
+                                        }
+                                    }
+                                    aurora_app::emit(&player_handle, "parental.clock", &event);
+                                }
+                                Ok(None) => {}
+                                Err(e) => tracing::warn!("could not count viewing time: {e}"),
                             }
                         });
                         // The sleep timer is kept here, by the host: it exists to act on

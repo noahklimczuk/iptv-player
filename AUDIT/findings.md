@@ -49,6 +49,7 @@ commit and the test that would catch a regression.
 | F-34 | High | player | Without `libmpv-2.dll` the app dies in the loader with no window, no log and no message; the `NullBackend` fallback is unreachable | Fixed |
 | F-35 | Medium | artwork | Prefetching an unordered `LIMIT` caches an arbitrary subset, so the cache never holds what is on screen | Fixed |
 | F-36 | Critical | parental | No parental control reached a list or the player: a kids profile showed and played everything | Fixed |
+| F-37 | High | parental | A profile's daily viewing limit was stored and never counted, refused or set | Fixed |
 
 ---
 
@@ -1246,3 +1247,41 @@ app's `with_a_parental_pin_set_changes_wait_for_it_and_your_own_pin_does_not`,
 `a_profile_with_a_pin_is_chosen_only_with_it` and
 `a_locked_channel_is_refused_to_the_viewer_but_not_to_the_recorder`, and
 `tests-e2e/parental.spec.ts` for the screens.
+
+---
+
+## F-37 — High — A profile's daily viewing limit was stored and never counted
+
+**Found by** looking, after F-36, for any other parental setting that stopped at the
+database. README §11 says kids mode "can enforce a daily viewing-time limit".
+`profiles.daily_limit_min` was created, synced and round-tripped by `profiles.setLimits`,
+and nothing else read it. Nothing counted viewing time, nothing refused playback, and no
+screen set the limit. Settings → Parental controls passed the stored value back unchanged.
+
+**Fix** (`docs/DECISIONS.md` D30):
+
+- Migration 20 adds `watch_time`: seconds watched per profile per local day, on this
+  device, unsynced.
+- The host's heartbeat counts it. It samples once a second whether the player is playing
+  or buffering, or the mosaic is open, and writes the total down every ten seconds. A
+  stalled heartbeat counts at most five seconds per sample, so a suspended laptop is not
+  an afternoon of television.
+- `repo::parental::check` answers `TimeUp` once the day's time is used up, so the player
+  and the mosaic refuse to start. If the limit runs out mid-stream, the heartbeat stops
+  playback and closes the mosaic. Five minutes before that, it warns.
+- The parental PIN gives more time, for as long as it opens anything else (thirty
+  minutes). The `invoke` wrapper answers the refusal with the PIN dialog and retries, as
+  it does for a lock.
+- A daily limit holds only while a parental PIN exists. Without one, nothing could give
+  more time, and the profile on the clock could lift its own limit anyway. The control
+  in Parental controls is disabled until a PIN is set.
+- With nobody chosen, the smallest limit any profile has applies. It counts against a
+  separate "nobody" total, the same fail-closed reading the gate gives an age limit.
+
+**Regression tests.**
+- `repo::parental`: `a_daily_limit_counts_what_is_watched_and_stops_at_it_until_the_pin`
+  and `without_a_parental_pin_a_daily_limit_stops_nothing`.
+- The app's three `ViewingClock` tests: counting, the stalled heartbeat, the warning
+  once, and time-up.
+- `tests-e2e/parental.spec.ts`: setting the limit, the warning, playback stopped at the
+  limit, and the PIN giving more time.

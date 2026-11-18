@@ -858,9 +858,29 @@ CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
         name: "parental_gate",
         sql: PARENTAL_GATE,
     },
+    Migration {
+        version: 20,
+        name: "watch_time",
+        sql: WATCH_TIME,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 19;
+pub const LATEST_VERSION: u32 = 20;
+
+/// Migration 20: how long each profile has watched today, for the daily limit
+/// (README §11, `AUDIT/findings.md` F-37).
+///
+/// Per device and unsynced, like `session`: the host counts what this device plays.
+/// `profile_id` 0 is nobody chosen. `day` is the viewer's local date, as SQLite's
+/// `localtime` reads it, so a day ends at the viewer's midnight, not at UTC's.
+const WATCH_TIME: &str = r#"
+CREATE TABLE watch_time (
+    profile_id INTEGER NOT NULL,
+    day        TEXT    NOT NULL,
+    seconds    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (profile_id, day)
+) WITHOUT ROWID;
+"#;
 
 /// Migration 19: parental controls that actually apply (README §11).
 ///

@@ -27,6 +27,17 @@ const AGE_LIMITS: { value: number | null; label: string }[] = [
   { value: 18, label: 'Up to 18' },
 ];
 
+/** A day's viewing, in minutes (F-37). */
+const DAILY_LIMITS: { value: number | null; label: string }[] = [
+  { value: null, label: 'No daily limit' },
+  { value: 30, label: '30 minutes a day' },
+  { value: 60, label: '1 hour a day' },
+  { value: 90, label: '1½ hours a day' },
+  { value: 120, label: '2 hours a day' },
+  { value: 180, label: '3 hours a day' },
+  { value: 240, label: '4 hours a day' },
+];
+
 export function ParentalPanel() {
   const { profiles, parental, load: loadProfiles } = useProfile();
   const { locks, state, load: loadParental, setLock } = useParental();
@@ -97,7 +108,9 @@ export function ParentalPanel() {
           metadata has fetched, and a profile that blocks unrated titles sees only those.
         </p>
       )}
-      {profiles.map((p) => <AgeLimit key={p.id} profile={p} busy={busy} run={run} />)}
+      {profiles.map((p) => (
+        <AgeLimit key={p.id} profile={p} busy={busy} run={run} pinSet={parental.hasMasterPin} />
+      ))}
 
       <h3 className="settings-subhead">Locked</h3>
       {!parental.hasMasterPin ? (
@@ -228,18 +241,23 @@ function MasterPin({
 }
 
 function AgeLimit({
-  profile, busy, run,
+  profile, busy, run, pinSet,
 }: {
   profile: Profile;
   busy: boolean;
   run: (work: () => Promise<unknown>) => Promise<void>;
+  pinSet: boolean;
 }) {
-  const set = (maxAge: number | null, allowUnrated: boolean) => run(() =>
+  const set = (
+    maxAge: number | null,
+    allowUnrated: boolean,
+    dailyLimitMin: number | null = profile.dailyLimitMin,
+  ) => run(() =>
     invoke('profiles.setLimits', {
       profileId: profile.id,
       maxAge,
       allowUnrated,
-      dailyLimitMin: profile.dailyLimitMin,
+      dailyLimitMin,
     }));
   return (
     <div className="settings-row" style={{ flexWrap: 'wrap' }}>
@@ -271,6 +289,25 @@ function AgeLimit({
         {AGE_LIMITS.map((a) => (
           <option key={a.label} value={a.value == null ? '' : String(a.value)}>
             {a.label}
+          </option>
+        ))}
+      </select>
+      {/* A daily limit holds only while a parental PIN exists: the PIN is what gives
+          more time, and without one the profile on the clock could lift it itself. */}
+      <select
+        aria-label={`Daily limit for ${profile.name}`}
+        title={pinSet ? undefined : 'Set a parental PIN first: it is what gives more time'}
+        value={profile.dailyLimitMin == null ? '' : String(profile.dailyLimitMin)}
+        disabled={busy || !pinSet}
+        onChange={(e) => {
+          const daily = e.target.value === '' ? null : Number(e.target.value);
+          void set(profile.maxAge, profile.allowUnrated, daily);
+        }}
+        className="dl-select"
+      >
+        {DAILY_LIMITS.map((d) => (
+          <option key={d.label} value={d.value == null ? '' : String(d.value)}>
+            {d.label}
           </option>
         ))}
       </select>
