@@ -174,6 +174,12 @@ fn every_document_read_and_written_is_counted_and_a_sign_out_does_not_reset_it()
     // The vault lookup, and the first pull, which finds nothing and is still a read.
     assert!(joined.reads >= 2, "{joined:?}");
 
+    // Setting up reads back its own library on the next round, or on its own first pull,
+    // depending on which side of the cursor the server's clock put them. Drained here so
+    // what follows counts one favourite and nothing else.
+    pc.household.sync(&mut pc.conn).unwrap();
+    let joined = pc.household.status(&pc.conn).unwrap().usage;
+
     lists::toggle_favorite(&pc.conn, 1, 10, None, 1).unwrap();
     pc.household.sync(&mut pc.conn).unwrap();
     let after = pc.household.status(&pc.conn).unwrap();
