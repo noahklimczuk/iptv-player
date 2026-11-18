@@ -19,6 +19,7 @@
 
 uniffi::setup_scaffolding!();
 
+mod assistant;
 mod catchup;
 mod diagnostics;
 mod error;
@@ -54,6 +55,7 @@ use aurora_ingest::credentials::CredentialStore;
 use aurora_ingest::http::{HttpClient, HttpConfig};
 use parking_lot::Mutex;
 
+pub use assistant::{AssistantListener, AssistantStatus, ChatItem, ChatMessage, SendResult};
 pub use catchup::CatchupTune;
 pub use diagnostics::{AboutCore, Diagnostics};
 pub use error::{AuroraError, Result};

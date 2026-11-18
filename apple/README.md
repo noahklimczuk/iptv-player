@@ -77,6 +77,11 @@ screens. The app can:
   viewer's own (Keychain) or one compiled in from `AURORA_GEMINI_KEY`. Settings →
   Recommendations has Windows' on/off switch, which is what stops anything being sent,
   and says why the rail is missing when it is.
+- The assistant, "Ask Aurora": a conversation that looks through the library and hands
+  back titles to play. The loop is Windows' `assistant.rs`, copied into the core because
+  the Tauri host cannot be linked, and `mirrors.rs` compares the copy with the original
+  line by line. It is a tab on Apple TV and iPad, and a button on Home on an iPhone.
+  "Ask about these" on the Gemini rail opens it with those titles.
 
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
 Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
