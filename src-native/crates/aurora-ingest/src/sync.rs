@@ -1658,8 +1658,10 @@ mod tests {
         assert_eq!(report.episodes, 2);
         assert_eq!(report.epg_programmes, 2);
 
+        assert_eq!(stored_channels(&conn), 3, "the adult one is imported too");
+        // The viewer's list leaves it out: adult categories are hidden by default.
         let rows = channels::list(&conn, &channels::ChannelFilter::default()).unwrap();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 2);
         // Ordered by channel number.
         assert_eq!(rows[0].name, "BBC One");
         assert_eq!(rows[0].number, Some(101));
@@ -1997,7 +1999,11 @@ mod tests {
         assert_eq!(mine.name, "My News", "rename must survive a refresh");
         assert_eq!(mine.number, Some(7), "number must survive a refresh");
         assert!(mine.hidden, "hidden flag must survive a refresh");
-        assert_eq!(rows.len(), 3, "refresh must not duplicate channels");
+        assert_eq!(
+            stored_channels(&conn),
+            3,
+            "refresh must not duplicate channels"
+        );
     }
 
     #[test]
@@ -2021,19 +2027,17 @@ mod tests {
             report.channels_missing >= 2,
             "vanished channels should be counted"
         );
-        let rows = channels::list(
-            &conn,
-            &channels::ChannelFilter {
-                include_hidden: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
         assert_eq!(
-            rows.len(),
+            stored_channels(&conn),
             3,
             "they stay in the library so favorites survive"
         );
+    }
+
+    /// Every channel row, whatever the parental gate would show a viewer.
+    fn stored_channels(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM channels", [], |r| r.get(0))
+            .unwrap()
     }
 
     #[test]
