@@ -749,12 +749,17 @@ pub fn window_ready(window: tauri::Window) -> Result<()> {
     window
         .show()
         .map_err(|e| crate::AppError::Other(e.to_string()))?;
+    // Now that this window is on screen, the native loading screen under it can go.
+    crate::splash::close();
     if !already {
         // Only on the transition. Stealing focus from whatever the person moved on to
         // while waiting would be its own rudeness, but the first appearance of a window
         // somebody launched should be the thing they are looking at.
         let _ = window.set_focus();
-        tracing::info!("window revealed by the UI");
+        tracing::info!(
+            splash_ms = crate::splash::painted_after_ms(),
+            "window revealed by the UI"
+        );
     }
     Ok(())
 }

@@ -596,7 +596,21 @@ fn listeners_hear_each_change_once() {
     let heard = Arc::new(Mutex::new(Vec::<Status>::new()));
     let h = heard.clone();
     engine.on_change(Box::new(move |r| h.lock().unwrap().push(r.status)));
-    playing(&engine, &mpv, film());
+    // The engine reports once per pass of its loop, so a load and mpv's "playing" that
+    // land in the same pass are one change, straight to Playing -- which is right, and
+    // made this test fail on a fast runner. Let the load be heard before mpv answers.
+    engine.load(film()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !heard.lock().unwrap().contains(&Status::Loading) {
+        assert!(Instant::now() < deadline, "the load was never heard");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    mpv.plays();
+    mpv.prop("duration", Node::Double(6000.0));
+    mpv.prop("time-pos", Node::Double(10.0));
+    until(&engine, "playing", |r| {
+        r.status == Status::Playing && r.has_picture
+    });
     std::thread::sleep(Duration::from_millis(600));
     let heard = heard.lock().unwrap().clone();
     assert!(heard.contains(&Status::Loading));
