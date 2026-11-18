@@ -460,6 +460,10 @@ struct ShelfPicker: View {
 struct FilterChip: View {
     let title: String
     let selected: Bool
+    /// How many it holds, after the title (the guide's group chips).
+    var count: Int64? = nil
+    /// Chosen to be left out, so struck through rather than lit (the guide's Hide mode).
+    var struck = false
     let action: () -> Void
 
     var body: some View {
@@ -469,7 +473,12 @@ struct FilterChip: View {
         Button(action: action) {
             // Weight, not colour: a colour set here would also stay on the white focus
             // background, where tvOS otherwise turns the label dark.
-            Text(title).fontWeight(selected ? .heavy : .regular)
+            HStack(spacing: 6) {
+                Text(title).fontWeight(selected ? .heavy : .regular).strikethrough(selected && struck)
+                if let count {
+                    Text("\(count)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
         .buttonStyle(.bordered)
         .tint(selected ? .accentColor : .secondary)
