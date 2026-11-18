@@ -8,14 +8,18 @@ import SwiftUI
 /// can be taken off Continue Watching, and after the first load the TMDB lists the feed
 /// reads are refreshed once, rebuilding the rails if any came back.
 ///
-/// Not here yet, for the look-and-feel pass: the hero billboard, the On Now tile and the
-/// assistant's rail.
+/// The Gemini rail ("Because of what you watch") is loaded on its own, after Continue
+/// Watching, as Windows' `AiRail`: it can take seconds where the rest is a database
+/// query, and it shows nothing at all until it has something.
+///
+/// Not here yet, for the look-and-feel pass: the hero billboard and the On Now tile.
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var rails: [Rail]?
     /// Taken off by the viewer this visit, kept off while the core catches up.
     @State private var hidden: Set<String> = []
     @State private var askedForSignals = false
+    @State private var ai: Rail?
     @State private var movie: Movie?
     @State private var series: Int64?
     @Environment(\.openSettings) private var openSettings
@@ -44,6 +48,10 @@ struct HomeView: View {
                     guard movie == nil, series == nil else { return }
                     await load()
                 }
+                .task(id: AiKey(library: model.libraryVersion, profile: model.profileId,
+                                version: model.aiVersion)) {
+                    ai = await model.aiPicks().flatMap(Self.rail)
+                }
                 .sheet(item: $movie) { MovieDetail(movie: $0) }
                 .navigationDestination(item: $series) { SeriesDetail(seriesId: $0) }
         }
@@ -51,7 +59,7 @@ struct HomeView: View {
 
     @ViewBuilder private var content: some View {
         if let rails {
-            let shown = visible(rails)
+            let shown = visible(rails, ai: ai)
             if shown.isEmpty {
                 ContentUnavailableView("Nothing here yet", systemImage: "house",
                                        description: Text("Add a provider in Settings and Aurora will build your library."))
@@ -71,10 +79,20 @@ struct HomeView: View {
         }
     }
 
-    /// Continue Watching first, then the feed's order; rails emptied by the viewer go.
-    private func visible(_ rails: [Rail]) -> [Rail] {
+    /// Continue Watching first, then the Gemini rail, then the feed's order; rails
+    /// emptied by the viewer go.
+    private func visible(_ rails: [Rail], ai: Rail?) -> [Rail] {
         let kept = rails.filter { rail in rail.items.contains { !hidden.contains($0.item.key) } }
-        return kept.filter { $0.kind == "continueWatching" } + kept.filter { $0.kind != "continueWatching" }
+        return kept.filter { $0.kind == "continueWatching" } + (ai.map { [$0] } ?? [])
+            + kept.filter { $0.kind != "continueWatching" }
+    }
+
+    /// The picks as a rail. Named for what it is: "Recommended for you" is the local
+    /// recommender's rail, and two rails with one name look confused about their source.
+    private static func rail(_ picks: AiPicks) -> Rail? {
+        guard !picks.items.isEmpty else { return nil }
+        return Rail(id: "gemini", kind: "aiPicks", title: "Because of what you watch",
+                    items: picks.items, total: UInt32(picks.items.count), hasMore: false)
     }
 
     private func load() async {
@@ -101,7 +119,7 @@ struct HomeView: View {
     /// there), "Remove" on Continue Watching, "Not interested" everywhere else.
     private func dismissAction(for rail: Rail) -> RailRow.Dismiss? {
         switch rail.kind {
-        case "myList": return nil
+        case "myList", "aiPicks": return nil
         case "continueWatching":
             return .init(label: "Remove from Continue Watching", systemImage: "xmark.circle") { item in
                 await hide(item) { await model.forgetProgress(item.listKind, id: item.id) != nil }
@@ -117,6 +135,12 @@ struct HomeView: View {
     private func hide(_ item: CatalogItem, _ action: () async -> Bool) async {
         hidden.insert(item.key)
         if !(await action()) { hidden.remove(item.key) }
+    }
+
+    private struct AiKey: Equatable {
+        let library: Int
+        let profile: Int64
+        let version: Int
     }
 
     private struct ReloadKey: Equatable {
