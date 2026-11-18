@@ -338,13 +338,24 @@ the household's id first, so the same favourite on both devices becomes one reco
 - At launch and on returning to the foreground.
 - After any local change, debounced by about 3 s.
 - Every 2 min while the app is in the foreground.
-- On Windows, on the existing supervised maintenance thread (`supervise.rs`).
+- On Windows, on a supervised thread of its own (`aurora-sync`, started in `main.rs`),
+  with its own SQLite connection, so a round waiting on the network never holds the
+  app's writer. The loop asks `household::Pacer` every 3 s whether a round is due.
 - **No push notifications and no realtime listeners.** Firestore's realtime listeners
   run over gRPC, which this design avoids, and two minutes of lag is fine for everything
   in §3.4.
 - **One exception, handled by a direct pull:** opening a film or episode pulls that one
   record's progress before showing **Resume / Start over**. Stopping on the TV and
-  opening the same episode on the phone therefore resumes at the right second.
+  opening the same episode on the phone therefore resumes at the right second. On
+  Windows this is `progress.get`: one query, waited on for at most 1.5 s, and skipped
+  while a round is running (it is pulling anyway) or a failure is being waited out.
+- **A device reads back its own writes.** The pull cannot leave them out: a
+  `writer != this device` filter ordered by `serverTime` is a query on two fields, which
+  Firestore refuses without a composite index on `(serverTime, writer, __name__)`
+  (checked against the real project in November 2026). The engine skips them on
+  arrival, and they cost one read each, which is a third of the reads with three
+  devices. Not worth an index that every project has to be given by hand while writes,
+  not reads, are the tighter quota (§3.7).
 
 **Pairing an Apple TV (Phase 5).** The TV signs in anonymously (free) and shows a QR code
 holding a pairing id and an ephemeral X25519 public key. A signed-in phone scans it and
@@ -377,9 +388,18 @@ In the pathological case where all three devices had written every one of 20,000
 records it is 60,000 reads, past the 50,000 quota: the pull stops at the quota, keeps
 its cursor (§3.8), and finishes the next day.
 
-`aurora-sync` keeps a **local count of today's reads and writes**. Past 70% of either
-quota it widens the poll interval and stops the 60-second progress writes, keeping only
-the pause/stop write. Diagnostics shows the counts.
+`aurora-sync` keeps a **local count of today's reads and writes** (`household::Usage`,
+in `sync_state`, kept across a sign-out). A device can count only what it spent itself,
+so it takes a third of the 70% mark -- a household is planned as three devices -- and
+past that on either quota it becomes *thrifty*: watch progress waits ten minutes
+instead of one, and so does the look for other devices' changes. Favourites and other
+edits still go after the usual 3 s, and a stop is still sent, just later. The Sync panel
+shows the counts.
+
+**The quota is the project's, not the household's.** Every copy of Aurora built with
+the same Firebase project shares one 20,000 writes and 50,000 reads a day. That is right
+for one household. Builds handed to other households need a project of their own, or a
+paid plan, or that sharing taken into account; no local count can see it.
 
 > The quotas were checked against Firebase's pricing page in November 2026. Check them
 > again at Phase 3. Free plans change.

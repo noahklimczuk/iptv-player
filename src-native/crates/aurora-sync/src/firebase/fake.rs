@@ -102,8 +102,11 @@ impl FakeFirebase {
 
     fn issue(s: &mut State, uid: &str) -> Value {
         s.serial += 1;
-        let id = format!("id-{}-{}", uid, s.serial);
-        let rt = format!("rt-{}-{}", uid, s.serial);
+        // As long as the real ones: an ID token is a signed JWT of about a kilobyte and a
+        // refresh token a few hundred characters. Short stand-ins hid that the whole
+        // session is too long for Windows Credential Manager.
+        let id = format!("id-{}-{}-{}", uid, s.serial, "j".repeat(1_000));
+        let rt = format!("rt-{}-{}-{}", uid, s.serial, "r".repeat(250));
         s.tokens.insert(id.clone(), uid.to_string());
         s.refresh.insert(rt.clone(), uid.to_string());
         json!({ "id": id, "rt": rt })

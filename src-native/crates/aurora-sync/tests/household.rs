@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use aurora_db::repo::{lists, sync as db};
+use aurora_db::repo::{lists, progress, sync as db};
 use aurora_db::rusqlite::Connection;
 use aurora_sync::firebase::fake::FakeFirebase;
 use aurora_sync::firebase::FirebaseConfig;
@@ -22,6 +22,13 @@ impl Secrets for MemorySecrets {
         self.0.lock().unwrap().get(name).cloned()
     }
     fn set(&self, name: &str, value: &str) -> Result<()> {
+        // What Windows Credential Manager refuses: more than 2,560 bytes of UTF-16.
+        let bytes = value.encode_utf16().count() * 2;
+        if bytes > 2_560 {
+            return Err(SyncError::Account(format!(
+                "{name} is {bytes} bytes as UTF-16; the credential store takes 2,560"
+            )));
+        }
         self.0.lock().unwrap().insert(name.into(), value.into());
         Ok(())
     }
@@ -84,6 +91,127 @@ fn favourites(conn: &Connection, item: i64) -> i64 {
         |r| r.get(0),
     )
     .unwrap()
+}
+
+fn add_film(conn: &Connection, offset: i64) -> i64 {
+    let id = 20 + offset;
+    conn.execute(
+        "INSERT INTO movies (id,provider_id,provider_key,title,match_key,url,last_seen_at)
+              VALUES (?1,?2,'9001','Heat','heat','http://x/heat.mkv',0)",
+        [id, 1 + offset],
+    )
+    .unwrap();
+    id
+}
+
+fn position(conn: &Connection, film: i64) -> Option<i64> {
+    progress::get(conn, 1, progress::ItemKind::Movie, film)
+        .unwrap()
+        .map(|p| p.position_secs)
+}
+
+#[test]
+fn opening_a_film_fetches_where_another_device_stopped_without_a_round() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    let mut tv = device(&fb, 100);
+    let pc_film = add_film(&pc.conn, 0);
+    let tv_film = add_film(&tv.conn, 100);
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    tv.household
+        .sign_in(
+            &mut tv.conn,
+            &account("TV"),
+            Unlock::Passphrase(PASS.into()),
+        )
+        .unwrap();
+
+    // Watched to 40 minutes on the TV, which pushed it.
+    progress::save(
+        &tv.conn,
+        1,
+        progress::ItemKind::Movie,
+        tv_film,
+        2_400,
+        6_000,
+        1,
+    )
+    .unwrap();
+    tv.household.sync(&mut tv.conn).unwrap();
+    assert_eq!(
+        position(&pc.conn, pc_film),
+        None,
+        "no round has run on the PC"
+    );
+
+    let before = fb.requests().len();
+    assert!(pc
+        .household
+        .refresh_progress(&mut pc.conn, 1, "movie", pc_film)
+        .unwrap());
+    assert_eq!(position(&pc.conn, pc_film), Some(2_400));
+    assert_eq!(
+        fb.requests().len() - before,
+        1,
+        "one query for one record, not a pull: {:?}",
+        &fb.requests()[before..]
+    );
+
+    // Nothing newer: asking again changes nothing, and a film with no key asks nothing.
+    let before = fb.requests().len();
+    assert!(!pc
+        .household
+        .refresh_progress(&mut pc.conn, 1, "movie", 999)
+        .unwrap());
+    assert_eq!(fb.requests().len(), before);
+}
+
+#[test]
+fn every_document_read_and_written_is_counted_and_a_sign_out_does_not_reset_it() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    let joined = pc.household.status(&pc.conn).unwrap().usage;
+    // The vault, then this device's library: one profile, one provider, its settings.
+    assert!(joined.writes >= 3, "{joined:?}");
+    // The vault lookup, and the first pull, which finds nothing and is still a read.
+    assert!(joined.reads >= 2, "{joined:?}");
+
+    // Setting up reads back its own library on the next round, or on its own first pull,
+    // depending on which side of the cursor the server's clock put them. Drained here so
+    // what follows counts one favourite and nothing else.
+    pc.household.sync(&mut pc.conn).unwrap();
+    let joined = pc.household.status(&pc.conn).unwrap().usage;
+
+    lists::toggle_favorite(&pc.conn, 1, 10, None, 1).unwrap();
+    pc.household.sync(&mut pc.conn).unwrap();
+    let after = pc.household.status(&pc.conn).unwrap();
+    assert_eq!(after.usage.writes, joined.writes + 1, "one favourite");
+    assert_eq!(
+        after.usage.reads,
+        joined.reads + 1,
+        "one query, which returns its own echo"
+    );
+    assert!(!after.thrifty);
+
+    pc.household.sign_out(&mut pc.conn).unwrap();
+    assert_eq!(pc.household.status(&pc.conn).unwrap().usage, after.usage);
+}
+
+#[test]
+fn a_device_that_never_signed_in_asks_the_server_nothing_on_opening_a_film() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    let film = add_film(&pc.conn, 0);
+    assert!(!pc
+        .household
+        .refresh_progress(&mut pc.conn, 1, "movie", film)
+        .unwrap());
+    assert!(fb.requests().is_empty());
 }
 
 #[test]
@@ -156,6 +284,51 @@ fn create_on_one_device_join_on_another_and_a_favourite_crosses() {
     let refresh: serde_json::Value = serde_json::from_str(&session).unwrap();
     assert!(!in_db.contains(refresh["refresh_token"].as_str().unwrap()));
     assert!(!in_db.contains(&pc.secrets.get(VAULT_SECRET).unwrap()));
+}
+
+#[test]
+fn the_sign_in_fits_the_credential_store_and_survives_a_restart() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    let mut tv = device(&fb, 100);
+    // Refused by Windows before the ID token was left out of what is stored.
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_str(&pc.secrets.get(SESSION_SECRET).unwrap()).unwrap();
+    assert_eq!(saved["id_token"], "", "the hour-long token is not stored");
+    assert!(!saved["refresh_token"].as_str().unwrap().is_empty());
+
+    // A restart: a new Household over the same store and library, nothing in memory.
+    let restarted = Household::new(
+        fb.clone(),
+        Some(FirebaseConfig {
+            api_key: "k".into(),
+            project_id: "aurora-test".into(),
+        }),
+        pc.secrets.clone(),
+    )
+    .with_kdf(KdfParams { m: 64, t: 1, p: 1 });
+    lists::toggle_favorite(&pc.conn, 1, 10, None, 1).unwrap();
+    restarted.sync(&mut pc.conn).unwrap();
+    tv.household
+        .sign_in(
+            &mut tv.conn,
+            &account("TV"),
+            Unlock::Passphrase(PASS.into()),
+        )
+        .unwrap();
+    assert_eq!(favourites(&tv.conn, 110), 1);
+
+    // And the running one does not mint a token per round: one round, no token request.
+    let before = fb.requests().len();
+    restarted.sync(&mut pc.conn).unwrap();
+    let minted = fb.requests()[before..]
+        .iter()
+        .filter(|r| r.contains("securetoken"))
+        .count();
+    assert_eq!(minted, 0, "{:?}", &fb.requests()[before..]);
 }
 
 #[test]

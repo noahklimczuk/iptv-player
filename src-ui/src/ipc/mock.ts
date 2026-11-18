@@ -1762,6 +1762,8 @@ function mockSyncStatus(): SyncStatus {
       ? { kind: 'offline', message: 'no network' }
       : null,
     secretsPersistent: false,
+    usage: mockSync ? { reads: 46, writes: 43 } : { reads: 0, writes: 0 },
+    thrifty: false,
   };
 }
 
