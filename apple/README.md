@@ -63,6 +63,11 @@ screens. The app can:
   app's Caches folder), up to 1 GB / 30 minutes by default and set in Settings. The bar
   runs from the oldest moment held to live, says how far behind live you are, and Back
   to live returns to the edge. The window is Windows' arithmetic (`aurora_core::timeshift`).
+- "On now" at the top of Home, as Windows' `OnNowTile`: the first six favourite
+  channels, what each is airing with its times and progress, and a tap to tune; with no
+  favourites, a line saying how to add some. Channels without a logo get Windows'
+  `ChannelTile`: the number (or first letter) on one of the seven art colours, picked
+  from the name the same way, so a channel is the same colour in both apps,
 - the channel banner over the player, as Windows' `ChannelBanner`: on every tune, the
   channel's logo, number and name, what is on now with its times and how far through,
   what is next (or "No guide data for this channel"), and the time, for 5 seconds,

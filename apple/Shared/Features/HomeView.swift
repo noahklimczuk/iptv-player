@@ -12,7 +12,8 @@ import SwiftUI
 /// Watching, as Windows' `AiRail`: it can take seconds where the rest is a database
 /// query, and it shows nothing at all until it has something.
 ///
-/// Not here yet, for the look-and-feel pass: the hero billboard and the On Now tile.
+/// "On now" (`OnNowTile`) heads the page, where Windows has it beside the billboard.
+/// Not here yet, for the look-and-feel pass: the hero billboard.
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var rails: [Rail]?
@@ -73,6 +74,10 @@ struct HomeView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: railSpacing) {
+                        OnNowTile(reload: AnyHashable(AiKey(library: model.libraryVersion,
+                                                            profile: model.profileId, version: 0)))
+                            .frame(maxWidth: onNowWidth, alignment: .leading)
+                            .padding(.horizontal, onNowInset)
                         ForEach(shown, id: \.id) { rail in
                             RailRow(rail: rail, hidden: hidden, open: open,
                                     dismiss: dismissAction(for: rail),
@@ -153,7 +158,7 @@ struct HomeView: View {
         return "You suggested \(titles.joined(separator: ", ")). Why those, and what else is like them?"
     }
 
-    private struct AiKey: Equatable {
+    private struct AiKey: Hashable {
         let library: Int
         let profile: Int64
         let version: Int
@@ -167,8 +172,13 @@ struct HomeView: View {
 
     #if os(tvOS)
     private let railSpacing: CGFloat = 48
+    /// Windows gives it five of twelve columns beside the billboard.
+    private let onNowWidth: CGFloat = 900
+    private let onNowInset: CGFloat = 80
     #else
     private let railSpacing: CGFloat = 24
+    private let onNowWidth: CGFloat = 640
+    private let onNowInset: CGFloat = 16
     #endif
 }
 
