@@ -52,7 +52,7 @@ struct LiveView: View {
                 Button("Add provider", systemImage: "plus") { addingProvider = true }
             }
             .sheet(isPresented: $addingProvider) {
-                NavigationStack { AddProviderView() }
+                SetupWizard(additional: true, onFinished: { addingProvider = false }, onSkip: { addingProvider = false })
             }
             .task { await model.reload() }
             // Every time the screen comes back: a list made or emptied in a channel list

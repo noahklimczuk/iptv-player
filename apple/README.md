@@ -82,6 +82,14 @@ screens. The app can:
   the Tauri host cannot be linked, and `mirrors.rs` compares the copy with the original
   line by line. It is a tab on Apple TV and iPad, and a button on Home on an iPhone.
   "Ask about these" on the Gemini rail opens it with those titles.
+- the setup wizard, Windows' four steps and wording: paste an address (a `get.php` link
+  is split into address, username and password, and the box keeps the address alone),
+  check it (a failed check is advice, and Continue becomes "Add it anyway"), choose what
+  to import, watch it import or leave it running in the background, then see what came
+  in and how much of it the guide covers. It opens on first run, before "Who's
+  watching?", while there is no provider; "Skip for now" lasts until the next launch.
+  Settings and Live TV open it as "Add another provider". `-AuroraSetup YES` shows it
+  over a library that has providers (debug builds).
 - sync with the household's other devices, Windows included (Settings → Sync, Windows'
   Sync panel and wording): set up or join with an email, a password and a passphrase
   (or the recovery code); favourites, My List, watch progress, profiles and playlist

@@ -11,6 +11,9 @@ import os
 @Observable
 final class AppModel {
     private(set) var providers: [Provider] = []
+    /// The providers have been asked for, however that went. Until then whether to show
+    /// the setup wizard isn't known (Windows' `providersLoading`).
+    private(set) var providersLoaded = false
     private(set) var groups: [ChannelGroup] = []
     private(set) var importProgress: ImportProgress?
     private(set) var lastImport: ImportReport?
@@ -97,6 +100,9 @@ final class AppModel {
         } catch {
             self.error = error.viewerMessage
         }
+        // A refusal ends the wait too: it has been reported, and the wizard is the right
+        // answer to "no providers that we know of".
+        providersLoaded = true
     }
 
     /// Save an Xtream panel and import it straight away.
@@ -123,27 +129,54 @@ final class AppModel {
     }
 
     func refresh(providerId: Int64, content: ImportContent) async {
-        guard let core else { return }
-        importProgress = ImportProgress(phase: .authenticating, done: 0, total: 0)
-        defer { importProgress = nil }
-        let listener = ProgressRelay { [weak self] phase, done, total in
-            Task { @MainActor in
-                self?.importProgress = ImportProgress(phase: phase, done: done, total: total)
-            }
-        }
         do {
-            lastImport = try await Task.detached {
-                try core.refresh(providerId: providerId, content: content, listener: listener)
-            }.value
+            _ = try await importProvider(providerId, content: content)
         } catch {
             self.error = error.viewerMessage
         }
+    }
+
+    /// Save a provider from the setup wizard's form, without importing it. Throws, so the
+    /// wizard keeps the form and says why where it is.
+    func saveProvider(_ draft: ProviderDraft) async throws -> Int64 {
+        guard let core else { throw AuroraError.Other(message: "Aurora could not open its library.") }
+        let id = try await Task.detached {
+            if draft.kind == "xtream" {
+                try core.addXtream(name: draft.name, baseUrl: draft.url,
+                                   username: draft.username ?? "", password: draft.password ?? "")
+            } else {
+                try core.addM3u(name: draft.name, url: draft.url)
+            }
+        }.value
+        await reload()
+        return id
+    }
+
+    /// Import one provider and hand back what came of it. Throws rather than raising the
+    /// app-wide alert, so the wizard can say it in place (Windows' `providers.refresh`).
+    @discardableResult
+    func importProvider(_ providerId: Int64, content: ImportContent) async throws -> ImportReport? {
+        guard let core else { return nil }
+        importProgress = ImportProgress(phase: .authenticating, done: 0, total: 0)
+        let listener = ProgressRelay { [weak self] phase, done, total in
+            Task { @MainActor in
+                // Late reports must not bring the bar back once the import has ended.
+                guard self?.importProgress != nil else { return }
+                self?.importProgress = ImportProgress(phase: phase, done: done, total: total)
+            }
+        }
+        let result = await Task.detached {
+            Result { try core.refresh(providerId: providerId, content: content, listener: listener) }
+        }.value
+        importProgress = nil
+        if case .success(let report) = result { lastImport = report }
         await reload()
         // An import leaves new titles bare; fetch their artwork and cast straight away,
         // as Windows does, rather than waiting for someone to find the button. Episode
         // listings likewise: an import stores each show without them.
         fetchMetadata()
         listEpisodes()
+        return try result.get()
     }
 
     /// Fill in the episode listings an import left out, in the background and quietly,
@@ -693,6 +726,22 @@ extension ImportPhase {
         case .matchingEpg: "Matching the guide to channels"
         case .indexing: "Building search"
         case .done: "Done"
+        }
+    }
+
+    /// The setup wizard's sentence for it (Windows' `PHASE_SENTENCE`): it narrates a first
+    /// run, where the label above sits beside a bar.
+    var sentence: String {
+        switch self {
+        case .authenticating: "Checking your subscription"
+        case .fetchingPlaylist: "Fetching your channel list"
+        case .importingChannels: "Importing channels"
+        case .importingMovies: "Importing films"
+        case .importingSeries: "Importing series"
+        case .fetchingEpg: "Downloading the TV guide"
+        case .matchingEpg: "Matching the guide to your channels"
+        case .indexing: "Building the search index"
+        case .done: "Finished"
         }
     }
 }

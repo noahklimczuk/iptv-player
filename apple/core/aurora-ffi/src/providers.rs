@@ -106,6 +106,9 @@ pub struct ImportReport {
     pub episodes: u64,
     pub epg_programmes: u64,
     pub epg_matched: u64,
+    /// Channels with no guide, all of them: the setup wizard's coverage figure divides by
+    /// this plus `epg_matched` (Windows' `epgUnmatchedTotal`, R-121).
+    pub epg_unmatched_total: u64,
     /// Channels the provider stopped listing. Kept and flagged, never deleted.
     pub channels_missing: u64,
     /// Entries the provider listed that were not kept, for any reason.
@@ -122,6 +125,7 @@ impl From<sync::SyncReport> for ImportReport {
             episodes: r.episodes as u64,
             epg_programmes: r.epg_programmes as u64,
             epg_matched: r.epg_matched as u64,
+            epg_unmatched_total: r.epg_unmatched_total as u64,
             channels_missing: r.channels_missing as u64,
             dropped: r.dropped.total() as u64,
             warnings: r.warnings,
