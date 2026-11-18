@@ -329,7 +329,10 @@ pub fn stamp(conn: &Connection, profile_id: i64, filter: &LibraryFilter) -> Resu
             Ok(out)
         },
     )?;
-    Ok(format!("{parts:?}/{filter:?}"))
+    // Who is watching and what they may see: switching to a kids profile, or a lock, must
+    // not be answered from a home screen built for somebody else.
+    let gate = crate::repo::parental::fingerprint(conn)?;
+    Ok(format!("{parts:?}/{filter:?}/{gate}"))
 }
 
 /// The key a title's "also liked" list is cached under.

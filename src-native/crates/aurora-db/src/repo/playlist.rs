@@ -127,6 +127,10 @@ fn conditions(q: &Query) -> (String, Vec<String>) {
         Show::Visible => sql.push_str(" AND t.hidden = 0"),
         Show::Hidden => sql.push_str(" AND t.hidden = 1"),
     }
+    // The editor lists everything the viewer hid, but not what the profile watching may
+    // not see: a kids profile opening it would otherwise read every title its limit holds
+    // back, artwork and all.
+    sql.push_str(&crate::repo::parental::where_sql_as(q.kind, "t"));
     if let Some(text) = q.text.as_ref().filter(|t| !t.trim().is_empty()) {
         // Escaped, so a typed % is a percent sign and not the whole playlist.
         let like = format!(
@@ -233,9 +237,10 @@ pub fn groups(conn: &Connection, kind: Kind) -> Result<Vec<(String, i64)>> {
         _ => "group_title",
     };
     let sql = format!(
-        "SELECT {expr} AS g, count(*) FROM {} WHERE g IS NOT NULL AND g != ''
+        "SELECT {expr} AS g, count(*) FROM {} WHERE g IS NOT NULL AND g != ''{gate}
          GROUP BY g ORDER BY g",
-        kind.table()
+        kind.table(),
+        gate = crate::repo::parental::where_sql(kind),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt

@@ -100,16 +100,27 @@ pub fn is_allowed(
 /// The preset allows `18 +` as well as `18+`, because playlists write both, so the
 /// spaces come out here before the markers are looked for -- otherwise a group one of
 /// them hides is left visible by the other (R-18).
+///
+/// Asked of every row of every list query when adult categories are hidden, which they
+/// are by default, so it allocates nothing on the way to "no": over 117,510 films the
+/// copies it used to make cost more than the rest of the query.
 pub fn looks_adult(group: Option<&str>) -> bool {
     let Some(group) = group else { return false };
-    let g = group.to_ascii_lowercase();
+    let g = group.as_bytes();
     // `+18` as well as `18+`: a playlist naming the category either way means the same
-    // thing, and only one of them was listed (R-16).
-    const MARKERS: &[&str] = &["adult", "xxx", "porn", "erotic", "18+", "+18", "for adults"];
-    if MARKERS.iter().any(|m| g.contains(m)) {
+    // thing, and only one of them was listed (R-16). `for adults` is covered by `adult`.
+    const MARKERS: &[&[u8]] = &[b"adult", b"xxx", b"porn", b"erotic", b"18+", b"+18"];
+    let contains = |needle: &[u8]| {
+        g.windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+    };
+    if MARKERS.iter().any(|m| contains(m)) {
         return true;
     }
-    let tight: String = g.chars().filter(|c| !c.is_whitespace()).collect();
+    if !group.contains('+') {
+        return false;
+    }
+    let tight: String = group.chars().filter(|c| !c.is_whitespace()).collect();
     tight.contains("18+") || tight.contains("+18")
 }
 

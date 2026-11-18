@@ -188,6 +188,35 @@ fn register_functions(conn: &Connection) -> Result<()> {
             Ok(raw.map(|raw| aurora_core::lang::strip_language_prefix(&raw).unwrap_or(raw)))
         },
     )?;
+    // The two halves of the `parental_gate` view (schema migration 19), in Rust so there
+    // is one reading of a certification and one of "adult category": the ones in
+    // `aurora_core::parental`.
+    conn.create_scalar_function(
+        "parental_age",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let raw: Option<String> = ctx.get(0)?;
+            Ok(i64::from(repo::parental::age_of(raw.as_deref())))
+        },
+    )?;
+    conn.create_scalar_function(
+        "parental_allows",
+        4,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            // Borrowed rather than copied: this runs once per row of a list query.
+            let text = |i: usize| -> Option<&str> {
+                match ctx.get_raw(i) {
+                    rusqlite::types::ValueRef::Text(t) => std::str::from_utf8(t).ok(),
+                    _ => None,
+                }
+            };
+            let rule: i64 = ctx.get(0)?;
+            let rated: bool = ctx.get::<i64>(3)? != 0;
+            Ok(repo::parental::allows(rule, text(1), text(2), rated))
+        },
+    )?;
     Ok(())
 }
 

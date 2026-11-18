@@ -116,7 +116,11 @@ impl LibraryFilter {
     }
 
     /// Conditions to `AND` onto any query over `kind`'s table, referring to it by its
-    /// own name. Empty when nothing is filtered, so the query is unchanged.
+    /// own name.
+    ///
+    /// Always carries the parental gate (`repo::parental`): what the profile watching may
+    /// see is not a filter the viewer chose, so no value of these switches turns it off.
+    /// It costs one lookup per statement when nothing is restricted.
     ///
     /// Duplicate collapsing is phrased as "no better copy of this exists" rather than
     /// as a grouping, so it composes with whatever else the caller is already asking —
@@ -137,6 +141,7 @@ impl LibraryFilter {
                 self.same_title_sql(kind, "dup", t),
             ));
         }
+        out.push_str(&crate::repo::parental::where_sql(kind));
         out
     }
 
@@ -768,7 +773,11 @@ mod tests {
         assert_eq!(ids(&conn, Kind::Live, &OFF).len(), 7);
         assert_eq!(ids(&conn, Kind::Movies, &OFF).len(), 4);
         assert_eq!(ids(&conn, Kind::Series, &OFF).len(), 2);
-        assert!(OFF.where_sql(Kind::Live).is_empty());
+        // Nothing the viewer chose: only the parental gate, which is always there.
+        assert_eq!(
+            OFF.where_sql(Kind::Live),
+            crate::repo::parental::where_sql(Kind::Live)
+        );
     }
 
     /// Two regional feeds of one brand survive "hide duplicates".
