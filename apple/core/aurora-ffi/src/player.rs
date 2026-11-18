@@ -93,8 +93,16 @@ pub(crate) const ASPECTS: [(PictureAspect, &str, &str); 6] = [
     (PictureAspect::Wide, "16:9", "Widescreen"),
     (PictureAspect::Standard, "4:3", "Older broadcasts"),
     (PictureAspect::Cinema, "21:9", "Cinematic"),
-    (PictureAspect::Zoom, "Zoom", "Fill the screen, crop the edges"),
-    (PictureAspect::Stretch, "Stretch", "Fill the screen, distort"),
+    (
+        PictureAspect::Zoom,
+        "Zoom",
+        "Fill the screen, crop the edges",
+    ),
+    (
+        PictureAspect::Stretch,
+        "Stretch",
+        "Fill the screen, distort",
+    ),
 ];
 
 #[uniffi::export]
@@ -124,7 +132,10 @@ pub fn aspect_options(aspect: PictureAspect) -> Vec<MpvOption> {
     Aspect::from(aspect)
         .mpv()
         .iter()
-        .map(|(name, value)| MpvOption::Text { name: (*name).into(), value: (*value).into() })
+        .map(|(name, value)| MpvOption::Text {
+            name: (*name).into(),
+            value: (*value).into(),
+        })
         .collect()
 }
 
@@ -335,7 +346,10 @@ impl AuroraCore {
     ) -> Result<u32> {
         let chapters: Vec<rules::Chapter> = chapters
             .into_iter()
-            .map(|c| rules::Chapter { title: c.title, start_secs: c.start_secs })
+            .map(|c| rules::Chapter {
+                title: c.title,
+                start_secs: c.start_secs,
+            })
             .collect();
         let derived = rules::from_chapters(&chapters, duration_secs);
         let mut db = self.db.lock();
@@ -395,7 +409,13 @@ impl AuroraCore {
         series_id: i64,
         prefs: SeriesPrefs,
     ) -> Result<()> {
-        markers::set_prefs(&self.db.lock(), profile_id, series_id, &prefs.into(), now_unix())?;
+        markers::set_prefs(
+            &self.db.lock(),
+            profile_id,
+            series_id,
+            &prefs.into(),
+            now_unix(),
+        )?;
         Ok(())
     }
 }
@@ -465,7 +485,9 @@ fn community_markers(key: CommunityKey, duration_secs: Option<f64>) -> Vec<rules
             let (tmdb_id, season, episode) = key;
             match client.fetch_string(&introdb::url(tmdb_id, season, episode)) {
                 Ok(body) => {
-                    cache().lock().insert(key, Entry::Answered(Some(body.clone())));
+                    cache()
+                        .lock()
+                        .insert(key, Entry::Answered(Some(body.clone())));
                     Some(body)
                 }
                 Err(e) if e.code == aurora_core::neterr::ErrorCode::NotFound => {
@@ -480,7 +502,8 @@ fn community_markers(key: CommunityKey, duration_secs: Option<f64>) -> Vec<rules
             }
         }
     };
-    body.map(|b| introdb::parse(&b, duration_secs)).unwrap_or_default()
+    body.map(|b| introdb::parse(&b, duration_secs))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -499,12 +522,20 @@ mod tests {
                 [],
             )
             .unwrap();
-            db.execute("INSERT OR IGNORE INTO profiles (id,name,created_at) VALUES (1,'Me',0)", [])
-                .unwrap();
+            db.execute(
+                "INSERT OR IGNORE INTO profiles (id,name,created_at) VALUES (1,'Me',0)",
+                [],
+            )
+            .unwrap();
             let sid = upsert_series(
                 &mut db,
                 1,
-                &NewSeries { provider_key: "s", title: "Show", match_key: "show", ..Default::default() },
+                &NewSeries {
+                    provider_key: "s",
+                    title: "Show",
+                    match_key: "show",
+                    ..Default::default()
+                },
                 0,
             )
             .unwrap();
@@ -519,7 +550,11 @@ mod tests {
                 })
                 .collect();
             upsert_episodes(&mut db, sid, &eps, 0).unwrap();
-            library::episodes_for(&db, sid, None).unwrap().into_iter().map(|e| e.id).collect()
+            library::episodes_for(&db, sid, None)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.id)
+                .collect()
         };
         (core, dir, ids)
     }
@@ -539,12 +574,22 @@ mod tests {
     #[test]
     fn every_aspect_sets_all_three_properties() {
         for (aspect, ..) in ASPECTS {
-            let names: Vec<String> =
-                aspect_options(aspect).iter().map(|o| o.name().to_string()).collect();
-            assert_eq!(names, ["video-aspect-override", "keepaspect", "panscan"], "{aspect:?}");
+            let names: Vec<String> = aspect_options(aspect)
+                .iter()
+                .map(|o| o.name().to_string())
+                .collect();
+            assert_eq!(
+                names,
+                ["video-aspect-override", "keepaspect", "panscan"],
+                "{aspect:?}"
+            );
         }
-        assert!(aspect_options(PictureAspect::Zoom)
-            .contains(&MpvOption::Text { name: "panscan".into(), value: "1".into() }));
+        assert!(
+            aspect_options(PictureAspect::Zoom).contains(&MpvOption::Text {
+                name: "panscan".into(),
+                value: "1".into()
+            })
+        );
     }
 
     #[test]
@@ -556,14 +601,25 @@ mod tests {
         assert_eq!(aids.next_episode.as_ref().map(|e| e.id), Some(ids[1]));
         assert!(aids.series_id.is_some());
         assert!(aids.up_next_at_secs.is_some_and(|t| t > 0.0 && t < 2700.0));
-        assert!(aids.markers.iter().all(|m| !m.may_auto_skip || m.source != MarkerSource::Convention));
+        assert!(aids
+            .markers
+            .iter()
+            .all(|m| !m.may_auto_skip || m.source != MarkerSource::Convention));
         // Autoplay on and auto-skip off until asked.
         assert_eq!(
             aids.prefs,
-            SeriesPrefs { always_skip_intro: false, always_skip_recap: false, autoplay_next: true }
+            SeriesPrefs {
+                always_skip_intro: false,
+                always_skip_recap: false,
+                autoplay_next: true
+            }
         );
         // The last episode has nothing after it.
-        assert!(core.playback_aids(1, ids[2], 0.0).unwrap().next_episode.is_none());
+        assert!(core
+            .playback_aids(1, ids[2], 0.0)
+            .unwrap()
+            .next_episode
+            .is_none());
     }
 
     #[test]
@@ -571,8 +627,10 @@ mod tests {
         let (core, _dir, ids) = seeded(4);
         let duration = 2700.0;
         // An intro at 60-120s, pressed on two episodes: the show learns it.
-        core.record_skip(ids[0], MarkerKind::Intro, 60.0, 120.0, duration).unwrap();
-        core.record_skip(ids[1], MarkerKind::Intro, 61.0, 121.0, duration).unwrap();
+        core.record_skip(ids[0], MarkerKind::Intro, 60.0, 120.0, duration)
+            .unwrap();
+        core.record_skip(ids[1], MarkerKind::Intro, 61.0, 121.0, duration)
+            .unwrap();
         let aids = core.playback_aids(1, ids[2], duration).unwrap();
         let intro = aids
             .markers
@@ -583,7 +641,8 @@ mod tests {
         assert!(intro.may_auto_skip);
         assert_eq!(intro.label, "Skip Intro");
         // An accidental one-second press teaches nothing.
-        core.record_skip(ids[3], MarkerKind::Recap, 10.0, 11.0, duration).unwrap();
+        core.record_skip(ids[3], MarkerKind::Recap, 10.0, 11.0, duration)
+            .unwrap();
         assert!(!core
             .playback_aids(1, ids[3], duration)
             .unwrap()
@@ -599,16 +658,29 @@ mod tests {
             .sync_chapters(
                 ids[0],
                 vec![
-                    ChapterMark { title: Some("Cold open".into()), start_secs: 0.0 },
-                    ChapterMark { title: Some("Intro".into()), start_secs: 90.0 },
-                    ChapterMark { title: Some("Episode".into()), start_secs: 150.0 },
+                    ChapterMark {
+                        title: Some("Cold open".into()),
+                        start_secs: 0.0,
+                    },
+                    ChapterMark {
+                        title: Some("Intro".into()),
+                        start_secs: 90.0,
+                    },
+                    ChapterMark {
+                        title: Some("Episode".into()),
+                        start_secs: 150.0,
+                    },
                 ],
                 2700.0,
             )
             .unwrap();
         assert_eq!(stored, 1);
         let aids = core.playback_aids(1, ids[0], 2700.0).unwrap();
-        let intro = aids.markers.iter().find(|m| m.kind == MarkerKind::Intro).unwrap();
+        let intro = aids
+            .markers
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .unwrap();
         assert_eq!((intro.start_secs, intro.end_secs), (90.0, 150.0));
         assert_eq!(intro.source, MarkerSource::Chapters);
     }
@@ -618,9 +690,16 @@ mod tests {
         let (core, _dir, ids) = seeded(1);
         assert!(core.observe_seek(ids[0], 40.0, 110.0, 2700.0).unwrap());
         let aids = core.playback_aids(1, ids[0], 2700.0).unwrap();
-        let intro = aids.markers.iter().find(|m| m.kind == MarkerKind::Intro).unwrap();
+        let intro = aids
+            .markers
+            .iter()
+            .find(|m| m.kind == MarkerKind::Intro)
+            .unwrap();
         assert_eq!(intro.source, MarkerSource::Seek);
-        assert!(!intro.may_auto_skip, "an uncorroborated drag must never jump by itself");
+        assert!(
+            !intro.may_auto_skip,
+            "an uncorroborated drag must never jump by itself"
+        );
         // Backwards is not evidence.
         assert!(!core.observe_seek(ids[0], 300.0, 100.0, 2700.0).unwrap());
     }
@@ -628,9 +707,23 @@ mod tests {
     #[test]
     fn a_shows_switches_are_kept_per_profile() {
         let (core, _dir, _ids) = seeded(1);
-        core.db.lock().execute("INSERT INTO profiles (id,name,created_at) VALUES (2,'You',0)", []).unwrap();
-        let on = SeriesPrefs { always_skip_intro: true, always_skip_recap: false, autoplay_next: false };
-        let series = core.playback_aids(1, _ids[0], 0.0).unwrap().series_id.unwrap();
+        core.db
+            .lock()
+            .execute(
+                "INSERT INTO profiles (id,name,created_at) VALUES (2,'You',0)",
+                [],
+            )
+            .unwrap();
+        let on = SeriesPrefs {
+            always_skip_intro: true,
+            always_skip_recap: false,
+            autoplay_next: false,
+        };
+        let series = core
+            .playback_aids(1, _ids[0], 0.0)
+            .unwrap()
+            .series_id
+            .unwrap();
         core.set_series_prefs(1, series, on).unwrap();
         assert_eq!(core.series_prefs(1, series).unwrap(), on);
         assert_eq!(core.playback_aids(1, _ids[0], 0.0).unwrap().prefs, on);

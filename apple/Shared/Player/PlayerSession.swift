@@ -96,7 +96,17 @@ final class PlayerSession {
         return false
     }
 
-    var seekable: Bool { !isLive }
+    /// Films and catch-up always; a live channel while it has a rewind buffer.
+    var seekable: Bool { !isLive || state.rewind != nil }
+
+    /// How far behind live the viewer is; 0 at the edge, or with no buffer.
+    var behindLive: Double { state.rewind?.behindSecs ?? 0 }
+
+    /// Back to the newest moment, playing (Windows' Back to live, T).
+    func backToLive() {
+        controller?.backToLive()
+        poke()
+    }
 
     var episodeId: Int64? {
         if case .episode(let id, _, _) = item { return id }

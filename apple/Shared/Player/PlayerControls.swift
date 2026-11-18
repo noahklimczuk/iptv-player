@@ -3,7 +3,7 @@ import SwiftUI
 /// Where the remote's focus can be in the player (tvOS).
 enum PlayerFocus: Hashable {
     case backdrop, back, playPause, forward, subtitles, audio, picture, close
-    case channelDown, channelUp, lastChannel, keypad
+    case channelDown, channelUp, lastChannel, keypad, backToLive
     case skip, upNextPlay, upNextCancel, sleepKeep
 
     /// The transport and menu buttons: focus on one of these is the viewer using the
@@ -11,7 +11,7 @@ enum PlayerFocus: Hashable {
     var isChrome: Bool {
         switch self {
         case .back, .playPause, .forward, .subtitles, .audio, .picture, .close,
-             .channelDown, .channelUp, .lastChannel, .keypad: true
+             .channelDown, .channelUp, .lastChannel, .keypad, .backToLive: true
         case .backdrop, .skip, .upNextPlay, .upNextCancel, .sleepKeep: false
         }
     }
@@ -290,7 +290,19 @@ private struct PlayerChrome: View {
             Spacer()
             HStack(spacing: spacing) {
                 ProgressRow(session: session, interactive: true)
-                if session.isLive, let last = session.lastChannel {
+                if session.behindLive > 0 {
+                    // Windows' Back to live (T): only while behind it.
+                    Button { session.backToLive() } label: {
+                        Label("Back to live", systemImage: "dot.radiowaves.left.and.right")
+                            .lineLimit(1)
+                    }
+                    .font(.callout)
+                    .focused(focus, equals: .backToLive)
+                    #if os(iOS)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    #endif
+                } else if session.isLive, let last = session.lastChannel {
                     Spacer()
                     // Windows' Backspace: the channel before this one.
                     Button { session.backToLast() } label: {
@@ -304,8 +316,27 @@ private struct PlayerChrome: View {
                     #endif
                 }
             }
+            // A rewindable channel adds two buttons to a row already holding the channel
+            // controls; where they don't fit (an iPhone upright) the bar still seeks.
+            ViewThatFits(in: .horizontal) {
+                transportRow(skips: true)
+                transportRow(skips: false)
+            }
+            .labelStyle(.iconOnly)
+        }
+        .padding(edge)
+        .foregroundStyle(.white)
+        .background {
+            LinearGradient(colors: [.black.opacity(0.7), .clear, .clear, .black.opacity(0.8)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func transportRow(skips: Bool) -> some View {
             HStack(spacing: spacing) {
-                if session.seekable {
+                if skips, session.seekable {
                     transport("Back 10 seconds", "gobackward.10", .back) { session.seek(by: -10) }
                 }
                 if session.isLive {
@@ -313,7 +344,7 @@ private struct PlayerChrome: View {
                 }
                 transport(session.state.paused ? "Play" : "Pause",
                           session.state.paused ? "play.fill" : "pause.fill", .playPause) { session.togglePause() }
-                if session.seekable {
+                if skips, session.seekable {
                     transport("Forward 30 seconds", "goforward.30", .forward) { session.seek(by: 30) }
                 }
                 if session.isLive {
@@ -330,15 +361,6 @@ private struct PlayerChrome: View {
                 menuButton("Picture", value: nil, icon: "slider.horizontal.3", tab: .picture)
             }
             .labelStyle(.iconOnly)
-        }
-        .padding(edge)
-        .foregroundStyle(.white)
-        .background {
-            LinearGradient(colors: [.black.opacity(0.7), .clear, .clear, .black.opacity(0.8)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-        }
     }
 
     #if os(tvOS)
@@ -394,12 +416,10 @@ private struct ProgressRow: View {
     @State private var dragging: Double?
 
     var body: some View {
-        if session.isLive {
-            Label("Live", systemImage: "dot.radiowaves.left.and.right")
-                .font(.caption.bold())
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(.red, in: Capsule())
-                .foregroundStyle(.white)
+        if session.isLive, let window = session.state.rewind {
+            timeshift(window)
+        } else if session.isLive {
+            liveBadge
         } else if session.state.duration > 0 {
             HStack {
                 Text(clock(dragging ?? session.state.position)).monospacedDigit()
@@ -412,6 +432,74 @@ private struct ProgressRow: View {
             // The stream doesn't say how long it is: just where it is.
             Text(clock(session.state.position)).font(.caption).monospacedDigit().foregroundStyle(.white)
         }
+    }
+
+    private var liveBadge: some View {
+        Label("Live", systemImage: "dot.radiowaves.left.and.right")
+            .font(.caption.bold())
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(.red, in: Capsule())
+            .foregroundStyle(.white)
+    }
+
+    /// Live with a buffer (`Scrub.tsx`'s timeshift timeline): how far behind live, how
+    /// much is held, and a bar from the oldest moment held to live.
+    private func timeshift(_ w: RewindWindow) -> some View {
+        // While dragging, the readout says where the finger is, as Windows' preview does.
+        let behind = dragging.map { max(0, w.liveSecs - $0) } ?? w.behindSecs
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                if behind > liveEdgeSecs {
+                    Text("−" + clock(behind))
+                        .monospacedDigit()
+                        .accessibilityLabel("\(clock(behind)) behind live")
+                } else {
+                    liveBadge
+                }
+                Spacer()
+                Text(w.heldSecs > 0 ? "\(clock(w.heldSecs)) buffered" : "Buffering…")
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .font(.caption)
+            timeshiftBar(w)
+        }
+        .foregroundStyle(.white)
+    }
+
+    /// Windows' `LIVE_EDGE_SECS`, which the core's `behind_secs` already uses.
+    private let liveEdgeSecs = 5.0
+
+    @ViewBuilder private func timeshiftBar(_ w: RewindWindow) -> some View {
+        let upper = max(w.liveSecs, w.startSecs + 1)
+        #if os(iOS)
+        if interactive {
+            Slider(
+                value: Binding(get: { dragging ?? min(max(w.positionSecs, w.startSecs), upper) },
+                               set: { dragging = $0 }),
+                in: w.startSecs...upper,
+                onEditingChanged: { editing in
+                    if editing {
+                        session.poke()
+                    } else if let to = dragging {
+                        session.seek(to: to)
+                        dragging = nil
+                    }
+                }
+            )
+            .tint(.red)
+            .background { Capsule().fill(.white.opacity(0.3)).frame(height: 4) }
+            .accessibilityLabel("Timeshift")
+        } else {
+            ProgressView(value: min(max(0, w.positionSecs - w.startSecs), upper - w.startSecs),
+                         total: upper - w.startSecs)
+                .tint(.red)
+        }
+        #else
+        ProgressView(value: min(max(0, w.positionSecs - w.startSecs), upper - w.startSecs),
+                     total: upper - w.startSecs)
+            .tint(.red)
+        #endif
     }
 
     @ViewBuilder private var bar: some View {

@@ -31,6 +31,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Rename, renumber, regroup or hide channels, films and series, and put them back.")
                 }
+                TimeshiftSection()
                 MetadataSection()
                 if let progress = model.importProgress {
                     Section("Importing") {
@@ -179,6 +180,105 @@ private struct LibraryFiltersSection: View {
             }
         }
         counts = rows
+    }
+}
+
+/// Pause live TV (Windows' `TimeshiftPanel`, same wording): on or off, how much disk the
+/// buffer may use and how far back it reaches, and emptying what an earlier run left.
+/// No folder to choose: on Apple the buffer lives in the app's own cache folder.
+private struct TimeshiftSection: View {
+    @Environment(AppModel.self) private var model
+    @State private var settings: TimeshiftSettings?
+    @State private var message: String?
+    private let choices = timeshiftChoices()
+    private static let gib: UInt64 = 1024 * 1024 * 1024
+
+    var body: some View {
+        Section {
+            if let settings {
+                Toggle(isOn: Binding(get: { settings.enabled },
+                                     set: { on in apply(TimeshiftChange(enabled: on, bytes: nil, secs: nil)) })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pause live TV")
+                        Text("Keeps the channel you are watching on disk so it can be paused and rewound.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Picker(selection: Binding(get: { settings.bytes },
+                                          set: { apply(TimeshiftChange(enabled: nil, bytes: $0, secs: nil)) })) {
+                    ForEach(choices.sizesGb, id: \.self) { gb in
+                        Text("\(gb) GB").tag(gb * Self.gib)
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Buffer size")
+                        Text("The disk it may use.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!settings.enabled)
+                Picker(selection: Binding(get: { settings.secs },
+                                          set: { apply(TimeshiftChange(enabled: nil, bytes: nil, secs: $0)) })) {
+                    ForEach(choices.limitsMin, id: \.self) { minutes in
+                        Text(limitLabel(minutes * 60)).tag(minutes * 60)
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Rewind limit")
+                        Text("How far back to offer. A gigabyte is eighteen minutes of HD and seven of 4K, so the shorter of the two is what you get.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!settings.enabled)
+                if settings.reclaimableBytes > 0 {
+                    LabeledContent {
+                        Button("Empty buffer") { empty() }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Reclaimable: \(bytes(settings.reclaimableBytes))")
+                            Text("Left behind by earlier viewing. Emptying it loses nothing you are watching.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Pause live TV")
+        } footer: {
+            if let settings {
+                Text((settings.enabled
+                      ? "Up to \(limitLabel(settings.secs)) of rewind, within \(bytes(settings.bytes))."
+                      : "Pausing live TV will freeze the picture and rejoin at the live edge.")
+                     + (message.map { " " + $0 } ?? ""))
+            }
+        }
+        .task { settings = try? model.core?.timeshiftSettings() }
+    }
+
+    private func apply(_ change: TimeshiftChange) {
+        guard let core = model.core else { return }
+        do {
+            settings = try core.setTimeshift(change: change)
+            message = "Saved. Applies to the next channel you tune."
+        } catch {
+            message = error.viewerMessage
+        }
+    }
+
+    private func empty() {
+        guard let core = model.core else { return }
+        let freed = core.emptyTimeshift()
+        message = freed > 0 ? "Freed \(bytes(freed))." : "Nothing to empty."
+        settings = try? core.timeshiftSettings()
+    }
+
+    /// "30 min", "3 hr" (Windows' `limitLabel`).
+    private func limitLabel(_ secs: UInt32) -> String {
+        let mins = Int((Double(secs) / 60).rounded())
+        return mins % 60 == 0 && mins >= 60 ? "\(mins / 60) hr" : "\(mins) min"
+    }
+
+    private func bytes(_ n: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: n), countStyle: .binary)
     }
 }
 

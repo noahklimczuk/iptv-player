@@ -111,7 +111,10 @@ fn item_kind(kind: ListKind) -> ItemKind {
 fn concurrency(conn: &Connection) -> u32 {
     aurora_db::repo::settings::get_or(conn, CONCURRENCY_KEY, enrich::DEFAULT_CONCURRENCY)
         .unwrap_or(enrich::DEFAULT_CONCURRENCY)
-        .clamp(*enrich::CONCURRENCY_RANGE.start(), *enrich::CONCURRENCY_RANGE.end())
+        .clamp(
+            *enrich::CONCURRENCY_RANGE.start(),
+            *enrich::CONCURRENCY_RANGE.end(),
+        )
 }
 
 impl AuroraCore {
@@ -119,7 +122,8 @@ impl AuroraCore {
     /// rate limit rather than the build's shared one.
     /// A client on the key `tmdb_key` picks, or none without one.
     pub(crate) fn tmdb_client(&self) -> Option<TmdbClient> {
-        self.tmdb_key().map(|key| TmdbClient::new(Arc::clone(&self.http), key))
+        self.tmdb_key()
+            .map(|key| TmdbClient::new(Arc::clone(&self.http), key))
     }
 
     fn tmdb_key(&self) -> Option<String> {
@@ -289,7 +293,12 @@ mod tests {
     struct FakeTmdb;
 
     impl MetadataClient for FakeTmdb {
-        fn search(&self, _kind: Kind, title: &str, _year: Option<i32>) -> std::result::Result<Vec<Candidate>, NetFailure> {
+        fn search(
+            &self,
+            _kind: Kind,
+            title: &str,
+            _year: Option<i32>,
+        ) -> std::result::Result<Vec<Candidate>, NetFailure> {
             Ok(if title.eq_ignore_ascii_case("heat") {
                 vec![Candidate::new(949, "Heat", Some(1995))]
             } else {
@@ -306,7 +315,11 @@ mod tests {
                 genres: vec!["Crime".into(), "Thriller".into()],
                 rating: Some(7.9),
                 credits: vec![TmdbCredit {
-                    person: Person { tmdb_id: 1158, name: "Al Pacino".into(), profile_path: Some("/al.jpg".into()) },
+                    person: Person {
+                        tmdb_id: 1158,
+                        name: "Al Pacino".into(),
+                        profile_path: Some("/al.jpg".into()),
+                    },
                     role: Some("Vincent Hanna".into()),
                     is_cast: true,
                     order: 0,
@@ -361,18 +374,27 @@ mod tests {
         let genres: String = core
             .db
             .lock()
-            .query_row("SELECT genres FROM movies WHERE provider_key = 'm0'", [], |r| r.get(0))
+            .query_row(
+                "SELECT genres FROM movies WHERE provider_key = 'm0'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(genres.contains("Crime"), "{genres}");
         let id: i64 = core
             .db
             .lock()
-            .query_row("SELECT id FROM movies WHERE provider_key = 'm0'", [], |r| r.get(0))
+            .query_row("SELECT id FROM movies WHERE provider_key = 'm0'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         let cast = core.credits(ListKind::Movie, id).unwrap();
         assert_eq!(cast.len(), 1);
         assert_eq!(cast[0].name, "Al Pacino");
-        assert_eq!(cast[0].photo_url.as_deref(), Some("https://image.tmdb.org/t/p/w185/al.jpg"));
+        assert_eq!(
+            cast[0].photo_url.as_deref(),
+            Some("https://image.tmdb.org/t/p/w185/al.jpg")
+        );
 
         // A second sweep has nothing to do.
         let again = core.enrich_with(&FakeTmdb, &Listen(true)).unwrap();
@@ -405,7 +427,10 @@ mod tests {
         core.set_metadata_key(None).unwrap();
         // Back to whatever this build was compiled with, which may be nothing.
         assert_eq!(core.tmdb_key().as_deref(), built_in());
-        assert_eq!(core.metadata_status().unwrap().key_is_built_in, built_in().is_some());
+        assert_eq!(
+            core.metadata_status().unwrap().key_is_built_in,
+            built_in().is_some()
+        );
         // Clearing twice is still fine.
         core.set_metadata_key(Some("   ".into())).unwrap();
     }

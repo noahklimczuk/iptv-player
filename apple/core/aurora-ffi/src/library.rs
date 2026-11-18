@@ -164,7 +164,10 @@ mod tests {
     #[test]
     fn an_empty_library_lists_nothing_rather_than_failing() {
         let (core, _dir) = core();
-        assert!(core.channels(1, None, false, None, 50, 0).unwrap().is_empty());
+        assert!(core
+            .channels(1, None, false, None, 50, 0)
+            .unwrap()
+            .is_empty());
         assert!(core.channel_groups().unwrap().is_empty());
     }
 }

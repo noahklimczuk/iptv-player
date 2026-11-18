@@ -138,18 +138,25 @@ fn other_scheme(url: &str) -> Option<String> {
     if let Some(rest) = url.strip_prefix("https://") {
         Some(format!("http://{rest}"))
     } else {
-        url.strip_prefix("http://").map(|rest| format!("https://{rest}"))
+        url.strip_prefix("http://")
+            .map(|rest| format!("https://{rest}"))
     }
 }
 
 /// Failures where the address itself may be wrong (`worth_probing`).
 fn worth_probing(code: ErrorCode) -> bool {
-    matches!(code, ErrorCode::Timeout | ErrorCode::Refused | ErrorCode::Dns | ErrorCode::Tls)
+    matches!(
+        code,
+        ErrorCode::Timeout | ErrorCode::Refused | ErrorCode::Dns | ErrorCode::Tls
+    )
 }
 
 /// The panel heard and declined (`is_refusing_us`): asking again only makes it worse.
 fn is_refusing_us(code: ErrorCode) -> bool {
-    matches!(code, ErrorCode::Dropped | ErrorCode::RateLimited | ErrorCode::ConnectionLimit)
+    matches!(
+        code,
+        ErrorCode::Dropped | ErrorCode::RateLimited | ErrorCode::ConnectionLimit
+    )
 }
 
 /// Does the host answer a request with no sign-in in it
@@ -168,7 +175,13 @@ fn host_answers_without_credentials(http: &HttpClient, base_url: &str) -> bool {
 /// The host is up and only signed-in requests die (`locally_blocked`), in the words
 /// that fit an iPhone or Apple TV.
 fn locally_blocked(url: &str, took: std::time::Duration) -> NetFailure {
-    let host = url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or(url);
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url);
     NetFailure {
         code: ErrorCode::Dropped,
         message: "Something on this network is blocking the sign-in".into(),
@@ -223,7 +236,9 @@ fn urlencoding(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -251,7 +266,13 @@ impl AuroraCore {
     /// A provider's saved settings and password, for the editor
     /// (`providers_credentials`).
     pub fn provider_settings(&self, provider_id: i64) -> Result<ProviderSettings> {
-        let (name, kind, url, username, credential): (String, String, String, String, Option<String>) = {
+        let (name, kind, url, username, credential): (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+        ) = {
             let db = self.db.lock();
             db.query_row(
                 "SELECT name, kind, base_url, COALESCE(username, ''), credential_ref
@@ -280,7 +301,11 @@ impl AuroraCore {
         if url.is_empty() {
             return Err(AuroraError::other("Enter the provider's address."));
         }
-        let name = if draft.name.trim().is_empty() { url } else { draft.name.trim() };
+        let name = if draft.name.trim().is_empty() {
+            url
+        } else {
+            draft.name.trim()
+        };
         let username = draft.username.as_deref().map(str::trim);
         let db = self.db.lock();
         let changed = db.execute(
@@ -378,7 +403,11 @@ impl AuroraCore {
             },
             Err(e) => {
                 tracing::warn!(code = ?e.code, "provider check failed: {}", e.message);
-                ProviderCheck { suggested_url, suggested_kind, ..ProviderCheck::failed(e) }
+                ProviderCheck {
+                    suggested_url,
+                    suggested_kind,
+                    ..ProviderCheck::failed(e)
+                }
             }
         }
     }
@@ -390,7 +419,11 @@ impl AuroraCore {
                 let n = parsed.result.entries.len();
                 ProviderCheck {
                     ok: n > 0,
-                    message: if n > 0 { format!("Found {n} entries") } else { "That playlist is empty".into() },
+                    message: if n > 0 {
+                        format!("Found {n} entries")
+                    } else {
+                        "That playlist is empty".into()
+                    },
                     detail: parsed
                         .result
                         .warnings
@@ -414,7 +447,12 @@ impl AuroraCore {
 mod tests {
     use super::*;
 
-    fn draft(kind: &str, url: &str, username: Option<&str>, password: Option<&str>) -> ProviderDraft {
+    fn draft(
+        kind: &str,
+        url: &str,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) -> ProviderDraft {
         ProviderDraft {
             name: "Panel".into(),
             kind: kind.into(),
@@ -426,18 +464,29 @@ mod tests {
 
     #[test]
     fn a_pasted_playlist_address_is_split_into_a_sign_in() {
-        let found = detect_source("http://panel.example:8080/get.php?username=me&password=pw&type=m3u_plus".into());
+        let found = detect_source(
+            "http://panel.example:8080/get.php?username=me&password=pw&type=m3u_plus".into(),
+        );
         assert_eq!(found.kind, "xtream");
         assert_eq!(found.url, "http://panel.example:8080");
         assert_eq!(found.username.as_deref(), Some("me"));
         assert_eq!(found.password.as_deref(), Some("pw"));
-        assert_eq!(detect_source("https://example.com/list.m3u".into()).kind, "m3u");
+        assert_eq!(
+            detect_source("https://example.com/list.m3u".into()).kind,
+            "m3u"
+        );
     }
 
     #[test]
     fn the_other_scheme_and_the_playlist_address() {
-        assert_eq!(other_scheme("https://a.example:80").as_deref(), Some("http://a.example:80"));
-        assert_eq!(other_scheme("http://a.example").as_deref(), Some("https://a.example"));
+        assert_eq!(
+            other_scheme("https://a.example:80").as_deref(),
+            Some("http://a.example:80")
+        );
+        assert_eq!(
+            other_scheme("http://a.example").as_deref(),
+            Some("https://a.example")
+        );
         assert_eq!(other_scheme("a.example"), None);
         assert_eq!(
             m3u_url("http://p.example/", "a b", "p&w"),
@@ -448,7 +497,8 @@ mod tests {
     #[test]
     fn a_blank_sign_in_is_named_without_asking_the_panel() {
         let (core, _dir) = crate::testing::core();
-        let check = core.check_provider(draft("xtream", "http://127.0.0.1:9", Some("me"), Some("")));
+        let check =
+            core.check_provider(draft("xtream", "http://127.0.0.1:9", Some("me"), Some("")));
         assert!(!check.ok);
         assert!(check.suggested_url.is_none());
     }
@@ -457,19 +507,42 @@ mod tests {
     fn editing_keeps_replaces_or_clears_the_password() {
         let (core, _dir) = crate::testing::core();
         let id = core
-            .add_xtream("Old".into(), "http://old.example".into(), "me".into(), "first".into())
+            .add_xtream(
+                "Old".into(),
+                "http://old.example".into(),
+                "me".into(),
+                "first".into(),
+            )
             .unwrap();
 
         // Renaming alone leaves the password where it was.
-        core.update_provider(id, draft("xtream", " http://new.example ", Some(" you "), None)).unwrap();
+        core.update_provider(
+            id,
+            draft("xtream", " http://new.example ", Some(" you "), None),
+        )
+        .unwrap();
         let s = core.provider_settings(id).unwrap();
-        assert_eq!((s.name.as_str(), s.url.as_str(), s.username.as_str()), ("Panel", "http://new.example", "you"));
+        assert_eq!(
+            (s.name.as_str(), s.url.as_str(), s.username.as_str()),
+            ("Panel", "http://new.example", "you")
+        );
         assert_eq!(s.password.as_deref(), Some("first"));
 
-        core.update_provider(id, draft("xtream", "http://new.example", Some("you"), Some("second"))).unwrap();
-        assert_eq!(core.provider_settings(id).unwrap().password.as_deref(), Some("second"));
+        core.update_provider(
+            id,
+            draft("xtream", "http://new.example", Some("you"), Some("second")),
+        )
+        .unwrap();
+        assert_eq!(
+            core.provider_settings(id).unwrap().password.as_deref(),
+            Some("second")
+        );
 
-        core.update_provider(id, draft("xtream", "http://new.example", Some("you"), Some(""))).unwrap();
+        core.update_provider(
+            id,
+            draft("xtream", "http://new.example", Some("you"), Some("")),
+        )
+        .unwrap();
         assert_eq!(core.provider_settings(id).unwrap().password, None);
     }
 
@@ -477,8 +550,14 @@ mod tests {
     fn a_removed_provider_cannot_be_edited() {
         let (core, _dir) = crate::testing::core();
         assert!(core.provider_settings(42).is_err());
-        assert!(core.update_provider(42, draft("m3u", "http://x.example/a.m3u", None, None)).is_err());
-        let id = core.add_m3u("List".into(), "http://x.example/a.m3u".into()).unwrap();
-        assert!(core.update_provider(id, draft("m3u", "  ", None, None)).is_err());
+        assert!(core
+            .update_provider(42, draft("m3u", "http://x.example/a.m3u", None, None))
+            .is_err());
+        let id = core
+            .add_m3u("List".into(), "http://x.example/a.m3u".into())
+            .unwrap();
+        assert!(core
+            .update_provider(id, draft("m3u", "  ", None, None))
+            .is_err());
     }
 }

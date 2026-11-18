@@ -74,6 +74,9 @@ pub struct LiveTune {
     pub sources: Vec<PlayableSource>,
     /// Set on mpv before loading any of `sources`.
     pub mpv_options: Vec<MpvOption>,
+    /// The rewind buffer's caps, or `None` when Pause live TV is off. The options above
+    /// already turn mpv's disk cache on to match (`timeshift.rs`).
+    pub rewind: Option<crate::timeshift::RewindBudget>,
 }
 
 #[uniffi::export]
@@ -117,9 +120,12 @@ impl AuroraCore {
         }
 
         // The URL is not part of it: Swift loads each source in turn under these.
+        let timeshift = crate::timeshift::for_live(&db, &self.buffer_folder())?;
+        let rewind = timeshift.as_ref().map(|t| t.budget.into());
         let options = Request {
             live: true,
             cache_secs: LIVE_CACHE_SECS,
+            timeshift,
             ..Default::default()
         };
 
@@ -128,6 +134,7 @@ impl AuroraCore {
             title: channel.name,
             sources: playable,
             mpv_options: mpv_options(&options),
+            rewind,
         })
     }
 

@@ -187,7 +187,9 @@ fn a_playlist_is_imported_listed_and_tuned() {
         .collect();
     assert_eq!(groups, vec!["News".to_string(), "Sport".to_string()]);
 
-    let news = core.channels(1, Some("News".into()), false, None, 50, 0).unwrap();
+    let news = core
+        .channels(1, Some("News".into()), false, None, 50, 0)
+        .unwrap();
     assert_eq!(news.len(), 1);
     assert_eq!(news[0].name, "Aurora News HD");
     assert!(
@@ -206,7 +208,26 @@ fn a_playlist_is_imported_listed_and_tuned() {
             .and_then(|o| o.text().map(str::to_string))
     };
     assert!(option("user-agent").is_some_and(|ua| !ua.is_empty()));
-    assert_eq!(option("cache-secs").as_deref(), Some("8"));
+    // Pause live TV is on by default, so mpv keeps the whole rewind limit (30 min)...
+    assert_eq!(option("cache-secs").as_deref(), Some("1800"));
+    assert!(tune.rewind.is_some());
+    // ...and with it off, only Windows' short read-ahead.
+    core.set_timeshift(aurora_ffi::TimeshiftChange {
+        enabled: Some(false),
+        ..Default::default()
+    })
+    .unwrap();
+    let plain = core.tune_live(news[0].id).unwrap();
+    assert!(plain.rewind.is_none());
+    assert_eq!(
+        plain
+            .mpv_options
+            .iter()
+            .find(|o| o.name() == "cache-secs")
+            .and_then(|o| o.text().map(str::to_string))
+            .as_deref(),
+        Some("8")
+    );
 
     // Favourites are per profile, and the list filter honours them.
     assert!(core.toggle_favorite(1, news[0].id, None).unwrap());
@@ -218,22 +239,57 @@ fn a_playlist_is_imported_listed_and_tuned() {
     // Named lists, as on Windows: a list exists once something is in it, the default
     // is always offered, the flag answers for the list asked about, and a list keeps
     // the order it was given.
-    let sport = core.channels(1, Some("Sport".into()), false, None, 50, 0).unwrap();
+    let sport = core
+        .channels(1, Some("Sport".into()), false, None, 50, 0)
+        .unwrap();
     let names = |core: &AuroraCore| -> Vec<(String, u32)> {
-        core.favorite_lists(1).unwrap().into_iter().map(|l| (l.name, l.channels)).collect()
+        core.favorite_lists(1)
+            .unwrap()
+            .into_iter()
+            .map(|l| (l.name, l.channels))
+            .collect()
     };
-    assert_eq!(names(&core).len(), 1, "only the default, empty: {:?}", names(&core));
-    assert!(core.toggle_favorite(1, news[0].id, Some("Evening".into())).unwrap());
-    assert!(core.toggle_favorite(1, sport[0].id, Some("Evening".into())).unwrap());
+    assert_eq!(
+        names(&core).len(),
+        1,
+        "only the default, empty: {:?}",
+        names(&core)
+    );
+    assert!(core
+        .toggle_favorite(1, news[0].id, Some("Evening".into()))
+        .unwrap());
+    assert!(core
+        .toggle_favorite(1, sport[0].id, Some("Evening".into()))
+        .unwrap());
     assert!(names(&core).contains(&("Evening".to_string(), 2)));
-    let evening = core.channels(1, None, true, Some("Evening".into()), 50, 0).unwrap();
-    assert_eq!(evening.iter().map(|c| c.id).collect::<Vec<_>>(), vec![news[0].id, sport[0].id]);
+    let evening = core
+        .channels(1, None, true, Some("Evening".into()), 50, 0)
+        .unwrap();
+    assert_eq!(
+        evening.iter().map(|c| c.id).collect::<Vec<_>>(),
+        vec![news[0].id, sport[0].id]
+    );
     assert!(evening.iter().all(|c| c.favorite));
-    assert!(core.channels(1, None, true, None, 50, 0).unwrap().is_empty(), "not in the default");
-    core.reorder_favorites(1, Some("Evening".into()), vec![sport[0].id, news[0].id]).unwrap();
-    let evening = core.channels(1, None, true, Some("Evening".into()), 50, 0).unwrap();
-    assert_eq!(evening.iter().map(|c| c.id).collect::<Vec<_>>(), vec![sport[0].id, news[0].id]);
-    assert_eq!(core.rename_favorite_list(1, "Evening".into(), "Nights".into()).unwrap(), 2);
+    assert!(
+        core.channels(1, None, true, None, 50, 0)
+            .unwrap()
+            .is_empty(),
+        "not in the default"
+    );
+    core.reorder_favorites(1, Some("Evening".into()), vec![sport[0].id, news[0].id])
+        .unwrap();
+    let evening = core
+        .channels(1, None, true, Some("Evening".into()), 50, 0)
+        .unwrap();
+    assert_eq!(
+        evening.iter().map(|c| c.id).collect::<Vec<_>>(),
+        vec![sport[0].id, news[0].id]
+    );
+    assert_eq!(
+        core.rename_favorite_list(1, "Evening".into(), "Nights".into())
+            .unwrap(),
+        2
+    );
     assert!(names(&core).contains(&("Nights".to_string(), 2)));
     assert_eq!(core.delete_favorite_list(1, "Nights".into()).unwrap(), 2);
     assert_eq!(names(&core).len(), 1);

@@ -58,7 +58,11 @@ screens. The app can:
   Apple TV, up and down on the remote), a number typed on a keypad (up to 4 digits,
   tuned 1.8 s after the last one), and back to the last channel. A banner names where
   it landed, or says there is no such number. The timings and the order up and down
-  walk are Windows', checked by `mirrors.rs`.
+  walk are Windows', checked by `mirrors.rs`,
+- pause and rewind live TV, as Windows does: mpv's own disk cache is the buffer (in the
+  app's Caches folder), up to 1 GB / 30 minutes by default and set in Settings. The bar
+  runs from the oldest moment held to live, says how far behind live you are, and Back
+  to live returns to the edge. The window is Windows' arithmetic (`aurora_core::timeshift`).
 
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
 Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
@@ -66,7 +70,7 @@ under "More", whose navigation bar stacks on the tab's own and doubles every bac
 button. iPad and Apple TV keep both as tabs.
 
 Not yet: profile age and daily limits (being fixed on Windows first; the Apple app will
-follow the same rule), recordings, live pause and rewind, and sync (Phase 3).
+follow the same rule), recordings, and sync (Phase 3).
 
 The app targets **iOS 26 and tvOS 26 only**.
 
