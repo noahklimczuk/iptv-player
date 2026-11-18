@@ -17,12 +17,13 @@
 #   apple/Shared/Core/Generated/aurora_ffi.swift
 #
 # API keys are compiled in from the environment, as on Windows: AURORA_TMDB_KEY (film
-# and series metadata) is read by the core at build time, so a build run with it set
-# ships with that key. CI fills it from the TMDB_API_KEY secret; a local build without
-# it simply asks the viewer for a key in Settings. AURORA_FIREBASE_API_KEY and
-# AURORA_FIREBASE_PROJECT_ID (household sync) work the same way; a build without them
-# offers no sync and Settings says so. They live in panel.env on the Windows machine,
-# never in this public repository.
+# and series metadata) and AURORA_GEMINI_KEY (the "Because of what you watch" rail) are
+# read by the core at build time, so a build run with them set ships with those keys.
+# CI fills them from the TMDB_API_KEY and GEMINI_API_KEY secrets; a local build without
+# them simply asks the viewer for a key in Settings.
+# AURORA_FIREBASE_API_KEY and AURORA_FIREBASE_PROJECT_ID (household sync) work the
+# same way; a build without them offers no sync and Settings says so. They live in
+# panel.env on the Windows machine, never in this public repository.
 #
 # Only touches apple/. The Windows workspace in src-native/ is read (the shared crates
 # are path dependencies) and never written: this workspace has its own target dir.

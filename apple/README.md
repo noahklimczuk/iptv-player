@@ -71,6 +71,17 @@ screens. The app can:
   version, the licence and the third-party notices. Those are this folder's
   `THIRD-PARTY-NOTICES-APPLE.md` (MPVKit's LGPL build, shipped as separate frameworks)
   followed by the shared file, both bundled with the app.
+- Gemini recommendations, as on Windows: a "Because of what you watch" rail on Home,
+  after Continue Watching, built from the watch history and kept only where the library
+  carries the title (`gemini.rs`, on the shared `aurora_ingest::gemini`). The key is the
+  viewer's own (Keychain) or one compiled in from `AURORA_GEMINI_KEY`. Settings →
+  Recommendations has Windows' on/off switch, which is what stops anything being sent,
+  and says why the rail is missing when it is.
+- The assistant, "Ask Aurora": a conversation that looks through the library and hands
+  back titles to play. The loop is Windows' `assistant.rs`, copied into the core because
+  the Tauri host cannot be linked, and `mirrors.rs` compares the copy with the original
+  line by line. It is a tab on Apple TV and iPad, and a button on Home on an iPhone.
+  "Ask about these" on the Gemini rail opens it with those titles.
 - sync with the household's other devices, Windows included (Settings → Sync, Windows'
   Sync panel and wording): set up or join with an email, a password and a passphrase
   (or the recovery code); favourites, My List, watch progress, profiles and playlist

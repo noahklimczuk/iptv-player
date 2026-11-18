@@ -20,10 +20,12 @@
 
 uniffi::setup_scaffolding!();
 
+mod assistant;
 mod catchup;
 mod diagnostics;
 mod error;
 mod filters;
+mod gemini;
 mod guide;
 mod home;
 mod library;
@@ -55,10 +57,12 @@ use aurora_ingest::credentials::CredentialStore;
 use aurora_ingest::http::{HttpClient, HttpConfig};
 use parking_lot::Mutex;
 
+pub use assistant::{AssistantListener, AssistantStatus, ChatItem, ChatMessage, SendResult};
 pub use catchup::CatchupTune;
 pub use diagnostics::{AboutCore, Diagnostics};
 pub use error::{AuroraError, Result};
 pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
+pub use gemini::{AiPicks, GeminiStatus};
 pub use guide::{GuideCell, GuideRow, NowNext, Programme};
 pub use home::{CatalogItem, Rail, RailItem, RailPage, RailProgress};
 pub use library::{Channel, ChannelGroup, FavoriteList};

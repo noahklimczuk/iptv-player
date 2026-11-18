@@ -523,3 +523,87 @@ fn about_states_the_licence_and_releases_page_windows_states() {
         "aurora-app RELEASES_URL changed; update diagnostics::RELEASES_URL"
     );
 }
+
+#[test]
+fn gemini_keeps_its_key_cache_and_switch_where_windows_does() {
+    use crate::gemini::*;
+    for (name, ours) in [
+        ("CREDENTIAL_KEY", CREDENTIAL_KEY),
+        ("CACHE_KEY", CACHE_KEY),
+        ("ENABLED_KEY", ENABLED_KEY),
+    ] {
+        assert_eq!(app_const("gemini.rs", name), format!("{ours:?}"), "{name}");
+    }
+    assert_eq!(app_const("gemini.rs", "FRESH_FOR_SECS"), "6 * 60 * 60");
+    assert_eq!(FRESH_FOR_SECS, 6 * 60 * 60);
+    assert_eq!(
+        app_const("gemini.rs", "HISTORY_FOR_PROMPT"),
+        HISTORY_FOR_PROMPT.to_string()
+    );
+    assert_eq!(
+        app_const("gemini.rs", "DEFAULT_ENABLED"),
+        DEFAULT_ENABLED.to_string()
+    );
+    assert_eq!(app_const("library.rs", "RAIL_SIZE"), RAIL_SIZE.to_string());
+    // The fingerprint is Windows' own, so a cache written by either reads the same.
+    let windows = app_src("gemini.rs");
+    for line in [
+        "let mut hash: u64 = 0xcbf2_9ce4_8422_2325;",
+        "hash = hash.wrapping_mul(0x100_0000_01b3);",
+        "eat(&((w.watched * 100.0).round() as i64).to_le_bytes());",
+    ] {
+        assert!(
+            windows.contains(line),
+            "aurora-app gemini.rs no longer has `{line}`"
+        );
+        assert!(
+            include_str!("gemini.rs").contains(line),
+            "gemini.rs lost `{line}`"
+        );
+    }
+}
+
+#[test]
+fn the_assistant_is_windows_assistant() {
+    // Everything above the Tauri commands is copied; compare it whole, less the lines
+    // the copy had to change (the module note, the imports and the error type).
+    let windows = app_src("assistant.rs");
+    let theirs = &windows[..windows
+        .find("/* ── Commands")
+        .expect("aurora-app assistant.rs has no Commands section")];
+    let ours = include_str!("assistant.rs");
+    let ours = &ours[..ours
+        .find("/* ── The Apple core's commands")
+        .expect("assistant.rs lost its exports")];
+    let normal = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| !l.starts_with("//!"))
+            .filter(|l| !l.starts_with("use crate::"))
+            .map(|l| {
+                l.replace(", uniffi::Record)]", ")]")
+                    .replace(
+                        "return Err(AuroraError::other(\"Ask me something first.\"));",
+                        "return Err(AppError::Other(\"Ask me something first.\".into()));",
+                    )
+                    .replace(
+                        "return Err(AuroraError::Network { message: why });",
+                        "return Err(AppError::Other(why));",
+                    )
+            })
+            .collect()
+    };
+    let (theirs, ours) = (normal(theirs), normal(ours));
+    for (n, (a, b)) in theirs.iter().zip(&ours).enumerate() {
+        assert_eq!(
+            a,
+            b,
+            "assistant.rs differs from aurora-app's at line {}",
+            n + 1
+        );
+    }
+    assert_eq!(
+        theirs.len(),
+        ours.len(),
+        "assistant.rs and aurora-app's differ in length"
+    );
+}

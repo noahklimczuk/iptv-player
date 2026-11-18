@@ -217,6 +217,78 @@ final class AppModel {
         await call(()) { try $0.setMetadataKey(key: key) }
     }
 
+    // MARK: Recommendations (Gemini)
+
+    /// Bumped when the Gemini switch or key changes, or Settings asked for a fresh set,
+    /// so Home fetches its rail again.
+    private(set) var aiVersion = 0
+
+    func geminiStatus() async -> GeminiStatus? {
+        let profile = profileId
+        return await call(nil) { try $0.geminiStatus(profileId: profile) }
+    }
+
+    func setGeminiEnabled(_ on: Bool) async {
+        await call(()) { try $0.setGeminiEnabled(enabled: on) }
+        aiVersion += 1
+    }
+
+    /// Save the viewer's own key, or clear it with "" (the build's key, if any, is used).
+    func setGeminiKey(_ key: String) async {
+        await call(()) { try $0.setGeminiKey(key: key) }
+        aiVersion += 1
+    }
+
+    /// The rail for Home. Quiet, as Windows' `AiRail`: every way this fails (no key,
+    /// nothing watched, a refusal, nothing in this library) is a reason for the rail not
+    /// to be there, and Settings is where it says why.
+    func aiPicks() async -> AiPicks? {
+        guard let core else { return nil }
+        let profile = profileId
+        return try? await Task.detached { try core.aiPicks(profileId: profile, refresh: false) }.value
+    }
+
+    /// A fresh set for Settings, with the error to show in place.
+    func askForAiPicks() async -> Result<AiPicks, Error> {
+        guard let core else { return .failure(AuroraError.Other(message: "The library is not open.")) }
+        let profile = profileId
+        let result = await Task.detached { Result { try core.aiPicks(profileId: profile, refresh: true) } }.value
+        if case .success = result { aiVersion += 1 }
+        return result
+    }
+
+    // MARK: Assistant
+
+    /// A question to open the assistant with ("Ask about these" on the Gemini rail),
+    /// taken by the assistant screen once it has asked it.
+    var assistantQuestion: String?
+
+    func assistantStatus() async -> AssistantStatus? {
+        let profile = profileId
+        return await call(nil) { try $0.assistantStatus(profileId: profile) }
+    }
+
+    func assistantHistory() async -> [ChatMessage] {
+        let profile = profileId
+        return await call([]) { $0.assistantHistory(profileId: profile) }
+    }
+
+    func assistantClear() async {
+        let profile = profileId
+        await call(()) { $0.assistantClear(profileId: profile) }
+    }
+
+    /// Ask the assistant. The error comes back rather than going to the alert: the
+    /// screen says it in the thread, as Windows does.
+    func assistantSend(_ text: String, step: @escaping @MainActor (String) -> Void) async -> Result<SendResult, Error> {
+        guard let core else { return .failure(AuroraError.Other(message: "The library is not open.")) }
+        let profile = profileId
+        let listener = AssistantSteps(step)
+        return await Task.detached {
+            Result { try core.assistantSend(profileId: profile, text: text, listener: listener) }
+        }.value
+    }
+
     func credits(_ kind: ListKind, id: Int64) async -> [Credit] {
         await call([]) { try $0.credits(kind: kind, id: id) }
     }
@@ -636,5 +708,14 @@ private final class CoreLog: LogSink {
         case 1: log.warning("\(text, privacy: .public)")
         default: log.info("\(text, privacy: .public)")
         }
+    }
+}
+
+/// The assistant's lookups as they happen, handed to the screen on the main actor.
+private final class AssistantSteps: AssistantListener, @unchecked Sendable {
+    private let onStep: @MainActor (String) -> Void
+    init(_ onStep: @escaping @MainActor (String) -> Void) { self.onStep = onStep }
+    func step(text: String) {
+        Task { @MainActor in onStep(text) }
     }
 }
