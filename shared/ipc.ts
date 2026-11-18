@@ -587,6 +587,67 @@ export interface UpdateStatus {
   kind: 'installer' | 'portable';
 }
 
+/* ── Sync (docs/APPLE_PORT_AND_SYNC.md §3) ─────────────────────────────── */
+
+/** What stopped the last sync, in terms the Sync panel can act on. */
+export type SyncProblem =
+  /** No network, or the service was down. Changes wait here and nothing is lost. */
+  | { kind: 'offline'; message: string }
+  /** The free plan's daily quota is spent. It resets at midnight Pacific time. */
+  | { kind: 'quota' }
+  /** The account's session was revoked or expired. Needs the password again. */
+  | { kind: 'signInAgain' }
+  | { kind: 'failed'; message: string };
+
+export interface SyncStatus {
+  /**
+   * Whether this build knows which Firebase project to use. A build compiled without
+   * one offers no sync, and the panel says so rather than showing a form that cannot work.
+   */
+  available: boolean;
+  signedIn: boolean;
+  email: string | null;
+  deviceName: string | null;
+  deviceId: string | null;
+  /** Whether this device's first sync has finished and its changes are being captured. */
+  joined: boolean;
+  /** Changes made here and not sent yet. */
+  pending: number;
+  /**
+   * Changes from other devices that name something this one does not have yet — a
+   * favourite on a channel from a playlist not imported here. Applied once it is.
+   */
+  parked: number;
+  /** Unix seconds. */
+  lastSyncAt: number | null;
+  problem: SyncProblem | null;
+  /** False where there is no OS credential store, so a sign-in lasts until Aurora closes. */
+  secretsPersistent: boolean;
+}
+
+/** What one sync round did. */
+export interface SyncRound {
+  pushed: number;
+  pulled: number;
+  applied: number;
+  parked: number;
+  /** Records this version could not read: written by a newer Aurora, or damaged. */
+  undecodable: number;
+  adopted: number;
+}
+
+/** What signing in, or creating the account, did. */
+export interface SyncJoined {
+  /**
+   * The recovery code, only when this device just set the household's sync up. Shown
+   * once; afterwards only to someone who enters the passphrase (`sync.recoveryCode`).
+   */
+  recoveryCode: string | null;
+  /** The first sync, or null when it did not finish. The device is signed in either way. */
+  report: SyncRound | null;
+  problem: SyncProblem | null;
+}
+
 /**
  * A provider's settings including its password, for the edit form.
  *
@@ -1879,6 +1940,47 @@ export interface Commands {
    * a verified download is waiting, and refuses while a recording is in progress.
    */
   'updates.install': () => void;
+
+  /* ── Sync ─────────────────────────────────────────────────────────────── */
+
+  /** Read on a read-only connection, so it answers at once even mid-sync. */
+  'sync.status': () => SyncStatus;
+  /** What the panel suggests calling this device: the computer's name. */
+  'sync.deviceName': () => string;
+  /**
+   * Create the household's sync account, set up its encryption, and send this device's
+   * library. The passphrase never leaves the device; it unlocks the encryption key on
+   * every other device that joins. At least eight characters.
+   */
+  'sync.createAccount': (args: {
+    email: string;
+    password: string;
+    passphrase: string;
+    deviceName: string;
+  }) => SyncJoined;
+  /**
+   * Sign this device in to the household's account. Give the passphrase, or the
+   * recovery code if the passphrase is forgotten. Signing in again to the account
+   * already here is how "Sign in again" works, and keeps everything.
+   */
+  'sync.signIn': (args: {
+    email: string;
+    password: string;
+    passphrase?: string;
+    recoveryCode?: string;
+    deviceName: string;
+  }) => SyncJoined;
+  /** A round now, whatever the schedule says. */
+  'sync.now': () => SyncRound;
+  /**
+   * Delete everything the household has on the server and upload this device's library
+   * in its place. Other devices keep their own libraries.
+   */
+  'sync.reset': () => SyncRound;
+  /** Stop syncing here. The library is untouched; only what sync knew is forgotten. */
+  'sync.signOut': () => void;
+  /** The recovery code again, for someone who knows the passphrase. Works offline. */
+  'sync.recoveryCode': (args: { passphrase: string }) => string;
 }
 
 export type CommandName = keyof Commands;

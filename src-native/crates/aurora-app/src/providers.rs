@@ -1092,6 +1092,10 @@ pub fn refresh_provider(
     // The lock has to be gone before this: it starts a thread that takes the same one.
     drop(db);
 
+    // Records from other devices that named something this library did not have yet
+    // are parked; an import is when they may finally have somewhere to go.
+    services.sync.wake();
+
     // Posters, cast and ratings for everything just imported. Enrichment was only ever
     // started by a button in Settings, so a library imported through the wizard was a
     // wall of grey rectangles until somebody found that screen — which reads as a

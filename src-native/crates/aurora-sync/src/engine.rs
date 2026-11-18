@@ -30,12 +30,15 @@ use crate::transport::{Envelope, SyncTransport};
 /// Firestore's commit limit, and a sensible page.
 pub const BATCH: usize = 500;
 
-const CURSOR: &str = "cursor";
-const DEVICE: &str = "device";
+/// Where the pull cursor is kept in `sync_state`.
+pub const CURSOR: &str = "cursor";
+/// This device's id in `sync_state`, set when it joins.
+pub const DEVICE: &str = "device";
 const APPLYING: &str = "applying";
 
 /// What one sync did. Feeds the Sync panel and Diagnostics.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Report {
     pub pushed: usize,
     pub pulled: usize,
@@ -103,6 +106,10 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
 
     pub fn device(&self) -> &str {
         &self.device
+    }
+
+    pub fn transport(&self) -> &T {
+        &self.transport
     }
 
     /// First sync on this device: take in what the household already has, then send

@@ -17,6 +17,7 @@ import type {
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
+import type { SyncJoined, SyncRound, SyncStatus } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
 import * as fx from './fixtures';
 
@@ -1710,6 +1711,81 @@ export function onArtworkProgress(fn: (p: { done: number; total: number }) => vo
   return () => artworkListeners.delete(fn);
 }
 
+/* ── Sync ──────────────────────────────────────────────────────────────────── */
+
+/**
+ * `?noSync` — model a build compiled without a Firebase project, which offers no sync.
+ * A compile-time fact on the host (`aurora_app::sync::config`), so a query flag here, like
+ * `?builtInKey`.
+ */
+const SYNC_AVAILABLE =
+  !(typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).has('noSync'));
+/** `?syncOffline` — every sync call fails the way it does with no network. */
+const SYNC_OFFLINE =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('syncOffline');
+
+/** The household on the "server": accounts by email, and the one vault. */
+const mockSyncAccounts = new Map<string, { password: string; passphrase: string; code: string }>([
+  // Another device already set this household up, so "Sign in" has something to join.
+  ['home@example.com', {
+    password: 'hunter22', passphrase: 'correct horse',
+    code: 'ABCDE-FGHJK-MNPQR-STVWX-YZ012-34567-89ABC-DEFGH-JKMNP-QRSTV-WXYZ0',
+  }],
+]);
+let mockSync: {
+  email: string; deviceName: string; lastSyncAt: number | null; pending: number;
+} | null = null;
+
+const mockRecoveryCode = () =>
+  Array.from({ length: 11 }, () =>
+    Array.from({ length: 5 }, () => '0123456789ABCDEFGHJKMNPQRSTVWXYZ'[Math.floor(Math.random() * 32)]).join(''),
+  ).join('-');
+
+const mockSyncReport = (pushed: number): SyncRound => ({
+  pushed, pulled: 0, applied: 0, parked: 0, undecodable: 0, adopted: 0,
+});
+
+function mockSyncStatus(): SyncStatus {
+  return {
+    available: SYNC_AVAILABLE,
+    signedIn: mockSync !== null,
+    email: mockSync?.email ?? null,
+    deviceName: mockSync?.deviceName ?? null,
+    deviceId: mockSync ? 'a1b2c3d4e5f60718' : null,
+    joined: mockSync !== null,
+    pending: mockSync?.pending ?? 0,
+    parked: 0,
+    lastSyncAt: mockSync?.lastSyncAt ?? null,
+    problem: mockSync && SYNC_OFFLINE
+      ? { kind: 'offline', message: 'no network' }
+      : null,
+    secretsPersistent: false,
+  };
+}
+
+function mockSyncJoin(email: string, deviceName: string, code: string | null): SyncJoined {
+  mockSync = {
+    email: email.trim(),
+    deviceName: deviceName.trim() || 'This device',
+    lastSyncAt: SYNC_OFFLINE ? null : Math.floor(Date.now() / 1000),
+    pending: 0,
+  };
+  return {
+    recoveryCode: code,
+    report: SYNC_OFFLINE ? null : mockSyncReport(42),
+    problem: SYNC_OFFLINE ? { kind: 'offline', message: 'no network' } : null,
+  };
+}
+
+function mockSyncAvailable() {
+  if (!SYNC_AVAILABLE) throw new Error('Sync is not available in this build of Aurora.');
+  if (SYNC_OFFLINE) {
+    throw new Error('Could not reach the sync service. Check the connection and try again.');
+  }
+}
+
 /* ── Command dispatch ──────────────────────────────────────────────────────── */
 
 type Handler<K extends CommandName> = (
@@ -2955,6 +3031,66 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     // host to hand it to, and saying so through the panel's error path is more honest
     // than pretending the download state changed.
     throw new Error('The installer would run here, and Aurora would close for it.');
+  },
+
+  'sync.status': () => mockSyncStatus(),
+  'sync.deviceName': () => 'LIVING-ROOM-PC',
+  'sync.createAccount': ({ email, password, passphrase, deviceName }) => {
+    mockSyncAvailable();
+    const key = email.trim().toLowerCase();
+    if (!key.includes('@')) throw new Error('That email address does not look right.');
+    if (password.length < 6) throw new Error('The password needs at least six characters.');
+    if ([...passphrase].length < 8) {
+      throw new Error('The sync passphrase needs at least 8 characters.');
+    }
+    if (mockSyncAccounts.has(key)) {
+      throw new Error('There is already a sync account for that email. Sign in instead.');
+    }
+    const code = mockRecoveryCode();
+    mockSyncAccounts.set(key, { password, passphrase, code });
+    return mockSyncJoin(email, deviceName, code);
+  },
+  'sync.signIn': ({ email, password, passphrase, recoveryCode, deviceName }) => {
+    mockSyncAvailable();
+    const account = mockSyncAccounts.get(email.trim().toLowerCase());
+    if (!account || account.password !== password) {
+      throw new Error('That email and password do not match a sync account.');
+    }
+    if (recoveryCode?.trim()) {
+      if (recoveryCode.trim().toUpperCase() !== account.code) {
+        throw new Error("That recovery code does not unlock this household's sync.");
+      }
+    } else if (passphrase !== account.passphrase) {
+      throw new Error(
+        "That passphrase does not match the one this household's sync was set up with",
+      );
+    }
+    return mockSyncJoin(email, deviceName, null);
+  },
+  'sync.now': () => {
+    mockSyncAvailable();
+    if (!mockSync) throw new Error('This device is not signed in to sync.');
+    const pushed = mockSync.pending;
+    mockSync.pending = 0;
+    mockSync.lastSyncAt = Math.floor(Date.now() / 1000);
+    return mockSyncReport(pushed);
+  },
+  'sync.reset': () => {
+    mockSyncAvailable();
+    if (!mockSync) throw new Error('This device is not signed in to sync.');
+    mockSync.lastSyncAt = Math.floor(Date.now() / 1000);
+    return mockSyncReport(42);
+  },
+  'sync.signOut': () => { mockSync = null; },
+  'sync.recoveryCode': ({ passphrase }) => {
+    const account = mockSync && mockSyncAccounts.get(mockSync.email.toLowerCase());
+    if (!account) throw new Error('This device is not signed in to sync.');
+    if (passphrase !== account.passphrase) {
+      throw new Error(
+        "That passphrase does not match the one this household's sync was set up with",
+      );
+    }
+    return account.code;
   },
 
   'providers.list': () => fx.providers,

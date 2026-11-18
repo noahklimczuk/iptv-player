@@ -129,6 +129,7 @@ dependencies = [
  "aurora-core",
  "aurora-db",
  "aurora-ingest",
+ "aurora-sync",
  "aurora-video",
  "base64 0.22.1",
  "parking_lot",

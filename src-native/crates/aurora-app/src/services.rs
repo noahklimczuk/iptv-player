@@ -46,6 +46,8 @@ pub struct Services {
     /// The home feed last built, so its rails can be paged without rebuilding them
     /// (`crate::home`). Never held while `db` is being locked.
     pub home: Arc<Mutex<Option<crate::home::HomeCache>>>,
+    /// Cross-device sync (`crate::sync`). Has its own connection to the library.
+    pub sync: Arc<crate::sync::Sync>,
     pub data_dir: PathBuf,
     /// What opening the library took. `Replaced` means the viewer's favourites, watch
     /// progress and recordings metadata are gone and a refresh is needed, which is
@@ -188,6 +190,11 @@ impl Services {
         ));
 
         let http = Arc::new(http);
+        let sync = Arc::new(crate::sync::Sync::new(
+            data_dir.join("library.db"),
+            &db.lock(),
+            Arc::clone(&credentials),
+        ));
 
         Ok(Self {
             mosaic,
@@ -195,6 +202,7 @@ impl Services {
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             updates: Arc::new(crate::updates::Downloads::default()),
             home: Arc::new(Mutex::new(None)),
+            sync,
             dvr,
             db,
             readers,

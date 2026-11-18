@@ -123,6 +123,20 @@ pub fn open_reader(path: impl AsRef<Path>) -> Result<Connection> {
     Ok(conn)
 }
 
+/// A second writer on a library that [`open`] has already opened and migrated.
+///
+/// For sync (`aurora-sync`), whose rounds wait on the network between short
+/// transactions: on a connection of its own it never holds the app's writer while a
+/// request is in flight. Only the pragmas -- no migration, no backfill, no checkpoint,
+/// which are the first opener's job and would wait on the app's readers. SQLite
+/// serialises the two writers itself; rusqlite's five-second busy timeout covers the
+/// short waits that leaves.
+pub fn open_secondary(path: impl AsRef<Path>) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    configure(&conn)?;
+    Ok(conn)
+}
+
 /// In-memory database, for tests.
 pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;

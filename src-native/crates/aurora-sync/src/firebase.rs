@@ -105,7 +105,9 @@ pub trait Http: Send + Sync {
     ) -> Result<Reply>;
 }
 
-/// The production [`Http`]: blocking reqwest with rustls.
+/// The production [`Http`]: blocking reqwest with rustls. Cheap to clone: the client is
+/// reference-counted.
+#[derive(Clone)]
 pub struct ReqwestHttp {
     client: reqwest::blocking::Client,
 }

@@ -10,6 +10,7 @@ import { DiagnosticsPanel } from '@/features/settings/DiagnosticsPanel';
 import { FilterPanel } from '@/features/settings/FilterPanel';
 import { GeminiPanel } from '@/features/settings/GeminiPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
+import { SyncPanel } from '@/features/settings/SyncPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
 import { RefreshButton } from '@/features/settings/RefreshButton';
 import { TimeshiftPanel } from '@/features/settings/TimeshiftPanel';
@@ -259,6 +260,10 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
         <Field label="24-hour clock" hint="Off shows times as 9:30 PM rather than 21:30.">
           <Toggle label="24-hour clock" on={ui.use24h} onToggle={ui.toggle24h} />
         </Field>
+      </Section>
+
+      <Section title="Sync">
+        <SyncPanel />
       </Section>
 
       <Section title="Artwork and metadata">

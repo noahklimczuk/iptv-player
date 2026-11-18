@@ -12,6 +12,7 @@ tauri-build = { version = "2", features = [] }
 aurora-core.workspace = true
 aurora-db.workspace = true
 aurora-ingest.workspace = true
+aurora-sync.workspace = true
 aurora-video.workspace = true
 serde.workspace = true
 serde_json.workspace = true
