@@ -93,7 +93,7 @@ final class PlayerSession {
     private func tick() {
         // Controls fade after a while untouched (`useChrome`), unless paused or a menu is
         // open: then the viewer is looking at them.
-        if controlsVisible, panel == nil, !state.paused, status == .playing || status == nil,
+        if controlsVisible, panel == nil, !state.paused, state.loaded, !holdsControls,
            Date().timeIntervalSince(lastActivity) * 1000 >= Double(menus.hideControlsAfterMs) {
             controlsVisible = false
         }
@@ -105,6 +105,14 @@ final class PlayerSession {
         if let deadline = upNextDeadline, Date() >= deadline {
             upNextDeadline = nil
             playNext()
+        }
+    }
+
+    /// Opening or failed: the controls stay, there is nothing else to look at.
+    private var holdsControls: Bool {
+        switch status {
+        case .opening?, .failed?: true
+        case .playing?, .noPicture?, nil: false
         }
     }
 

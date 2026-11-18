@@ -51,6 +51,9 @@ struct PlayerOverlay: View {
                 }
             }
         }
+        // Over a picture, whatever the rest of the app is set to: a light menu on a film
+        // is a lamp switched on in the dark.
+        .environment(\.colorScheme, .dark)
         .animation(.easeInOut(duration: 0.2), value: session.controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: session.panel)
         #if os(tvOS)
@@ -83,7 +86,7 @@ struct PlayerOverlay: View {
         VStack {
             HStack {
                 switch session.status {
-                case .opening(let source, let total):
+                case .opening(let source, let total) where !session.controlsVisible:
                     Label(total > 1
                           ? "Opening \(session.item.title) (source \(source) of \(total))"
                           : "Opening \(session.item.title)",
@@ -105,21 +108,25 @@ struct PlayerOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// Skip and Up Next, bottom right, above the controls when they are up.
+    /// Skip and Up Next, bottom right, one stack above where the controls sit (`App.tsx`).
+    /// Both can be live during the credits, so they queue rather than overlap. The stack
+    /// stays put when the controls fade: one that dropped into their place would take a
+    /// tap meant for a control that had just gone.
     private var corner: some View {
-        VStack(alignment: .trailing) {
+        VStack(alignment: .trailing, spacing: 12) {
             Spacer()
             if session.panel == nil {
                 if session.upNextVisible, let next = session.aids?.nextEpisode {
                     UpNextCard(session: session, episode: next, focus: focus)
-                } else if let marker = session.activeMarker {
+                }
+                if let marker = session.activeMarker {
                     SkipButton(session: session, marker: marker, focus: focus)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(edge)
-        .padding(.bottom, session.controlsVisible ? chromeHeight : 0)
+        .padding(.bottom, chromeHeight)
     }
 
     private var chromeHeight: CGFloat {
@@ -156,8 +163,15 @@ private struct PlayerChrome: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(session.item.title).font(.title3.bold()).lineLimit(1)
-                    if case .noPicture(let message) = session.status {
+                    switch session.status {
+                    case .noPicture(let message):
                         Label(message, systemImage: "speaker.wave.2").font(.caption)
+                    case .opening(let source, let total):
+                        Label(total > 1 ? "Opening (source \(source) of \(total))…" : "Opening…",
+                              systemImage: "dot.radiowaves.left.and.right")
+                            .font(.caption)
+                    default:
+                        EmptyView()
                     }
                 }
                 Spacer()
@@ -288,6 +302,8 @@ private struct ProgressRow: View {
                 }
             )
             .tint(.white)
+            // The unplayed part of the track is drawn dark, which vanishes on black.
+            .background { Capsule().fill(.white.opacity(0.3)).frame(height: 4) }
             .accessibilityLabel("Position")
         } else {
             ProgressView(value: min(session.state.position, session.state.duration), total: session.state.duration)
@@ -338,9 +354,10 @@ private struct WatchPanel: View {
             .padding(padding)
             .frame(width: width)
             .frame(maxHeight: .infinity)
-            .background(.regularMaterial)
+            // The panel's glass runs to the edges; what is on it stays clear of the
+            // status bar and the Dynamic Island.
+            .background { Rectangle().fill(.regularMaterial).ignoresSafeArea() }
         }
-        .ignoresSafeArea(edges: .vertical)
     }
 
     #if os(tvOS)

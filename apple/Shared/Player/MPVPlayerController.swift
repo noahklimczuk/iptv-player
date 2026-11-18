@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Libmpv
 import UIKit
@@ -99,6 +100,7 @@ final class MPVPlayerController: UIViewController {
         metalLayer.framebufferOnly = true
         metalLayer.backgroundColor = UIColor.black.cgColor
         view.layer.addSublayer(metalLayer)
+        startAudioSession()
         createMpv()
     }
 
@@ -469,6 +471,18 @@ final class MPVPlayerController: UIViewController {
             // Ranking is a hint for the next tune; failing to record it must not stop
             // this one.
             NSLog("could not record the source outcome: %@", error.viewerMessage)
+        }
+    }
+
+    /// A film app's audio session: plays with the silent switch on, and mpv's audio
+    /// output (AudioUnit) has a session to open against.
+    private func startAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+        } catch {
+            NSLog("could not start the audio session: %@", error.localizedDescription)
         }
     }
 
