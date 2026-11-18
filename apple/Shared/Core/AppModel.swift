@@ -59,6 +59,9 @@ final class AppModel {
     init() {
         do {
             core = try AuroraCore.open(dataDir: Self.dataDirectory().path, secrets: KeychainSecretStore())
+            // The rewind buffer in Caches: not backed up, and the system's to reclaim.
+            let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            core?.useBufferFolder(path: caches.appendingPathComponent("timeshift", isDirectory: true).path)
         } catch {
             core = nil
             self.error = "Aurora could not open its library. \(error.viewerMessage)"

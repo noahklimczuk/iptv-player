@@ -342,7 +342,14 @@ impl AuroraCore {
     fn facets(&self, kind: Kind, browse: Browse) -> Result<BrowseFacets> {
         let db = self.db.lock();
         // The letter counts too: the total is of what is on screen.
-        let q = browse_query(&db, Browse { limit: 1, offset: 0, ..browse })?;
+        let q = browse_query(
+            &db,
+            Browse {
+                limit: 1,
+                offset: 0,
+                ..browse
+            },
+        )?;
         let shelf = |c: library::Category| Shelf {
             name: c.name,
             count: c.count,
@@ -471,7 +478,9 @@ fn browse_letter(raw: &str) -> Option<String> {
     if first == '#' {
         return Some("#".into());
     }
-    first.is_alphabetic().then(|| first.to_uppercase().to_string())
+    first
+        .is_alphabetic()
+        .then(|| first.to_uppercase().to_string())
 }
 
 #[cfg(test)]
@@ -532,20 +541,34 @@ mod tests {
             ],
         );
         let titles = |b: Browse| -> Vec<String> {
-            let mut t: Vec<_> = core.movies(b).unwrap().into_iter().map(|m| m.title).collect();
+            let mut t: Vec<_> = core
+                .movies(b)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.title)
+                .collect();
             t.sort();
             t
         };
 
-        let drama = Browse { genre: Some("Drama".into()), ..browse() };
+        let drama = Browse {
+            genre: Some("Drama".into()),
+            ..browse()
+        };
         assert_eq!(titles(drama.clone()), ["Arrival", "Brooklyn"]);
         assert_eq!(core.movie_facets(drama).unwrap().total, 2);
 
-        let a = Browse { letter: Some("a".into()), ..browse() };
+        let a = Browse {
+            letter: Some("a".into()),
+            ..browse()
+        };
         assert_eq!(titles(a.clone()), ["Alien", "Arrival"]);
         assert_eq!(core.movie_facets(a).unwrap().total, 2);
 
-        let hash = Browse { letter: Some("#".into()), ..browse() };
+        let hash = Browse {
+            letter: Some("#".into()),
+            ..browse()
+        };
         assert_eq!(titles(hash), ["9 to 5"]);
 
         let facets = core.movie_facets(browse()).unwrap();

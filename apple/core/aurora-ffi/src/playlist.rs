@@ -166,11 +166,19 @@ pub fn channel_number_from_typed(input: String) -> Option<u32> {
 #[uniffi::export]
 impl AuroraCore {
     /// A page of the editor's list, hidden rows included unless asked otherwise.
-    pub fn playlist_page(&self, query: PlaylistQuery, limit: u32, offset: u32) -> Result<PlaylistPage> {
+    pub fn playlist_page(
+        &self,
+        query: PlaylistQuery,
+        limit: u32,
+        offset: u32,
+    ) -> Result<PlaylistPage> {
         let q = query.query(limit, offset);
         let db = self.db.lock();
         Ok(PlaylistPage {
-            rows: playlist::list(&db, &q)?.into_iter().map(Into::into).collect(),
+            rows: playlist::list(&db, &q)?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             total: playlist::count(&db, &q)?,
         })
     }
@@ -192,7 +200,12 @@ impl AuroraCore {
     }
 
     /// Hide or show these entries. Returns how many changed.
-    pub fn playlist_set_hidden(&self, kind: LibraryKind, ids: Vec<i64>, hidden: bool) -> Result<u32> {
+    pub fn playlist_set_hidden(
+        &self,
+        kind: LibraryKind,
+        ids: Vec<i64>,
+        hidden: bool,
+    ) -> Result<u32> {
         let mut db = self.db.lock();
         Ok(playlist::set_hidden_many(&mut db, kind.into(), &ids, hidden)? as u32)
     }
@@ -241,6 +254,10 @@ mod tests {
         assert_eq!(typed("1e3".into()), None);
         assert_eq!(typed("-5".into()), None);
         assert_eq!(typed("٣".into()), None, "other scripts' digits are refused");
-        assert_eq!(typed("99999999999".into()), None, "more than the column holds");
+        assert_eq!(
+            typed("99999999999".into()),
+            None,
+            "more than the column holds"
+        );
     }
 }

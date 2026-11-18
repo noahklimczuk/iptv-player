@@ -28,7 +28,10 @@ pub struct ZapRules {
 
 #[uniffi::export]
 pub fn zap_rules() -> ZapRules {
-    ZapRules { digit_timeout_ms: DIGIT_TIMEOUT_MS, max_digits: MAX_DIGITS }
+    ZapRules {
+        digit_timeout_ms: DIGIT_TIMEOUT_MS,
+        max_digits: MAX_DIGITS,
+    }
 }
 
 /// Add a digit to what has been typed so far, as Windows' `pushDigit` does: past
@@ -82,7 +85,10 @@ impl AuroraCore {
     /// `from` that isn't in that list (or none) starts from outside it.
     pub fn channel_step(&self, from: Option<i64>, forward: bool) -> Result<Option<Channel>> {
         let db = self.db.lock();
-        let filter = ChannelFilter { library: LibraryFilter::load(&db)?, ..Default::default() };
+        let filter = ChannelFilter {
+            library: LibraryFilter::load(&db)?,
+            ..Default::default()
+        };
         let rows = channels::list(&db, &filter)?;
         let current = from.and_then(|id| rows.iter().position(|r| r.id == id));
         Ok(step_index(rows.len(), current, forward)
@@ -96,7 +102,9 @@ mod tests {
     use super::*;
     use aurora_core::model::PlaylistEntry;
 
-    fn seeded(numbers: &[Option<u32>]) -> (std::sync::Arc<AuroraCore>, tempfile::TempDir, Vec<i64>) {
+    fn seeded(
+        numbers: &[Option<u32>],
+    ) -> (std::sync::Arc<AuroraCore>, tempfile::TempDir, Vec<i64>) {
         let (core, dir) = crate::testing::core();
         {
             let mut db = core.db.lock();
@@ -110,13 +118,19 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, n)| {
-                    let mut e = PlaylistEntry::new(&format!("Channel {i}"), &format!("https://example.com/{i}.ts"));
+                    let mut e = PlaylistEntry::new(
+                        &format!("Channel {i}"),
+                        &format!("https://example.com/{i}.ts"),
+                    );
                     e.number = *n;
                     e
                 })
                 .collect();
-            let batch: Vec<(String, &PlaylistEntry)> =
-                entries.iter().enumerate().map(|(i, e)| (format!("k{i}"), e)).collect();
+            let batch: Vec<(String, &PlaylistEntry)> = entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (format!("k{i}"), e))
+                .collect();
             channels::upsert_batch(&mut db, 1, &batch, 0).unwrap();
         }
         // In the listed order, which is what up and down walk.

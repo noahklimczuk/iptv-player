@@ -39,6 +39,7 @@ mod search;
 mod secrets;
 mod series;
 mod sleep;
+mod timeshift;
 mod vod;
 mod zap;
 
@@ -70,9 +71,12 @@ pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};
 pub use series::{ListingListener, ListingReport};
 pub use sleep::{SleepAfter, SleepPlaying, SleepState};
+pub use timeshift::{
+    RewindBudget, RewindReading, RewindWindow, TimeshiftChange, TimeshiftChoices, TimeshiftSettings,
+};
 pub use vod::{
-    Browse, BrowseFacets, BrowseSort, Episode, Movie, Series, SeriesResume, Shelf, VodKind, VodTune,
-    WatchProgress,
+    Browse, BrowseFacets, BrowseSort, Episode, Movie, Series, SeriesResume, Shelf, VodKind,
+    VodTune, WatchProgress,
 };
 
 /// One open library, and everything needed to fill it and play from it.
@@ -94,6 +98,8 @@ pub struct AuroraCore {
     home: Mutex<Option<home::HomeCache>>,
     /// The player's sleep timer (`sleep.rs`).
     sleep: Mutex<sleep::SleepTimer>,
+    /// Where the rewind buffer goes (`timeshift.rs`); beside the library until told.
+    buffer_dir: Mutex<Option<PathBuf>>,
 }
 
 #[uniffi::export]
@@ -125,6 +131,7 @@ impl AuroraCore {
             data_dir,
             home: Mutex::new(None),
             sleep: Mutex::new(sleep::SleepTimer::default()),
+            buffer_dir: Mutex::new(None),
         }))
     }
 

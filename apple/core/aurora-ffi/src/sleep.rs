@@ -28,7 +28,9 @@ pub enum SleepAfter {
     EndOfProgramme,
     /// When the film or episode ends, from its duration and the speed.
     EndOfEpisode,
-    Minutes { minutes: u32 },
+    Minutes {
+        minutes: u32,
+    },
 }
 
 /// What the player shows about the timer.
@@ -90,34 +92,40 @@ impl SleepTimer {
 
     /// Arm it (H19). Refuses, in words, when there is nothing to go on or the time asked
     /// for has already passed.
-    fn set(&mut self, after: SleepAfter, now: i64, playing: Playing) -> std::result::Result<SleepState, String> {
-        let at = match after {
-            SleepAfter::Minutes { minutes } => {
-                if minutes == 0 || minutes > MAX_MINUTES {
-                    return Err(format!(
-                        "A sleep timer runs for 1 to {MAX_MINUTES} minutes, not {minutes}."
-                    ));
+    fn set(
+        &mut self,
+        after: SleepAfter,
+        now: i64,
+        playing: Playing,
+    ) -> std::result::Result<SleepState, String> {
+        let at =
+            match after {
+                SleepAfter::Minutes { minutes } => {
+                    if minutes == 0 || minutes > MAX_MINUTES {
+                        return Err(format!(
+                            "A sleep timer runs for 1 to {MAX_MINUTES} minutes, not {minutes}."
+                        ));
+                    }
+                    now + i64::from(minutes) * 60
                 }
-                now + i64::from(minutes) * 60
-            }
-            SleepAfter::EndOfProgramme => playing.programme_ends.ok_or_else(|| {
-                "The guide has no listing for what is on, so Aurora cannot tell when it ends."
-                    .to_string()
-            })?,
-            SleepAfter::EndOfEpisode => {
-                let left = playing.remaining_secs.filter(|s| s.is_finite()).ok_or_else(|| {
+                SleepAfter::EndOfProgramme => playing.programme_ends.ok_or_else(|| {
+                    "The guide has no listing for what is on, so Aurora cannot tell when it ends."
+                        .to_string()
+                })?,
+                SleepAfter::EndOfEpisode => {
+                    let left = playing.remaining_secs.filter(|s| s.is_finite()).ok_or_else(|| {
                     "This stream does not say how long it is, so Aurora cannot tell when it \
                      ends."
                         .to_string()
                 })?;
-                let speed = if playing.speed.is_finite() && playing.speed > 0.0 {
-                    playing.speed
-                } else {
-                    1.0
-                };
-                now + (left / speed).ceil() as i64
-            }
-        };
+                    let speed = if playing.speed.is_finite() && playing.speed > 0.0 {
+                        playing.speed
+                    } else {
+                        1.0
+                    };
+                    now + (left / speed).ceil() as i64
+                }
+            };
         if at <= now {
             return Err("That has already ended.".into());
         }
@@ -188,7 +196,10 @@ impl AuroraCore {
             remaining_secs: playing.remaining_secs,
             speed: playing.speed,
         };
-        self.sleep.lock().set(after, now, playing).map_err(AuroraError::other)
+        self.sleep
+            .lock()
+            .set(after, now, playing)
+            .map_err(AuroraError::other)
     }
 
     pub fn sleep_cancel(&self) -> SleepState {
@@ -196,7 +207,10 @@ impl AuroraCore {
     }
 
     pub fn sleep_extend(&self, minutes: u32) -> Result<SleepState> {
-        self.sleep.lock().extend(minutes, now_unix()).map_err(AuroraError::other)
+        self.sleep
+            .lock()
+            .extend(minutes, now_unix())
+            .map_err(AuroraError::other)
     }
 
     /// True once, when the deadline has come: stop playback then.
@@ -229,9 +243,14 @@ mod tests {
     #[test]
     fn h19_end_of_programme_needs_the_guide() {
         let mut t = SleepTimer::default();
-        assert!(t.set(SleepAfter::EndOfProgramme, NOW, Playing::default()).is_err());
+        assert!(t
+            .set(SleepAfter::EndOfProgramme, NOW, Playing::default())
+            .is_err());
         assert!(t.armed.is_none(), "nothing to go on armed something");
-        let on = Playing { programme_ends: Some(NOW + 1200), ..Playing::default() };
+        let on = Playing {
+            programme_ends: Some(NOW + 1200),
+            ..Playing::default()
+        };
         let s = t.set(SleepAfter::EndOfProgramme, NOW, on).unwrap();
         assert_eq!(s.at_unix, Some(NOW + 1200));
         assert_eq!(s.after, Some(SleepAfter::EndOfProgramme));
@@ -240,16 +259,25 @@ mod tests {
     #[test]
     fn h19_end_of_episode_from_its_duration_and_speed() {
         let mut t = SleepTimer::default();
-        let p = Playing { remaining_secs: Some(600.0), speed: 2.0, ..Playing::default() };
+        let p = Playing {
+            remaining_secs: Some(600.0),
+            speed: 2.0,
+            ..Playing::default()
+        };
         let s = t.set(SleepAfter::EndOfEpisode, NOW, p).unwrap();
         assert_eq!(s.at_unix, Some(NOW + 300));
-        assert!(t.set(SleepAfter::EndOfEpisode, NOW, Playing::default()).is_err());
+        assert!(t
+            .set(SleepAfter::EndOfEpisode, NOW, Playing::default())
+            .is_err());
     }
 
     #[test]
     fn h19_a_time_already_past_is_not_a_deadline() {
         let mut t = SleepTimer::default();
-        let ended = Playing { programme_ends: Some(NOW - 5), ..Playing::default() };
+        let ended = Playing {
+            programme_ends: Some(NOW - 5),
+            ..Playing::default()
+        };
         assert!(t.set(SleepAfter::EndOfProgramme, NOW, ended).is_err());
         assert!(t.armed.is_none());
     }
@@ -283,7 +311,11 @@ mod tests {
         let err = core
             .sleep_set(
                 SleepAfter::EndOfProgramme,
-                SleepPlaying { channel_id: Some(999), remaining_secs: None, speed: 1.0 },
+                SleepPlaying {
+                    channel_id: Some(999),
+                    remaining_secs: None,
+                    speed: 1.0,
+                },
             )
             .unwrap_err();
         assert!(err.to_string().contains("guide"), "{err}");

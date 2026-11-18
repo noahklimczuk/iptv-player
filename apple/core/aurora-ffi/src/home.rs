@@ -221,12 +221,18 @@ fn page_of(
     limit: usize,
 ) -> Result<RailPage> {
     let end = (offset + limit).min(rail.items.len());
-    let keys = if offset < end { &rail.items[offset..end] } else { &[][..] };
+    let keys = if offset < end {
+        &rail.items[offset..end]
+    } else {
+        &[][..]
+    };
     let continuing = rail.kind == "continueWatching";
     let mut items = Vec::with_capacity(keys.len());
     for key in keys {
         let item = match key.0 {
-            Kind::Movie => library::movie(db, key.1)?.map(|m| CatalogItem::Movie { movie: m.into() }),
+            Kind::Movie => {
+                library::movie(db, key.1)?.map(|m| CatalogItem::Movie { movie: m.into() })
+            }
             Kind::Series => {
                 library::series(db, key.1)?.map(|s| CatalogItem::Series { series: s.into() })
             }
@@ -235,7 +241,11 @@ fn page_of(
         items.push(RailItem {
             item,
             reason: rail.reasons.get(key).cloned(),
-            progress: if continuing { progress.get(key).copied() } else { None },
+            progress: if continuing {
+                progress.get(key).copied()
+            } else {
+                None
+            },
         });
     }
     Ok(RailPage {
@@ -416,9 +426,13 @@ impl AuroraCore {
             match result {
                 Ok(list) => fetched.push((
                     key,
-                    list.into_iter().map(|r| (from_tmdb(r.kind), r.id)).collect(),
+                    list.into_iter()
+                        .map(|r| (from_tmdb(r.kind), r.id))
+                        .collect(),
                 )),
-                Err(e) => tracing::warn!(list = %key, error = %e.message, "home signal fetch failed"),
+                Err(e) => {
+                    tracing::warn!(list = %key, error = %e.message, "home signal fetch failed")
+                }
             }
         }
         let updated = fetched.len() as u32;
@@ -531,11 +545,18 @@ mod tests {
         assert_eq!(movie_id(&cw.items[0]), 3);
         assert_eq!(
             cw.items[0].progress,
-            Some(RailProgress { position_secs: 600, duration_secs: 6000 })
+            Some(RailProgress {
+                position_secs: 600,
+                duration_secs: 6000
+            })
         );
         // Only Continue Watching carries progress.
         for rail in rails.iter().filter(|r| r.kind != "continueWatching") {
-            assert!(rail.items.iter().all(|i| i.progress.is_none()), "{}", rail.kind);
+            assert!(
+                rail.items.iter().all(|i| i.progress.is_none()),
+                "{}",
+                rail.kind
+            );
         }
 
         assert!(core.forget_progress(1, ListKind::Movie, 3).unwrap());
@@ -576,7 +597,9 @@ mod tests {
         let first = core.home_rails(1, Some(7)).unwrap();
         let again = core.home_rails(1, Some(7)).unwrap();
         let ids = |r: &[Rail]| -> Vec<(String, Vec<i64>)> {
-            r.iter().map(|r| (r.id.clone(), r.items.iter().map(movie_id).collect())).collect()
+            r.iter()
+                .map(|r| (r.id.clone(), r.items.iter().map(movie_id).collect()))
+                .collect()
         };
         assert_eq!(ids(&first), ids(&again));
     }
@@ -587,19 +610,33 @@ mod tests {
         films(&core, 8);
         let rails = core.home_rails(1, Some(7)).unwrap();
         let victim = movie_id(&rails[0].items[0]);
-        assert!(core.set_not_interested(1, ListKind::Movie, victim, true).unwrap());
+        assert!(core
+            .set_not_interested(1, ListKind::Movie, victim, true)
+            .unwrap());
 
         // The kept feed forgets it at once, for paging…
         for rail in &rails {
-            let page = core.home_rail_page(1, rail.id.clone(), 0, Some(200), Some(7)).unwrap();
-            assert!(page.items.iter().all(|i| movie_id(i) != victim), "{}", rail.kind);
+            let page = core
+                .home_rail_page(1, rail.id.clone(), 0, Some(200), Some(7))
+                .unwrap();
+            assert!(
+                page.items.iter().all(|i| movie_id(i) != victim),
+                "{}",
+                rail.kind
+            );
         }
         // …and a rebuilt feed leaves it out.
         for rail in core.home_rails(1, Some(7)).unwrap() {
-            assert!(all_items(&core, &rail).iter().all(|id| *id != victim), "{}", rail.kind);
+            assert!(
+                all_items(&core, &rail).iter().all(|id| *id != victim),
+                "{}",
+                rail.kind
+            );
         }
 
-        assert!(!core.set_not_interested(1, ListKind::Movie, victim, false).unwrap());
+        assert!(!core
+            .set_not_interested(1, ListKind::Movie, victim, false)
+            .unwrap());
         let back = core
             .home_rails(1, Some(7))
             .unwrap()
@@ -630,14 +667,23 @@ mod tests {
         let (inputs, _) = gather(&db, 1, 7).unwrap();
         let now = now_unix();
         let wanted = wanted_lists(&db, &inputs, now).unwrap();
-        assert_eq!(wanted.first().map(|w| w.0.as_str()), Some(store::TRENDING_KEY));
+        assert_eq!(
+            wanted.first().map(|w| w.0.as_str()),
+            Some(store::TRENDING_KEY)
+        );
         assert!(wanted.len() <= FETCHES_PER_REFRESH);
 
         store::store_tmdb_list(&db, store::TRENDING_KEY, &[(Kind::Movie, 1)], now).unwrap();
         let wanted = wanted_lists(&db, &inputs, now).unwrap();
-        assert!(wanted.iter().all(|w| w.0 != store::TRENDING_KEY), "fresh trending is kept");
+        assert!(
+            wanted.iter().all(|w| w.0 != store::TRENDING_KEY),
+            "fresh trending is kept"
+        );
         let later = now + TRENDING_REFRESH + 1;
         let wanted = wanted_lists(&db, &inputs, later).unwrap();
-        assert_eq!(wanted.first().map(|w| w.0.as_str()), Some(store::TRENDING_KEY));
+        assert_eq!(
+            wanted.first().map(|w| w.0.as_str()),
+            Some(store::TRENDING_KEY)
+        );
     }
 }

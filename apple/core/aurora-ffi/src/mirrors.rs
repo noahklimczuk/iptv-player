@@ -184,13 +184,21 @@ fn a_new_profile_follows_the_windows_editors_rules() {
 fn series_const(name: &str) -> String {
     let series = app_src("series.rs");
     let decl = between(&series, &format!("pub const {name}:"), ";");
-    decl.split_once('=').map(|(_, v)| v.trim().to_string()).unwrap_or_default()
+    decl.split_once('=')
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_default()
 }
 
 #[test]
 fn episode_listing_waits_and_batches_as_windows_does() {
-    assert_eq!(series_const("SWEEP_BATCH"), crate::series::SWEEP_BATCH.to_string());
-    assert_eq!(series_const("SWEEP_CONCURRENCY"), crate::series::SWEEP_CONCURRENCY.to_string());
+    assert_eq!(
+        series_const("SWEEP_BATCH"),
+        crate::series::SWEEP_BATCH.to_string()
+    );
+    assert_eq!(
+        series_const("SWEEP_CONCURRENCY"),
+        crate::series::SWEEP_CONCURRENCY.to_string()
+    );
     assert_eq!(series_const("LISTING_RETRY_AFTER_SECS"), "6 * 3600");
     assert_eq!(crate::series::LISTING_RETRY_AFTER_SECS, 6 * 3600);
     assert_eq!(
@@ -204,7 +212,9 @@ fn episode_listing_waits_and_batches_as_windows_does() {
 fn app_const(file: &str, name: &str) -> String {
     let src = app_src(file);
     let decl = between(&src, &format!("const {name}:"), ";");
-    decl.split_once('=').map(|(_, v)| v.trim().to_string()).unwrap_or_default()
+    decl.split_once('=')
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_default()
 }
 
 #[test]
@@ -213,8 +223,14 @@ fn the_home_feed_pages_and_refreshes_as_windows_does() {
     assert_eq!(app_const("home.rs", "FIRST_PAGE"), FIRST_PAGE.to_string());
     assert_eq!(app_const("home.rs", "PAGE"), PAGE.to_string());
     assert_eq!(app_const("home.rs", "MAX_PAGE"), MAX_PAGE.to_string());
-    assert_eq!(app_const("home.rs", "CONTINUE_LIMIT"), CONTINUE_LIMIT.to_string());
-    assert_eq!(app_const("home.rs", "FETCHES_PER_REFRESH"), FETCHES_PER_REFRESH.to_string());
+    assert_eq!(
+        app_const("home.rs", "CONTINUE_LIMIT"),
+        CONTINUE_LIMIT.to_string()
+    );
+    assert_eq!(
+        app_const("home.rs", "FETCHES_PER_REFRESH"),
+        FETCHES_PER_REFRESH.to_string()
+    );
     assert_eq!(app_const("home.rs", "TRENDING_SHOWN_FOR"), "4 * 86_400");
     assert_eq!(TRENDING_SHOWN_FOR, 4 * 86_400);
     assert_eq!(app_const("home.rs", "TRENDING_REFRESH"), "86_400");
@@ -228,45 +244,68 @@ fn ui_numbers(file: &str, name: &str) -> Vec<f64> {
     let src = ui_src(file);
     between(&src, &format!("export const {name} = ["), "]")
         .split(',')
-        .map(|n| n.trim().parse().unwrap_or_else(|_| panic!("{name} in {file} is not a list of numbers")))
+        .map(|n| {
+            n.trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("{name} in {file} is not a list of numbers"))
+        })
         .collect()
 }
 
 /// `export const NAME = N;` in a Windows UI source, as N.
 fn ui_number(file: &str, name: &str) -> String {
-    between(&ui_src(file), &format!("export const {name} ="), ";").trim().to_string()
+    between(&ui_src(file), &format!("export const {name} ="), ";")
+        .trim()
+        .to_string()
 }
 
 #[test]
 fn the_player_menus_offer_what_windows_offers() {
     use crate::player::*;
     const MODEL: &str = "features/player/model.ts";
-    assert_eq!(ui_numbers(MODEL, "SPEEDS"), SPEEDS.to_vec(), "model.ts SPEEDS");
+    assert_eq!(
+        ui_numbers(MODEL, "SPEEDS"),
+        SPEEDS.to_vec(),
+        "model.ts SPEEDS"
+    );
     let sleep: Vec<f64> = SLEEP_MINUTES.iter().map(|&m| f64::from(m)).collect();
-    assert_eq!(ui_numbers(MODEL, "SLEEP_MINUTES"), sleep, "model.ts SLEEP_MINUTES");
-    assert_eq!(ui_number(MODEL, "SLEEP_EXTEND_MINUTES"), SLEEP_EXTEND_MINUTES.to_string());
+    assert_eq!(
+        ui_numbers(MODEL, "SLEEP_MINUTES"),
+        sleep,
+        "model.ts SLEEP_MINUTES"
+    );
+    assert_eq!(
+        ui_number(MODEL, "SLEEP_EXTEND_MINUTES"),
+        SLEEP_EXTEND_MINUTES.to_string()
+    );
     assert_eq!(ui_number(MODEL, "HIDE_AFTER_MS"), HIDE_AFTER_MS.to_string());
     assert_eq!(
         ui_number("features/player/UpNextCard.tsx", "COUNTDOWN_SECS"),
         UP_NEXT_COUNTDOWN_SECS.to_string()
     );
-    assert_eq!(app_const("commands.rs", "UP_NEXT_TAIL_SECS"), format!("{UP_NEXT_TAIL_SECS:.1}"));
+    assert_eq!(
+        app_const("commands.rs", "UP_NEXT_TAIL_SECS"),
+        format!("{UP_NEXT_TAIL_SECS:.1}")
+    );
     // The Aspect menu: Windows' words, in Windows' order.
     let model = ui_src(MODEL);
     let windows = between(&model, "export const ASPECTS", "\n];");
     let mut at = 0;
     for (_, label, detail) in ASPECTS {
         let line = format!("label: '{label}', detail: '{detail}'");
-        let found = windows[at..]
-            .find(&line)
-            .unwrap_or_else(|| panic!("model.ts ASPECTS has no `{line}` here; update player.rs ASPECTS"));
+        let found = windows[at..].find(&line).unwrap_or_else(|| {
+            panic!("model.ts ASPECTS has no `{line}` here; update player.rs ASPECTS")
+        });
         at += found + line.len();
     }
 }
 
 #[test]
 fn the_sleep_timer_keeps_windows_limits() {
-    assert_eq!(app_const("play/sleep.rs", "WARNING_SECS"), crate::sleep::WARNING_SECS.to_string());
+    assert_eq!(
+        app_const("play/sleep.rs", "WARNING_SECS"),
+        crate::sleep::WARNING_SECS.to_string()
+    );
     assert_eq!(app_const("play/sleep.rs", "MAX_MINUTES"), "12 * 60");
     assert_eq!(crate::sleep::MAX_MINUTES, 12 * 60);
 }
@@ -276,7 +315,11 @@ fn a_typed_channel_number_is_read_as_windows_reads_it() {
     // `channel_number_from_typed` (playlist.rs) repeats `numberPatch`: empty clears,
     // ASCII digits only, anything else sends nothing.
     let windows = ui_src("features/playlist/number.ts");
-    for needle in ["if (text === '') return { number: 0 };", "/^[0-9]+$/", "return undefined;"] {
+    for needle in [
+        "if (text === '') return { number: 0 };",
+        "/^[0-9]+$/",
+        "return undefined;",
+    ] {
         assert!(
             windows.contains(needle),
             "number.ts no longer has `{needle}`; update channel_number_from_typed"
@@ -290,20 +333,35 @@ fn zapping_follows_windows_zapper() {
     // rule, and the list that up and down walk.
     let zapper = ui_src("hooks/useZapper.ts");
     let timeout = format!("const DIGIT_TIMEOUT_MS = {};", crate::zap::DIGIT_TIMEOUT_MS);
-    assert!(zapper.contains(&timeout), "useZapper.ts no longer has `{timeout}`; update zap.rs");
+    assert!(
+        zapper.contains(&timeout),
+        "useZapper.ts no longer has `{timeout}`; update zap.rs"
+    );
     let ui = ui_src("state/ui.ts");
     let buffer = format!("(s.digits + d).slice(0, {})", crate::zap::MAX_DIGITS);
-    assert!(ui.contains(&buffer), "ui.ts no longer has `{buffer}`; update zap.rs");
+    assert!(
+        ui.contains(&buffer),
+        "ui.ts no longer has `{buffer}`; update zap.rs"
+    );
     let step = ui_src("hooks/zap.ts");
     for needle in [
         "if (current < 0) return delta === 1 ? 0 : count - 1;",
         "return (current + delta + count) % count;",
     ] {
-        assert!(step.contains(needle), "zap.ts no longer has `{needle}`; update step_index");
+        assert!(
+            step.contains(needle),
+            "zap.ts no longer has `{needle}`; update step_index"
+        );
     }
     let app = ui_src("App.tsx");
-    for needle in ["useCommand('channels.list', {}, [])", "useZapper(channels ?? []"] {
-        assert!(app.contains(needle), "App.tsx no longer has `{needle}`; update channel_step");
+    for needle in [
+        "useCommand('channels.list', {}, [])",
+        "useZapper(channels ?? []",
+    ] {
+        assert!(
+            app.contains(needle),
+            "App.tsx no longer has `{needle}`; update channel_step"
+        );
     }
 }
 
@@ -314,8 +372,14 @@ fn a_provider_is_checked_and_edited_the_way_windows_does_it() {
     // Which failures earn a second look, and which mean the panel is refusing us: the
     // same lists, or a check here asks a throttling panel again where Windows stops.
     for (name, list) in [
-        ("fn worth_probing(", "ErrorCode::Timeout | ErrorCode::Refused | ErrorCode::Dns | ErrorCode::Tls"),
-        ("fn is_refusing_us(", "ErrorCode::Dropped | ErrorCode::RateLimited | ErrorCode::ConnectionLimit"),
+        (
+            "fn worth_probing(",
+            "ErrorCode::Timeout | ErrorCode::Refused | ErrorCode::Dns | ErrorCode::Tls",
+        ),
+        (
+            "fn is_refusing_us(",
+            "ErrorCode::Dropped | ErrorCode::RateLimited | ErrorCode::ConnectionLimit",
+        ),
     ] {
         let squash = |t: &str| t.split_whitespace().collect::<String>();
         assert!(
@@ -326,16 +390,86 @@ fn a_provider_is_checked_and_edited_the_way_windows_does_it() {
     }
     // The playlist address offered when the API refuses.
     let format = "{}/get.php?username={}&password={}&type=m3u_plus&output=ts";
-    assert!(app.contains(format), "aurora-app builds the playlist address differently now");
+    assert!(
+        app.contains(format),
+        "aurora-app builds the playlist address differently now"
+    );
     assert!(ours.contains(format));
     // The password rule: None keeps, "" clears, anything else replaces.
-    assert!(app.contains("Some(p) if p.is_empty() =>"), "providers_update's password rule changed");
-    assert!(app.contains("\"UPDATE providers SET name = ?2, kind = ?3, base_url = ?4, username = ?5"));
+    assert!(
+        app.contains("Some(p) if p.is_empty() =>"),
+        "providers_update's password rule changed"
+    );
+    assert!(
+        app.contains("\"UPDATE providers SET name = ?2, kind = ?3, base_url = ?4, username = ?5")
+    );
 }
 
 #[test]
 fn a_typed_address_is_asked_about_when_windows_asks() {
-    let theirs = between(&ui_src("features/setup/SetupWizard.tsx"), "const DETECT_AFTER_TYPING_MS =", ";").trim().to_string();
-    assert_eq!(theirs, crate::provider_edit::DETECT_AFTER_TYPING_MS.to_string());
+    let theirs = between(
+        &ui_src("features/setup/SetupWizard.tsx"),
+        "const DETECT_AFTER_TYPING_MS =",
+        ";",
+    )
+    .trim()
+    .to_string();
+    assert_eq!(
+        theirs,
+        crate::provider_edit::DETECT_AFTER_TYPING_MS.to_string()
+    );
 }
 
+#[test]
+fn pause_live_tv_is_stored_and_defaulted_as_windows_does_it() {
+    use crate::timeshift::*;
+    let theirs = app_src("play/timeshift.rs");
+    for (name, ours) in [
+        ("ENABLED_KEY", ENABLED_KEY),
+        ("BYTES_KEY", BYTES_KEY),
+        ("SECS_KEY", SECS_KEY),
+    ] {
+        let value = between(&theirs, &format!("pub const {name}: &str ="), ";")
+            .trim()
+            .to_string();
+        assert_eq!(
+            value,
+            format!("{ours:?}"),
+            "play/timeshift.rs {name} is {value}; timeshift.rs says {ours:?}"
+        );
+    }
+    let on = between(&theirs, "pub const ENABLED_BY_DEFAULT: bool =", ";")
+        .trim()
+        .to_string();
+    assert_eq!(on, ENABLED_BY_DEFAULT.to_string());
+    // The leftover rule: files in the folder, and mpv's own never among them.
+    assert!(theirs.contains("m.is_file().then(|| (e.path(), m.len()))"));
+}
+
+#[test]
+fn back_to_live_and_the_settings_screen_offer_what_windows_offers() {
+    // `rewind_live_target` is `Seek::Live` with the same margin.
+    let engine = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .unwrap()
+            .join("src-native/crates/aurora-video/src/engine.rs"),
+    )
+    .unwrap();
+    assert!(engine.contains("Seek::Live => (w.live_secs - LIVE_MARGIN_SECS).max(w.start_secs)"));
+    let panel = ui_src("features/settings/TimeshiftPanel.tsx");
+    let sizes: Vec<u64> = between(&panel, "const SIZES = [", "]")
+        .split(',')
+        .map(|n| n.trim().parse().unwrap())
+        .collect();
+    let minutes: Vec<u32> = between(&panel, "const MINUTES = [", "]")
+        .split(',')
+        .map(|n| n.trim().parse().unwrap())
+        .collect();
+    assert_eq!(sizes, crate::timeshift::BUFFER_SIZES_GB);
+    assert_eq!(minutes, crate::timeshift::REWIND_LIMITS_MIN);
+    // The live edge `behind_secs` uses.
+    assert_eq!(ui_number("features/player/model.ts", "LIVE_EDGE_SECS"), "5");
+    assert_eq!(aurora_core::timeshift::LIVE_EDGE_SECS, 5.0);
+}

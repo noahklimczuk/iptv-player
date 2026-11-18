@@ -109,7 +109,9 @@ impl AuroraCore {
             )
             .optional()?;
         let Some((kind, base_url, username, credential_ref, key)) = row else {
-            return Err(AuroraError::not_found("This series is no longer in your library."));
+            return Err(AuroraError::not_found(
+                "This series is no longer in your library.",
+            ));
         };
         if kind != "xtream" {
             return Ok(None);
@@ -154,7 +156,11 @@ impl AuroraCore {
                     season: ep.season.unwrap_or(1).min(u32::from(u16::MAX)) as u16,
                     episode: number.min(u32::from(u16::MAX)) as u16,
                     title: ep.title.clone().filter(|t| !t.trim().is_empty()),
-                    url: client.stream_url(MediaKind::Episode, id, ep.container_extension.as_deref()),
+                    url: client.stream_url(
+                        MediaKind::Episode,
+                        id,
+                        ep.container_extension.as_deref(),
+                    ),
                     still: ep.info.movie_image.clone().filter(|s| !s.trim().is_empty()),
                     overview: ep.info.plot.clone().filter(|s| !s.trim().is_empty()),
                     // Nearest minute: a 3,563-second episode is 59, not 0.
@@ -170,7 +176,12 @@ impl AuroraCore {
             return Ok(0);
         }
         let mut db = self.db.lock();
-        Ok(library::upsert_episodes(&mut db, series_id, &episodes, now_unix())?)
+        Ok(library::upsert_episodes(
+            &mut db,
+            series_id,
+            &episodes,
+            now_unix(),
+        )?)
     }
 
     /// One batch of the background sweep: shows with no listing that are not in their
@@ -181,7 +192,12 @@ impl AuroraCore {
         let ids = {
             let db = self.db.lock();
             let filter = LibraryFilter::load(&db)?;
-            library::series_needing_episodes(&db, &filter, SWEEP_BATCH, now - LISTING_RETRY_AFTER_SECS)?
+            library::series_needing_episodes(
+                &db,
+                &filter,
+                SWEEP_BATCH,
+                now - LISTING_RETRY_AFTER_SECS,
+            )?
         };
         let total = ids.len() as u64;
         if ids.is_empty() {
@@ -210,7 +226,9 @@ impl AuroraCore {
                     {
                         let db = self.db.lock();
                         let wrote = match attempt {
-                            Some(attempt) => library::record_listing_attempt(&db, series_id, attempt, now),
+                            Some(attempt) => {
+                                library::record_listing_attempt(&db, series_id, attempt, now)
+                            }
                             None => library::clear_listing_attempt(&db, series_id),
                         };
                         // Losing one costs one extra request on a later sweep.
@@ -276,14 +294,20 @@ impl AuroraCore {
                 if *id == series_id {
                     return Err(e);
                 }
-                tracing::warn!(series = id, "a duplicate copy would not list its episodes ({e})");
+                tracing::warn!(
+                    series = id,
+                    "a duplicate copy would not list its episodes ({e})"
+                );
             }
         }
         // Brought up to date, but a panel that will not answer now leaves the stored
         // episodes on screen rather than replacing them with an error.
         for id in &stale {
             if let Err(e) = self.fetch_episodes(*id) {
-                tracing::warn!(series = id, "could not refresh episodes ({e}); showing those stored");
+                tracing::warn!(
+                    series = id,
+                    "could not refresh episodes ({e}); showing those stored"
+                );
             }
         }
 

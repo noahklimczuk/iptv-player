@@ -32,6 +32,12 @@ final class MPVPlayerController: UIViewController {
 
     private var core: AuroraCore?
     private var session: Session?
+    /// The live channel's buffer caps, when it has a buffer.
+    private var rewindBudget: RewindBudget?
+    /// The playhead when this source started: nothing before it was ever buffered.
+    private var tunedAt: Double?
+    /// The window last read, for seeks to stay inside.
+    private var rewind: RewindWindow?
 
     /// How often a playing film's position is written. Often enough that a crash loses
     /// little, rarely enough that the library is not written every second.
@@ -58,6 +64,9 @@ final class MPVPlayerController: UIViewController {
         var subtitleId: Int64?
         /// The file is open: before this mpv has no chapters or tracks to tell.
         var loaded = false
+        /// A live channel's rewind buffer: what it holds and where the playhead is in it.
+        /// `nil` for films, and for live TV with Pause live TV turned off.
+        var rewind: RewindWindow?
     }
 
     /// An audio or subtitle track, as Windows' menu lists it (`model.ts` `Track`).
@@ -79,7 +88,7 @@ final class MPVPlayerController: UIViewController {
 
     /// What each observed property is, in mpv's `reply_userdata`.
     private enum Observed: UInt64 {
-        case position, duration, pause, speed, tracks
+        case position, duration, pause, speed, tracks, cache
     }
 
     enum PlayerStatus: Equatable {
@@ -125,6 +134,7 @@ final class MPVPlayerController: UIViewController {
         queue.async { [self] in
             self.core = core
             session = .live(tune, sourceIndex: 0)
+            rewindBudget = tune.rewind
             resetFile()
             apply(tune.mpvOptions)
             loadLiveSource()
@@ -215,14 +225,28 @@ final class MPVPlayerController: UIViewController {
         queue.async { [self] in apply(aspectOptions(aspect: aspect)) }
     }
 
-    /// Jump to `seconds` from the start. Films, episodes and catch-up only.
+    /// Jump to `seconds`: from the start of a film, or a point in a live channel's
+    /// buffer (in the stream's own time, as the window gives it), held inside it.
     func seek(to seconds: Double) {
         queue.async { [self] in
             switch session {
-            case .vod?, .replay?: break
-            case .live?, nil: return
+            case .vod?, .replay?:
+                command("seek", String(max(0, seconds)), "absolute")
+            case .live?:
+                guard let window = currentWindow() else { return }
+                seekLive(to: rewindSeekTarget(window: window, targetSecs: seconds))
+            case nil:
+                return
             }
-            command("seek", String(max(0, seconds)), "absolute")
+        }
+    }
+
+    /// Back to the newest moment of a live channel, playing (Windows' `backToLive`).
+    func backToLive() {
+        queue.async { [self] in
+            guard case .live? = session, let window = currentWindow() else { return }
+            seekLive(to: rewindLiveTarget(window: window))
+            setPausedNow(false)
         }
     }
 
@@ -245,16 +269,102 @@ final class MPVPlayerController: UIViewController {
         }
     }
 
-    /// Jump by `seconds`, forwards or back. Films, episodes and catch-up: live has no
-    /// timeshift on Apple yet.
+    /// Jump by `seconds`, forwards or back: through a film, or through a live channel's
+    /// buffer, never past live.
     func seek(by seconds: Double) {
         queue.async { [self] in
             switch session {
-            case .vod?, .replay?: break
-            case .live?, nil: return
+            case .vod?, .replay?:
+                command("seek", String(seconds), "relative")
+            case .live?:
+                guard let window = currentWindow() else { return }
+                seekLive(to: rewindSeekTarget(window: window, targetSecs: window.positionSecs + seconds))
+            case nil:
+                return
             }
-            command("seek", String(seconds), "relative")
         }
+    }
+
+    // MARK: Live rewind (on `queue`)
+
+    /// The rewind window now, read fresh from mpv, or `nil` when there is no buffer.
+    private func currentWindow() -> RewindWindow? {
+        rewind = readWindow()
+        return rewind
+    }
+
+    /// Windows' `Engine::refresh_window`: what mpv's cache holds, put through the core.
+    private func readWindow() -> RewindWindow? {
+        guard case .live? = session, loaded, let budget = rewindBudget, let mpv else { return nil }
+        var position = 0.0
+        guard mpv_get_property(mpv, "time-pos", MPV_FORMAT_DOUBLE, &position) >= 0, position.isFinite
+        else { return nil }
+        if tunedAt == nil { tunedAt = position }
+        let cache = cacheState()
+        var bitrate = 0.0
+        for name in ["video-bitrate", "audio-bitrate"] {
+            var value = 0.0
+            if mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &value) >= 0, value.isFinite, value > 0 {
+                bitrate += value
+            }
+        }
+        return rewindWindow(budget: budget, reading: RewindReading(
+            positionSecs: position,
+            liveSecs: cache.end,
+            tunedAtSecs: tunedAt,
+            bitrateBps: UInt64(bitrate),
+            seekableStartSecs: cache.seekableStart
+        ))
+    }
+
+    /// `demuxer-cache-state`'s `cache-end` and the first seekable range's start.
+    private func cacheState() -> (end: Double?, seekableStart: Double?) {
+        guard let mpv else { return (nil, nil) }
+        var node = mpv_node()
+        guard mpv_get_property(mpv, "demuxer-cache-state", MPV_FORMAT_NODE, &node) >= 0 else { return (nil, nil) }
+        defer { mpv_free_node_contents(&node) }
+        guard node.format == MPV_FORMAT_NODE_MAP, let map = node.u.list?.pointee else { return (nil, nil) }
+        var end: Double?
+        var start: Double?
+        for i in 0..<Int(map.num) {
+            guard let key = map.keys[i] else { continue }
+            let value = map.values[i]
+            switch String(cString: key) {
+            case "cache-end":
+                end = number(value)
+            case "seekable-ranges":
+                guard value.format == MPV_FORMAT_NODE_ARRAY, let ranges = value.u.list?.pointee, ranges.num > 0
+                else { break }
+                let first = ranges.values[0]
+                guard first.format == MPV_FORMAT_NODE_MAP, let range = first.u.list?.pointee else { break }
+                for j in 0..<Int(range.num) {
+                    if let k = range.keys[j], String(cString: k) == "start" { start = number(range.values[j]) }
+                }
+            default:
+                break
+            }
+        }
+        return (end, start)
+    }
+
+    private func number(_ node: mpv_node) -> Double? {
+        switch node.format {
+        case MPV_FORMAT_DOUBLE: node.u.double_.isFinite ? node.u.double_ : nil
+        case MPV_FORMAT_INT64: Double(node.u.int64)
+        default: nil
+        }
+    }
+
+    private func seekLive(to seconds: Double) {
+        guard seconds.isFinite else { return }
+        command("seek", String(format: "%.3f", seconds), "absolute")
+        publish(force: true)
+    }
+
+    private func setPausedNow(_ paused: Bool) {
+        guard let mpv else { return }
+        var flag: Int32 = paused ? 1 : 0
+        mpv_set_property(mpv, "pause", MPV_FORMAT_FLAG, &flag)
     }
 
     // MARK: Session steps (on `queue`)
@@ -294,6 +404,9 @@ final class MPVPlayerController: UIViewController {
 
     private func loadLiveSource() {
         guard case .live(let tune, let index)? = session, index < tune.sources.count else { return }
+        // Another source is another stream: its buffer starts again.
+        tunedAt = nil
+        rewind = nil
         let total = tune.sources.count
         DispatchQueue.main.async { self.onStatus?(.opening(source: index + 1, of: total)) }
         command("loadfile", tune.sources[index].url, "replace")
@@ -302,6 +415,8 @@ final class MPVPlayerController: UIViewController {
     /// A new file is starting: nothing of the last one's state carries over.
     private func resetFile() {
         loaded = false
+        tunedAt = nil
+        rewind = nil
         tracks = ([], [], nil, nil)
         publish(force: true)
     }
@@ -342,6 +457,8 @@ final class MPVPlayerController: UIViewController {
         state.subtitleTracks = tracks.subtitles
         state.audioId = tracks.audioId
         state.subtitleId = tracks.subtitleId
+        rewind = readWindow()
+        state.rewind = rewind
         DispatchQueue.main.async { self.onState?(state) }
     }
 
@@ -508,6 +625,10 @@ final class MPVPlayerController: UIViewController {
         // start the picture there: the sound still plays, and since no video output
         // starts, the player shows its "only the sound is playing" notice.
         mpv_set_option_string(handle, "vid", "no")
+        // And its audio unit can refuse to start (-10851, seen 2026-11-18). With no
+        // picture as well nothing then drives the clock and playback stands still, so
+        // fall back to mpv's null output: silent, but time moves and seeking can be tested.
+        mpv_set_option_string(handle, "ao", "audiounit,null")
         #endif
         #if DEBUG
         // `-AuroraMpvLog v` (or `debug`) at launch for mpv's full story; warnings otherwise.
@@ -525,6 +646,9 @@ final class MPVPlayerController: UIViewController {
         mpv_observe_property(handle, Observed.duration.rawValue, "duration", MPV_FORMAT_DOUBLE)
         mpv_observe_property(handle, Observed.pause.rawValue, "pause", MPV_FORMAT_FLAG)
         mpv_observe_property(handle, Observed.speed.rawValue, "speed", MPV_FORMAT_DOUBLE)
+        // The live edge moves while a paused channel goes on arriving: "−2:10" has to
+        // keep counting with the picture still.
+        mpv_observe_property(handle, Observed.cache.rawValue, "demuxer-cache-time", MPV_FORMAT_DOUBLE)
         mpv_observe_property(handle, Observed.tracks.rawValue, "track-list", MPV_FORMAT_NONE)
         mpv_observe_property(handle, Observed.tracks.rawValue, "aid", MPV_FORMAT_NONE)
         mpv_observe_property(handle, Observed.tracks.rawValue, "sid", MPV_FORMAT_NONE)
@@ -560,6 +684,8 @@ final class MPVPlayerController: UIViewController {
                 case .tracks?:
                     if loaded { readTracks() }
                     publish(force: true)
+                case .cache?:
+                    publish(force: false)
                 case .duration?, .pause?, .speed?, nil:
                     publish(force: true)
                 }

@@ -144,10 +144,12 @@ fn a_real_panel_is_imported_listed_guided_and_tuned() {
         "channel {}'s stream URL wasn't built from the login",
         first[0].id
     );
+    // Pause live TV is on by default: mpv keeps the rewind limit, not the short read-ahead.
+    assert!(tune.rewind.is_some());
     assert!(tune
         .mpv_options
         .iter()
-        .any(|o| o.name() == "cache-secs" && o.text() == Some("8")));
+        .any(|o| o.name() == "cache-secs" && o.text() == Some("1800")));
 
     // The guide grid answers one row per channel on screen, in order.
     let ids: Vec<i64> = first.iter().take(20).map(|c| c.id).collect();
@@ -180,7 +182,10 @@ fn a_real_panel_is_imported_listed_guided_and_tuned() {
 
     // Removing the panel takes its password with it.
     assert!(core.remove_provider(id).unwrap());
-    assert!(core.channels(1, None, false, None, 5, 0).unwrap().is_empty());
+    assert!(core
+        .channels(1, None, false, None, 5, 0)
+        .unwrap()
+        .is_empty());
 }
 
 /// An error message with the login taken out, in case one ever carries a URL.
@@ -202,12 +207,29 @@ fn a_real_panels_show_lists_its_episodes_when_opened() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let core = AuroraCore::open(dir.path().display().to_string(), std::sync::Arc::new(Secrets::default())).unwrap();
+    let core = AuroraCore::open(
+        dir.path().display().to_string(),
+        std::sync::Arc::new(Secrets::default()),
+    )
+    .unwrap();
     let id = core
-        .add_xtream("Live test".into(), panel.url.clone(), panel.user.clone(), panel.pass.clone())
+        .add_xtream(
+            "Live test".into(),
+            panel.url.clone(),
+            panel.user.clone(),
+            panel.pass.clone(),
+        )
         .unwrap();
     let report = core
-        .refresh(id, ImportContent { live: false, vod: false, series: true }, std::sync::Arc::new(Quiet))
+        .refresh(
+            id,
+            ImportContent {
+                live: false,
+                vod: false,
+                series: true,
+            },
+            std::sync::Arc::new(Quiet),
+        )
         .unwrap_or_else(|e| panic!("the import failed: {}", redact(&e.to_string(), &panel)));
     assert!(report.series > 0, "the panel listed no series");
 
@@ -231,11 +253,20 @@ fn a_real_panels_show_lists_its_episodes_when_opened() {
             (!eps.is_empty()).then(|| (s.id, eps))
         })
         .expect("none of the ten newest shows listed an episode");
-    eprintln!("live_provider: show {show} listed {} episodes", episodes.len());
-    assert!(episodes.windows(2).all(|w| (w[0].season, w[0].episode) <= (w[1].season, w[1].episode)));
+    eprintln!(
+        "live_provider: show {show} listed {} episodes",
+        episodes.len()
+    );
+    assert!(episodes
+        .windows(2)
+        .all(|w| (w[0].season, w[0].episode) <= (w[1].season, w[1].episode)));
     // A season asked for on its own is a subset.
     let season = episodes[0].season;
-    assert!(core.episodes(show, Some(season)).unwrap().iter().all(|e| e.season == season));
+    assert!(core
+        .episodes(show, Some(season))
+        .unwrap()
+        .iter()
+        .all(|e| e.season == season));
     // And it plays.
     let tune = core.tune_episode(episodes[0].id, None).unwrap();
     assert!(!tune.url.is_empty());
@@ -243,9 +274,18 @@ fn a_real_panels_show_lists_its_episodes_when_opened() {
     let swept = core
         .list_episodes(std::sync::Arc::new(StopAfter(6)))
         .unwrap_or_else(|e| panic!("the sweep failed: {}", redact(&e.to_string(), &panel)));
-    eprintln!("live_provider: sweep asked {} listed {} failed {}", swept.asked, swept.listed, swept.failed);
-    assert!(swept.asked >= 6, "the sweep stopped before asking about six shows");
-    assert!(swept.asked <= 6 + 4, "the sweep ran on after being told to stop");
+    eprintln!(
+        "live_provider: sweep asked {} listed {} failed {}",
+        swept.asked, swept.listed, swept.failed
+    );
+    assert!(
+        swept.asked >= 6,
+        "the sweep stopped before asking about six shows"
+    );
+    assert!(
+        swept.asked <= 6 + 4,
+        "the sweep ran on after being told to stop"
+    );
 }
 
 fn redact(message: &str, panel: &Panel) -> String {

@@ -129,7 +129,11 @@ mod tests {
     #[test]
     fn an_empty_library_counts_nothing() {
         let (core, _dir) = core();
-        for kind in [LibraryKind::Channels, LibraryKind::Movies, LibraryKind::Series] {
+        for kind in [
+            LibraryKind::Channels,
+            LibraryKind::Movies,
+            LibraryKind::Series,
+        ] {
             assert_eq!(core.filter_counts(kind).unwrap().total, 0);
         }
     }
@@ -146,7 +150,11 @@ mod tests {
                 [],
             )
             .unwrap();
-            for (id, name, lang) in [(1, "BBC One", Some("en")), (2, "TVE", Some("es")), (3, "Mystery", None)] {
+            for (id, name, lang) in [
+                (1, "BBC One", Some("en")),
+                (2, "TVE", Some("es")),
+                (3, "Mystery", None),
+            ] {
                 db.execute(
                     "INSERT INTO channels (id, provider_id, provider_key, name, match_key, lang_code, last_seen_at)
                      VALUES (?1, 1, ?2, ?2, lower(?2), ?3, 0)",
@@ -172,7 +180,10 @@ mod tests {
         core.set_library_filters(f).unwrap();
         assert_eq!(names(), ["BBC One", "Mystery"]);
         let counts = core.filter_counts(LibraryKind::Channels).unwrap();
-        assert_eq!((counts.total, counts.non_english, counts.untagged), (3, 1, 1));
+        assert_eq!(
+            (counts.total, counts.non_english, counts.untagged),
+            (3, 1, 1)
+        );
 
         f.hide_untagged = true;
         core.set_library_filters(f).unwrap();
