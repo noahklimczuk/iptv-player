@@ -306,3 +306,36 @@ fn zapping_follows_windows_zapper() {
         assert!(app.contains(needle), "App.tsx no longer has `{needle}`; update channel_step");
     }
 }
+
+#[test]
+fn a_provider_is_checked_and_edited_the_way_windows_does_it() {
+    let app = app_src("providers.rs");
+    let ours = include_str!("provider_edit.rs");
+    // Which failures earn a second look, and which mean the panel is refusing us: the
+    // same lists, or a check here asks a throttling panel again where Windows stops.
+    for (name, list) in [
+        ("fn worth_probing(", "ErrorCode::Timeout | ErrorCode::Refused | ErrorCode::Dns | ErrorCode::Tls"),
+        ("fn is_refusing_us(", "ErrorCode::Dropped | ErrorCode::RateLimited | ErrorCode::ConnectionLimit"),
+    ] {
+        let squash = |t: &str| t.split_whitespace().collect::<String>();
+        assert!(
+            squash(between(&app, name, "}")).contains(&squash(list)),
+            "aurora-app `{name}` no longer matches {list}; update provider_edit.rs"
+        );
+        assert!(squash(between(ours, name, "}")).contains(&squash(list)));
+    }
+    // The playlist address offered when the API refuses.
+    let format = "{}/get.php?username={}&password={}&type=m3u_plus&output=ts";
+    assert!(app.contains(format), "aurora-app builds the playlist address differently now");
+    assert!(ours.contains(format));
+    // The password rule: None keeps, "" clears, anything else replaces.
+    assert!(app.contains("Some(p) if p.is_empty() =>"), "providers_update's password rule changed");
+    assert!(app.contains("\"UPDATE providers SET name = ?2, kind = ?3, base_url = ?4, username = ?5"));
+}
+
+#[test]
+fn a_typed_address_is_asked_about_when_windows_asks() {
+    let theirs = between(&ui_src("features/setup/SetupWizard.tsx"), "const DETECT_AFTER_TYPING_MS =", ";").trim().to_string();
+    assert_eq!(theirs, crate::provider_edit::DETECT_AFTER_TYPING_MS.to_string());
+}
+

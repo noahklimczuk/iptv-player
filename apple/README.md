@@ -36,7 +36,11 @@ screens. The app can:
   total,
 - filter the whole library as Windows does: English only, also hide what's untagged,
   and one copy per title, each with what it would hide (Settings),
-- list providers in Settings with what each holds, and refresh or remove one,
+- list providers in Settings with what each holds, and refresh, edit or remove one.
+  Editing works like Windows: change the name, address and sign-in (the password shown
+  only on request), and Check connection tries the form without saving it. When the
+  address fails it tries the other scheme and the playlist, and offers whichever works.
+  Pasting a `get.php` link when adding a provider fills in the address and sign-in,
 - open a series on the episode to resume, list its seasons and episodes,
 - play a channel, film or episode through mpv (MPVKit). A channel tries each of its
   sources in turn. Films and episodes resume, and save their position every 15 s and

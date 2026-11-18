@@ -62,7 +62,7 @@ struct SettingsView: View {
 private struct ProviderRow: View {
     @Environment(AppModel.self) private var model
     let provider: Provider
-    @State private var confirmingRemove = false
+    @State private var editing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -80,18 +80,18 @@ private struct ProviderRow: View {
                 Button("Refresh", systemImage: "arrow.clockwise") {
                     Task { await refresh() }
                 }
-                Button("Remove", systemImage: "trash", role: .destructive) {
-                    confirmingRemove = true
-                }
+                // Change the address or sign-in, check it, or remove the provider
+                // (Windows' Edit opens the same editor).
+                Button("Edit", systemImage: "pencil") { editing = true }
             }
+            #if os(iOS)
+            // Two buttons in one row: each takes its own taps, not the whole row's.
+            .buttonStyle(.borderless)
+            #endif
             .disabled(model.importProgress != nil)
         }
-        .confirmationDialog("Remove \(provider.name)?", isPresented: $confirmingRemove, titleVisibility: .visible) {
-            Button("Remove", role: .destructive) {
-                Task { await model.removeProvider(provider.id) }
-            }
-        } message: {
-            Text("Its channels, films, series and guide are removed from this device, and its password from the Keychain.")
+        .navigationDestination(isPresented: $editing) {
+            ProviderEditorView(provider: provider)
         }
     }
 
