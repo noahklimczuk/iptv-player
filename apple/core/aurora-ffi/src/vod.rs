@@ -268,12 +268,16 @@ impl AuroraCore {
         self.tune_vod(VodKind::Episode, episode_id, start_at_secs)
     }
 
+    /// Where this profile is in a film or episode. With sync on, a newer position from
+    /// another of the household's devices is fetched first (at most 1.5 s), so stopping
+    /// on the TV and opening the same film on the phone resumes at the right second.
     pub fn watch_progress(
         &self,
         profile_id: i64,
         kind: VodKind,
         id: i64,
     ) -> Result<Option<WatchProgress>> {
+        self.refresh_progress_from_household(profile_id, kind, id);
         let db = self.db.lock();
         Ok(
             progress::get(&db, profile_id, kind.into(), id)?.map(|p| WatchProgress {

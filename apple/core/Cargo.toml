@@ -21,6 +21,7 @@ aurora-core = { path = "../../src-native/crates/aurora-core" }
 aurora-db = { path = "../../src-native/crates/aurora-db" }
 aurora-ingest = { path = "../../src-native/crates/aurora-ingest" }
 aurora-video = { path = "../../src-native/crates/aurora-video" }
+aurora-sync = { path = "../../src-native/crates/aurora-sync" }
 uniffi = "=0.32.2"
 thiserror = "1"
 tracing = "0.1"

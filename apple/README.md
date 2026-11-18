@@ -82,6 +82,16 @@ screens. The app can:
   the Tauri host cannot be linked, and `mirrors.rs` compares the copy with the original
   line by line. It is a tab on Apple TV and iPad, and a button on Home on an iPhone.
   "Ask about these" on the Gemini rail opens it with those titles.
+- sync with the household's other devices, Windows included (Settings → Sync, Windows'
+  Sync panel and wording): set up or join with an email, a password and a passphrase
+  (or the recovery code); favourites, My List, watch progress, profiles and playlist
+  edits follow, end-to-end encrypted. Opening a film or episode first asks the
+  household for its position, waiting at most 1.5 s, as Windows does. The sign-in and
+  the vault key are in the Keychain. The loop runs while the app is in front; the
+  shared pacer decides when a round is due, and the free plan's daily count and the
+  slower "thrifty" pace are the same as Windows'. Needs `AURORA_FIREBASE_API_KEY` and
+  `AURORA_FIREBASE_PROJECT_ID` in the environment when the core is built
+  (`scripts/build-core.sh`); without them Settings says the build has no sync.
 
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
 Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
@@ -89,7 +99,8 @@ under "More", whose navigation bar stacks on the tab's own and doubles every bac
 button. iPad and Apple TV keep both as tabs.
 
 Not yet: profile age and daily limits (being fixed on Windows first; the Apple app will
-follow the same rule), recordings, and sync (Phase 3).
+follow the same rule), recordings, and syncing provider passwords (each device keeps its
+own, as on Windows today).
 
 The app targets **iOS 26 and tvOS 26 only**.
 
