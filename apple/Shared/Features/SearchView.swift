@@ -7,6 +7,9 @@ struct SearchView: View {
     @State private var results: SearchResults?
     @State private var playing: PlayerItem?
     @State private var movie: Movie?
+    /// Shown as a sheet (an iPhone), so it needs its own way out.
+    var closable = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -39,6 +42,11 @@ struct SearchView: View {
                 }
             }
             .navigationTitle("Search")
+            .toolbar {
+                if closable {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
+            }
             .searchable(text: $text, prompt: "Channels, programmes, films, series")
             .task(id: text) {
                 // Wait for typing to pause before asking.

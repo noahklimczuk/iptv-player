@@ -18,11 +18,25 @@ struct HomeView: View {
     @State private var askedForSignals = false
     @State private var movie: Movie?
     @State private var series: Int64?
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openSearch) private var openSearch
 
     var body: some View {
         NavigationStack {
             content
                 .navigationTitle("Home")
+                .toolbar {
+                    if let openSearch {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Search", systemImage: "magnifyingglass", action: openSearch)
+                        }
+                    }
+                    if let openSettings {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Settings", systemImage: "gear", action: openSettings)
+                        }
+                    }
+                }
                 .task(id: ReloadKey(library: model.libraryVersion, profile: model.profileId,
                                     showing: movie == nil && series == nil)) {
                     // Rebuilt when a title's page closes: Continue Watching and My List
