@@ -19,6 +19,8 @@ struct AddProviderView: View {
     @State private var url = ""
     @State private var username = ""
     @State private var password = ""
+    @State private var checked: ProviderCheck?
+    @State private var checking = false
     #if os(tvOS)
     // Live TV only by default on Apple TV: a whole film catalogue and its search index
     // on storage the system can purge is docs §5 risk 3.
@@ -43,6 +45,13 @@ struct AddProviderView: View {
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     #endif
+                    .task(id: url) {
+                        // Windows asks a beat after typing stops (`DETECT_AFTER_TYPING_MS`):
+                        // asked on every keystroke, a link typed by hand split itself at
+                        // the first letter of its password.
+                        try? await Task.sleep(for: .milliseconds(typingPause))
+                        if !Task.isCancelled { recognise(url) }
+                    }
                 if kind == .xtream {
                     TextField("Username", text: $username)
                         .textContentType(.username)
@@ -53,6 +62,21 @@ struct AddProviderView: View {
                     SecureField("Password", text: $password)
                         .textContentType(.password)
                 }
+            }
+            Section {
+                Button(checking ? "Checking…" : "Check connection", systemImage: "network") {
+                    Task { await check() }
+                }
+                .disabled(checking || url.trimmingCharacters(in: .whitespaces).isEmpty)
+                if let checked {
+                    CheckResult(result: checked) { suggested in
+                        if checked.suggestedKind == "m3u" { kind = .m3u }
+                        url = suggested
+                        Task { await check() }
+                    }
+                }
+            } footer: {
+                Text("A playlist link with a username and password in it fills in the form by itself.")
             }
             Section("Import") {
                 Toggle("Live TV", isOn: .constant(true)).disabled(true)
@@ -70,6 +94,35 @@ struct AddProviderView: View {
     private var canAdd: Bool {
         let hasURL = !url.trimmingCharacters(in: .whitespaces).isEmpty
         return kind == .m3u ? hasURL : hasURL && !username.isEmpty && !password.isEmpty
+    }
+
+    /// A pasted `get.php` or `player_api.php` link carries the whole sign-in: split it
+    /// into the form, as Windows' wizard does (`providers.detect`).
+    /// Windows' `DETECT_AFTER_TYPING_MS`.
+    private let typingPause = Int(detectAfterTypingMs())
+
+    private func recognise(_ text: String) {
+        let found = detectSource(text: text)
+        guard found.kind == "xtream", let user = found.username, let pass = found.password else { return }
+        kind = .xtream
+        url = found.url
+        username = user
+        password = pass
+        if name.trimmingCharacters(in: .whitespaces).isEmpty {
+            name = URL(string: found.url)?.host() ?? ""
+        }
+    }
+
+    private func check() async {
+        checking = true
+        defer { checking = false }
+        checked = await model.checkProvider(ProviderDraft(
+            name: name,
+            kind: kind == .xtream ? "xtream" : "m3u",
+            url: url,
+            username: kind == .xtream ? username : nil,
+            password: kind == .xtream ? password : nil
+        ))
     }
 
     private func add() async {

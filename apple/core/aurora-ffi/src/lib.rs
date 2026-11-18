@@ -33,6 +33,7 @@ mod playback;
 mod player;
 mod playlist;
 mod profiles;
+mod provider_edit;
 mod providers;
 mod search;
 mod secrets;
@@ -63,6 +64,7 @@ pub use player::{
     SeriesPrefs, SkipMarker,
 };
 pub use profiles::{PinChange, PinOutcome, Profile};
+pub use provider_edit::{DetectedSource, ProviderCheck, ProviderDraft, ProviderSettings};
 pub use providers::{ImportContent, ImportListener, ImportPhase, ImportReport, Provider};
 pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};

@@ -381,6 +381,28 @@ final class AppModel {
         return await call(nil) { try $0.seriesResume(profileId: profile, seriesId: seriesId) }
     }
 
+    // MARK: Editing a provider
+
+    /// A provider's saved settings, password included, for the editor. Throws, so the
+    /// editor can say why it has nothing to show.
+    func providerSettings(_ id: Int64) async throws -> ProviderSettings {
+        guard let core else { throw CancellationError() }
+        return try await Task.detached { try core.providerSettings(providerId: id) }.value
+    }
+
+    /// "Check connection": what the form holds, tried without saving it.
+    func checkProvider(_ draft: ProviderDraft) async -> ProviderCheck? {
+        guard let core else { return nil }
+        return await Task.detached { core.checkProvider(draft: draft) }.value
+    }
+
+    /// Save edits to a provider. Throws, so the editor keeps the form and says why.
+    func updateProvider(_ id: Int64, draft: ProviderDraft) async throws {
+        guard let core else { return }
+        try await Task.detached { try core.updateProvider(providerId: id, draft: draft) }.value
+        await reload()
+    }
+
     /// Remove a provider and everything imported from it.
     func removeProvider(_ id: Int64) async {
         _ = await call(false) { try $0.removeProvider(providerId: id) }
