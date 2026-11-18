@@ -24,6 +24,7 @@ struct HomeView: View {
     @State private var series: Int64?
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openSearch) private var openSearch
+    @Environment(\.openAssistant) private var openAssistant
 
     var body: some View {
         NavigationStack {
@@ -33,6 +34,12 @@ struct HomeView: View {
                     if let openSearch {
                         ToolbarItem(placement: .primaryAction) {
                             Button("Search", systemImage: "magnifyingglass", action: openSearch)
+                        }
+                    }
+                    // Where Settings is in the toolbar (an iPhone), so is the assistant.
+                    if openSettings != nil {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Ask Aurora", systemImage: "sparkles") { openAssistant(nil) }
                         }
                     }
                     if let openSettings {
@@ -68,7 +75,8 @@ struct HomeView: View {
                     LazyVStack(alignment: .leading, spacing: railSpacing) {
                         ForEach(shown, id: \.id) { rail in
                             RailRow(rail: rail, hidden: hidden, open: open,
-                                    dismiss: dismissAction(for: rail))
+                                    dismiss: dismissAction(for: rail),
+                                    ask: rail.kind == "aiPicks" ? { openAssistant(Self.askAbout(rail.items)) } : nil)
                         }
                     }
                     .padding(.vertical)
@@ -137,6 +145,14 @@ struct HomeView: View {
         if !(await action()) { hidden.remove(item.key) }
     }
 
+    /// The opening question from the rail, as Windows words it: the first four titles,
+    /// phrased as something a person would say, since it goes into the thread as theirs.
+    static func askAbout(_ items: [RailItem]) -> String {
+        let titles = items.prefix(4).map(\.item.title)
+        if titles.isEmpty { return "What should I watch tonight?" }
+        return "You suggested \(titles.joined(separator: ", ")). Why those, and what else is like them?"
+    }
+
     private struct AiKey: Equatable {
         let library: Int
         let profile: Int64
@@ -169,6 +185,8 @@ struct RailRow: View {
     let hidden: Set<String>
     let open: (CatalogItem) -> Void
     let dismiss: Dismiss?
+    /// "Ask about these", on the Gemini rail: into the assistant with these titles.
+    var ask: (() -> Void)? = nil
     @State private var more: [RailItem] = []
     @State private var hasMore: Bool?
     @State private var loading = false
@@ -180,7 +198,18 @@ struct RailRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(rail.title).font(.title3.bold()).padding(.horizontal)
+            HStack(alignment: .firstTextBaseline) {
+                Text(rail.title).font(.title3.bold())
+                Spacer()
+                if let ask {
+                    Button("Ask about these", systemImage: "sparkles", action: ask)
+                        .font(.caption.weight(.semibold))
+                        #if os(iOS)
+                        .buttonStyle(.borderless)
+                        #endif
+                }
+            }
+            .padding(.horizontal)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: cardSpacing) {
                     ForEach(items, id: \.item.key) { entry in

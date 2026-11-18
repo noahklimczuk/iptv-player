@@ -532,3 +532,48 @@ fn gemini_keeps_its_key_cache_and_switch_where_windows_does() {
         );
     }
 }
+
+#[test]
+fn the_assistant_is_windows_assistant() {
+    // Everything above the Tauri commands is copied; compare it whole, less the lines
+    // the copy had to change (the module note, the imports and the error type).
+    let windows = app_src("assistant.rs");
+    let theirs = &windows[..windows
+        .find("/* ── Commands")
+        .expect("aurora-app assistant.rs has no Commands section")];
+    let ours = include_str!("assistant.rs");
+    let ours = &ours[..ours
+        .find("/* ── The Apple core's commands")
+        .expect("assistant.rs lost its exports")];
+    let normal = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| !l.starts_with("//!"))
+            .filter(|l| !l.starts_with("use crate::"))
+            .map(|l| {
+                l.replace(", uniffi::Record)]", ")]")
+                    .replace(
+                        "return Err(AuroraError::other(\"Ask me something first.\"));",
+                        "return Err(AppError::Other(\"Ask me something first.\".into()));",
+                    )
+                    .replace(
+                        "return Err(AuroraError::Network { message: why });",
+                        "return Err(AppError::Other(why));",
+                    )
+            })
+            .collect()
+    };
+    let (theirs, ours) = (normal(theirs), normal(ours));
+    for (n, (a, b)) in theirs.iter().zip(&ours).enumerate() {
+        assert_eq!(
+            a,
+            b,
+            "assistant.rs differs from aurora-app's at line {}",
+            n + 1
+        );
+    }
+    assert_eq!(
+        theirs.len(),
+        ours.len(),
+        "assistant.rs and aurora-app's differ in length"
+    );
+}

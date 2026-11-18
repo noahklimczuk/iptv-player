@@ -217,7 +217,7 @@ impl AuroraCore {
     }
 
     /// The key to use, preferring the viewer's own; none when switched off.
-    fn gemini_key(&self) -> Option<String> {
+    pub(crate) fn gemini_key(&self) -> Option<String> {
         let own = self.credentials.get(CREDENTIAL_KEY).ok();
         key_from(self.gemini_enabled(), own.as_deref(), built_in())
     }
