@@ -22,6 +22,13 @@ impl Secrets for MemorySecrets {
         self.0.lock().unwrap().get(name).cloned()
     }
     fn set(&self, name: &str, value: &str) -> Result<()> {
+        // What Windows Credential Manager refuses: more than 2,560 bytes of UTF-16.
+        let bytes = value.encode_utf16().count() * 2;
+        if bytes > 2_560 {
+            return Err(SyncError::Account(format!(
+                "{name} is {bytes} bytes as UTF-16; the credential store takes 2,560"
+            )));
+        }
         self.0.lock().unwrap().insert(name.into(), value.into());
         Ok(())
     }
@@ -277,6 +284,51 @@ fn create_on_one_device_join_on_another_and_a_favourite_crosses() {
     let refresh: serde_json::Value = serde_json::from_str(&session).unwrap();
     assert!(!in_db.contains(refresh["refresh_token"].as_str().unwrap()));
     assert!(!in_db.contains(&pc.secrets.get(VAULT_SECRET).unwrap()));
+}
+
+#[test]
+fn the_sign_in_fits_the_credential_store_and_survives_a_restart() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    let mut tv = device(&fb, 100);
+    // Refused by Windows before the ID token was left out of what is stored.
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_str(&pc.secrets.get(SESSION_SECRET).unwrap()).unwrap();
+    assert_eq!(saved["id_token"], "", "the hour-long token is not stored");
+    assert!(!saved["refresh_token"].as_str().unwrap().is_empty());
+
+    // A restart: a new Household over the same store and library, nothing in memory.
+    let restarted = Household::new(
+        fb.clone(),
+        Some(FirebaseConfig {
+            api_key: "k".into(),
+            project_id: "aurora-test".into(),
+        }),
+        pc.secrets.clone(),
+    )
+    .with_kdf(KdfParams { m: 64, t: 1, p: 1 });
+    lists::toggle_favorite(&pc.conn, 1, 10, None, 1).unwrap();
+    restarted.sync(&mut pc.conn).unwrap();
+    tv.household
+        .sign_in(
+            &mut tv.conn,
+            &account("TV"),
+            Unlock::Passphrase(PASS.into()),
+        )
+        .unwrap();
+    assert_eq!(favourites(&tv.conn, 110), 1);
+
+    // And the running one does not mint a token per round: one round, no token request.
+    let before = fb.requests().len();
+    restarted.sync(&mut pc.conn).unwrap();
+    let minted = fb.requests()[before..]
+        .iter()
+        .filter(|r| r.contains("securetoken"))
+        .count();
+    assert_eq!(minted, 0, "{:?}", &fb.requests()[before..]);
 }
 
 #[test]

@@ -14,7 +14,7 @@
 //! can read it on a read-only connection without waiting behind a sync in flight.
 //! Signing out runs [`db::disable`], which clears all of it except the clock.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aurora_db::repo::sync as db;
@@ -38,7 +38,8 @@ pub trait Secrets: Send + Sync {
     fn is_persistent(&self) -> bool;
 }
 
-/// The Firebase session, as JSON. Its refresh token is what keeps the device signed in.
+/// The Firebase session, as JSON: the account and its refresh token, which is what keeps
+/// the device signed in. Not the ID token -- see [`stored`].
 pub const SESSION_SECRET: &str = "session";
 /// The household's vault key, in hex.
 pub const VAULT_SECRET: &str = "vault";
@@ -161,6 +162,24 @@ pub struct Household<H: Http + Clone> {
     cfg: Option<FirebaseConfig>,
     secrets: Arc<dyn Secrets>,
     kdf: KdfParams,
+    /// The session as last used, ID token and all, so each round does not mint a new
+    /// one. Only its long-lived half is in `secrets`.
+    live: Mutex<Option<Session>>,
+}
+
+/// What goes in the credential store: the session without its ID token.
+///
+/// The ID token is a JWT of about a kilobyte that lasts an hour, and Windows Credential
+/// Manager refuses a secret longer than 2,560 bytes of UTF-16 -- 1,280 characters. The
+/// whole session was past that, so on Windows setting sync up signed in and then failed
+/// to save the sign-in. The refresh token mints a new ID token on first use, which costs
+/// one token request after a restart and no Firestore reads.
+fn stored(session: &Session) -> Session {
+    Session {
+        id_token: String::new(),
+        expires_at: 0,
+        ..session.clone()
+    }
 }
 
 impl<H: Http + Clone> Household<H> {
@@ -171,6 +190,7 @@ impl<H: Http + Clone> Household<H> {
             cfg,
             secrets,
             kdf: KdfParams::default(),
+            live: Mutex::new(None),
         }
     }
 
@@ -316,10 +336,7 @@ impl<H: Http + Clone> Household<H> {
             None => new_device_id()?,
         };
 
-        self.secrets.set(
-            SESSION_SECRET,
-            &serde_json::to_string(&transport.session())?,
-        )?;
+        self.keep_session(transport.session())?;
         self.secrets.set(VAULT_SECRET, &key.to_hex())?;
         db::set_state(conn, EMAIL, account.email.trim())?;
         db::set_state(conn, DEVICE_NAME, device_name(account.device_name).as_str())?;
@@ -380,10 +397,17 @@ impl<H: Http + Clone> Household<H> {
     /// transport's count is exactly that operation's.
     fn settle(&self, conn: &Connection, engine: &Live<H>) -> Result<()> {
         Usage::add(conn, now_secs(), engine.transport().used())?;
-        let session = serde_json::to_string(&engine.transport().session())?;
-        if self.secrets.get(SESSION_SECRET).as_deref() != Some(session.as_str()) {
-            self.secrets.set(SESSION_SECRET, &session)?;
+        self.keep_session(engine.transport().session())
+    }
+
+    /// Remember `session` for the next engine, and store its long-lived half if that
+    /// changed -- the refresh token rotates now and then, the ID token every hour.
+    fn keep_session(&self, session: Session) -> Result<()> {
+        let keep = serde_json::to_string(&stored(&session))?;
+        if self.secrets.get(SESSION_SECRET).as_deref() != Some(keep.as_str()) {
+            self.secrets.set(SESSION_SECRET, &keep)?;
         }
+        *self.live.lock().unwrap_or_else(|p| p.into_inner()) = Some(session);
         Ok(())
     }
 
@@ -424,6 +448,7 @@ impl<H: Http + Clone> Household<H> {
 
     /// Stop syncing on this device. Its library is untouched; only what sync knew goes.
     pub fn sign_out(&self, conn: &mut Connection) -> Result<()> {
+        *self.live.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.secrets.delete(SESSION_SECRET);
         self.secrets.delete(VAULT_SECRET);
         db::disable(conn)?;
@@ -433,12 +458,19 @@ impl<H: Http + Clone> Household<H> {
     fn engine(&self, conn: &Connection) -> Result<Live<H>> {
         let not_signed_in = || SyncError::Account("This device is not signed in to sync.".into());
         let cfg = self.cfg()?.clone();
-        let session: Session = self
+        let saved: Session = self
             .secrets
             .get(SESSION_SECRET)
             .map(|s| serde_json::from_str(&s))
             .transpose()?
             .ok_or_else(not_signed_in)?;
+        // The one in memory, unless the store now says otherwise: signed in again
+        // elsewhere in this process, or a restart, which leaves nothing in memory.
+        let live = self.live.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let session = match live {
+            Some(l) if stored(&l) == stored(&saved) => l,
+            _ => saved,
+        };
         let key = self
             .secrets
             .get(VAULT_SECRET)
