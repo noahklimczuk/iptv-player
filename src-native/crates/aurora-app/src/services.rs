@@ -120,6 +120,14 @@ impl Services {
         // is waiting for belongs. See `catch_up`.
         let db = db;
 
+        // Nobody has said who is watching yet, and nothing the parental PIN opened last
+        // time is still open. Until the picker answers, the strictest profile's limits
+        // apply (`aurora_db::repo::parental`). A failure here is logged, not fatal: the
+        // gate it leaves is the previous session's, which is a profile somebody chose.
+        if let Err(e) = aurora_db::repo::parental::clear_session(&db) {
+            tracing::warn!("could not reset who is watching: {e}");
+        }
+
         let http = HttpClient::new(HttpConfig::default())
             .map_err(|e| crate::AppError::Other(e.message))?;
 

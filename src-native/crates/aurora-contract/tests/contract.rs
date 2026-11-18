@@ -298,6 +298,25 @@ fn the_fields_the_host_sends_are_the_ones_the_contract_declares() {
             v(aurora_db::repo::channels::ChannelRow::default()).unwrap(),
         ),
         (
+            "ParentalState",
+            v(aurora_db::repo::parental::ParentalState {
+                profile_id: Some(1),
+                unlocked_until: Some(0),
+                hide_locked: false,
+                restricted: true,
+            })
+            .unwrap(),
+        ),
+        (
+            "ParentalLock",
+            v(aurora_db::repo::parental::Lock {
+                kind: aurora_db::repo::parental::LockKind::Channel,
+                value: "10".into(),
+                label: "BBC One".into(),
+            })
+            .unwrap(),
+        ),
+        (
             "Programme",
             v(aurora_db::repo::epg::ProgrammeRow::default()).unwrap(),
         ),

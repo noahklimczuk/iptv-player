@@ -260,7 +260,7 @@ impl Session {
         }
         let planned = {
             let db = self.db.lock();
-            resolve::plan(
+            resolve::plan_for_viewer(
                 &db,
                 self.credentials.as_ref(),
                 what,

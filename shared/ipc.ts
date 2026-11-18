@@ -720,6 +720,30 @@ export interface ParentalSettings {
   lockSettings: boolean;
 }
 
+/**
+ * The parental gate on this device (`aurora_db::repo::parental`): who is watching, and
+ * whether the parental PIN has opened locked content and the parental settings.
+ */
+export interface ParentalState {
+  /** The profile chosen with `profiles.select`; null until somebody has been chosen. */
+  profileId: number | null;
+  /** Unix seconds until which the PIN keeps things open; null when it has not. */
+  unlockedUntil: number | null;
+  /** Locked content is hidden rather than shown with a padlock. */
+  hideLocked: boolean;
+  /** Whether anything at all is held back for the profile watching. */
+  restricted: boolean;
+}
+
+export type LockKind = 'channel' | 'category';
+
+export interface ParentalLock {
+  kind: LockKind;
+  /** A channel's id as text, or a category's name. */
+  value: string;
+  label: string;
+}
+
 export type PinOutcome =
   | { ok: null }
   | 'ok'
@@ -1794,6 +1818,19 @@ export interface Commands {
     masterPin?: string | null;
   }) => void;
   'profiles.watchedToday': (args: { profileId: number }) => number;
+  /**
+   * Who is watching: the profile whose limits apply from now on. Checks the profile's
+   * PIN on the host; anything the parental PIN had opened closes.
+   */
+  'profiles.select': (args: { profileId: number; pin?: string }) => PinOutcome;
+
+  'parental.state': () => ParentalState;
+  /** The parental PIN: opens locked content and the parental settings for 30 minutes. */
+  'parental.unlock': (args: { pin: string }) => PinOutcome;
+  'parental.relock': () => ParentalState;
+  'parental.locks': () => ParentalLock[];
+  'parental.setLock': (args: { kind: LockKind; value: string; locked: boolean }) => ParentalLock[];
+  'parental.setHideLocked': (args: { hide: boolean }) => ParentalState;
 
   /** Returns null when this airing was already on the schedule. */
   'dvr.schedule': (args: {

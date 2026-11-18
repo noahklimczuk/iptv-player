@@ -5,8 +5,8 @@ use aurora_app::play::commands as play;
 use aurora_app::play::player::Player;
 use aurora_app::play::sleep::{SleepAction, SleepDeadline};
 use aurora_app::{
-    assistant, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, playlist,
-    profiles, providers, recommend,
+    assistant, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, parental,
+    playlist, profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
     sync, updates, window,
@@ -650,6 +650,13 @@ fn main() {
             profiles::profiles_parental,
             profiles::profiles_set_parental,
             profiles::profiles_watched_today,
+            profiles::profiles_select,
+            parental::parental_state,
+            parental::parental_unlock,
+            parental::parental_relock,
+            parental::parental_locks,
+            parental::parental_set_lock,
+            parental::parental_set_hide_locked,
             providers::providers_detect,
             providers::providers_validate,
             providers::providers_save,
