@@ -684,3 +684,53 @@ provider's address, stream URLs, or anything identifying the subscription or the
 Every tool result is assembled field by field by the host, so a tool cannot leak a column
 it was not written to return, and there is a test that asserts no tool result contains a
 URL.
+
+## D29 — The parental gate is one view, applied by the host to every list and to playback
+
+**Context.** Parental controls were stored and never applied (`AUDIT/findings.md` F-36).
+The question was where applying them should live. The UI already knew the active profile,
+and filtering in the screens would have been the smallest change -- and the wrong one: the
+screens are the part a child is sitting in front of, a list the UI forgot to filter is a
+leak, and the player would still play whatever id it was handed.
+
+**Decision.** The host decides, from one place.
+
+- **Who is watching is the host's.** `profiles.select` checks the profile's PIN and records
+  the choice in `session`, a one-row table with no sync triggers that the host empties at
+  every launch. The UI's own notion of the active profile only decides what it shows next.
+- **One view, `parental_gate`,** folds the chosen profile's age limit and unrated rule, the
+  household's "hide adult categories", and how locked content is shown into a single row.
+  A view rather than values the host keeps current, because those inputs change from the
+  picker, the settings, a profile's limits and a sync, and a view cannot be forgotten by
+  any of them.
+- **Lists get it through `LibraryFilter::where_sql`,** which nearly every list query already
+  calls. Each `(SELECT … FROM parental_gate)` in it is uncorrelated, so SQLite evaluates it
+  once per statement, and an unrestricted gate stops at the `OR` before any per-row work.
+  Not a field on `LibraryFilter`: the Apple core builds that struct by name, and the gate
+  is not the viewer's filter to set anyway.
+- **Playback asks the same view** (`repo::parental::check`) before the player or the mosaic
+  plans a stream, so a list and the player cannot disagree. The recorder does not ask: a
+  recording a parent scheduled must not fail because a kids profile is on screen when it
+  starts, and *watching* the recording is judged by its channel.
+- **Two refusals, two answers.** Over a limit is *not allowed*: hidden, refused, and not
+  opened by any PIN -- the answer is another profile. A lock is *locked*: shown with a
+  padlock (or hidden, if the household chooses) and opened by the parental PIN for thirty
+  minutes, until a profile is chosen, or until the app closes.
+- **Fail closed.** With nobody chosen, the strictest profile's limits apply; an age limit
+  the build cannot read is the strictest limit; an age limit below 18 hides adult
+  categories whatever the household setting says.
+- **Locks need a PIN to exist.** A lock is applied only while there is a parental PIN, and
+  one cannot be set without it. Otherwise a lock left behind when the PIN was removed would
+  be a channel nobody could watch.
+- **Unrated is unknown, not suitable.** A kids profile blocks titles with no rating, and
+  panels send none, so until metadata is fetched a kids profile's film library is empty.
+  That is kept, and explained rather than hidden: the films page says why it is empty, and
+  Parental controls shows how much of the library carries a rating.
+- **Channels have no age.** Playlists do not rate channels, so an age limit cannot judge
+  them; a channel is held back by its category (adult) and by locks.
+
+**Consequences.** Adult categories are now actually hidden by default, which removes them
+from libraries where they used to show; Settings → Parental controls is where they come
+back. A device that never chooses a profile -- the Apple app, until its picker calls
+`repo::parental::select_profile` -- gets the strictest profile's limits, which with one
+profile is that profile.

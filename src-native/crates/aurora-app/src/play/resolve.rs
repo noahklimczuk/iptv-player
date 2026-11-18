@@ -83,6 +83,39 @@ fn address(url: String, noun: &str) -> Result<String> {
     Ok(url)
 }
 
+/// Work out how to play `what` for the person watching: [`plan`], once the parental
+/// gate has agreed.
+///
+/// The player and the mosaic come here; the recorder does not, because a recording a
+/// parent scheduled must not fail because a kids profile happens to be on screen when it
+/// starts. Watching that recording is judged here, by its channel.
+pub fn plan_for_viewer(
+    db: &Connection,
+    credentials: &dyn CredentialStore,
+    what: What,
+    start_secs: Option<f64>,
+    now: i64,
+) -> Result<Plan> {
+    allowed(db, what)?;
+    plan(db, credentials, what, start_secs, now)
+}
+
+/// Refuse what the profile watching may not play (`aurora_db::repo::parental`).
+pub fn allowed(db: &Connection, what: What) -> Result<()> {
+    use aurora_db::repo::parental::{self, Target, Verdict};
+    let target = match what {
+        What::Channel(id) | What::Catchup { channel: id, .. } => Target::Channel(id),
+        What::Movie(id) => Target::Movie(id),
+        What::Episode(id) => Target::Episode(id),
+        What::Recording(id) => Target::Recording(id),
+    };
+    match parental::check(db, target)? {
+        Verdict::Allowed => Ok(()),
+        Verdict::NotAllowed => Err(AppError::NotAllowed),
+        Verdict::Locked => Err(AppError::Locked),
+    }
+}
+
 /// Work out how to play `what`.
 pub fn plan(
     db: &Connection,
@@ -477,6 +510,31 @@ mod tests {
 
     fn plan_of(db: &Connection, what: What) -> Result<Plan> {
         plan(db, &MemoryStore::default(), what, None, NOW)
+    }
+
+    /// The player and the mosaic ask the gate; the recorder plans without it, because a
+    /// recording a parent scheduled must still run while a kids profile is on screen.
+    #[test]
+    fn a_locked_channel_is_refused_to_the_viewer_but_not_to_the_recorder() {
+        use aurora_db::repo::parental::{self, LockKind};
+        let db = library();
+        channel(&db, 10, "News", Some("http://x/news.ts"));
+        aurora_db::repo::profiles::set_master_pin(&db, Some("2468"), 0).unwrap();
+        parental::set_lock(&db, LockKind::Channel, "10", true).unwrap();
+
+        let viewer = plan_for_viewer(&db, &MemoryStore::default(), What::Channel(10), None, NOW);
+        assert!(matches!(viewer, Err(AppError::Locked)), "{viewer:?}");
+        let catchup = What::Catchup {
+            channel: 10,
+            start: 0,
+            stop: 60,
+        };
+        assert!(matches!(allowed(&db, catchup), Err(AppError::Locked)));
+        plan_of(&db, What::Channel(10)).expect("the recorder's plan ignores the gate");
+
+        parental::unlock(&db, crate::now_unix()).unwrap();
+        plan_for_viewer(&db, &MemoryStore::default(), What::Channel(10), None, NOW)
+            .expect("the PIN opened it");
     }
 
     fn refusal(db: &Connection, what: What) -> String {

@@ -28,6 +28,8 @@ export const ICON_PATHS: Record<string, string> = {
   volumeOff: 'M11 5L6 9H3v6h3l5 4V5zM17 9l4 6M21 9l-4 6',
   fullscreen: 'M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6',
   record: 'M12 7a5 5 0 100 10 5 5 0 000-10z',
+  // A padlock: parental locks (README §11).
+  lock: 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4',
   clock: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2',
   bell: 'M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',
   star: 'M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5-5.8-3-5.8 3 1.1-6.5L2.6 9.8l6.5-.9z',

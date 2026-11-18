@@ -853,9 +853,88 @@ CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
         name: "sync_capture",
         sql: SYNC_CAPTURE,
     },
+    Migration {
+        version: 19,
+        name: "parental_gate",
+        sql: PARENTAL_GATE,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 18;
+pub const LATEST_VERSION: u32 = 19;
+
+/// Migration 19: parental controls that actually apply (README §11).
+///
+/// Before this, every parental setting was stored and none was read. The age limit on
+/// a kids profile, "hide adult categories" (on by default) and the per-channel and
+/// per-category locks reached no list query and no playback, so a nine-year-old's
+/// profile showed and played everything the owner's did.
+///
+/// **`session`** is who is watching on this device now: the profile last chosen in
+/// "Who's watching?", and until when the parental PIN has opened locked content and the
+/// parental settings. One row, no sync triggers, and the host empties it at every launch,
+/// so a restart is never still unlocked from yesterday.
+///
+/// **`parental_gate`** is what that profile may see, folded into one row: an age limit,
+/// whether unrated titles pass it, whether adult categories are hidden, and whether
+/// locked content is hidden or only asks for the PIN. `LibraryFilter::where_sql` reads it
+/// in every list query, and playback asks the same row (`repo::parental::check`), so a
+/// list and the player cannot disagree about what is allowed. A view rather than values
+/// the host keeps up to date, because the inputs change from four places -- the picker,
+/// the parental settings, a profile's limits and a sync pulling any of them in -- and a
+/// view cannot be forgotten by one of them.
+///
+/// With no profile chosen, or the chosen one deleted, the gate is the **strictest of
+/// every profile's**: the lowest age limit, unrated blocked if any profile blocks it. A
+/// device with one profile is therefore that profile, and one with a kids profile shows
+/// nothing above the kid's limit until somebody has picked who is watching.
+///
+/// Locks apply only while there is a parental PIN to open them with. A lock set and then
+/// left behind when the PIN was removed would otherwise be a channel nobody can watch.
+///
+/// `rule` packs the content half into one integer for `parental_allows`: -1 when nothing
+/// is restricted, otherwise the age limit (255 for none) in the low byte, "unrated
+/// passes" in bit 8 and "hide adult categories" in bit 9. An age limit below 18 always
+/// hides adult categories, whatever the household setting says.
+const PARENTAL_GATE: &str = r#"
+CREATE TABLE session (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    profile_id     INTEGER,
+    unlocked_until INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO session (id) VALUES (1);
+
+CREATE VIEW parental_gate AS
+SELECT
+    CASE WHEN g.age >= 255 AND g.adult = 0 THEN -1
+         ELSE g.age | (g.unrated << 8) | (g.adult << 9) END AS rule,
+    g.hide_locked AS hide_locked,
+    g.unlocked    AS unlocked
+FROM (
+    SELECT
+        c.age     AS age,
+        c.unrated AS unrated,
+        CASE WHEN c.age < 18
+               OR COALESCE((SELECT hide_adult FROM parental WHERE id = 1), 1) != 0
+             THEN 1 ELSE 0 END AS adult,
+        CASE WHEN COALESCE((SELECT value FROM settings
+                             WHERE scope = 'global' AND key = 'parental.hide_locked'),
+                           'false') = 'true'
+             THEN 1 ELSE 0 END AS hide_locked,
+        CASE WHEN (SELECT master_pin FROM parental WHERE id = 1) IS NULL
+               OR COALESCE((SELECT unlocked_until FROM session WHERE id = 1), 0)
+                  > CAST(strftime('%s', 'now') AS INTEGER)
+             THEN 1 ELSE 0 END AS unlocked
+    FROM (
+        SELECT COALESCE(MIN(parental_age(p.max_rating)), 255) AS age,
+               COALESCE(MIN(CASE WHEN parental_age(p.max_rating) < 255
+                                 THEN p.allow_unrated END), 1) AS unrated
+          FROM profiles p
+         WHERE p.id = (SELECT profile_id FROM session WHERE id = 1)
+            OR NOT EXISTS (SELECT 1 FROM profiles q
+                            WHERE q.id = (SELECT profile_id FROM session WHERE id = 1))
+    ) c
+) g;
+"#;
 
 /// Migration 18: what sync needs from the local database (`docs/APPLE_PORT_AND_SYNC.md`
 /// §3.3 and §3.6).

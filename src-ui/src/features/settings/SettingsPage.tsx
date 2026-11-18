@@ -4,20 +4,71 @@ import type { Theme } from '@/state/ui';
 import { Badge, Button } from '@/components/Primitives';
 import { Icon, type IconName } from '@/components/Icon';
 import { useCommand } from '@/hooks/useCommand';
-import { isNativeHost } from '@/ipc';
+import { invoke, isNativeHost, requestParentalPin } from '@/ipc';
 import { AboutPanel } from '@/features/settings/AboutPanel';
 import { DiagnosticsPanel } from '@/features/settings/DiagnosticsPanel';
 import { FilterPanel } from '@/features/settings/FilterPanel';
 import { GeminiPanel } from '@/features/settings/GeminiPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
+import { ParentalPanel } from '@/features/settings/ParentalPanel';
 import { SyncPanel } from '@/features/settings/SyncPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
 import { RefreshButton } from '@/features/settings/RefreshButton';
 import { TimeshiftPanel } from '@/features/settings/TimeshiftPanel';
 import { UpdatePanel } from '@/features/settings/UpdatePanel';
+import { useParental } from '@/state/parental';
+import { useProfile } from '@/state/profile';
 import { useUi } from '@/state/ui';
 
+/**
+ * Settings, behind the parental PIN when the household asked for that (README §11:
+ * "a PIN-protected Settings section").
+ *
+ * Leaving closes what the PIN opened, so the next person to come here is asked again
+ * rather than inheriting the parent's half hour.
+ */
 export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
+  const parental = useProfile((s) => s.parental);
+  const state = useParental((s) => s.state);
+  const loadParental = useParental((s) => s.load);
+  const guarded = parental?.hasMasterPin ?? false;
+
+  useEffect(() => {
+    loadParental().catch(() => {});
+  }, [loadParental]);
+  useEffect(() => () => {
+    if (guarded) invoke('parental.relock').catch(() => {});
+  }, [guarded]);
+
+  const open = state?.unlockedUntil != null && state.unlockedUntil > Date.now() / 1000;
+  if (parental?.lockSettings && guarded && !open) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', padding: 'var(--sp-7) var(--sp-5)' }}>
+        <div className="dl-panel settings-card" style={{ maxWidth: 520, textAlign: 'center' }}>
+          <Icon name="lock" size={32} />
+          <h1 className="dl-display" style={{ fontSize: 'var(--fs-2xl)', margin: '12px 0 8px' }}>
+            Settings are locked
+          </h1>
+          <p className="settings-row-hint" style={{ margin: '0 auto 20px' }}>
+            Enter the parental PIN to change them.
+          </p>
+          <Button
+            variant="primary"
+            icon="lock"
+            onClick={() => {
+              void requestParentalPin('change').then(async (ok) => { if (ok) await loadParental(); });
+            }}
+          >
+            Enter the PIN
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return <SettingsContent onAddProvider={onAddProvider} />;
+}
+
+function SettingsContent({ onAddProvider }: { onAddProvider: () => void }) {
   /**
    * The eight fields this page reads, subscribed to one at a time (R-90).
    *
@@ -266,6 +317,10 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
         <SyncPanel />
       </Section>
 
+      <Section title="Parental controls">
+        <ParentalPanel />
+      </Section>
+
       <Section title="Artwork and metadata">
         <MetadataPanel />
       </Section>
@@ -375,7 +430,8 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
 
 /** The sections, in page order, for the index. */
 const SECTIONS = [
-  'Providers', 'Appearance', 'Artwork and metadata', 'Recommendations', 'Filtering',
+  'Providers', 'Appearance', 'Parental controls', 'Artwork and metadata', 'Recommendations',
+  'Filtering',
   'Pause live TV', 'Library', 'Updates', 'About', 'Diagnostics', 'Keyboard',
 ];
 
@@ -383,6 +439,7 @@ const SECTIONS = [
 const SECTION_ICONS: Record<string, IconName> = {
   Providers: 'layers',
   Appearance: 'sun',
+  'Parental controls': 'lock',
   'Artwork and metadata': 'film',
   Recommendations: 'sparkle',
   Filtering: 'grid',
@@ -401,6 +458,7 @@ const SECTION_ICONS: Record<string, IconName> = {
 const SECTION_BLURBS: Record<string, string> = {
   Providers: 'The playlists and Xtream lines your library is built from.',
   Appearance: 'How Aurora looks and moves.',
+  'Parental controls': 'What each profile may watch, and what needs the PIN.',
   Filtering: 'What your library shows, and what it hides.',
   'Pause live TV': 'Rewind and pause the channel you are watching.',
   Library: 'What your providers have given you.',

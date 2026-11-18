@@ -63,10 +63,19 @@ export const useProfile = create<ProfileState>((set, get) => ({
     // Keep the active profile, refreshed (a rename shows at once); if it was deleted,
     // there is no active profile until one is chosen.
     const still = was ? profiles.find((p) => p.id === was.id) ?? null : null;
+    const chosen = still ?? (onlyOne ? profiles[0]! : null);
+    // Skipping the picker still has to tell the host who is watching: what a profile
+    // may see is decided there (`profiles.select`). With one profile the host's
+    // fallback is that profile anyway, so a failure here costs nothing but the log.
+    if (chosen && !was) {
+      invoke('profiles.select', { profileId: chosen.id }).catch((e: unknown) => {
+        console.warn('could not tell the host who is watching', e);
+      });
+    }
     set({
       profiles,
       parental,
-      active: still ?? (onlyOne ? profiles[0]! : null),
+      active: chosen,
       picking: atLaunch && onlyOne ? false : get().picking,
       loaded: true,
     });

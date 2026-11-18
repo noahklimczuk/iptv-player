@@ -110,6 +110,7 @@ mod tests {
         "series_prefs",
         "parental",
         "parental_locks",
+        "session",
         "pin_attempts",
         "recordings",
         "recording_rules",

@@ -555,7 +555,7 @@ impl Mosaic {
         // none is left.
         let planned = {
             let db = self.db.lock();
-            resolve::plan(
+            resolve::plan_for_viewer(
                 &db,
                 self.credentials.as_ref(),
                 What::Channel(channel_id),

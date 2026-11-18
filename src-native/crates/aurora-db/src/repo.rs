@@ -10,6 +10,7 @@ pub mod library;
 pub mod lists;
 pub mod markers;
 pub mod mosaic;
+pub mod parental;
 pub mod playlist;
 pub mod profiles;
 pub mod progress;

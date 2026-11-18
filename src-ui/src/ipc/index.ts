@@ -6,6 +6,7 @@
 import type {
   CommandArgs, CommandName, CommandResult, Events, IngestProgress, PlayerState,
 } from '@shared/ipc';
+import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE } from './parentalMessages';
 import { subscribe } from './subscribe';
 import {
   invokeMock,
@@ -49,10 +50,71 @@ export const isNativeHost = (): boolean => tauri() !== null;
 export const hasVideoSurface = (): boolean =>
   isNativeHost() || new URLSearchParams(window.location.search).has('video');
 
+/**
+ * The host's two refusals that the parental PIN answers (`AppError::Locked` and
+ * `AppError::ParentalPinRequired`). Matched on the text, as `superseded` is: the error
+ * crosses the bridge as a string.
+ */
+export { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE };
+
+/** Why the PIN is being asked for: to watch something locked, or to change a setting. */
+export type ParentalReason = 'watch' | 'change';
+
+let askParentalPin: ((reason: ParentalReason) => Promise<boolean>) | null = null;
+let asking: Promise<boolean> | null = null;
+
+/**
+ * Register what asks the viewer for the parental PIN (`ParentalPinDialog`). Returns
+ * the unregister.
+ *
+ * Done here, under every command, rather than at each call site: playback alone starts
+ * from six places -- a click, the zapper, the number pad, the guide, catch-up, the next
+ * episode -- and a guarded change from a dozen more. Each would otherwise need its own
+ * "if locked, ask, then try again", and the one that forgot it would show a padlock
+ * error with no way past it.
+ */
+export function setParentalPinAsker(fn: (reason: ParentalReason) => Promise<boolean>): () => void {
+  askParentalPin = fn;
+  return () => {
+    if (askParentalPin === fn) askParentalPin = null;
+  };
+}
+
+/** Ask for the parental PIN now, as Settings does when it is locked. True if it opened. */
+export function requestParentalPin(reason: ParentalReason): Promise<boolean> {
+  if (!askParentalPin) return Promise.resolve(false);
+  asking ??= askParentalPin(reason).finally(() => { asking = null; });
+  return asking;
+}
+
+function refusalText(e: unknown): string {
+  if (typeof e === 'string') return e;
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
 /** Call a host command. Rejects with a readable message; callers surface it per README §17. */
 export async function invoke<K extends CommandName>(
   name: K,
   args: CommandArgs<K> = undefined as CommandArgs<K>,
+): Promise<CommandResult<K>> {
+  try {
+    return await send(name, args);
+  } catch (e: unknown) {
+    const text = refusalText(e);
+    const reason: ParentalReason | null = text.includes(LOCKED_MESSAGE)
+      ? 'watch'
+      : text.includes(PIN_REQUIRED_MESSAGE) ? 'change' : null;
+    if (!reason || !askParentalPin || name === 'parental.unlock') throw e;
+    // Several refusals at once -- a guarded save of three settings -- share one dialog.
+    if (!(await requestParentalPin(reason))) throw e;
+    return send(name, args);
+  }
+}
+
+async function send<K extends CommandName>(
+  name: K,
+  args: CommandArgs<K>,
 ): Promise<CommandResult<K>> {
   const host = tauri();
   if (!host) return invokeMock(name, args);

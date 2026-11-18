@@ -30,6 +30,8 @@ pub const SETTINGS: &[(&str, SettingSync)] = &[
     ("filter.hide_untagged", Personal),
     ("guide.free_sources", Personal),
     ("gemini.enabled", Personal),
+    // The household's parental choice, like the locks it applies to.
+    ("parental.hide_locked", Personal),
     // Per-device by nature.
     //
     // The assistant's history is per profile but can run to many kilobytes, and a
