@@ -3,13 +3,15 @@ import SwiftUI
 /// Where the remote's focus can be in the player (tvOS).
 enum PlayerFocus: Hashable {
     case backdrop, back, playPause, forward, subtitles, audio, picture, close
+    case channelDown, channelUp, lastChannel, keypad
     case skip, upNextPlay, upNextCancel, sleepKeep
 
     /// The transport and menu buttons: focus on one of these is the viewer using the
     /// controls, which keeps them up. Skip, Up Next and the sleep warning stand alone.
     var isChrome: Bool {
         switch self {
-        case .back, .playPause, .forward, .subtitles, .audio, .picture, .close: true
+        case .back, .playPause, .forward, .subtitles, .audio, .picture, .close,
+             .channelDown, .channelUp, .lastChannel, .keypad: true
         case .backdrop, .skip, .upNextPlay, .upNextCancel, .sleepKeep: false
         }
     }
@@ -57,6 +59,7 @@ struct PlayerOverlay: View {
                     .allowsHitTesting(false)
                 }
                 status
+                zapping
                 corner
                 if let panel = session.panel {
                     WatchPanel(session: session, tab: panel)
@@ -108,11 +111,8 @@ struct PlayerOverlay: View {
         // own tabs can move it to another, so the tab it closed on decides).
         .onChange(of: session.panel) { old, new in
             guard new == nil, let old, session.controlsVisible else { return }
-            let opener: PlayerFocus = switch old {
-            case .subtitles: .subtitles
-            case .audio: session.state.audioTracks.count > 1 ? .audio : .subtitles
-            case .picture: .picture
-            }
+            // Audio's button is missing with one track: Subtitles is beside where it was.
+            let opener: PlayerFocus = old == .audio && session.state.audioTracks.count <= 1 ? .subtitles : old.opener
             DispatchQueue.main.async { focus.wrappedValue = opener }
         }
         .onChange(of: session.sleep.warning) { _, warning in
@@ -159,6 +159,49 @@ struct PlayerOverlay: View {
         .allowsHitTesting(false)
     }
 
+    /// The number being typed, top right, and the channel just tuned, bottom left above
+    /// the controls, as a set-top box shows them (`ZapBanner`). Neither raises the
+    /// controls.
+    private var zapping: some View {
+        VStack {
+            HStack(alignment: .top) {
+                Spacer()
+                if !session.digits.isEmpty {
+                    Text(session.digits)
+                        .font(.system(size: digitSize, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .padding(.horizontal, 20).padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityLabel("Channel \(session.digits)")
+                }
+            }
+            Spacer()
+            HStack {
+                if let banner = session.banner, session.panel == nil {
+                    Text(banner)
+                        .font(.title3.bold())
+                        .lineLimit(2)
+                        .padding(.horizontal, 18).padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .transition(.opacity)
+                }
+                Spacer()
+            }
+            .padding(.bottom, chromeHeight)
+        }
+        .padding(edge)
+        .allowsHitTesting(false)
+        .animation(.easeInOut(duration: 0.2), value: session.banner)
+    }
+
+    private var digitSize: CGFloat {
+        #if os(tvOS)
+        72
+        #else
+        40
+        #endif
+    }
+
     /// Skip and Up Next, bottom right, one stack above where the controls sit (`App.tsx`).
     /// Both can be live during the credits, so they queue rather than overlap. The stack
     /// stays put when the controls fade: one that dropped into their place would take a
@@ -192,7 +235,17 @@ struct PlayerOverlay: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Could not play \(session.item.title)").font(.headline)
             Text(message)
-            Button("Close", action: close)
+            HStack {
+                // A dead channel isn't the end of watching: the next one is a press away.
+                if session.isLive {
+                    Button("Channel down", systemImage: "chevron.down") { session.step(forward: false) }
+                    Button("Channel up", systemImage: "chevron.up") { session.step(forward: true) }
+                }
+                Button("Close", action: close)
+            }
+            #if os(iOS)
+            .buttonStyle(.bordered)
+            #endif
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -235,17 +288,41 @@ private struct PlayerChrome: View {
                 #endif
             }
             Spacer()
-            ProgressRow(session: session, interactive: true)
+            HStack(spacing: spacing) {
+                ProgressRow(session: session, interactive: true)
+                if session.isLive, let last = session.lastChannel {
+                    Spacer()
+                    // Windows' Backspace: the channel before this one.
+                    Button { session.backToLast() } label: {
+                        Label("Back to \(last.name)", systemImage: "arrow.uturn.backward")
+                            .lineLimit(1)
+                    }
+                    .font(.callout)
+                    .focused(focus, equals: .lastChannel)
+                    #if os(iOS)
+                    .buttonStyle(.bordered)
+                    #endif
+                }
+            }
             HStack(spacing: spacing) {
                 if session.seekable {
                     transport("Back 10 seconds", "gobackward.10", .back) { session.seek(by: -10) }
+                }
+                if session.isLive {
+                    transport("Channel down", "chevron.down", .channelDown) { session.step(forward: false) }
                 }
                 transport(session.state.paused ? "Play" : "Pause",
                           session.state.paused ? "play.fill" : "pause.fill", .playPause) { session.togglePause() }
                 if session.seekable {
                     transport("Forward 30 seconds", "goforward.30", .forward) { session.seek(by: 30) }
                 }
+                if session.isLive {
+                    transport("Channel up", "chevron.up", .channelUp) { session.step(forward: true) }
+                }
                 Spacer()
+                if session.isLive {
+                    menuButton("Channel number", value: nil, icon: "number", tab: .keypad)
+                }
                 menuButton("Subtitles", value: subtitleChoice, icon: "captions.bubble", tab: .subtitles)
                 if session.state.audioTracks.count > 1 {
                     menuButton("Audio", value: audioChoice, icon: "waveform", tab: .audio)
@@ -301,7 +378,7 @@ private struct PlayerChrome: View {
         }
         .accessibilityLabel(value.map { "\(title): \($0)" } ?? title)
         .font(.title3)
-        .focused(focus, equals: tab == .subtitles ? .subtitles : tab == .audio ? .audio : .picture)
+        .focused(focus, equals: tab.opener)
         #if os(iOS)
         .buttonStyle(.plain)
         .padding(6)
@@ -380,12 +457,17 @@ private struct WatchPanel: View {
             Spacer()
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Picker("Menu", selection: Binding(get: { tab }, set: { session.panel = $0 })) {
-                        Text("Subtitles").tag(PlayerSession.Panel.subtitles)
-                        Text("Audio").tag(PlayerSession.Panel.audio)
-                        Text("Picture").tag(PlayerSession.Panel.picture)
+                    if tab == .keypad {
+                        Text("Channel number").font(.headline)
+                        Spacer()
+                    } else {
+                        Picker("Menu", selection: Binding(get: { tab }, set: { session.panel = $0 })) {
+                            Text("Subtitles").tag(PlayerSession.Panel.subtitles)
+                            Text("Audio").tag(PlayerSession.Panel.audio)
+                            Text("Picture").tag(PlayerSession.Panel.picture)
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
                     #if os(iOS)
                     Button("Close", systemImage: "xmark") { session.panel = nil }
                         .labelStyle(.iconOnly)
@@ -397,6 +479,7 @@ private struct WatchPanel: View {
                         case .subtitles: subtitles
                         case .audio: audio
                         case .picture: picture
+                        case .keypad: Keypad(session: session)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -496,6 +579,65 @@ private struct WatchPanel: View {
         } catch {
             sleepError = error.viewerMessage
         }
+    }
+}
+
+/// Digits for a channel number (Windows' number keys). The number is tuned when typing
+/// stops, as on Windows; Go tunes it at once.
+private struct Keypad: View {
+    let session: PlayerSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(session.digits.isEmpty ? "–" : session.digits)
+                .font(.system(size: 44, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .center)
+                .accessibilityLabel(session.digits.isEmpty ? "No number typed" : "Typed \(session.digits)")
+            Grid(horizontalSpacing: spacing, verticalSpacing: spacing) {
+                ForEach([[1, 2, 3], [4, 5, 6], [7, 8, 9]], id: \.self) { row in
+                    GridRow {
+                        ForEach(row, id: \.self) { digit($0) }
+                    }
+                }
+                GridRow {
+                    key("Delete", systemImage: "delete.left") { session.dropDigit() }
+                        .disabled(session.digits.isEmpty)
+                    digit(0)
+                    key("Go", systemImage: "return") { session.commitDigits() }
+                    .disabled(session.digits.isEmpty)
+                }
+            }
+            Text("Up to \(session.zap.maxDigits) digits. The channel changes when you stop typing.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    #if os(tvOS)
+    private let spacing: CGFloat = 20
+    #else
+    private let spacing: CGFloat = 10
+    #endif
+
+    private func digit(_ d: Int) -> some View {
+        key("\(d)", systemImage: nil) { session.typeDigit(d) }
+    }
+
+    private func key(_ title: String, systemImage: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if let systemImage {
+                    Image(systemName: systemImage).accessibilityLabel(title)
+                } else {
+                    Text(title).monospacedDigit()
+                }
+            }
+            .font(.title2)
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        #if os(iOS)
+        .buttonStyle(.bordered)
+        #endif
     }
 }
 
@@ -720,5 +862,17 @@ private struct SleepWarning: View {
             Spacer()
         }
         .padding(.top, 24)
+    }
+}
+
+extension PlayerSession.Panel {
+    /// The button in the controls that opens this panel.
+    var opener: PlayerFocus {
+        switch self {
+        case .subtitles: .subtitles
+        case .audio: .audio
+        case .picture: .picture
+        case .keypad: .keypad
+        }
     }
 }

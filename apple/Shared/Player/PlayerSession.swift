@@ -12,6 +12,8 @@ import Observation
 final class PlayerSession {
     enum Panel: Hashable {
         case subtitles, audio, picture
+        /// Typing a channel number with the remote or a finger (live only).
+        case keypad
     }
 
     let menus = playerMenus()
@@ -46,6 +48,30 @@ final class PlayerSession {
     private var upNextDismissed: Int64?
     private(set) var upNextDeadline: Date?
 
+    // MARK: Zapping (`useZapper`)
+
+    /// A channel as the player names it: enough to come back to it.
+    struct Tuned: Equatable {
+        let id: Int64
+        let name: String
+        let number: UInt32?
+    }
+
+    let zap = zapRules()
+    /// Digits typed so far, shown while a number is being entered.
+    private(set) var digits = ""
+    /// The channel before this one, for "last channel".
+    private(set) var lastChannel: Tuned?
+    /// Names the channel just tuned (or says a number reached nothing) for a moment,
+    /// without raising the controls: the next press of up or down zaps again.
+    private(set) var banner: String?
+    private var bannerUntil: Date?
+    private var current: Tuned?
+    /// What the viewer most recently asked to be on. A lookup that answers after they
+    /// moved on is dropped, or it would put them back on a channel they had left.
+    private var intent = 0
+    private var digitTimer: Task<Void, Never>?
+
     // MARK: Sleep timer
 
     private(set) var sleep = SleepState(atUnix: nil, after: nil, remainingSecs: nil, warning: false)
@@ -62,6 +88,7 @@ final class PlayerSession {
         self.core = core
         self.profileId = profileId
         sleep = core.sleepState()
+        if case .channel(let id, let name) = item { current = Tuned(id: id, name: name, number: nil) }
     }
 
     var isLive: Bool {
@@ -79,6 +106,7 @@ final class PlayerSession {
     // MARK: Ticking
 
     func start() {
+        nameCurrent()
         ticker?.invalidate()
         ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -99,6 +127,7 @@ final class PlayerSession {
         }
         // The remote's jump hint goes after its moment, even when nothing else redraws.
         if let until = seekHintUntil, Date() >= until { seekHintUntil = nil }
+        if let until = bannerUntil, Date() >= until { banner = nil; bannerUntil = nil }
         sleep = core.sleepState()
         if core.sleepDue() {
             controller?.stop()
@@ -332,6 +361,12 @@ final class PlayerSession {
         upNextDeadline = nil
         let title = next.title.map { "S\(next.season)E\(next.episode) · \($0)" } ?? "S\(next.season)E\(next.episode)"
         item = .episode(id: next.id, title: title, startAt: nil)
+        startOver()
+        poke()
+    }
+
+    /// Forget what belonged to the item that was playing.
+    private func startOver() {
         aids = nil
         aidsStage = nil
         autoSkipped = []
@@ -339,7 +374,115 @@ final class PlayerSession {
         lastPosition = nil
         state = MPVPlayerController.PlaybackState()
         status = nil
-        poke()
+    }
+
+    // MARK: Zapping
+
+    /// Put a channel on in place of this one.
+    func tune(_ channel: Tuned) {
+        intent += 1
+        guard isLive else { return }
+        if let current, current.id != channel.id { lastChannel = current }
+        current = channel
+        if case .channel(let id, _) = item, id == channel.id {
+            // Already on: say so rather than open it again.
+            showBanner(channel)
+            return
+        }
+        item = .channel(id: channel.id, name: channel.name)
+        startOver()
+        showBanner(channel)
+    }
+
+    /// Channel up (`forward`) or down, through the list Windows zaps through.
+    func step(forward: Bool) {
+        guard isLive else { return }
+        intent += 1
+        let mine = intent
+        let from = current?.id
+        let core = core
+        Task {
+            do {
+                let next = try await Task.detached { try core.channelStep(from: from, forward: forward) }.value
+                guard mine == intent, let next else { return }
+                tune(Tuned(next))
+            } catch {
+                guard mine == intent else { return }
+                say(error.viewerMessage)
+            }
+        }
+    }
+
+    /// The channel the player opened on came with a name only: find its number, for the
+    /// banner that "last channel" shows on the way back to it.
+    private func nameCurrent() {
+        guard let opened = current, opened.number == nil else { return }
+        let core = core
+        Task {
+            let found = await Task.detached { try? core.channel(id: opened.id) }.value
+            guard let found = found ?? nil else { return }
+            let named = Tuned(found)
+            if current?.id == named.id { current = named }
+            if lastChannel?.id == named.id { lastChannel = named }
+        }
+    }
+
+    /// Back to the channel before this one (Windows' Backspace).
+    func backToLast() {
+        if let lastChannel { tune(lastChannel) }
+    }
+
+    /// A digit from the keypad. The number is tuned when the viewer stops typing.
+    func typeDigit(_ digit: Int) {
+        guard isLive else { return }
+        digits = pushDigit(typed: digits, digit: String(digit))
+        digitTimer?.cancel()
+        let wait = UInt64(zap.digitTimeoutMs) * 1_000_000
+        digitTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: wait)
+            guard !Task.isCancelled else { return }
+            self?.commitDigits()
+        }
+    }
+
+    /// Take back the last digit typed.
+    func dropDigit() {
+        guard !digits.isEmpty else { return }
+        digits.removeLast()
+        if digits.isEmpty { digitTimer?.cancel() }
+    }
+
+    /// Tune what has been typed now, without waiting.
+    func commitDigits() {
+        digitTimer?.cancel()
+        let typed = digits
+        digits = ""
+        // The keypad has done its job: back to the picture, to see where it landed.
+        if panel == .keypad { panel = nil }
+        guard let number = UInt32(typed), number > 0 else { return }
+        intent += 1
+        let mine = intent
+        let core = core
+        Task {
+            do {
+                let hit = try await Task.detached { try core.channelByNumber(number: number) }.value
+                guard mine == intent else { return }
+                if let hit { tune(Tuned(hit)) } else { say("There is no channel \(number)") }
+            } catch {
+                guard mine == intent else { return }
+                say(error.viewerMessage)
+            }
+        }
+    }
+
+    private func showBanner(_ channel: Tuned) {
+        say(channel.number.map { "\($0)  \(channel.name)" } ?? channel.name)
+    }
+
+    private func say(_ text: String) {
+        banner = text
+        // As long as Windows' banner stays (`showBanner`).
+        bannerUntil = Date().addingTimeInterval(5)
     }
 
     // MARK: Sleep timer
@@ -381,4 +524,10 @@ func clock(_ seconds: Double) -> String {
     let total = Int(max(0, seconds.isFinite ? seconds : 0))
     let h = total / 3600, m = total / 60 % 60, s = total % 60
     return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+}
+
+extension PlayerSession.Tuned {
+    init(_ channel: Channel) {
+        self.init(id: channel.id, name: channel.name, number: channel.number)
+    }
 }

@@ -28,7 +28,7 @@ enum PlayerItem: Identifiable, Hashable {
 /// Full-screen playback.
 ///
 /// Siri Remote, controls hidden: left and right skip back 10 and forward 30 seconds on
-/// films and episodes, a click or up/down shows the controls, Play/Pause pauses. With the
+/// films and episodes, up and down change channel on live TV, a click shows the controls, Play/Pause pauses. With the
 /// controls up the remote moves between them, and Menu closes a panel, then cancels
 /// Up Next, then hides the controls, then closes the player. On iPhone and iPad a tap shows or hides the controls.
 struct PlayerScreen: View {
@@ -132,6 +132,9 @@ private struct PlayerContent: View {
                 switch direction {
                 case .left: session.nudge(by: -10)
                 case .right: session.nudge(by: 30)
+                // On a channel, up and down change channel, as on any TV.
+                case .up where session.isLive: session.step(forward: true)
+                case .down where session.isLive: session.step(forward: false)
                 default: session.poke()
                 }
             }
@@ -162,6 +165,8 @@ private struct PlayerContent: View {
             guard item == session.item else { return }
             resolved = (item, tune)
         } catch {
+            // A channel zapped past while it was still resolving isn't the one failing.
+            guard item == session.item else { return }
             session.status = .failed(error.viewerMessage)
         }
     }
