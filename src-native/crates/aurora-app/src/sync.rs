@@ -46,6 +46,13 @@ pub const TICK: Duration = Duration::from_secs(3);
 /// The first round waits this long after launch: the first seconds belong to getting a
 /// picture on screen, and nothing about sync is that urgent.
 pub const START_DELAY: Duration = Duration::from_secs(8);
+/// The longest opening a film waits for its position from the other devices. One small
+/// query is a few hundred milliseconds; past this the film opens on what this PC knows,
+/// and the fetch still lands for the next look.
+pub const RESUME_BUDGET: Duration = Duration::from_millis(1500);
+/// Opening a film asks for its position, and pressing Play a moment later asks again.
+/// The second is not worth a read.
+const RESUME_FRESH_SECS: i64 = 20;
 
 fn config() -> Option<FirebaseConfig> {
     let api_key = BUILT_IN_API_KEY.map(str::trim).filter(|k| !k.is_empty())?;
@@ -103,6 +110,8 @@ pub struct Sync {
     /// way round.
     conn: Mutex<Option<Connection>>,
     pacer: Mutex<Pacer>,
+    /// The last film whose position was fetched, and when: (profile, kind, id, at).
+    last_resume: Mutex<Option<(i64, &'static str, i64, i64)>>,
 }
 
 impl Sync {
@@ -135,6 +144,72 @@ impl Sync {
             library,
             conn: Mutex::new(None),
             pacer: Mutex::new(Pacer::default()),
+            last_resume: Mutex::new(None),
+        }
+    }
+
+    /// Fetch this profile's position in a film or episode from the other devices before
+    /// it is shown or resumed (§3.6), waiting at most [`RESUME_BUDGET`].
+    ///
+    /// `enabled` is whether sync is on, read by the caller on its reader connection, so a
+    /// library that never signed in costs nothing here and never opens sync's connection.
+    /// Skipped while the loop is waiting out a failure, and while a round holds sync's
+    /// connection -- that round is pulling everything anyway. Never an error: a position
+    /// that could not be fetched is the one this PC already had.
+    pub fn refresh_progress(
+        self: &Arc<Self>,
+        enabled: bool,
+        profile_id: i64,
+        kind: &'static str,
+        id: i64,
+    ) {
+        let Some(household) = &self.household else {
+            return;
+        };
+        let now = now_unix();
+        if !enabled || !household.is_available() || self.pacer.lock().is_holding(now) {
+            return;
+        }
+        {
+            let mut last = self.last_resume.lock();
+            if let Some((p, k, i, at)) = *last {
+                if (p, k, i) == (profile_id, kind, id) && now - at < RESUME_FRESH_SECS {
+                    return;
+                }
+            }
+            *last = Some((profile_id, kind, id, now));
+        }
+        let (done, wait) = std::sync::mpsc::channel();
+        let sync = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("aurora-sync-resume".into())
+            .spawn(move || {
+                let Some(mut slot) = sync.conn.try_lock() else {
+                    return;
+                };
+                if slot.is_none() {
+                    match aurora_db::open_secondary(&sync.library) {
+                        Ok(c) => *slot = Some(c),
+                        Err(e) => {
+                            tracing::debug!("sync could not open its connection: {e}");
+                            return;
+                        }
+                    }
+                }
+                let conn = slot.as_mut().expect("opened just above");
+                if let Some(household) = &sync.household {
+                    match household.refresh_progress(conn, profile_id, kind, id) {
+                        Ok(true) => {
+                            tracing::info!(kind, id, "took a newer position from another device")
+                        }
+                        Ok(false) => {}
+                        Err(e) => tracing::debug!("could not fetch a position: {e}"),
+                    }
+                }
+                let _ = done.send(());
+            });
+        if spawned.is_ok() {
+            let _ = wait.recv_timeout(RESUME_BUDGET);
         }
     }
 
@@ -187,7 +262,7 @@ impl Sync {
             if !self
                 .pacer
                 .lock()
-                .due(now, Waiting::read(conn).map_err(sync_error)?)
+                .due(now, Waiting::read(conn, now).map_err(sync_error)?)
             {
                 return Ok(None);
             }

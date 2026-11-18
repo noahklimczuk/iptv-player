@@ -71,6 +71,9 @@ fn random_hex() -> String {
 
 /// Delete an account's documents and then the account itself.
 fn destroy(http: &ReqwestHttp, cfg: &FirebaseConfig, session: Session) {
+    // A stored session has no ID token (`household::stored`); mint one.
+    let session =
+        aurora_sync::firebase::refresh(http, cfg, &session.refresh_token).unwrap_or(session);
     let uid = session.uid.clone();
     let id_token = session.id_token.clone();
     let t = FirestoreTransport::new(http.clone(), cfg.clone(), session);

@@ -353,6 +353,18 @@ export function SyncPanel() {
             channels or titles this device has not imported. They apply once it has.
           </div>
         )}
+        <div style={{ ...MUTED, color: 'var(--text-faint)' }} data-testid="sync-usage">
+          Today this device has read {status.usage.reads.toLocaleString()} and
+          written {status.usage.writes.toLocaleString()} of the free plan&apos;s 50,000
+          reads and 20,000 writes.
+        </div>
+        {status.thrifty && (
+          <div style={{ ...MUTED, color: 'var(--warning)' }} data-testid="sync-thrifty">
+            That is past this device&apos;s share, so until the quota resets at midnight
+            Pacific it sends watch progress and checks for changes every ten minutes.
+            Favourites and other edits still go straight away.
+          </div>
+        )}
       </div>
 
       {!status.secretsPersistent && (

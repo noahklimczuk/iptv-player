@@ -14,7 +14,7 @@
 //! can read it on a read-only connection without waiting behind a sync in flight.
 //! Signing out runs [`db::disable`], which clears all of it except the clock.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aurora_db::repo::sync as db;
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::codec::Codec;
 use crate::engine::{self, Engine, Report};
 use crate::error::{Result, SyncError};
-use crate::firebase::{self, FirebaseConfig, FirestoreTransport, Http, Session};
+use crate::firebase::{self, FirebaseConfig, FirestoreTransport, Http, Session, Used};
 use crate::transport::SyncTransport;
 use crate::vault::{KdfParams, VaultCodec, VaultKey, WrappedKey};
 
@@ -38,7 +38,8 @@ pub trait Secrets: Send + Sync {
     fn is_persistent(&self) -> bool;
 }
 
-/// The Firebase session, as JSON. Its refresh token is what keeps the device signed in.
+/// The Firebase session, as JSON: the account and its refresh token, which is what keeps
+/// the device signed in. Not the ID token -- see [`stored`].
 pub const SESSION_SECRET: &str = "session";
 /// The household's vault key, in hex.
 pub const VAULT_SECRET: &str = "vault";
@@ -111,6 +112,10 @@ pub struct Status {
     pub problem: Option<Problem>,
     /// False where there is no OS credential store, so signing in lasts one session.
     pub secrets_persistent: bool,
+    /// What this device has spent of the free plan today (§3.7).
+    pub usage: Usage,
+    /// Past its share of the quota, so syncing less often until it resets.
+    pub thrifty: bool,
 }
 
 /// How a device proves it may open the household's vault.
@@ -157,6 +162,24 @@ pub struct Household<H: Http + Clone> {
     cfg: Option<FirebaseConfig>,
     secrets: Arc<dyn Secrets>,
     kdf: KdfParams,
+    /// The session as last used, ID token and all, so each round does not mint a new
+    /// one. Only its long-lived half is in `secrets`.
+    live: Mutex<Option<Session>>,
+}
+
+/// What goes in the credential store: the session without its ID token.
+///
+/// The ID token is a JWT of about a kilobyte that lasts an hour, and Windows Credential
+/// Manager refuses a secret longer than 2,560 bytes of UTF-16 -- 1,280 characters. The
+/// whole session was past that, so on Windows setting sync up signed in and then failed
+/// to save the sign-in. The refresh token mints a new ID token on first use, which costs
+/// one token request after a restart and no Firestore reads.
+fn stored(session: &Session) -> Session {
+    Session {
+        id_token: String::new(),
+        expires_at: 0,
+        ..session.clone()
+    }
 }
 
 impl<H: Http + Clone> Household<H> {
@@ -167,6 +190,7 @@ impl<H: Http + Clone> Household<H> {
             cfg,
             secrets,
             kdf: KdfParams::default(),
+            live: Mutex::new(None),
         }
     }
 
@@ -194,6 +218,7 @@ impl<H: Http + Clone> Household<H> {
     /// The panel's view. Reads only, so it can run on a read-only connection.
     pub fn status(&self, conn: &Connection) -> Result<Status> {
         let email = db::get_state(conn, EMAIL)?;
+        let usage = Usage::today(conn, now_secs())?;
         let parked: i64 = conn.query_row("SELECT COUNT(*) FROM sync_pending", [], |r| r.get(0))?;
         Ok(Status {
             available: self.is_available(),
@@ -207,6 +232,8 @@ impl<H: Http + Clone> Household<H> {
             last_sync_at: db::get_state(conn, LAST_SYNC)?.and_then(|v| v.parse().ok()),
             problem: db::get_state(conn, PROBLEM)?.and_then(|v| serde_json::from_str(&v).ok()),
             secrets_persistent: self.secrets.is_persistent(),
+            usage,
+            thrifty: usage.is_thrifty(),
         })
     }
 
@@ -309,10 +336,7 @@ impl<H: Http + Clone> Household<H> {
             None => new_device_id()?,
         };
 
-        self.secrets.set(
-            SESSION_SECRET,
-            &serde_json::to_string(&transport.session())?,
-        )?;
+        self.keep_session(transport.session())?;
         self.secrets.set(VAULT_SECRET, &key.to_hex())?;
         db::set_state(conn, EMAIL, account.email.trim())?;
         db::set_state(conn, DEVICE_NAME, device_name(account.device_name).as_str())?;
@@ -338,9 +362,53 @@ impl<H: Http + Clone> Household<H> {
         outcome
     }
 
-    /// Fetch one record now -- what opening a film does before offering to resume.
+    /// Fetch one record now, ahead of the next round. Returns whether it changed anything.
     pub fn refresh_one(&self, conn: &mut Connection, key: &str) -> Result<bool> {
-        self.engine(conn)?.refresh_one(conn, key)
+        let engine = self.engine(conn)?;
+        let outcome = engine.refresh_one(conn, key);
+        self.settle(conn, &engine)?;
+        outcome
+    }
+
+    /// What opening a film or an episode does before offering to resume (§3.6): fetch
+    /// this profile's position in it from the other devices, so stopping on the TV and
+    /// opening the same film here a minute later resumes where the TV stopped rather than
+    /// where this PC last knew.
+    ///
+    /// Nothing is asked of the server when sync is off or the item has no sync key.
+    pub fn refresh_progress(
+        &self,
+        conn: &mut Connection,
+        profile_id: i64,
+        item_kind: &str,
+        item_id: i64,
+    ) -> Result<bool> {
+        if !self.is_available() || !db::is_enabled(conn)? {
+            return Ok(false);
+        }
+        match db::progress_key(conn, profile_id, item_kind, item_id)? {
+            Some(key) => self.refresh_one(conn, &key),
+            None => Ok(false),
+        }
+    }
+
+    /// After any use of the server: save the session if the transport refreshed it, and
+    /// add what it spent to today's count. Each engine is built for one operation, so its
+    /// transport's count is exactly that operation's.
+    fn settle(&self, conn: &Connection, engine: &Live<H>) -> Result<()> {
+        Usage::add(conn, now_secs(), engine.transport().used())?;
+        self.keep_session(engine.transport().session())
+    }
+
+    /// Remember `session` for the next engine, and store its long-lived half if that
+    /// changed -- the refresh token rotates now and then, the ID token every hour.
+    fn keep_session(&self, session: Session) -> Result<()> {
+        let keep = serde_json::to_string(&stored(&session))?;
+        if self.secrets.get(SESSION_SECRET).as_deref() != Some(keep.as_str()) {
+            self.secrets.set(SESSION_SECRET, &keep)?;
+        }
+        *self.live.lock().unwrap_or_else(|p| p.into_inner()) = Some(session);
+        Ok(())
     }
 
     /// Throw the server's copy away and upload this device's in its place (§3.5).
@@ -380,6 +448,7 @@ impl<H: Http + Clone> Household<H> {
 
     /// Stop syncing on this device. Its library is untouched; only what sync knew goes.
     pub fn sign_out(&self, conn: &mut Connection) -> Result<()> {
+        *self.live.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.secrets.delete(SESSION_SECRET);
         self.secrets.delete(VAULT_SECRET);
         db::disable(conn)?;
@@ -389,12 +458,19 @@ impl<H: Http + Clone> Household<H> {
     fn engine(&self, conn: &Connection) -> Result<Live<H>> {
         let not_signed_in = || SyncError::Account("This device is not signed in to sync.".into());
         let cfg = self.cfg()?.clone();
-        let session: Session = self
+        let saved: Session = self
             .secrets
             .get(SESSION_SECRET)
             .map(|s| serde_json::from_str(&s))
             .transpose()?
             .ok_or_else(not_signed_in)?;
+        // The one in memory, unless the store now says otherwise: signed in again
+        // elsewhere in this process, or a restart, which leaves nothing in memory.
+        let live = self.live.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let session = match live {
+            Some(l) if stored(&l) == stored(&saved) => l,
+            _ => saved,
+        };
         let key = self
             .secrets
             .get(VAULT_SECRET)
@@ -411,10 +487,7 @@ impl<H: Http + Clone> Household<H> {
 
     /// Keep a rotated session, and note how the round went for the panel.
     fn record(&self, conn: &Connection, engine: &Live<H>, outcome: &Result<Report>) -> Result<()> {
-        let session = serde_json::to_string(&engine.transport().session())?;
-        if self.secrets.get(SESSION_SECRET).as_deref() != Some(session.as_str()) {
-            self.secrets.set(SESSION_SECRET, &session)?;
-        }
+        self.settle(conn, engine)?;
         match outcome {
             Ok(_) => {
                 db::set_state(conn, LAST_SYNC, &now_secs().to_string())?;
@@ -491,10 +564,12 @@ pub struct Waiting {
     pub changes: usize,
     /// Every waiting change is watch progress, which can wait for the next minute.
     pub only_progress: bool,
+    /// This device is past its share of today's quota ([`Usage::is_thrifty`]).
+    pub thrifty: bool,
 }
 
 impl Waiting {
-    pub fn read(conn: &Connection) -> Result<Self> {
+    pub fn read(conn: &Connection, now: i64) -> Result<Self> {
         let (changes, only_progress): (i64, i64) = conn.query_row(
             "SELECT COUNT(*), COALESCE(MIN(kind = 'progress'), 1) FROM sync_outbox",
             [],
@@ -503,7 +578,70 @@ impl Waiting {
         Ok(Self {
             changes: usize::try_from(changes).unwrap_or(0),
             only_progress: only_progress != 0,
+            thrifty: Usage::today(conn, now)?.is_thrifty(),
         })
+    }
+}
+
+/// The Spark plan's daily quotas (§3.7). Checked against Firebase's pricing page in
+/// November 2026.
+pub const QUOTA_READS: u64 = 50_000;
+pub const QUOTA_WRITES: u64 = 20_000;
+/// The devices a household is planned for: a PC, a TV and a phone. A device can count
+/// only what it spent itself, so each takes an equal share of the 70% of the quota at
+/// which §3.7 says to slow down.
+const PLANNED_DEVICES: u64 = 3;
+/// With a thrifty device, progress and the look for others' changes wait this long.
+/// Any other edit -- a favourite, a setting -- still goes after [`DEBOUNCE_SECS`].
+pub const THRIFTY_SECS: i64 = 600;
+
+/// What this device has spent of the free plan's quota today. "Today" is Firestore's
+/// day, which ends at [`next_quota_reset`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    /// Firestore days since the epoch, so a count from yesterday is not read as today's.
+    pub day: i64,
+    pub reads: u64,
+    pub writes: u64,
+}
+
+impl Usage {
+    /// Which Firestore day `now` falls in. The days run from one reset to the next.
+    pub fn day_of(now: i64) -> i64 {
+        (next_quota_reset(now) - 1).div_euclid(86_400)
+    }
+
+    /// Today's count, or nothing spent when the stored one is from an earlier day.
+    pub fn today(conn: &Connection, now: i64) -> Result<Self> {
+        let day = Self::day_of(now);
+        let stored: Option<Usage> =
+            db::get_state(conn, db::USAGE)?.and_then(|v| serde_json::from_str(&v).ok());
+        Ok(match stored {
+            Some(u) if u.day == day => u,
+            _ => Usage {
+                day,
+                ..Usage::default()
+            },
+        })
+    }
+
+    /// Add what one operation spent.
+    pub fn add(conn: &Connection, now: i64, used: Used) -> Result<Self> {
+        let mut u = Self::today(conn, now)?;
+        if used == Used::default() {
+            return Ok(u);
+        }
+        u.reads += used.reads;
+        u.writes += used.writes;
+        db::set_state(conn, db::USAGE, &serde_json::to_string(&u)?)?;
+        Ok(u)
+    }
+
+    /// Past this device's share of 70% of either quota.
+    pub fn is_thrifty(&self) -> bool {
+        self.reads * 10 * PLANNED_DEVICES >= QUOTA_READS * 7
+            || self.writes * 10 * PLANNED_DEVICES >= QUOTA_WRITES * 7
     }
 }
 
@@ -539,15 +677,20 @@ impl Pacer {
             return true;
         }
         let since = now - last;
+        let (progress, interval) = if waiting.thrifty {
+            (THRIFTY_SECS, THRIFTY_SECS)
+        } else {
+            (PROGRESS_SECS, INTERVAL_SECS)
+        };
         if waiting.changes > 0 {
             since
                 >= if waiting.only_progress {
-                    PROGRESS_SECS
+                    progress
                 } else {
                     DEBOUNCE_SECS
                 }
         } else {
-            since >= INTERVAL_SECS
+            since >= interval
         }
     }
 
@@ -574,6 +717,12 @@ impl Pacer {
     /// Whether the loop has given up until the account is signed in again.
     pub fn is_stopped(&self) -> bool {
         self.stopped
+    }
+
+    /// Whether a failure is being waited out: offline, out of quota, or signed out. Then
+    /// nothing else should reach for the server either.
+    pub fn is_holding(&self, now: i64) -> bool {
+        self.stopped || now < self.hold_until
     }
 }
 
@@ -617,10 +766,12 @@ mod tests {
         let edit = Waiting {
             changes: 1,
             only_progress: false,
+            thrifty: false,
         };
         let progress = Waiting {
             changes: 1,
             only_progress: true,
+            thrifty: false,
         };
         assert!(!p.due(1_001, edit));
         assert!(p.due(1_000 + DEBOUNCE_SECS, edit));
@@ -671,6 +822,57 @@ mod tests {
         p.after(now, Some(&Problem::SignInAgain));
         assert!(p.is_stopped());
         assert!(!p.due(now + 10 * 86_400, Waiting::default()));
+    }
+
+    #[test]
+    fn a_thrifty_device_holds_progress_and_polling_for_ten_minutes_but_not_a_favourite() {
+        let mut p = Pacer::default();
+        p.after(1_000, None);
+        let thrifty = |only_progress| Waiting {
+            changes: 1,
+            only_progress,
+            thrifty: true,
+        };
+        assert!(p.due(1_000 + DEBOUNCE_SECS, thrifty(false)));
+        assert!(!p.due(1_000 + PROGRESS_SECS, thrifty(true)));
+        assert!(p.due(1_000 + THRIFTY_SECS, thrifty(true)));
+        let idle = Waiting {
+            thrifty: true,
+            ..Waiting::default()
+        };
+        assert!(!p.due(1_000 + INTERVAL_SECS, idle));
+        assert!(p.due(1_000 + THRIFTY_SECS, idle));
+    }
+
+    #[test]
+    fn a_device_is_thrifty_past_its_third_of_seventy_percent_of_either_quota() {
+        let at = |reads, writes| Usage {
+            day: 0,
+            reads,
+            writes,
+        };
+        assert!(!at(11_666, 4_666).is_thrifty());
+        assert!(at(11_667, 0).is_thrifty());
+        assert!(at(0, 4_667).is_thrifty());
+    }
+
+    #[test]
+    fn the_count_starts_again_when_firestore_s_day_does() {
+        let conn = aurora_db::open_memory().unwrap();
+        // 20:00 UTC; the quota resets at 08:00 UTC tomorrow.
+        let evening = 1_795_464_000;
+        let reset = next_quota_reset(evening);
+        let spent = Used {
+            reads: 5,
+            writes: 2,
+        };
+        Usage::add(&conn, evening, spent).unwrap();
+        Usage::add(&conn, reset - 1, spent).unwrap();
+        let before = Usage::today(&conn, reset - 1).unwrap();
+        assert_eq!((before.reads, before.writes), (10, 4));
+        let after = Usage::today(&conn, reset).unwrap();
+        assert_eq!((after.reads, after.writes), (0, 0));
+        assert_eq!(Usage::add(&conn, reset, spent).unwrap().reads, 5);
     }
 
     #[test]

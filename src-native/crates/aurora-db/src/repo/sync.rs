@@ -21,6 +21,9 @@ use crate::error::Result;
 const ENABLED: &str = "enabled";
 const APPLYING: &str = "applying";
 const HLC: &str = "hlc";
+/// Today's Firestore reads and writes from this device (`aurora_sync::household::Usage`).
+/// Kept across a sign-out, like the clock: signing out does not give the quota back.
+pub const USAGE: &str = "usage";
 
 /// One record changed here and not yet pushed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,9 +80,13 @@ pub fn enable(conn: &mut Connection) -> Result<usize> {
 ///
 /// What "sign out" and "remove this device" come down to locally. The clock is kept: it
 /// only ever moves forward, and a device that signs in again must not reissue old values.
+/// So is the day's quota count, which a sign-out does not reset on the server either.
 pub fn disable(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
-    tx.execute("DELETE FROM sync_state WHERE key <> ?1", [HLC])?;
+    tx.execute(
+        "DELETE FROM sync_state WHERE key NOT IN (?1, ?2)",
+        [HLC, USAGE],
+    )?;
     tx.execute("DELETE FROM sync_outbox", [])?;
     tx.execute("DELETE FROM sync_shadow", [])?;
     tx.execute("DELETE FROM sync_pending", [])?;
@@ -152,6 +159,27 @@ pub fn clock(conn: &Connection) -> Result<i64> {
     Ok(get_state(conn, HLC)?
         .and_then(|v| v.parse().ok())
         .unwrap_or(0))
+}
+
+/// The sync key of one profile's position in one film or episode, exactly as the capture
+/// triggers name it -- the same SQL builds it -- or `None` when either side has no sync
+/// identity. What opening a film asks the server for, ahead of the next round (§3.6).
+pub fn progress_key(
+    conn: &Connection,
+    profile_id: i64,
+    item_kind: &str,
+    item_id: i64,
+) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT 'progress:' || json_object('pf', 'pf:' || p.sync_id, 'item', k.key)
+               FROM profiles p, sync_item_keys k
+              WHERE p.id = ?1 AND k.kind = ?2 AND k.id = ?3
+                AND p.sync_id IS NOT NULL AND k.key IS NOT NULL",
+            params![profile_id, item_kind, item_id],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 /// Fold a clock value seen on another device's record into this device's clock.
@@ -406,6 +434,29 @@ mod tests {
             .unwrap();
         let ident: serde_json::Value = serde_json::from_str(&row.ident).unwrap();
         assert_eq!(ident["item"], format!("ep:sr:{prov}:77:s1e2"));
+    }
+
+    #[test]
+    fn the_progress_key_is_the_one_the_trigger_writes() {
+        let mut conn = db();
+        enable(&mut conn).unwrap();
+        conn.execute("DELETE FROM sync_outbox", []).unwrap();
+        conn.execute(
+            "INSERT INTO watch_progress VALUES (1,'episode',40,10,100,0,1),
+                                               (1,'movie',20,10,100,0,1)",
+            [],
+        )
+        .unwrap();
+        let mut written = keys(&conn);
+        let mut asked = vec![
+            progress_key(&conn, 1, "episode", 40).unwrap().unwrap(),
+            progress_key(&conn, 1, "movie", 20).unwrap().unwrap(),
+        ];
+        written.sort();
+        asked.sort();
+        assert_eq!(asked, written);
+        assert_eq!(progress_key(&conn, 1, "movie", 999).unwrap(), None);
+        assert_eq!(progress_key(&conn, 77, "movie", 20).unwrap(), None);
     }
 
     #[test]

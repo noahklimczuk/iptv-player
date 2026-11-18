@@ -7,6 +7,8 @@ use aurora_sync::firebase::{self, FirebaseConfig, FirestoreTransport, Session};
 use aurora_sync::transport::{Envelope, SyncTransport};
 use aurora_sync::vault::{KdfParams, VaultCodec, VaultKey, WrappedKey};
 use aurora_sync::{Engine, SyncError};
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 
 const CHEAP: KdfParams = KdfParams { m: 64, t: 1, p: 1 };
 
@@ -238,11 +240,21 @@ fn two_devices_sync_a_favourite_through_encrypted_firestore() {
     assert_eq!(n, 1);
     assert_eq!(db::outbox_len(&tv).unwrap(), 0);
 
-    // Nothing readable reached the server.
+    // Nothing readable reached the server. Words are looked for anywhere in a document;
+    // the channel number only in what was stored, because a document's id is 64 hex
+    // digits and "501" turns up in one by chance about one time in seventy.
     for doc in fb.documents() {
         let text = doc.to_string();
-        for leak in ["BBC", "501", "Favorites", "panel.example", "viewer"] {
+        for leak in ["BBC", "Favorites", "panel.example", "viewer"] {
             assert!(!text.contains(leak), "{leak} reached the server: {text}");
+        }
+        let stored = doc["fields"]["payload"]["bytesValue"]
+            .as_str()
+            .and_then(|b| B64.decode(b).ok())
+            .unwrap_or_default();
+        let stored = String::from_utf8_lossy(&stored);
+        for leak in ["BBC", "501", "Favorites", "panel.example", "viewer"] {
+            assert!(!stored.contains(leak), "{leak} reached the server: {text}");
         }
     }
 }
