@@ -29,8 +29,8 @@ enum PlayerItem: Identifiable, Hashable {
 ///
 /// Siri Remote, controls hidden: left and right skip back 10 and forward 30 seconds on
 /// films and episodes, a click or up/down shows the controls, Play/Pause pauses. With the
-/// controls up the remote moves between them, and Menu closes a panel, then the
-/// controls, then the player. On iPhone and iPad a tap shows or hides the controls.
+/// controls up the remote moves between them, and Menu closes a panel, then cancels
+/// Up Next, then hides the controls, then closes the player. On iPhone and iPad a tap shows or hides the controls.
 struct PlayerScreen: View {
     @Environment(AppModel.self) private var model
     let item: PlayerItem
@@ -73,6 +73,9 @@ private struct PlayerContent: View {
             .ignoresSafeArea()
             backdrop
             PlayerOverlay(session: session, focus: $focus, close: { dismiss() })
+                #if os(tvOS)
+                .onExitCommand(perform: menu)
+                #endif
         }
         .task(id: session.item) { await resolve(session.item) }
         // Whichever arrives second — the tune or the player view — starts playback.
@@ -90,17 +93,26 @@ private struct PlayerContent: View {
         }
         #if os(tvOS)
         .onPlayPauseCommand { session.togglePause() }
-        .onExitCommand {
-            if session.panel != nil {
-                session.panel = nil
-            } else if session.controlsVisible {
-                session.hideControls()
-            } else {
-                dismiss()
-            }
-        }
         #endif
     }
+
+    #if os(tvOS)
+    /// Menu on the remote: a panel closes, then Up Next is cancelled, then the controls
+    /// go, then the player. Attached beside the focusable views themselves: one
+    /// on the screen as a whole never hears it, the full-screen cover closes first.
+    private func menu() {
+        if session.panel != nil {
+            session.panel = nil
+        } else if focus == .upNextPlay || focus == .upNextCancel {
+            // Up Next is the one thing on screen asking something: Menu says no.
+            session.dismissUpNext()
+        } else if session.controlsVisible {
+            session.hideControls()
+        } else {
+            dismiss()
+        }
+    }
+    #endif
 
     /// Under the controls: on tvOS what the remote talks to while they are hidden, on
     /// iPhone and iPad what a tap on the picture lands on.
@@ -111,7 +123,11 @@ private struct PlayerContent: View {
                 Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .buttonStyle(BareButtonStyle())
+            // Under Skip and Up Next while one of them has focus, so moving between
+            // their buttons can't fall through to the picture.
+            .disabled(focus?.isCorner == true)
             .focused($focus, equals: .backdrop)
+            .onExitCommand(perform: menu)
             .onMoveCommand { direction in
                 switch direction {
                 case .left: session.nudge(by: -10)

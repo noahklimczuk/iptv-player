@@ -3,7 +3,23 @@ import SwiftUI
 /// Where the remote's focus can be in the player (tvOS).
 enum PlayerFocus: Hashable {
     case backdrop, back, playPause, forward, subtitles, audio, picture, close
-    case skip, upNextPlay, sleepKeep
+    case skip, upNextPlay, upNextCancel, sleepKeep
+
+    /// The transport and menu buttons: focus on one of these is the viewer using the
+    /// controls, which keeps them up. Skip, Up Next and the sleep warning stand alone.
+    var isChrome: Bool {
+        switch self {
+        case .back, .playPause, .forward, .subtitles, .audio, .picture, .close: true
+        case .backdrop, .skip, .upNextPlay, .upNextCancel, .sleepKeep: false
+        }
+    }
+
+    var isCorner: Bool {
+        switch self {
+        case .skip, .upNextPlay, .upNextCancel, .sleepKeep: true
+        default: false
+        }
+    }
 }
 
 /// A button that draws nothing of its own: the tvOS player's backdrop.
@@ -31,7 +47,7 @@ struct PlayerOverlay: View {
                 if session.panel == nil && session.controlsVisible {
                     PlayerChrome(session: session, focus: focus, close: close)
                         .transition(.opacity)
-                } else if session.panel == nil, let until = session.seekHintUntil, until > .now {
+                } else if session.panel == nil, session.seekHintUntil != nil {
                     // The remote jumped with the controls hidden: just where it landed.
                     VStack {
                         Spacer()
@@ -57,29 +73,64 @@ struct PlayerOverlay: View {
         .animation(.easeInOut(duration: 0.2), value: session.controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: session.panel)
         #if os(tvOS)
-        // Keep the controls up while the remote moves through them.
+        // Keep the controls up while the remote moves through them. Skip and Up Next
+        // don't bring them up: those stand alone over the picture.
         .onChange(of: focus.wrappedValue) { _, new in
-            if let new, new != .backdrop { session.poke() }
+            if new?.isChrome == true { session.poke() }
         }
         .onChange(of: session.controlsVisible) { _, visible in
-            if visible, session.activeMarker == nil, !session.upNextVisible {
-                focus.wrappedValue = .playPause
-            } else if !visible {
+            if visible, focus.wrappedValue?.isCorner != true {
+                // Next turn of the run loop: the buttons appear in this same update,
+                // and focus given to one that isn't there yet goes to the first one.
+                DispatchQueue.main.async { focus.wrappedValue = .playPause }
+            } else if !visible, focus.wrappedValue?.isCorner != true {
+                // Fading controls leave a focused Skip or Up Next where it is.
                 focus.wrappedValue = .backdrop
             }
         }
-        // Skip and Up Next take the remote's focus as they appear, as a TV's do.
+        // Skip and Up Next take the remote's focus as they appear, as a TV's do, and
+        // give it back when they go.
         .onChange(of: session.activeMarker?.startSecs) { _, start in
-            if start != nil, session.panel == nil { focus.wrappedValue = .skip }
+            if start != nil, session.panel == nil, !session.upNextVisible {
+                focus.wrappedValue = .skip
+            } else if start == nil, focus.wrappedValue == .skip {
+                restFocus()
+            }
         }
         .onChange(of: session.upNextVisible) { _, visible in
-            if visible, session.panel == nil { focus.wrappedValue = .upNextPlay }
+            if visible, session.panel == nil {
+                focus.wrappedValue = .upNextPlay
+            } else if !visible, focus.wrappedValue == .upNextPlay || focus.wrappedValue == .upNextCancel {
+                if session.activeMarker != nil { focus.wrappedValue = .skip } else { restFocus() }
+            }
+        }
+        // A closed panel hands focus back to the button that opened it (the panel's
+        // own tabs can move it to another, so the tab it closed on decides).
+        .onChange(of: session.panel) { old, new in
+            guard new == nil, let old, session.controlsVisible else { return }
+            let opener: PlayerFocus = switch old {
+            case .subtitles: .subtitles
+            case .audio: session.state.audioTracks.count > 1 ? .audio : .subtitles
+            case .picture: .picture
+            }
+            DispatchQueue.main.async { focus.wrappedValue = opener }
         }
         .onChange(of: session.sleep.warning) { _, warning in
-            if warning { focus.wrappedValue = .sleepKeep }
+            if warning {
+                focus.wrappedValue = .sleepKeep
+            } else if focus.wrappedValue == .sleepKeep {
+                restFocus()
+            }
         }
         #endif
     }
+
+    #if os(tvOS)
+    /// Where focus goes when what held it disappears.
+    private func restFocus() {
+        focus.wrappedValue = session.controlsVisible ? .playPause : .backdrop
+    }
+    #endif
 
     /// Opening, or sound without a picture.
     @ViewBuilder private var status: some View {
@@ -617,6 +668,7 @@ private struct UpNextCard: View {
                         .buttonStyle(.borderedProminent)
                         #endif
                     Button("Cancel") { session.dismissUpNext() }
+                        .focused(focus, equals: .upNextCancel)
                         #if os(iOS)
                         .buttonStyle(.bordered)
                         #endif

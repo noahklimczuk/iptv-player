@@ -97,6 +97,8 @@ final class PlayerSession {
            Date().timeIntervalSince(lastActivity) * 1000 >= Double(menus.hideControlsAfterMs) {
             controlsVisible = false
         }
+        // The remote's jump hint goes after its moment, even when nothing else redraws.
+        if let until = seekHintUntil, Date() >= until { seekHintUntil = nil }
         sleep = core.sleepState()
         if core.sleepDue() {
             controller?.stop()
