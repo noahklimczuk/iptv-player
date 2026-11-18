@@ -1,7 +1,8 @@
 # Apple TV / iOS port, and sync across every device
 
-A plan, not a record of work done. Nothing here is built yet. It sits beside
-`ARCHITECTURE.md` and `DECISIONS.md`. When a phase below lands, its decisions move into
+The plan for the port and for sync. Much of it is now built; §4 says how far each phase
+has got (November 2026), and `apple/README.md` records where the Apple app departs from
+the plan. It sits beside `ARCHITECTURE.md` and `DECISIONS.md`. When a phase below lands, its decisions move into
 `DECISIONS.md`, its status moves into `ROADMAP.md`, and this file keeps only what is
 still ahead.
 
@@ -226,7 +227,7 @@ guarantee `ROADMAP.md` already holds the importer to.
 | Data | Table(s) | Merge rule |
 |---|---|---|
 | Providers (name, kind, URL, user agent, referrer, enabled, order, max connections) | `providers` | Last writer wins, field by field. |
-| Provider passwords, TMDB key, Gemini key | the credential store | Encrypted vault records (§3.5), last writer wins. |
+| Provider passwords, TMDB key, Gemini key | the credential store | Encrypted vault records (§3.5), last writer wins. **Not built.** The Sync panel and `PRIVACY.md` currently promise that playlist passwords stay on the device that entered them, so building this row is a privacy decision first. Until then a joining device adds the provider itself and adopts the household's id (§3.3). |
 | Profiles (name, avatar, kids flag, PIN hash, rating ceiling) | `profiles`, `parental`, `parental_locks` | Last writer wins, field by field. The PIN syncs as its Argon2 hash; a new PIN on one device applies everywhere. |
 | Watch progress | `watch_progress` | Latest `updated_at` wins per item, **except that `completed` is sticky**. A "finished" from one device is not undone by another device's stale mid-film position written later from an outbox. Only an explicit "mark unwatched" clears it, and that is its own timestamped write. |
 | Favorites (all named lists), My List, Not interested | `favorites`, `my_list`, `not_interested` | A set of items. An add or a removal is a timestamped element, and removals are tombstones, so a removal on the TV is not resurrected by the PC's older copy. List order uses a fractional `sort_key`, so reorders on two devices both survive. |
@@ -421,13 +422,13 @@ paid plan, or that sharing taken into account; no local count can see it.
 
 Each phase ends with something that runs and is tested, as the Windows work did.
 
-| # | Phase | Exit criteria |
-|---|---|---|
-| 1 | **Split `aurora-app` into `aurora-service`** | Every Windows test suite and journey passes. `aurora-service` builds and tests with no Tauri in its dependency tree. The DVR tick, failover and home rails all live there. |
-| 2 | **Apple spike: Rust to Swift to video** | Built on a Mac: `AuroraCore.xcframework` for iOS, the iOS simulator, tvOS and the tvOS simulator. A bare SwiftUI app on a **real Apple TV** imports one Xtream provider, lists channels and plays one live channel through MPVKit. Measure: import time for the 117k-film panel on Apple TV hardware, and zap time against the 1.5 s budget. |
-| 3 | **`aurora-sync`, Windows first** | The new migration, the outbox, HLC, the merge rules and the in-memory transport, with multi-device simulation tests (offline edits, clock skew, sticky `completed`, tombstones, parked references). Then the Firestore transport, the security rules with emulator tests, and the Sync panel in the React UI. **Two Windows installs share progress and favorites end to end.** |
-| 4 | **The Apple app proper** | Home, Live, Guide, Movies, Series, Search, Player, Settings and Profiles on tvOS and iOS, with sync from day one. The guide grid works with the focus engine and passes the same scenarios as the Windows guide. |
-| 5 | **Polish** | Pairing the TV from a phone, Top Shelf, iOS PiP and AirPlay, multiview on iPad/Apple TV 4K, and TestFlight builds from CI. |
+| # | Phase | Exit criteria | Status |
+|---|---|---|---|
+| 1 | **Split `aurora-app` into `aurora-service`** | Every Windows test suite and journey passes. `aurora-service` builds and tests with no Tauri in its dependency tree. The DVR tick, failover and home rails all live there. | **Not done, by choice.** `apple/core/aurora-ffi` repeats the little host glue it needs instead of editing the Windows host, and `mirrors.rs` checks each copy against its original (`apple/README.md`). |
+| 2 | **Apple spike: Rust to Swift to video** | Built on a Mac: `AuroraCore.xcframework` for iOS, the iOS simulator, tvOS and the tvOS simulator. A bare SwiftUI app on a **real Apple TV** imports one Xtream provider, lists channels and plays one live channel through MPVKit. Measure: import time for the 117k-film panel on Apple TV hardware, and zap time against the 1.5 s budget. | Built and running in the simulators. **Real Apple TV hardware not yet**: the picture, import time and zap time need it. |
+| 3 | **`aurora-sync`, Windows first** | The new migration, the outbox, HLC, the merge rules and the in-memory transport, with multi-device simulation tests (offline edits, clock skew, sticky `completed`, tombstones, parked references). Then the Firestore transport, the security rules with emulator tests, and the Sync panel in the React UI. **Two Windows installs share progress and favorites end to end.** | **Done.** `tests-host/scenarios/real_sync.py` runs two portable installs, each importing the real panel, through the real Firebase project. |
+| 4 | **The Apple app proper** | Home, Live, Guide, Movies, Series, Search, Player, Settings and Profiles on tvOS and iOS, with sync from day one. The guide grid works with the focus engine and passes the same scenarios as the Windows guide. | Most screens built (`apple/README.md`, Status). Sync is wired through `aurora-ffi` and tested in Rust; its Swift screen is written but has not yet been compiled on a Mac. |
+| 5 | **Polish** | Pairing the TV from a phone, Top Shelf, iOS PiP and AirPlay, multiview on iPad/Apple TV 4K, and TestFlight builds from CI. | Not started. |
 
 Phase 3 can run **before or alongside** Phase 2. It needs no Mac and gives Windows users
 multi-PC sync on its own.

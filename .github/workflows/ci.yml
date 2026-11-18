@@ -221,6 +221,36 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The Apple app's Rust core (apple/core): a workspace of its own that reaches the
+  # shared crates by path, so a change to aurora-core, -db, -ingest, -video or -sync can
+  # break it without touching apple/ -- and until this job nothing built it, which is
+  # how it collected five clippy failures unseen. Its mirror tests also read aurora-app's
+  # sources, so a Windows constant that moves without its Apple copy fails here.
+  # Swift and the xcframework need a Mac and are not built here.
+  apple-core:
+    name: Apple core (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apple/core
+
+      - name: Rust formatting
+        working-directory: apple/core
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        working-directory: apple/core
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: apple/core
+        run: cargo test
+
   # The Windows-only half: the mpv/Win32 compositing layer and the Tauri host.
   # This is the only runner that can compile aurora-app, so a green core job alone
   # does NOT mean the app builds.

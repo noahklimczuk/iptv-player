@@ -250,7 +250,7 @@ fn a_real_panels_show_lists_its_episodes_when_opened() {
         .iter()
         .find_map(|s| {
             let eps = core.episodes(s.id, None).ok()?;
-            (!eps.is_empty()).then(|| (s.id, eps))
+            (!eps.is_empty()).then_some((s.id, eps))
         })
         .expect("none of the ten newest shows listed an episode");
     eprintln!(

@@ -34,7 +34,7 @@ pub fn install_log(sink: Arc<dyn LogSink>) {
         .with_max_level(tracing::Level::INFO)
         .with_ansi(false)
         .without_time()
-        .with_writer(|| LineWriter::default())
+        .with_writer(LineWriter::default)
         .try_init();
 }
 

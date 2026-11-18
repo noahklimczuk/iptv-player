@@ -446,12 +446,11 @@ impl AuroraCore {
     }
 }
 
+/// A TMDB list to fetch: its store key, and the title it hangs off (`None` is trending).
+type WantedList = (String, Option<(Kind, i64)>);
+
 /// Which TMDB lists are due, trending first, then one per anchor; `None` is trending.
-fn wanted_lists(
-    db: &Connection,
-    inputs: &Inputs,
-    now: i64,
-) -> Result<Vec<(String, Option<(Kind, i64)>)>> {
+fn wanted_lists(db: &Connection, inputs: &Inputs, now: i64) -> Result<Vec<WantedList>> {
     let stale = |key: &str, max_age: i64| -> Result<bool> {
         Ok(match store::tmdb_list(db, key)? {
             Some((_, at)) => now - at > max_age,
