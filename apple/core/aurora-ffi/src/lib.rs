@@ -27,6 +27,7 @@ mod error;
 mod filters;
 mod gemini;
 mod guide;
+mod guide_filters;
 mod home;
 mod library;
 mod log;

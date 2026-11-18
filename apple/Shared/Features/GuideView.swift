@@ -15,6 +15,12 @@ struct GuideView: View {
     /// The clock the grid draws "on now" and the now line from. Ticked, because a TV is
     /// often left on the guide, and both would otherwise stay where they were drawn.
     @State private var now = Date()
+    /// Which groups and kinds of channel are shown (`GuideFiltersView.swift`), kept on
+    /// the device between visits.
+    @State private var filters = GuideFilterStore.read()
+    /// How many channels the filters leave, all pages together.
+    @State private var shown: UInt32 = 0
+    @State private var filtering = false
 
     #if os(tvOS)
     private let span: TimeInterval = 3 * 3600
@@ -35,6 +41,7 @@ struct GuideView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 8) {
                 controls
+                filterBar
                 TimeAxis(start: start, span: span, leading: nameWidth)
                 ScrollView {
                     LazyVStack(spacing: 4) {
@@ -56,6 +63,10 @@ struct GuideView: View {
                     if channels.isEmpty {
                         if let progress = model.importProgress {
                             ProgressView("Importing: \(progress.phase.label)")
+                        } else if filters.activeCount > 0 {
+                            ContentUnavailableView(
+                                filters.withListings ? "No channels with listings here" : "No channels match these filters",
+                                systemImage: "line.3.horizontal.decrease")
                         } else {
                             ContentUnavailableView("No channels", systemImage: "calendar",
                                                    description: Text("Add a provider in Live TV."))
@@ -67,7 +78,9 @@ struct GuideView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .task(id: model.libraryVersion) { channels = await model.channels(group: nil, limit: 200) }
+            .task(id: ListKey(library: model.libraryVersion, profile: model.profileId, filters: filters)) {
+                await loadChannels()
+            }
             .task(id: window) { await loader.show(window, model: model) }
             .task {
                 while !Task.isCancelled {
@@ -76,7 +89,60 @@ struct GuideView: View {
                 }
             }
             .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
+            .sheet(isPresented: $filtering) {
+                GuideFiltersSheet(groups: model.groups, filters: filterBinding, shown: shown)
+            }
         }
+    }
+
+    /// What the list is read for: a new import, another profile's favourites, or another
+    /// choice of filters each start it over.
+    private struct ListKey: Hashable {
+        let library: Int
+        let profile: Int64
+        let filters: GuideFilters
+    }
+
+    private var filterBinding: Binding<GuideFilters> {
+        Binding(get: { filters }, set: { filters = $0; GuideFilterStore.write($0) })
+    }
+
+    /// Groups as chips rather than a menu, as on Windows: browsing is choosing between
+    /// them, and a list you have to open to see is a list nobody reads. Each chip adds its
+    /// group to the choice or takes it out, so several can be on at once; Filters has
+    /// the rest — hiding groups instead, searching them, and the channel filters.
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack {
+                GuideFiltersButton(count: filters.activeCount) { filtering = true }
+                FilterChip(title: "All channels", selected: filters.groups.isEmpty) {
+                    filterBinding.wrappedValue.groups = []
+                }
+                ForEach(model.groups, id: \.name) { group in
+                    FilterChip(title: group.name, selected: filters.groups.contains(group.name),
+                               count: group.count, struck: filters.groupMode == .hide) {
+                        filterBinding.wrappedValue = filters.toggling(group.name)
+                    }
+                }
+                Toggle("With listings", isOn: filterBinding.withListings)
+                    .fixedSize()
+                    .padding(.leading, 8)
+            }
+            .padding(.horizontal)
+            #if os(tvOS)
+            .padding(.vertical, 12)
+            #endif
+        }
+        .scrollClipDisabled()
+        #if os(tvOS)
+        .focusSection()
+        #endif
+    }
+
+    private func loadChannels() async {
+        let page = await model.guideChannels(filters, limit: 200)
+        channels = page.channels
+        shown = page.shown
     }
 
     private var controls: some View {
@@ -93,9 +159,14 @@ struct GuideView: View {
     }
 
     private func loadMoreChannels() async {
-        let more = await model.channels(group: nil, limit: 200, offset: UInt32(channels.count))
+        guard channels.count < Int(shown) else { return }
+        let asked = filters
+        let page = await model.guideChannels(asked, limit: 200, offset: UInt32(channels.count))
+        // The filters changed while this was in flight: the list has started over.
+        guard asked == filters else { return }
         let known = Set(channels.map(\.id))
-        channels += more.filter { !known.contains($0.id) }
+        channels += page.channels.filter { !known.contains($0.id) }
+        shown = page.shown
     }
 
     /// The half hour before `date`, so "now" sits near the left edge.

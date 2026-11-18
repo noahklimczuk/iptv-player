@@ -343,6 +343,14 @@ final class AppModel {
         }
     }
 
+    /// A page of the channels the guide's filters leave, and how many they leave in all.
+    func guideChannels(_ filters: GuideFilters, limit: UInt32 = 200, offset: UInt32 = 0) async -> GuideChannels {
+        let profile = profileId
+        return await call(GuideChannels(channels: [], shown: 0)) {
+            try $0.guideChannels(profileId: profile, filters: filters, limit: limit, offset: offset)
+        }
+    }
+
     /// Into or out of `list` (the default Favourites when nil); a new name makes a new
     /// list. Returns whether the channel is in that list now.
     func toggleFavorite(channelId: Int64, list: String? = nil) async -> Bool? {

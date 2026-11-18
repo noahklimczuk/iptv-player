@@ -23,6 +23,10 @@ screens. The app can:
 - show the guide grid (channels down, time across), fetching only the rows on screen
   as Windows does since R-130; choosing what's on plays the channel, choosing what
   already aired replays it where the archive allows,
+- filter the guide as Windows does: group chips to tap in or out, and a Filters sheet
+  with every group searchable, shown only or hidden, plus with listings, favourites,
+  catch-up, radio and quality. The rules are Windows' `guideFilters.ts` in the core
+  (`guide_filters.rs`), and the choice is kept on the device,
 - show a channel's schedule a day at a time, and replay what already aired where the
   channel keeps an archive (catch-up, up to a week back),
 - keep films and series on My List, and like them,
