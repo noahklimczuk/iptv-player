@@ -52,7 +52,7 @@ struct SettingsView: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 }
             }
-            .sheet(isPresented: $adding) { NavigationStack { AddProviderView() } }
+            .sheet(isPresented: $adding) { SetupWizard(additional: true, onFinished: { adding = false }, onSkip: { adding = false }) }
         }
     }
 }

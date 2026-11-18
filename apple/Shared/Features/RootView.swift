@@ -11,6 +11,11 @@ struct RootView: View {
     @State private var showingSettings = false
     @State private var showingSearch = false
     @State private var showingAssistant = false
+    /// The setup wizard was finished, or its import left running. Not stored: a library
+    /// with no provider asks again next launch, as on Windows.
+    @State private var setupFinished = false
+    /// "Skip for now": this run only, which is what the button says.
+    @State private var setupSkipped = false
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -23,8 +28,12 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if !model.profilesLoaded {
+            if !model.profilesLoaded || !model.providersLoaded {
                 ProgressView()
+            } else if needsSetup {
+                // Before "Who's watching?": there is no point choosing a profile for an
+                // empty library.
+                SetupWizard(onFinished: { setupFinished = true }, onSkip: { setupSkipped = true })
             } else if model.picking && !model.profiles.isEmpty {
                 ProfilePicker()
             } else {
@@ -35,6 +44,7 @@ struct RootView: View {
             }
         }
         .task { await model.loadProfiles() }
+        .task { await model.reload() }
         // Sync while the app is in front; a new phase cancels the loop and, if active
         // again, starts it afresh.
         .task(id: scenePhase) {
@@ -93,6 +103,17 @@ struct RootView: View {
         } message: {
             Text(model.error ?? "")
         }
+    }
+
+    /// No provider yet, and the wizard neither finished nor skipped this run.
+    private var needsSetup: Bool {
+        guard !setupFinished && !setupSkipped else { return false }
+        #if DEBUG
+        // `-AuroraSetup YES` shows it over a library that has providers, for demos and
+        // tests (Windows' `?setup`).
+        if UserDefaults.standard.bool(forKey: "AuroraSetup") { return true }
+        #endif
+        return model.providers.isEmpty
     }
 
     /// An iPhone, or an iPad in a narrow window.
