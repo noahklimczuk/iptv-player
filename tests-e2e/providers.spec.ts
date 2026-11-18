@@ -19,15 +19,15 @@ async function openEditor(page: Page) {
 test('a provider can be edited without its password being on display', async ({ page }) => {
   await openEditor(page);
 
-  const password = page.getByLabel('Password');
+  const password = page.getByLabel('Password', { exact: true });
   await expect(password).toHaveAttribute('type', 'password');
   // It is loaded — the form can save it back — but it is not readable yet.
   await expect(password).not.toHaveValue('');
 
-  await page.getByRole('button', { name: 'Show' }).click();
+  await page.getByRole('button', { name: 'Show', exact: true }).click();
   await expect(password).toHaveAttribute('type', 'text');
 
-  await page.getByRole('button', { name: 'Hide' }).click();
+  await page.getByRole('button', { name: 'Hide', exact: true }).click();
   await expect(password).toHaveAttribute('type', 'password');
 
   await page.screenshot({ path: `${SHOTS}/35-provider-editor.png` });
