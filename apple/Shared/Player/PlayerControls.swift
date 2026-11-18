@@ -1102,7 +1102,8 @@ private struct ChannelBannerView: View {
 
     private func content(now: Date) -> some View {
         HStack(spacing: 16) {
-            ChannelLogo(name: banner.channel.name, logo: banner.channel.logo, size: logoSize)
+            ChannelTile(name: banner.channel.name, number: banner.channel.number, logo: banner.channel.logo,
+                        size: logoSize)
             if let number = banner.channel.number {
                 Text(String(number))
                     .font(.system(.largeTitle, design: .rounded).weight(.heavy))
@@ -1163,28 +1164,4 @@ private struct ChannelBannerView: View {
     private let logoSize: CGFloat = 52
     private let maxWidth: CGFloat = 560
     #endif
-}
-
-/// A channel's logo, or its initials on a tile when it has none (Windows' `ChannelTile`).
-struct ChannelLogo: View {
-    let name: String
-    let logo: String?
-    let size: CGFloat
-
-    var body: some View {
-        AsyncImage(url: logo.flatMap(URL.init(string:))) { image in
-            image.resizable().scaledToFit().padding(size * 0.1)
-        } placeholder: {
-            Text(initials)
-                .font(.system(size: size * 0.36, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white)
-        }
-        .frame(width: size, height: size)
-        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.22))
-    }
-
-    private var initials: String {
-        let words = name.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        return String(words.prefix(2).compactMap(\.first)).uppercased()
-    }
 }
