@@ -71,6 +71,12 @@ screens. The app can:
   version, the licence and the third-party notices. Those are this folder's
   `THIRD-PARTY-NOTICES-APPLE.md` (MPVKit's LGPL build, shipped as separate frameworks)
   followed by the shared file, both bundled with the app.
+- Gemini recommendations, as on Windows: a "Because of what you watch" rail on Home,
+  after Continue Watching, built from the watch history and kept only where the library
+  carries the title (`gemini.rs`, on the shared `aurora_ingest::gemini`). The key is the
+  viewer's own (Keychain) or one compiled in from `AURORA_GEMINI_KEY`. Settings →
+  Recommendations has Windows' on/off switch, which is what stops anything being sent,
+  and says why the rail is missing when it is.
 
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
 Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go

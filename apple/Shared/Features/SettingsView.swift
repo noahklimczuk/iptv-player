@@ -33,6 +33,7 @@ struct SettingsView: View {
                 }
                 TimeshiftSection()
                 MetadataSection()
+                RecommendationsSection()
                 if let progress = model.importProgress {
                     Section("Importing") {
                         Text(progress.phase.label)

@@ -217,6 +217,46 @@ final class AppModel {
         await call(()) { try $0.setMetadataKey(key: key) }
     }
 
+    // MARK: Recommendations (Gemini)
+
+    /// Bumped when the Gemini switch or key changes, or Settings asked for a fresh set,
+    /// so Home fetches its rail again.
+    private(set) var aiVersion = 0
+
+    func geminiStatus() async -> GeminiStatus? {
+        let profile = profileId
+        return await call(nil) { try $0.geminiStatus(profileId: profile) }
+    }
+
+    func setGeminiEnabled(_ on: Bool) async {
+        await call(()) { try $0.setGeminiEnabled(enabled: on) }
+        aiVersion += 1
+    }
+
+    /// Save the viewer's own key, or clear it with "" (the build's key, if any, is used).
+    func setGeminiKey(_ key: String) async {
+        await call(()) { try $0.setGeminiKey(key: key) }
+        aiVersion += 1
+    }
+
+    /// The rail for Home. Quiet, as Windows' `AiRail`: every way this fails (no key,
+    /// nothing watched, a refusal, nothing in this library) is a reason for the rail not
+    /// to be there, and Settings is where it says why.
+    func aiPicks() async -> AiPicks? {
+        guard let core else { return nil }
+        let profile = profileId
+        return try? await Task.detached { try core.aiPicks(profileId: profile, refresh: false) }.value
+    }
+
+    /// A fresh set for Settings, with the error to show in place.
+    func askForAiPicks() async -> Result<AiPicks, Error> {
+        guard let core else { return .failure(AuroraError.Other(message: "The library is not open.")) }
+        let profile = profileId
+        let result = await Task.detached { Result { try core.aiPicks(profileId: profile, refresh: true) } }.value
+        if case .success = result { aiVersion += 1 }
+        return result
+    }
+
     func credits(_ kind: ListKind, id: Int64) async -> [Credit] {
         await call([]) { try $0.credits(kind: kind, id: id) }
     }

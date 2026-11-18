@@ -493,3 +493,42 @@ fn about_states_the_licence_and_releases_page_windows_states() {
         "aurora-app RELEASES_URL changed; update diagnostics::RELEASES_URL"
     );
 }
+
+#[test]
+fn gemini_keeps_its_key_cache_and_switch_where_windows_does() {
+    use crate::gemini::*;
+    for (name, ours) in [
+        ("CREDENTIAL_KEY", CREDENTIAL_KEY),
+        ("CACHE_KEY", CACHE_KEY),
+        ("ENABLED_KEY", ENABLED_KEY),
+    ] {
+        assert_eq!(app_const("gemini.rs", name), format!("{ours:?}"), "{name}");
+    }
+    assert_eq!(app_const("gemini.rs", "FRESH_FOR_SECS"), "6 * 60 * 60");
+    assert_eq!(FRESH_FOR_SECS, 6 * 60 * 60);
+    assert_eq!(
+        app_const("gemini.rs", "HISTORY_FOR_PROMPT"),
+        HISTORY_FOR_PROMPT.to_string()
+    );
+    assert_eq!(
+        app_const("gemini.rs", "DEFAULT_ENABLED"),
+        DEFAULT_ENABLED.to_string()
+    );
+    assert_eq!(app_const("library.rs", "RAIL_SIZE"), RAIL_SIZE.to_string());
+    // The fingerprint is Windows' own, so a cache written by either reads the same.
+    let windows = app_src("gemini.rs");
+    for line in [
+        "let mut hash: u64 = 0xcbf2_9ce4_8422_2325;",
+        "hash = hash.wrapping_mul(0x100_0000_01b3);",
+        "eat(&((w.watched * 100.0).round() as i64).to_le_bytes());",
+    ] {
+        assert!(
+            windows.contains(line),
+            "aurora-app gemini.rs no longer has `{line}`"
+        );
+        assert!(
+            include_str!("gemini.rs").contains(line),
+            "gemini.rs lost `{line}`"
+        );
+    }
+}
