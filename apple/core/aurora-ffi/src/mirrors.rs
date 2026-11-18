@@ -283,3 +283,26 @@ fn a_typed_channel_number_is_read_as_windows_reads_it() {
         );
     }
 }
+
+#[test]
+fn zapping_follows_windows_zapper() {
+    // `zap.rs` repeats `useZapper`: the digit timeout, the four-digit buffer, the step
+    // rule, and the list that up and down walk.
+    let zapper = ui_src("hooks/useZapper.ts");
+    let timeout = format!("const DIGIT_TIMEOUT_MS = {};", crate::zap::DIGIT_TIMEOUT_MS);
+    assert!(zapper.contains(&timeout), "useZapper.ts no longer has `{timeout}`; update zap.rs");
+    let ui = ui_src("state/ui.ts");
+    let buffer = format!("(s.digits + d).slice(0, {})", crate::zap::MAX_DIGITS);
+    assert!(ui.contains(&buffer), "ui.ts no longer has `{buffer}`; update zap.rs");
+    let step = ui_src("hooks/zap.ts");
+    for needle in [
+        "if (current < 0) return delta === 1 ? 0 : count - 1;",
+        "return (current + delta + count) % count;",
+    ] {
+        assert!(step.contains(needle), "zap.ts no longer has `{needle}`; update step_index");
+    }
+    let app = ui_src("App.tsx");
+    for needle in ["useCommand('channels.list', {}, [])", "useZapper(channels ?? []"] {
+        assert!(app.contains(needle), "App.tsx no longer has `{needle}`; update channel_step");
+    }
+}

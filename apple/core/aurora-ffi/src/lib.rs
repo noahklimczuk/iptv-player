@@ -39,6 +39,7 @@ mod secrets;
 mod series;
 mod sleep;
 mod vod;
+mod zap;
 
 use std::path::PathBuf;
 use std::sync::Arc;

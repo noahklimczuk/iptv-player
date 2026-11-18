@@ -49,7 +49,12 @@ screens. The app can:
 - keep channels in named favourite lists, rename and empty them, and reorder them,
 - edit the playlist (Settings): rename, renumber, regroup or hide channels, films and
   series, hide everything a search matches, see a title's other copies, and put any of
-  it back.
+  it back,
+- change channel from inside the player, as Windows does: channel up and down (on
+  Apple TV, up and down on the remote), a number typed on a keypad (up to 4 digits,
+  tuned 1.8 s after the last one), and back to the last channel. A banner names where
+  it landed, or says there is no such number. The timings and the order up and down
+  walk are Windows', checked by `mirrors.rs`.
 
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
 Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
@@ -57,8 +62,7 @@ under "More", whose navigation bar stacks on the tab's own and doubles every bac
 button. iPad and Apple TV keep both as tabs.
 
 Not yet: profile age and daily limits (being fixed on Windows first; the Apple app will
-follow the same rule), recordings, live pause and rewind, channel-number entry, and
-sync (Phase 3).
+follow the same rule), recordings, live pause and rewind, and sync (Phase 3).
 
 The app targets **iOS 26 and tvOS 26 only**.
 
