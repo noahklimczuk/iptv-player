@@ -286,6 +286,63 @@ final class MPVPlayerController: UIViewController {
         }
     }
 
+    /// The picture on screen now and the moment it is of, scaled to `maxWidth` wide:
+    /// Windows' `Engine::grab_frame` (mpv's `screenshot-raw video`, which asks for
+    /// `bgr0`). `done` runs on the main thread, with nil when there is no picture.
+    func grabFrame(maxWidth: Int, _ done: @escaping (CGImage?, Double) -> Void) {
+        queue.async { [self] in
+            var at = 0.0
+            var image: CGImage?
+            if let mpv, loaded, mpv_get_property(mpv, "time-pos", MPV_FORMAT_DOUBLE, &at) >= 0, at.isFinite {
+                image = screenshot(mpv, maxWidth: maxWidth)
+            }
+            DispatchQueue.main.async { done(image, at) }
+        }
+    }
+
+    /// On `queue`.
+    private func screenshot(_ mpv: OpaquePointer, maxWidth: Int) -> CGImage? {
+        var cArgs: [UnsafePointer<CChar>?] = ["screenshot-raw", "video"].map { (word: String) in UnsafePointer(strdup(word)) }
+        cArgs.append(nil)
+        defer { cArgs.forEach { free(UnsafeMutableRawPointer(mutating: $0)) } }
+        var node = mpv_node()
+        guard mpv_command_ret(mpv, &cArgs, &node) >= 0 else { return nil }
+        defer { mpv_free_node_contents(&node) }
+        guard node.format == MPV_FORMAT_NODE_MAP, let map = node.u.list?.pointee else { return nil }
+        var width = 0, height = 0, stride = 0
+        var format: String?
+        var bytes: mpv_byte_array?
+        for i in 0..<Int(map.num) {
+            guard let key = map.keys[i] else { continue }
+            let value = map.values[i]
+            switch String(cString: key) {
+            case "w": width = Int(value.u.int64)
+            case "h": height = Int(value.u.int64)
+            case "stride": stride = Int(value.u.int64)
+            case "format": format = value.u.string.map { String(cString: $0) }
+            case "data": if value.format == MPV_FORMAT_BYTE_ARRAY { bytes = value.u.ba?.pointee }
+            default: break
+            }
+        }
+        // Windows takes `bgr0` only; anything else is not a picture it knows how to read.
+        guard format == "bgr0", width > 0, height > 0, stride >= width * 4,
+              let bytes, let data = bytes.data, bytes.size >= stride * height else { return nil }
+        let info = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue
+        let space = CGColorSpaceCreateDeviceRGB()
+        guard let provider = CGDataProvider(data: Data(bytes: data, count: stride * height) as CFData),
+              let full = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                                 bytesPerRow: stride, space: space, bitmapInfo: CGBitmapInfo(rawValue: info),
+                                 provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        else { return nil }
+        guard width > maxWidth else { return full }
+        let w = maxWidth, h = max(1, height * maxWidth / width)
+        guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: info) else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(full, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return context.makeImage()
+    }
+
     /// Jump by `seconds`, forwards or back: through a film, or through a live channel's
     /// buffer, never past live.
     func seek(by seconds: Double) {

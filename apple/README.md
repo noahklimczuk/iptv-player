@@ -63,6 +63,16 @@ screens. The app can:
   app's Caches folder), up to 1 GB / 30 minutes by default and set in Settings. The bar
   runs from the oldest moment held to live, says how far behind live you are, and Back
   to live returns to the edge. The window is Windows' arithmetic (`aurora_core::timeshift`).
+- the channel banner over the player, as Windows' `ChannelBanner`: on every tune, the
+  channel's logo, number and name, what is on now with its times and how far through,
+  what is next (or "No guide data for this channel"), and the time, for 5 seconds,
+- the seek preview on iPhone and iPad (Windows' `Scrub.tsx` and `play/preview.rs`):
+  dragging the bar shows a bubble with the time, the chapter or skip marker there, and on
+  live TV the wall-clock moment and what was on. The picture in it comes from frames mpv
+  takes of what has already played (`screenshot-raw`, 320 px wide, every few seconds
+  once playback is steady), so it exists only for moments that have been on screen. The
+  rules are Windows' `Frames`, copied and checked by `mirrors.rs`. Apple TV has no
+  drag to preview; it gets the banner only,
 - Settings → Diagnostics and About, as on Windows. Diagnostics says when the library
   had to be started again, names the data folder and the video engine, and exports this
   run's log, with every address's login removed (`redact_log`), to share from an iPhone.

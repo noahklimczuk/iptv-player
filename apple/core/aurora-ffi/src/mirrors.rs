@@ -607,3 +607,59 @@ fn the_assistant_is_windows_assistant() {
         "assistant.rs and aurora-app's differ in length"
     );
 }
+
+#[test]
+fn the_seek_preview_is_windows_seek_preview() {
+    // From the constants to `clock_at`, and the tests, copied whole; the PNG step and
+    // its test are Windows' alone (the pictures stay in Swift here).
+    let windows = app_src("play/preview.rs");
+    let ours = include_str!("preview.rs");
+    let theirs_body = between(
+        &windows,
+        "use super::resolve::What;",
+        "/// A frame as a PNG",
+    );
+    let ours_body = between(
+        ours,
+        "Catchup { channel: i64, start: i64, stop: i64 },\n}",
+        "/* ── The Apple core's commands",
+    );
+    let theirs_tests = between(
+        &windows,
+        "#[cfg(test)]",
+        "    #[test]\n    fn a_frame_becomes_a_png",
+    );
+    let ours_tests = &ours[ours
+        .find("#[cfg(test)]")
+        .expect("preview.rs lost its tests")
+        + "#[cfg(test)]".len()..];
+    let lines = |text: &str| -> Vec<String> {
+        text.lines()
+            .map(|l| l.replace(", uniffi::Record)]", ")]"))
+            .filter(|l| !l.trim().is_empty())
+            .collect()
+    };
+    let theirs: Vec<String> = lines(theirs_body)
+        .into_iter()
+        .chain(lines(theirs_tests))
+        .collect();
+    let mut ours: Vec<String> = lines(ours_body)
+        .into_iter()
+        .chain(lines(ours_tests))
+        .collect();
+    // Windows' tests end where its PNG test begins; ours close the module there.
+    assert_eq!(ours.pop().as_deref(), Some("}"));
+    for (n, (a, b)) in theirs.iter().zip(&ours).enumerate() {
+        assert_eq!(
+            a,
+            b,
+            "preview.rs differs from aurora-app's at line {}",
+            n + 1
+        );
+    }
+    assert_eq!(
+        theirs.len(),
+        ours.len(),
+        "preview.rs and aurora-app's differ in length"
+    );
+}

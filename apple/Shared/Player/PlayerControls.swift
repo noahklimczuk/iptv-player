@@ -137,14 +137,15 @@ struct PlayerOverlay: View {
         VStack {
             HStack {
                 switch session.status {
-                case .opening(let source, let total) where !session.controlsVisible:
+                // The channel banner says what is opening, and has the top for its moment.
+                case .opening(let source, let total) where !session.controlsVisible && session.channelBanner == nil:
                     Label(total > 1
                           ? "Opening \(session.item.title) (source \(source) of \(total))"
                           : "Opening \(session.item.title)",
                           systemImage: "dot.radiowaves.left.and.right")
                         .padding()
                         .background(.ultraThinMaterial, in: Capsule())
-                case .noPicture(let message) where !session.controlsVisible:
+                case .noPicture(let message) where !session.controlsVisible && session.channelBanner == nil:
                     Label(message, systemImage: "speaker.wave.2")
                         .padding()
                         .background(.ultraThinMaterial, in: Capsule())
@@ -159,13 +160,22 @@ struct PlayerOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// The number being typed, top right, and the channel just tuned, bottom left above
-    /// the controls, as a set-top box shows them (`ZapBanner`). Neither raises the
-    /// controls.
+    /// The number being typed, top right; the channel just tuned, top centre, clear of
+    /// the controls (Windows' `ChannelBanner` over the player); and anything said about a
+    /// zap, bottom left. None of them raises the controls.
     private var zapping: some View {
         VStack {
             HStack(alignment: .top) {
                 Spacer()
+                if let banner = session.channelBanner, session.panel == nil {
+                    ChannelBannerView(banner: banner)
+                        // Below the title row while the controls are up, clear of it.
+                        .padding(.top, session.controlsVisible ? titleHeight : 0)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                Spacer()
+            }
+            .overlay(alignment: .topTrailing) {
                 if !session.digits.isEmpty {
                     Text(session.digits)
                         .font(.system(size: digitSize, weight: .bold, design: .rounded))
@@ -192,6 +202,8 @@ struct PlayerOverlay: View {
         .padding(edge)
         .allowsHitTesting(false)
         .animation(.easeInOut(duration: 0.2), value: session.banner)
+        .animation(.easeOut(duration: 0.22), value: session.channelBanner?.channel)
+        .animation(.easeInOut(duration: 0.2), value: session.controlsVisible)
     }
 
     private var digitSize: CGFloat {
@@ -221,6 +233,15 @@ struct PlayerOverlay: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(edge)
         .padding(.bottom, chromeHeight)
+    }
+
+    /// The controls' title row, which the channel banner sits below.
+    private var titleHeight: CGFloat {
+        #if os(tvOS)
+        90
+        #else
+        52
+        #endif
     }
 
     private var chromeHeight: CGFloat {
@@ -414,6 +435,13 @@ private struct ProgressRow: View {
     let interactive: Bool
     /// While a finger drags the bar: where it is, so the bar doesn't jump back.
     @State private var dragging: Double?
+    /// What the seek preview says about where the finger is.
+    @State private var preview: Shown?
+
+    struct Shown {
+        let preview: SeekPreview
+        let image: CGImage?
+    }
 
     var body: some View {
         if session.isLive, let window = session.state.rewind {
@@ -476,7 +504,8 @@ private struct ProgressRow: View {
         if interactive {
             Slider(
                 value: Binding(get: { dragging ?? min(max(w.positionSecs, w.startSecs), upper) },
-                               set: { dragging = $0 }),
+                               // A hand on the bar keeps the controls up.
+                               set: { dragging = $0; session.poke() }),
                 in: w.startSecs...upper,
                 onEditingChanged: { editing in
                     if editing {
@@ -489,6 +518,13 @@ private struct ProgressRow: View {
             )
             .tint(.red)
             .background { Capsule().fill(.white.opacity(0.3)).frame(height: 4) }
+            // Above the readout row, which sits over this bar.
+            .overlay { bubble(in: w.startSecs...upper, lift: 34) { secs, p in
+                // `Scrub.tsx`'s timeshift words.
+                let back = max(0, w.liveSecs - secs)
+                return (back <= liveEdgeSecs ? "Live" : "−" + clock(back),
+                        [p?.clockUnix.map(wallClock), p?.programme, p?.label])
+            } }
             .accessibilityLabel("Timeshift")
         } else {
             ProgressView(value: min(max(0, w.positionSecs - w.startSecs), upper - w.startSecs),
@@ -502,11 +538,51 @@ private struct ProgressRow: View {
         #endif
     }
 
+    #if os(iOS)
+    /// The seek preview over the bar while a finger drags it (`Scrub.tsx`'s
+    /// `SeekBubble`): the picture nearest that moment, if one was taken, and what it was.
+    private func bubble(in range: ClosedRange<Double>, lift: CGFloat,
+                        words: @escaping (Double, SeekPreview?) -> (String, [String?])) -> some View {
+        GeometryReader { geo in
+            if let at = dragging {
+                let span = range.upperBound - range.lowerBound
+                let x = span > 0 ? (at - range.lowerBound) / span * geo.size.width : 0
+                let (time, lines) = words(at, preview?.preview)
+                // Kept inside the bar, so the bubble at either end is not cut off.
+                let half = SeekBubble.width / 2
+                let left = geo.size.width > SeekBubble.width ? min(max(x, half), geo.size.width - half)
+                                                             : geo.size.width / 2
+                // A point-sized anchor above the bar the bubble grows up from, centred on it.
+                SeekBubble(time: time, lines: lines, image: preview?.image)
+                    .fixedSize()
+                    .frame(width: 0, height: 0, alignment: .bottom)
+                    .offset(x: left, y: -lift)
+            }
+        }
+        .allowsHitTesting(false)
+        // One question at a time, asked again while the picture is still coming (Windows'
+        // `useSeekPreview`, 150 ms).
+        .task(id: dragging) {
+            guard let at = dragging else {
+                preview = nil
+                return
+            }
+            while !Task.isCancelled {
+                guard let answer = await session.seekPreview(at: at), !Task.isCancelled else { return }
+                preview = Shown(preview: answer.0, image: answer.1)
+                guard answer.0.pending else { return }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+        }
+    }
+    #endif
+
     @ViewBuilder private var bar: some View {
         #if os(iOS)
         if interactive {
             Slider(
-                value: Binding(get: { dragging ?? session.state.position }, set: { dragging = $0 }),
+                value: Binding(get: { dragging ?? session.state.position },
+                               set: { dragging = $0; session.poke() }),
                 in: 0...max(session.state.duration, 1),
                 onEditingChanged: { editing in
                     if editing {
@@ -520,6 +596,9 @@ private struct ProgressRow: View {
             .tint(.white)
             // The unplayed part of the track is drawn dark, which vanishes on black.
             .background { Capsule().fill(.white.opacity(0.3)).frame(height: 4) }
+            .overlay { bubble(in: 0...max(session.state.duration, 1), lift: 10) { secs, p in
+                (clock(secs), [p?.label])
+            } }
             .accessibilityLabel("Position")
         } else {
             ProgressView(value: min(session.state.position, session.state.duration), total: session.state.duration)
@@ -962,5 +1041,150 @@ extension PlayerSession.Panel {
         case .picture: .picture
         case .keypad: .keypad
         }
+    }
+}
+
+/// Windows' `--dock-bg`: what the banner and the seek bubble sit on, a dark grey that
+/// still reads over a black picture.
+private let dockBackground = Color(white: 0.13).opacity(0.94)
+
+/// "21:04", in the viewer's own clock style.
+private func wallClock(_ unix: Int64) -> String {
+    Date(timeIntervalSince1970: TimeInterval(unix)).formatted(.dateTime.hour().minute())
+}
+
+#if os(iOS)
+/// `Scrub.tsx`'s `SeekBubble`: a 160×90 picture when there is one, the time, and what
+/// the moment was.
+private struct SeekBubble: View {
+    let time: String
+    let lines: [String?]
+    let image: CGImage?
+
+    static let width: CGFloat = 176
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if let image {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 160, height: 90)
+                    .background(.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            Text(time).font(.subheadline.weight(.heavy)).monospacedDigit()
+            ForEach(Array(lines.compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }.enumerated()), id: \.offset) { _, line in
+                Text(line).font(.caption.bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            }
+        }
+        .frame(minWidth: 64, maxWidth: image == nil ? 176 : 160)
+        .padding(image == nil ? EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+                              : EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+        .foregroundStyle(.white)
+        .background(dockBackground, in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityHidden(true)
+    }
+}
+#endif
+
+/// Windows' `ChannelBanner` over the player: the channel's logo, number and name, what is
+/// on now with its times and how far through it is, what is on next, and the time.
+private struct ChannelBannerView: View {
+    let banner: PlayerSession.ChannelBanner
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            content(now: context.date)
+        }
+    }
+
+    private func content(now: Date) -> some View {
+        HStack(spacing: 16) {
+            ChannelLogo(name: banner.channel.name, logo: banner.channel.logo, size: logoSize)
+            if let number = banner.channel.number {
+                Text(String(number))
+                    .font(.system(.largeTitle, design: .rounded).weight(.heavy))
+                    .monospacedDigit()
+                    .foregroundStyle(.tint)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(banner.channel.name).font(.headline.weight(.heavy)).lineLimit(1)
+                if let on = banner.guide?.now {
+                    Text(on.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    HStack(spacing: 12) {
+                        Text("\(wallClock(on.start))–\(wallClock(on.stop))").monospacedDigit()
+                        ProgressView(value: through(on, now: now))
+                            .tint(.white)
+                            .frame(maxWidth: 280)
+                            .accessibilityLabel("Programme progress")
+                    }
+                    .font(.caption.bold())
+                    .foregroundStyle(.white.opacity(0.7))
+                    if let next = banner.guide?.next {
+                        Text("Next: \(wallClock(next.start)) \(next.title)")
+                            .font(.caption.bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                    }
+                } else if banner.guide != nil {
+                    Text("No guide data for this channel")
+                        .font(.caption.bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(now, format: .dateTime.hour().minute())
+                .font(.title2.weight(.heavy))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.white)
+        .padding(.vertical, 14).padding(.leading, 14).padding(.trailing, 22)
+        .frame(maxWidth: maxWidth)
+        .background(dockBackground, in: RoundedRectangle(cornerRadius: 26))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spoken)
+    }
+
+    /// How far through the programme now is, 0…1.
+    private func through(_ on: Programme, now: Date) -> Double {
+        let span = Double(max(1, on.stop - on.start))
+        return min(1, max(0, (now.timeIntervalSince1970 - Double(on.start)) / span))
+    }
+
+    private var spoken: String {
+        let number = banner.channel.number.map { "\($0) " } ?? ""
+        let now = banner.guide?.now.map { ", now \($0.title)" } ?? ""
+        return number + banner.channel.name + now
+    }
+
+    #if os(tvOS)
+    private let logoSize: CGFloat = 80
+    private let maxWidth: CGFloat = 760
+    #else
+    private let logoSize: CGFloat = 52
+    private let maxWidth: CGFloat = 560
+    #endif
+}
+
+/// A channel's logo, or its initials on a tile when it has none (Windows' `ChannelTile`).
+struct ChannelLogo: View {
+    let name: String
+    let logo: String?
+    let size: CGFloat
+
+    var body: some View {
+        AsyncImage(url: logo.flatMap(URL.init(string:))) { image in
+            image.resizable().scaledToFit().padding(size * 0.1)
+        } placeholder: {
+            Text(initials)
+                .font(.system(size: size * 0.36, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+        }
+        .frame(width: size, height: size)
+        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.22))
+    }
+
+    private var initials: String {
+        let words = name.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        return String(words.prefix(2).compactMap(\.first)).uppercased()
     }
 }

@@ -37,6 +37,9 @@ mod mylist;
 mod playback;
 mod player;
 mod playlist;
+// The copy keeps Windows' whole `Frames` and `What`, recordings included, unused here.
+#[allow(dead_code)]
+mod preview;
 mod profiles;
 mod provider_edit;
 mod providers;
@@ -109,6 +112,8 @@ pub struct AuroraCore {
     home: Mutex<Option<home::HomeCache>>,
     /// The player's sleep timer (`sleep.rs`).
     sleep: Mutex<sleep::SleepTimer>,
+    /// The seek preview's pictures, by key (`preview.rs`).
+    previews: Mutex<preview::Previews>,
     /// Where the rewind buffer goes (`timeshift.rs`); beside the library until told.
     buffer_dir: Mutex<Option<PathBuf>>,
     /// Where the unreadable library was moved when this launch started a new one.
@@ -175,6 +180,7 @@ impl AuroraCore {
             data_dir,
             home: Mutex::new(None),
             sleep: Mutex::new(sleep::SleepTimer::default()),
+            previews: Mutex::new(preview::Previews::default()),
             buffer_dir: Mutex::new(None),
             replaced,
             sync,
