@@ -41,13 +41,8 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Section("About") {
-                    LabeledContent("Aurora core", value: coreVersion())
-                    if let core = model.core {
-                        LabeledContent("Library", value: core.dataDir())
-                            .font(.caption)
-                    }
-                }
+                DiagnosticsSection()
+                AboutSection()
             }
             .navigationTitle("Settings")
             .toolbar {

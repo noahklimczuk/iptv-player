@@ -473,3 +473,23 @@ fn back_to_live_and_the_settings_screen_offer_what_windows_offers() {
     assert_eq!(ui_number("features/player/model.ts", "LIVE_EDGE_SECS"), "5");
     assert_eq!(aurora_core::timeshift::LIVE_EDGE_SECS, 5.0);
 }
+
+#[test]
+fn about_states_the_licence_and_releases_page_windows_states() {
+    let logging = app_src("logging.rs");
+    assert!(
+        logging.contains(&format!(
+            "license: \"{}\".to_string()",
+            crate::diagnostics::LICENSE
+        )),
+        "aurora-app app_about's licence changed; update diagnostics::LICENSE"
+    );
+    let updates = app_src("updates.rs");
+    assert!(
+        updates.contains(&format!(
+            "pub const RELEASES_URL: &str = \"{}\";",
+            crate::diagnostics::RELEASES_URL
+        )),
+        "aurora-app RELEASES_URL changed; update diagnostics::RELEASES_URL"
+    );
+}

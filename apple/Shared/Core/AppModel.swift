@@ -57,6 +57,9 @@ final class AppModel {
     private var listingTask: Task<Void, Never>?
 
     init() {
+        // Before the library opens, so a library started again is in the log too.
+        LogExport.launchedAt = Date()
+        installLog(sink: CoreLog())
         do {
             core = try AuroraCore.open(dataDir: Self.dataDirectory().path, secrets: KeychainSecretStore())
             // The rewind buffer in Caches: not backed up, and the system's to reclaim.
@@ -618,6 +621,20 @@ extension ImportPhase {
         case .matchingEpg: "Matching the guide to channels"
         case .indexing: "Building search"
         case .done: "Done"
+        }
+    }
+}
+
+/// The core's log lines (`log.rs`), written into the system log beside mpv's, where
+/// Settings → Diagnostics exports them from. The core redacts URLs before logging.
+private final class CoreLog: LogSink {
+    private let log = Logger(subsystem: "tv.aurora", category: "core")
+
+    func line(level: UInt8, text: String) {
+        switch level {
+        case 0: log.error("\(text, privacy: .public)")
+        case 1: log.warning("\(text, privacy: .public)")
+        default: log.info("\(text, privacy: .public)")
         }
     }
 }

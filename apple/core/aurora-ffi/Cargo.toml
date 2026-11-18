@@ -20,6 +20,9 @@ aurora-video.workspace = true
 uniffi.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# The core's log, written into the system log (`log.rs`). No env-filter: one fixed
+# level, as Windows' default.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 parking_lot.workspace = true
 serde_json = "1"
 

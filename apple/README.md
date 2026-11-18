@@ -63,6 +63,14 @@ screens. The app can:
   app's Caches folder), up to 1 GB / 30 minutes by default and set in Settings. The bar
   runs from the oldest moment held to live, says how far behind live you are, and Back
   to live returns to the edge. The window is Windows' arithmetic (`aurora_core::timeshift`).
+- Settings → Diagnostics and About, as on Windows. Diagnostics says when the library
+  had to be started again, names the data folder and the video engine, and exports this
+  run's log, with every address's login removed (`redact_log`), to share from an iPhone.
+  The log is the system's: the core's own lines (`log.rs`, at Windows' `info`) and mpv's
+  warnings, redacted before they are written, both go into it. About carries the
+  version, the licence and the third-party notices. Those are this folder's
+  `THIRD-PARTY-NOTICES-APPLE.md` (MPVKit's LGPL build, shipped as separate frameworks)
+  followed by the shared file, both bundled with the app.
 
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
 Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go

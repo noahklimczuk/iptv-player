@@ -33,6 +33,12 @@ targetTemplates:
     type: application
     sources:
       - path: Shared
+      # The licence notices, shown in Settings → About and obliged to travel with the
+      # app (libmpv and FFmpeg are LGPL): the Apple build's own, then the shared file.
+      - path: THIRD-PARTY-NOTICES-APPLE.md
+        buildPhase: resources
+      - path: ../THIRD-PARTY-NOTICES.md
+        buildPhase: resources
     dependencies:
       - framework: Frameworks/AuroraCore.xcframework
         embed: false
