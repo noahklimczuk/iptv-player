@@ -733,6 +733,18 @@ export interface ParentalState {
   hideLocked: boolean;
   /** Whether anything at all is held back for the profile watching. */
   restricted: boolean;
+  /**
+   * The profile watching has an age limit and does not allow unrated titles, so every
+   * film and series without a rating is held back.
+   */
+  unratedHidden: boolean;
+  /**
+   * Films and series that carry a rating, and how many there are. Panels rarely send
+   * ratings; fetching metadata does. Until then a profile that blocks unrated titles
+   * sees no films, and the screens say so.
+   */
+  ratedTitles: number;
+  titles: number;
 }
 
 export type LockKind = 'channel' | 'category';

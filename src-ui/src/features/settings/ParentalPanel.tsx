@@ -88,6 +88,15 @@ export function ParentalPanel() {
       />
 
       <h3 className="settings-subhead">Age limits</h3>
+      {state && state.titles > 0 && state.ratedTitles < state.titles && (
+        <p className="settings-row-hint" data-testid="rated-share">
+          {state.ratedTitles === 0
+            ? 'None of your films and series carry a rating yet'
+            : `${state.ratedTitles.toLocaleString()} of ${state.titles.toLocaleString()} films and series carry a rating`}
+          . Providers rarely send one, so an age limit can only judge what Artwork and
+          metadata has fetched, and a profile that blocks unrated titles sees only those.
+        </p>
+      )}
       {profiles.map((p) => <AgeLimit key={p.id} profile={p} busy={busy} run={run} />)}
 
       <h3 className="settings-subhead">Locked</h3>

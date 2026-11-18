@@ -304,6 +304,9 @@ fn the_fields_the_host_sends_are_the_ones_the_contract_declares() {
                 unlocked_until: Some(0),
                 hide_locked: false,
                 restricted: true,
+                unrated_hidden: true,
+                rated_titles: 0,
+                titles: 0,
             })
             .unwrap(),
         ),

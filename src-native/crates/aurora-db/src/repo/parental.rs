@@ -79,6 +79,12 @@ pub(crate) fn allows(
     )
 }
 
+/// Whether `rule` holds back every title with no rating: an age limit that does not let
+/// unrated titles through.
+fn unrated_hidden(rule: i64) -> bool {
+    rule >= 0 && (rule & 0xFF) as u8 != NO_LIMIT && rule & UNRATED_PASSES == 0
+}
+
 /// The category a row of `kind` is filed under, as SQL over the unaliased table. A
 /// channel's is the viewer's own regrouping if there is one: a lock is on what the
 /// viewer sees.
@@ -296,6 +302,15 @@ pub struct ParentalState {
     pub hide_locked: bool,
     /// Whether anything at all is held back for the profile watching.
     pub restricted: bool,
+    /// The profile watching has an age limit and does not allow titles with no rating,
+    /// so every film and series without one is held back.
+    pub unrated_hidden: bool,
+    /// Films and series in the library that carry a rating, and how many there are in
+    /// all. Panels rarely send ratings; they come from fetching metadata. Until they are
+    /// fetched, a profile that blocks unrated titles sees an empty film library, and the
+    /// screens need these to say why.
+    pub rated_titles: i64,
+    pub titles: i64,
 }
 
 pub fn state(conn: &Connection, now: i64) -> Result<ParentalState> {
@@ -305,11 +320,23 @@ pub fn state(conn: &Connection, now: i64) -> Result<ParentalState> {
         conn.query_row("SELECT EXISTS (SELECT 1 FROM parental_locks)", [], |r| {
             r.get(0)
         })?;
+    let (rated_titles, titles): (i64, i64) = conn.query_row(
+        "SELECT
+             (SELECT count(*) FROM movies WHERE hidden = 0 AND trim(COALESCE(certification, '')) != '')
+           + (SELECT count(*) FROM series WHERE hidden = 0 AND trim(COALESCE(certification, '')) != ''),
+             (SELECT count(*) FROM movies WHERE hidden = 0)
+           + (SELECT count(*) FROM series WHERE hidden = 0)",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     Ok(ParentalState {
         profile_id: active_profile(conn)?,
         unlocked_until: (until > now).then_some(until),
         hide_locked: hide_locked(conn)?,
         restricted: rule >= 0 || any_lock,
+        unrated_hidden: unrated_hidden(rule),
+        rated_titles,
+        titles,
     })
 }
 
@@ -502,8 +529,13 @@ mod tests {
         let sam = kid(&conn);
         select_profile(&conn, sam).unwrap();
 
-        // Unrated is out too: a kids profile defaults to blocking it.
+        // Unrated is out too: a kids profile defaults to blocking it, and the state says
+        // so with how much of the library carries a rating, for the screens to explain
+        // an empty film list.
         assert_eq!(ids(&conn, Kind::Movies), [1]);
+        let seen = state(&conn, NOW).unwrap();
+        assert!(seen.unrated_hidden);
+        assert_eq!((seen.rated_titles, seen.titles), (5, 6));
         assert_eq!(ids(&conn, Kind::Series), [1]);
         // An age limit hides adult categories whatever the household setting says.
         assert_eq!(ids(&conn, Kind::Live), [10, 12]);
@@ -528,6 +560,7 @@ mod tests {
         // Back to the owner: everything again.
         select_profile(&conn, 1).unwrap();
         assert_eq!(ids(&conn, Kind::Movies), [1, 2, 3, 4]);
+        assert!(!state(&conn, NOW).unwrap().unrated_hidden);
         assert_eq!(check(&conn, Target::Movie(2)).unwrap(), Verdict::Allowed);
     }
 

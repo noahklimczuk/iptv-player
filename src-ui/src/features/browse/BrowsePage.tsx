@@ -188,6 +188,20 @@ export function BrowsePage({
 
   const shelves = useMemo(() => facets?.categories ?? [], [facets]);
   const filtered = Boolean(genre || category || query || letter);
+  // An empty library for a profile that blocks unrated titles is almost always a
+  // library nobody has fetched ratings for: panels do not send them (F-36). Asked only
+  // when the list comes back empty, so a full library never pays for the count.
+  const empty = !loading && items.length === 0 && !filtered;
+  const { data: gate } = useCommand('parental.state', undefined, [empty], empty);
+  const unrated = empty && gate?.unratedHidden === true && gate.ratedTitles < gate.titles;
+  const unratedBody = !unrated ? undefined : [
+    'This profile only sees titles with a rating, and',
+    gate!.ratedTitles === 0
+      ? "none of this library's are rated."
+      : `${gate!.ratedTitles.toLocaleString()} of ${gate!.titles.toLocaleString()} titles are rated.`,
+    "Your provider doesn't send ratings, so a parent can fetch them in Settings →",
+    'Artwork and metadata, or allow unrated titles in Settings → Parental controls.',
+  ].join(' ');
   const total = facets?.total;
 
   return (
@@ -341,8 +355,11 @@ export function BrowsePage({
 
           {!loading && items.length === 0 && (
             <EmptyState
-              icon="film"
-              title={filtered ? 'Nothing matches those filters' : 'Nothing here yet'}
+              icon={unrated ? 'lock' : 'film'}
+              title={filtered
+                ? 'Nothing matches those filters'
+                : unrated ? 'Nothing rated for this profile yet' : 'Nothing here yet'}
+              body={unratedBody}
               action={filtered ? (
                 <Button
                   onClick={() => {

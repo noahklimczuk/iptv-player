@@ -24,8 +24,9 @@ async function typePin(page: Page, pin: string) {
   for (const d of pin) await dialog.getByRole('button', { name: d, exact: true }).click();
 }
 
-async function parentalSection(page: Page) {
-  await page.goto('/#/settings');
+async function parentalSection(page: Page, base = '/') {
+  // Only the hash changes, so the mock's state survives the trip.
+  await page.goto(`${base}#/settings`);
   const section = page.getByRole('region', { name: 'Parental controls' });
   await section.scrollIntoViewIfNeeded();
   await expect(section).toBeVisible();
@@ -129,4 +130,30 @@ test('Settings can be locked behind the PIN', async ({ page }) => {
   await page.getByRole('button', { name: 'Enter the PIN' }).click();
   await typePin(page, '2468');
   await expect(page.getByRole('region', { name: 'Parental controls' })).toBeVisible();
+});
+
+test('a profile that blocks unrated titles is told why its film library is empty', async ({ page }) => {
+  // `?unenriched`: a panel's library before metadata is fetched, with no ratings at all.
+  await page.goto('/?unenriched#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await invoke(page, 'profiles.setLimits', {
+    profileId: 1, maxAge: 12, allowUnrated: false, dailyLimitMin: null,
+  });
+  await invoke(page, 'profiles.select', { profileId: 1 });
+
+  await page.goto('/?unenriched#/movies');
+  await expect(page.getByText('Nothing rated for this profile yet')).toBeVisible();
+  await expect(page.getByText("none of this library's are rated")).toBeVisible();
+
+  const section = await parentalSection(page, '/?unenriched');
+  await expect(section.getByTestId('rated-share'))
+    .toContainText('None of your films and series carry a rating yet');
+
+  // Letting unrated titles through brings the library back.
+  await invoke(page, 'profiles.setLimits', {
+    profileId: 1, maxAge: 12, allowUnrated: true, dailyLimitMin: null,
+  });
+  await page.goto('/?unenriched#/movies');
+  await expect.poll(async () =>
+    Number(await page.getByTestId('browse-grid').getAttribute('data-loaded') ?? 0)).toBeGreaterThan(0);
 });

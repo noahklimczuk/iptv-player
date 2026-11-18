@@ -1226,6 +1226,20 @@ The design is `docs/DECISIONS.md` D29.
 with ten categories locked and hidden. The first cut cost 157 ms; the difference was two
 string copies per row in `looks_adult`, now gone.
 
+**On the real panel** (`tests-host/scenarios/real_parental.py`, release build, 6,699
+channels and 25,053 films): the owner's first page of films took 109 ms, a kids profile's
+30 ms, and the same kids profile allowed unrated titles 133 ms.
+
+**What the real panel showed that the fixtures did not.** Not one of the 25,053 films
+carries a rating. Panels do not send them; only Artwork and metadata fetches them, and
+that needs a TMDB key. A kids profile blocks unrated titles by default, so on a library
+nobody has fetched ratings for, it sees no films at all. That is the rule doing what it
+says -- an unrated title is unknown, not suitable -- but an empty page that does not say
+why reads as a broken app. `parental.state` now reports `unratedHidden` and how many
+titles carry a rating. The films and series pages use that to explain an empty list and
+point to Artwork and metadata, or to allowing unrated titles. Parental controls shows the
+same count beside the age limits.
+
 **Regression tests.** `repo::parental`'s tests (lists and playback for each rule, the
 strictest-profile fallback, the PIN's expiry, locks needing a PIN, the fingerprint), the
 app's `with_a_parental_pin_set_changes_wait_for_it_and_your_own_pin_does_not`,

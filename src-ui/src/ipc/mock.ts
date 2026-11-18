@@ -335,9 +335,9 @@ let mockParental: ParentalSettings = {
 
 /**
  * The parental gate, as `aurora_db::repo::parental` keeps it: who is watching, until when
- * the PIN has opened things, and the locks. Only the locks are applied to the fixture's
- * lists and playback -- the fixture has no adult categories and no certifications to
- * hold back -- and they are applied in the host's own words, so the PIN dialog that
+ * the PIN has opened things, and the locks. The locks and the rule for unrated titles are
+ * applied to the fixture's lists and playback -- the fixture has no adult categories and
+ * no ratings for an age limit to judge -- and in the host's own words, so the PIN dialog that
  * answers them is exercised exactly as on Windows.
  */
 let mockSession: number | null = null;
@@ -361,7 +361,10 @@ function parentalState(): ParentalState {
     profileId: mockSession,
     unlockedUntil: mockUnlockedUntil > nowSecs() ? mockUnlockedUntil : null,
     hideLocked: mockHideLocked,
-    restricted: mockLocks.length > 0 && mockMasterPin != null,
+    restricted: (mockLocks.length > 0 && mockMasterPin != null) || ageRule().limit != null,
+    unratedHidden: unratedHidden(),
+    ratedTitles: editedMovies().filter(rated).length + editedSeries().filter(rated).length,
+    titles: editedMovies().length + editedSeries().length,
   };
 }
 
@@ -746,9 +749,44 @@ function mockCategories<T extends { genres: string[] }>(rows: T[]) {
 }
 
 const visibleMovies = (): Movie[] =>
-  applyFilters(editedMovies(), 'movies', (m) => m.title, (m) => m.year);
+  gateTitles(applyFilters(editedMovies(), 'movies', (m) => m.title, (m) => m.year));
 const visibleSeries = (): Series[] =>
-  applyFilters(editedSeries(), 'series', (s) => s.title, (s) => s.year);
+  gateTitles(applyFilters(editedSeries(), 'series', (s) => s.title, (s) => s.year));
+
+const rated = (t: { certification: string | null }) => (t.certification ?? '').trim() !== '';
+
+/** `aurora_core::parental::min_age` for the ratings the fixture hands out. */
+const FIXTURE_AGES: Record<string, number> = { U: 0, PG: 6, '12': 12, '15': 15, '18': 18 };
+
+/**
+ * The gate's age rule, as the host's `parental_gate` view reads it: the watching
+ * profile's limit, or with nobody chosen the strictest of them, and unrated titles
+ * through only if every limited profile allows them. Run with `?unenriched`, the
+ * fixture carries no ratings, which is what a panel's library looks like before
+ * metadata is fetched: a profile that blocks unrated titles then sees none.
+ */
+function ageRule(): { limit: number | null; unrated: boolean } {
+  const watching = mockProfiles.find((p) => p.id === mockSession);
+  const limited = (watching ? [watching] : mockProfiles).filter((p) => p.maxAge != null);
+  if (limited.length === 0) return { limit: null, unrated: true };
+  return {
+    limit: Math.min(...limited.map((p) => p.maxAge!)),
+    unrated: limited.every((p) => p.allowUnrated),
+  };
+}
+
+function unratedHidden(): boolean {
+  const { limit, unrated } = ageRule();
+  return limit != null && !unrated;
+}
+
+function gateTitles<T extends { certification: string | null }>(rows: T[]): T[] {
+  const { limit, unrated } = ageRule();
+  if (limit == null) return rows;
+  return rows.filter((r) => (rated(r)
+    ? (FIXTURE_AGES[r.certification!.trim()] ?? 0) <= limit
+    : unrated));
+}
 
 /** Every row of one list, hidden ones included: the editor's own view. */
 function allRows(kind: PlaylistKind): PlaylistEntry[] {

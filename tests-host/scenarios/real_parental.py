@@ -6,9 +6,10 @@ Parental controls in the real app, over a library imported from the real panel.
 subscription's library (`docs/DECISIONS.md` D29, `AUDIT/findings.md` F-36):
 
   1. adult categories are hidden on a fresh install, from the lists and from playback;
-  2. a kids profile, once chosen, sees only films rated within its limit -- unrated ones
-     included in that, since a kids profile blocks them -- and the list is timed against
-     the owner's, on this library;
+  2. a kids profile, once chosen, sees only films rated within its limit, and no unrated
+     ones unless it is allowed them. A panel sends no ratings, so on a line nobody has
+     fetched metadata for that is an empty list, and the host says why; allowing unrated
+     titles brings the films back. The lists are timed against the owner's;
   3. once a parental PIN exists, a locked channel is refused until the PIN is entered,
      and an age limit cannot be changed without it;
   4. a restart forgets who was watching and anything the PIN had opened.
@@ -85,26 +86,31 @@ def run(d, ctx):
     kid = d.invoke("profiles.create", {"name": "Sam", "isKids": True, "maxAge": KIDS_LIMIT})
     d.invoke("profiles.select", {"profileId": kid})
     kid_films, kid_ms = _films(d)
-    assert kid_films, "a kids profile with a limit of 12 sees no films at all on this line"
-    ids = ",".join(str(f["id"]) for f in kid_films)
-    certs = ctx.rows(f"SELECT id, certification FROM movies WHERE id IN ({ids})")
-    unknown = []
-    for film, cert in certs:
-        assert cert and cert.strip(), f"film {film} has no rating and a kids profile was shown it"
-        age = _age(cert)
-        if age is None:
-            unknown.append(cert)
-            continue
-        assert age <= KIDS_LIMIT, f"film {film} is rated {cert!r}, above the kids limit"
-    rated_total = ctx.rows("SELECT count(*) FROM movies WHERE hidden = 0 AND certification IS NOT NULL AND certification != ''")[0][0]
-    print(f"   kids: first page of {len(kid_films)} films in {kid_ms:.0f} ms, all rated "
-          f"{KIDS_LIMIT} or under ({rated_total} of {ctx.count('movies')} films carry a rating at all)")
-    if unknown:
-        print(f"   kids: ratings this check cannot read, left to the host: {sorted(set(unknown))[:8]}")
+    state = d.invoke("parental.state")
+    assert state["unratedHidden"], "a kids profile is not reported as blocking unrated titles"
+    print(f"   kids: first page of {len(kid_films)} films in {kid_ms:.0f} ms; "
+          f"{state['ratedTitles']} of {state['titles']} titles carry a rating")
+    _only_within_limit(ctx, kid_films)
+    if state["ratedTitles"] == 0:
+        # A panel sends no ratings; only fetching metadata does. The list is empty, and
+        # the state carries what the films page needs to say why.
+        assert not kid_films, "a library with no ratings showed a kids profile films"
+        film = ctx.rows("SELECT id FROM movies WHERE hidden = 0 LIMIT 1")[0][0]
+        _refused(d, "player.play", {"kind": "movie", "id": film}, NOT_ALLOWED)
+        print(f"   kids: nothing rated, so nothing shown, and unrated film {film} is refused")
     over = ctx.rows("SELECT id FROM movies WHERE certification IN ('R','18','TV-MA','NC-17','15') LIMIT 1")
     if over:
         _refused(d, "player.play", {"kind": "movie", "id": over[0][0]}, NOT_ALLOWED)
         print(f"   kids: film {over[0][0]}, rated above the limit, is refused")
+
+    # Letting unrated titles through: the library is back, except what is rated too high.
+    d.invoke("profiles.setLimits", {"profileId": kid, "maxAge": KIDS_LIMIT, "allowUnrated": True, "dailyLimitMin": None})
+    open_films, open_ms = _films(d)
+    assert open_films, "allowing unrated titles still shows a kids profile no films"
+    assert not d.invoke("parental.state")["unratedHidden"]
+    _only_within_limit(ctx, open_films)
+    print(f"   kids, unrated allowed: first page of {len(open_films)} films in {open_ms:.0f} ms")
+    d.invoke("profiles.setLimits", {"profileId": kid, "maxAge": KIDS_LIMIT, "allowUnrated": False, "dailyLimitMin": None})
 
     # 3. The parental PIN and a lock ---------------------------------------------------
     d.invoke("profiles.select", {"profileId": owner})
@@ -135,6 +141,24 @@ def run(d, ctx):
         "with nobody chosen, the list is not the kids profile's")
     print("   restart: nobody watching, nothing unlocked, the strictest profile's list")
     ctx.assert_no_panic()
+
+
+def _only_within_limit(ctx, films):
+    """Every rated film among these is rated within the kids limit."""
+    if not films:
+        return
+    ids = ",".join(str(f["id"]) for f in films)
+    unknown = []
+    for film, cert in ctx.rows(f"SELECT id, certification FROM movies WHERE id IN ({ids})"):
+        if not (cert and cert.strip()):
+            continue
+        age = _age(cert)
+        if age is None:
+            unknown.append(cert)
+            continue
+        assert age <= KIDS_LIMIT, f"film {film} is rated {cert!r}, above the kids limit"
+    if unknown:
+        print(f"   kids: ratings this check cannot read, left to the host: {sorted(set(unknown))[:8]}")
 
 
 def _films(d):

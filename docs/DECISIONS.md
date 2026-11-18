@@ -722,6 +722,10 @@ leak, and the player would still play whatever id it was handed.
 - **Locks need a PIN to exist.** A lock is applied only while there is a parental PIN, and
   one cannot be set without it. Otherwise a lock left behind when the PIN was removed would
   be a channel nobody could watch.
+- **Unrated is unknown, not suitable.** A kids profile blocks titles with no rating, and
+  panels send none, so until metadata is fetched a kids profile's film library is empty.
+  That is kept, and explained rather than hidden: the films page says why it is empty, and
+  Parental controls shows how much of the library carries a rating.
 - **Channels have no age.** Playlists do not rate channels, so an age limit cannot judge
   them; a channel is held back by its category (adult) and by locks.
 
