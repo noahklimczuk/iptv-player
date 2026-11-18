@@ -17,6 +17,9 @@ aurora-core.workspace = true
 aurora-db.workspace = true
 aurora-ingest.workspace = true
 aurora-video.workspace = true
+# Household sync (docs/APPLE_PORT_AND_SYNC.md §3), the same crate Windows uses. Its
+# Firebase client is the blocking rustls reqwest aurora-ingest already brings.
+aurora-sync.workspace = true
 uniffi.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

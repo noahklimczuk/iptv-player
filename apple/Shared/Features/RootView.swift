@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var tab: AppTab = .home
     @State private var showingSettings = false
     @State private var showingSearch = false
+    @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -33,6 +34,11 @@ struct RootView: View {
             }
         }
         .task { await model.loadProfiles() }
+        // Sync while the app is in front; a new phase cancels the loop and, if active
+        // again, starts it afresh.
+        .task(id: scenePhase) {
+            if scenePhase == .active { await model.runSyncLoop() }
+        }
         #if DEBUG
         .task { demo = await DemoLaunch.prepare(model) }
         .fullScreenCover(item: $demo) { PlayerScreen(item: $0) }

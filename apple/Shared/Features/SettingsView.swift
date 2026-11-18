@@ -31,6 +31,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Rename, renumber, regroup or hide channels, films and series, and put them back.")
                 }
+                SyncSection()
                 TimeshiftSection()
                 MetadataSection()
                 if let progress = model.importProgress {

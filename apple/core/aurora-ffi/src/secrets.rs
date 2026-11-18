@@ -86,6 +86,18 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct MemorySecrets(Mutex<HashMap<String, String>>);
 
+    impl MemorySecrets {
+        /// Everything stored, for a test to look at.
+        pub(crate) fn dump(&self) -> Vec<(String, String)> {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        }
+    }
+
     impl SecretStore for MemorySecrets {
         fn set(&self, key: String, secret: String) -> Result<(), SecretError> {
             self.0.lock().unwrap().insert(key, secret);

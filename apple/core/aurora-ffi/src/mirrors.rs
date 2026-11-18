@@ -48,6 +48,36 @@ fn resolve_const(name: &str) -> u32 {
         .unwrap_or_else(|_| panic!("{name} in play/resolve.rs is not a plain number"))
 }
 
+/// `pub const NAME: Duration = Duration::from_xxx(N);` or `const NAME: i64 = N;` in
+/// `aurora-app/src/sync.rs`, as N in the unit given.
+fn sync_const(decl: &str) -> u64 {
+    let sync = app_src("sync.rs");
+    let text = between(&sync, decl, ";");
+    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+    digits
+        .parse()
+        .unwrap_or_else(|_| panic!("`{decl}` in sync.rs has no plain number: {text:?}"))
+}
+
+#[test]
+fn sync_paces_and_waits_for_a_position_as_windows_does() {
+    assert_eq!(
+        crate::sync::TICK_SECS,
+        sync_const("pub const TICK: Duration = Duration::from_secs("),
+        "aurora-app's sync TICK changed; sync.rs TICK_SECS says otherwise"
+    );
+    assert_eq!(
+        crate::sync::RESUME_BUDGET_MS,
+        sync_const("pub const RESUME_BUDGET: Duration = Duration::from_millis("),
+        "aurora-app's RESUME_BUDGET changed; sync.rs RESUME_BUDGET_MS says otherwise"
+    );
+    assert_eq!(
+        crate::sync::RESUME_FRESH_SECS as u64,
+        sync_const("const RESUME_FRESH_SECS: i64 ="),
+        "aurora-app's RESUME_FRESH_SECS changed; sync.rs says otherwise"
+    );
+}
+
 #[test]
 fn the_live_buffer_is_the_one_windows_uses() {
     let windows = resolve_const("LIVE_BUFFER_SECS");

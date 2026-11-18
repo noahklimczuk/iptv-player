@@ -15,7 +15,8 @@
 //!
 //! Scope today: the Phase 2 spike of docs/APPLE_PORT_AND_SYNC.md (open a library, add a
 //! provider, import it, list its channels, tune one), plus the guide's now/next and
-//! schedule, films and series, watch progress, favourite channels, search, catch-up, profiles and My List.
+//! schedule, films and series, watch progress, favourite channels, search, catch-up, profiles and My List,
+//! and household sync (`sync.rs`).
 
 uniffi::setup_scaffolding!();
 
@@ -41,6 +42,7 @@ mod search;
 mod secrets;
 mod series;
 mod sleep;
+mod sync;
 mod timeshift;
 mod vod;
 mod zap;
@@ -75,6 +77,7 @@ pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};
 pub use series::{ListingListener, ListingReport};
 pub use sleep::{SleepAfter, SleepPlaying, SleepState};
+pub use sync::{SyncJoined, SyncProblem, SyncReport, SyncStatus};
 pub use timeshift::{
     RewindBudget, RewindReading, RewindWindow, TimeshiftChange, TimeshiftChoices, TimeshiftSettings,
 };
@@ -106,6 +109,8 @@ pub struct AuroraCore {
     buffer_dir: Mutex<Option<PathBuf>>,
     /// Where the unreadable library was moved when this launch started a new one.
     replaced: Option<PathBuf>,
+    /// Household sync, on a connection of its own (`sync.rs`).
+    sync: Arc<sync::SyncHost>,
 }
 
 #[uniffi::export]
@@ -117,6 +122,25 @@ impl AuroraCore {
     /// exactly as on Windows (`aurora_db::open_or_recover`).
     #[uniffi::constructor]
     pub fn open(data_dir: String, secrets: Arc<dyn SecretStore>) -> Result<Arc<Self>> {
+        Self::open_with(data_dir, secrets, |library, db, credentials| {
+            sync::SyncHost::new(library, db, credentials)
+        })
+    }
+
+    /// Where the library lives. For diagnostics.
+    pub fn data_dir(&self) -> String {
+        self.data_dir.display().to_string()
+    }
+}
+
+impl AuroraCore {
+    /// [`AuroraCore::open`], with the sync host chosen by the caller: the tests give it
+    /// the in-memory Firebase.
+    fn open_with(
+        data_dir: String,
+        secrets: Arc<dyn SecretStore>,
+        sync_host: impl FnOnce(PathBuf, &Connection, Arc<dyn CredentialStore>) -> sync::SyncHost,
+    ) -> Result<Arc<Self>> {
         let data_dir = PathBuf::from(data_dir);
         std::fs::create_dir_all(&data_dir).map_err(|e| {
             AuroraError::other(format!("Aurora could not create its data folder: {e}"))
@@ -134,21 +158,23 @@ impl AuroraCore {
             aurora_db::Opened::Replaced { corrupt_copy } => Some(corrupt_copy),
         };
         let http = Arc::new(HttpClient::new(HttpConfig::default())?);
+        let credentials: Arc<dyn CredentialStore> = Arc::new(secrets::Bridged(secrets));
+        let sync = Arc::new(sync_host(
+            data_dir.join("library.db"),
+            &db,
+            Arc::clone(&credentials),
+        ));
         Ok(Arc::new(Self {
             db: Mutex::new(db),
             http,
-            credentials: Arc::new(secrets::Bridged(secrets)),
+            credentials,
             data_dir,
             home: Mutex::new(None),
             sleep: Mutex::new(sleep::SleepTimer::default()),
             buffer_dir: Mutex::new(None),
             replaced,
+            sync,
         }))
-    }
-
-    /// Where the library lives. For diagnostics.
-    pub fn data_dir(&self) -> String {
-        self.data_dir.display().to_string()
     }
 }
 
@@ -179,5 +205,33 @@ pub(crate) mod testing {
         )
         .unwrap();
         (core, dir)
+    }
+
+    /// A library whose sync talks to `fb`, the in-memory Firebase, with a cheap key
+    /// derivation. Opened again on the same folder and Keychain, it is a restart.
+    pub(crate) fn core_with_sync(
+        dir: &std::path::Path,
+        fb: &aurora_sync::firebase::fake::FakeFirebase,
+        keychain: Arc<secrets::tests::MemorySecrets>,
+    ) -> Arc<AuroraCore> {
+        let fb = fb.clone();
+        AuroraCore::open_with(
+            dir.display().to_string(),
+            keychain,
+            move |library, db, creds| {
+                sync::SyncHost::with(
+                    library,
+                    db,
+                    creds,
+                    Some(sync::AnyHttp::new(fb)),
+                    Some(aurora_sync::firebase::FirebaseConfig {
+                        api_key: "k".into(),
+                        project_id: "aurora-test".into(),
+                    }),
+                )
+                .with_kdf(aurora_sync::vault::KdfParams { m: 64, t: 1, p: 1 })
+            },
+        )
+        .unwrap()
     }
 }

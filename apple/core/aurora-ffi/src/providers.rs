@@ -294,6 +294,12 @@ impl AuroraCore {
             Ok(n) => tracing::info!(rows = n, "stored stream ids in place of stream URLs"),
             Err(e) => tracing::error!("could not rewrite stored stream URLs: {e}"),
         }
+        drop(db);
+
+        // Records from other devices that named something this library did not have yet
+        // are parked; an import is when they may finally have somewhere to go
+        // (`refresh_provider` does the same).
+        self.sync.wake();
 
         Ok(result.into())
     }
