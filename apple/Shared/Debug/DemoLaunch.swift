@@ -12,13 +12,19 @@ import Foundation
 /// `-AuroraDemoXtreamPass` do the same for an Xtream panel (`apple/scripts/sim-demo.sh`
 /// reads them from a local file). `-AuroraDemoContent all` imports films and series too,
 /// and adds them to a library that so far has only live TV. `-AuroraAutoplay YES` then
-/// plays the first channel.
+/// plays the first channel. `-AuroraPlayEpisode <id>` opens that episode, at
+/// `-AuroraStartAt <seconds>` when given: for trying skip markers and Up Next without
+/// sitting through the episode.
 /// Arguments of the form `-Key value` land in UserDefaults' argument domain, so nothing
 /// here parses the command line.
 enum DemoLaunch {
     @MainActor
     static func prepare(_ model: AppModel) async -> PlayerItem? {
         let defaults = UserDefaults.standard
+        if let episode = defaults.object(forKey: "AuroraPlayEpisode") as? String, let id = Int64(episode) {
+            let at = (defaults.object(forKey: "AuroraStartAt") as? String).flatMap(Double.init)
+            return .episode(id: id, title: "Episode \(id)", startAt: at)
+        }
         let everything = defaults.string(forKey: "AuroraDemoContent") == "all"
         let content = ImportContent(live: true, vod: everything, series: everything)
         let playlist = defaults.string(forKey: "AuroraDemoPlaylist")

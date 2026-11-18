@@ -308,6 +308,7 @@ struct SeriesDetail: View {
                     MarkButtons(kind: .series, id: seriesId)
                     if let overview = detail.overview { Text(overview) }
                     CastAndCrew(kind: .series, id: seriesId, genres: detail.genres)
+                    SeriesSwitches(seriesId: seriesId)
                     if let resume, let episode = allEpisodes.first(where: { $0.id == resume.episodeId }) {
                         Button(resume.positionSecs > 0 ? "Resume \(label(episode))" : "Play \(label(episode))",
                                systemImage: "play.fill") {
@@ -361,6 +362,43 @@ struct SeriesDetail: View {
         let number = "S\(e.season)E\(e.episode)"
         guard let title = e.title, !title.isEmpty else { return number }
         return "\(number) · \(title)"
+    }
+}
+
+/// The show's own switches, read by the player's skip and Up Next (`DetailModal.tsx`
+/// `SeriesPrefsToggles`). Per profile.
+private struct SeriesSwitches: View {
+    @Environment(AppModel.self) private var model
+    let seriesId: Int64
+    @State private var prefs: SeriesPrefs?
+
+    var body: some View {
+        if let prefs {
+            toggle("Always skip intros", \.alwaysSkipIntro, prefs)
+            toggle("Always skip recaps", \.alwaysSkipRecap, prefs)
+            toggle("Autoplay next episode", \.autoplayNext, prefs)
+        } else {
+            Color.clear.frame(height: 0)
+                .task(id: model.profileId) {
+                    prefs = try? model.core?.seriesPrefs(profileId: model.profileId, seriesId: seriesId)
+                }
+        }
+    }
+
+    private func toggle(_ label: String, _ key: WritableKeyPath<SeriesPrefs, Bool>, _ current: SeriesPrefs) -> some View {
+        Toggle(label, isOn: Binding(get: { current[keyPath: key] }, set: { on in
+            var next = current
+            next[keyPath: key] = on
+            prefs = next
+            do {
+                try model.core?.setSeriesPrefs(profileId: model.profileId, seriesId: seriesId, prefs: next)
+            } catch {
+                // Put it back: a switch showing what wasn't saved would have the player
+                // skip (or not) against what the viewer sees (R-103).
+                prefs = current
+                model.error = "Could not save that preference: \(error.viewerMessage)"
+            }
+        }))
     }
 }
 

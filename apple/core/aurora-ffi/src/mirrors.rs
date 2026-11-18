@@ -222,3 +222,51 @@ fn the_home_feed_pages_and_refreshes_as_windows_does() {
     assert_eq!(app_const("home.rs", "ALSO_LIKED_REFRESH"), "14 * 86_400");
     assert_eq!(ALSO_LIKED_REFRESH, 14 * 86_400);
 }
+
+/// The JavaScript list in `export const NAME = [a, b, c] as const;`, as numbers.
+fn ui_numbers(file: &str, name: &str) -> Vec<f64> {
+    let src = ui_src(file);
+    between(&src, &format!("export const {name} = ["), "]")
+        .split(',')
+        .map(|n| n.trim().parse().unwrap_or_else(|_| panic!("{name} in {file} is not a list of numbers")))
+        .collect()
+}
+
+/// `export const NAME = N;` in a Windows UI source, as N.
+fn ui_number(file: &str, name: &str) -> String {
+    between(&ui_src(file), &format!("export const {name} ="), ";").trim().to_string()
+}
+
+#[test]
+fn the_player_menus_offer_what_windows_offers() {
+    use crate::player::*;
+    const MODEL: &str = "features/player/model.ts";
+    assert_eq!(ui_numbers(MODEL, "SPEEDS"), SPEEDS.to_vec(), "model.ts SPEEDS");
+    let sleep: Vec<f64> = SLEEP_MINUTES.iter().map(|&m| f64::from(m)).collect();
+    assert_eq!(ui_numbers(MODEL, "SLEEP_MINUTES"), sleep, "model.ts SLEEP_MINUTES");
+    assert_eq!(ui_number(MODEL, "SLEEP_EXTEND_MINUTES"), SLEEP_EXTEND_MINUTES.to_string());
+    assert_eq!(ui_number(MODEL, "HIDE_AFTER_MS"), HIDE_AFTER_MS.to_string());
+    assert_eq!(
+        ui_number("features/player/UpNextCard.tsx", "COUNTDOWN_SECS"),
+        UP_NEXT_COUNTDOWN_SECS.to_string()
+    );
+    assert_eq!(app_const("commands.rs", "UP_NEXT_TAIL_SECS"), format!("{UP_NEXT_TAIL_SECS:.1}"));
+    // The Aspect menu: Windows' words, in Windows' order.
+    let model = ui_src(MODEL);
+    let windows = between(&model, "export const ASPECTS", "\n];");
+    let mut at = 0;
+    for (_, label, detail) in ASPECTS {
+        let line = format!("label: '{label}', detail: '{detail}'");
+        let found = windows[at..]
+            .find(&line)
+            .unwrap_or_else(|| panic!("model.ts ASPECTS has no `{line}` here; update player.rs ASPECTS"));
+        at += found + line.len();
+    }
+}
+
+#[test]
+fn the_sleep_timer_keeps_windows_limits() {
+    assert_eq!(app_const("play/sleep.rs", "WARNING_SECS"), crate::sleep::WARNING_SECS.to_string());
+    assert_eq!(app_const("play/sleep.rs", "MAX_MINUTES"), "12 * 60");
+    assert_eq!(crate::sleep::MAX_MINUTES, 12 * 60);
+}

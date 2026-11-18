@@ -30,11 +30,13 @@ mod metadata;
 mod mirrors;
 mod mylist;
 mod playback;
+mod player;
 mod profiles;
 mod providers;
 mod search;
 mod secrets;
 mod series;
+mod sleep;
 mod vod;
 
 use std::path::PathBuf;
@@ -54,11 +56,16 @@ pub use library::{Channel, ChannelGroup, FavoriteList};
 pub use metadata::{Coverage, Credit, MetadataListener, MetadataReport, MetadataStatus};
 pub use mylist::{ItemMarks, ListKind, MyList};
 pub use playback::{LiveTune, MpvOption, PlayableSource};
+pub use player::{
+    AspectChoice, ChapterMark, MarkerKind, MarkerSource, PictureAspect, PlaybackAids, PlayerMenus,
+    SeriesPrefs, SkipMarker,
+};
 pub use profiles::{PinChange, PinOutcome, Profile};
 pub use providers::{ImportContent, ImportListener, ImportPhase, ImportReport, Provider};
 pub use search::{SearchHit, SearchResults};
 pub use secrets::{SecretError, SecretStore};
 pub use series::{ListingListener, ListingReport};
+pub use sleep::{SleepAfter, SleepPlaying, SleepState};
 pub use vod::{
     Browse, BrowseFacets, BrowseSort, Episode, Movie, Series, SeriesResume, Shelf, VodKind, VodTune,
     WatchProgress,
@@ -81,6 +88,8 @@ pub struct AuroraCore {
     data_dir: PathBuf,
     /// The home feed last built (`home.rs`).
     home: Mutex<Option<home::HomeCache>>,
+    /// The player's sleep timer (`sleep.rs`).
+    sleep: Mutex<sleep::SleepTimer>,
 }
 
 #[uniffi::export]
@@ -111,6 +120,7 @@ impl AuroraCore {
             credentials: Arc::new(secrets::Bridged(secrets)),
             data_dir,
             home: Mutex::new(None),
+            sleep: Mutex::new(sleep::SleepTimer::default()),
         }))
     }
 
