@@ -221,17 +221,43 @@ pub struct ParentalArgs {
 pub fn profiles_set_parental(services: State<'_, Services>, args: ParentalArgs) -> Result<()> {
     let db = services.db.lock();
     require_parent(&db)?;
-    profiles::set_parental_flags(&db, args.hide_adult, args.lock_settings, now_unix())?;
+    set_parental(&db, args, now_unix())
+}
+
+/// What `profiles.setParental` does once the caller may change it, apart from the Tauri
+/// state so it can be tested.
+///
+/// Adult categories show only while there is a parental PIN (README §11, F-39), so a
+/// change that would show them with none -- turning the switch off before a PIN exists,
+/// or clearing the PIN while it is off -- is refused here with the reason. The database
+/// holds the same rule with a trigger, for the paths that have nobody to tell.
+///
+/// The PIN is written before the switches: a first PIN and "show adult categories" in one
+/// save is allowed, and written the other way round the trigger would hide them again.
+pub(crate) fn set_parental(db: &Connection, args: ParentalArgs, now: i64) -> Result<()> {
+    let pin_after = match &args.master_pin {
+        Some(pin) => pin.is_some(),
+        None => profiles::parental_settings(db)?.has_master_pin,
+    };
+    if !args.hide_adult && !pin_after {
+        return Err(AppError::Other(ADULT_NEEDS_PIN.into()));
+    }
     if let Some(pin) = args.master_pin {
-        profiles::set_master_pin(&db, pin.as_deref(), now_unix())?;
+        profiles::set_master_pin(db, pin.as_deref(), now)?;
         // Whoever just chose the PIN knows it: the rest of this visit to the settings
         // should not ask for it straight back.
         if pin.is_some() {
-            parental::unlock(&db, now_unix())?;
+            parental::unlock(db, now)?;
         }
     }
+    // Without a PIN there is nothing to open Settings with, so they cannot stay locked.
+    profiles::set_parental_flags(db, args.hide_adult, args.lock_settings && pin_after, now)?;
     Ok(())
 }
+
+/// Why showing adult categories was refused.
+pub(crate) const ADULT_NEEDS_PIN: &str =
+    "Set a parental PIN before showing adult categories, so that only you can show them.";
 
 /// Minutes watched today, for the daily limit on a kids profile.
 #[tauri::command(async)]
@@ -270,6 +296,61 @@ fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn adult_hidden(db: &Connection) -> bool {
+        profiles::parental_settings(db).unwrap().hide_adult
+    }
+
+    fn parental(hide_adult: bool, master_pin: Option<Option<&str>>) -> ParentalArgs {
+        ParentalArgs {
+            hide_adult,
+            lock_settings: false,
+            master_pin: master_pin.map(|p| p.map(str::to_string)),
+        }
+    }
+
+    #[test]
+    fn adult_categories_show_only_while_there_is_a_parental_pin() {
+        let db = aurora_db::open_memory().unwrap();
+        assert!(adult_hidden(&db), "README §11: hidden on a fresh install");
+
+        // No PIN: refused, and still hidden.
+        let refused = set_parental(&db, parental(false, None), 0).unwrap_err();
+        assert!(
+            refused.to_string().contains("Set a parental PIN"),
+            "{refused}"
+        );
+        assert!(adult_hidden(&db));
+
+        // A first PIN and the opt-in in one save.
+        set_parental(&db, parental(false, Some(Some("2468"))), 0).unwrap();
+        assert!(!adult_hidden(&db));
+
+        // Clearing the PIN while they show is refused too.
+        assert!(set_parental(&db, parental(false, Some(None)), 0).is_err());
+        assert!(profiles::parental_settings(&db).unwrap().has_master_pin);
+
+        // Clearing it along with hiding them is fine.
+        set_parental(&db, parental(true, Some(None)), 0).unwrap();
+        assert!(adult_hidden(&db));
+    }
+
+    #[test]
+    fn the_database_hides_adult_categories_again_when_the_pin_goes_another_way() {
+        // Sync, or anything else that writes the row without asking the command.
+        let db = aurora_db::open_memory().unwrap();
+        profiles::set_master_pin(&db, Some("2468"), 0).unwrap();
+        profiles::set_parental_flags(&db, false, false, 0).unwrap();
+        assert!(!adult_hidden(&db));
+        profiles::set_master_pin(&db, None, 0).unwrap();
+        assert!(
+            adult_hidden(&db),
+            "no PIN left, and adult categories still show"
+        );
+
+        profiles::set_parental_flags(&db, false, false, 0).unwrap();
+        assert!(adult_hidden(&db), "shown with no PIN at all");
+    }
 
     #[test]
     fn with_a_parental_pin_set_changes_wait_for_it_and_your_own_pin_does_not() {

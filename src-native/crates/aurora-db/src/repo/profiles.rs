@@ -573,7 +573,11 @@ mod tests {
             Some("XXX")
         ));
 
-        // ...until explicitly opted into.
+        // ...until explicitly opted into, which needs the master PIN (README §11): with
+        // none, the database puts the switch back.
+        set_parental_flags(&conn, false, false, 0).unwrap();
+        assert!(parental_settings(&conn).unwrap().hide_adult);
+        set_master_pin(&conn, Some("2468"), 0).unwrap();
         set_parental_flags(&conn, false, false, 0).unwrap();
         let relaxed = parental_settings(&conn).unwrap();
         assert!(may_watch(&adult_profile, &relaxed, Some("18"), Some("XXX")));

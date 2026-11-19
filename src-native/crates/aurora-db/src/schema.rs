@@ -863,9 +863,36 @@ CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
         name: "watch_time",
         sql: WATCH_TIME,
     },
+    Migration {
+        version: 21,
+        name: "adult_needs_pin",
+        sql: ADULT_NEEDS_PIN,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 20;
+pub const LATEST_VERSION: u32 = 21;
+
+/// Migration 21: adult categories show only while there is a parental PIN (README §11:
+/// "requires explicit opt-in plus the master PIN to reveal"; `AUDIT/findings.md` F-39).
+///
+/// "Hide adult categories" was a switch anybody could turn off with no PIN set, and
+/// clearing the PIN left them showing. The trigger holds the rule wherever the row is
+/// written from: the settings command, clearing the PIN, or another device's row arriving
+/// through sync. It puts the switch back rather than refusing, because sync has nobody to
+/// refuse to; the command checks first and says why. Recursive triggers are off, so the
+/// update inside does not fire it again, and `sync_parental_update` sends the corrected
+/// row on.
+///
+/// The `UPDATE` applies the rule to a library that already broke it.
+const ADULT_NEEDS_PIN: &str = r#"
+UPDATE parental SET hide_adult = 1 WHERE id = 1 AND hide_adult = 0 AND master_pin IS NULL;
+
+CREATE TRIGGER parental_adult_needs_pin AFTER UPDATE OF hide_adult, master_pin ON parental
+    WHEN NEW.hide_adult = 0 AND NEW.master_pin IS NULL
+BEGIN
+    UPDATE parental SET hide_adult = 1 WHERE id = 1;
+END;
+"#;
 
 /// Migration 20: how long each profile has watched today, for the daily limit
 /// (README §11, `AUDIT/findings.md` F-37).

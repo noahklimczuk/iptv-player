@@ -21,7 +21,9 @@ import type {
 import type { SyncJoined, SyncRound, SyncStatus } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
 import * as fx from './fixtures';
-import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE } from './parentalMessages';
+import {
+  ADULT_NEEDS_PIN_MESSAGE, LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE,
+} from './parentalMessages';
 
 /**
  * A pretend published build, one patch ahead of whatever this bundle was built from.
@@ -2861,10 +2863,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'profiles.parental': (): ParentalSettings => mockParental,
   'profiles.setParental': ({ hideAdult, lockSettings, masterPin }) => {
     requireParent();
+    const pinAfter = masterPin !== undefined ? masterPin !== null : mockParental.hasMasterPin;
+    // Adult categories show only while there is a PIN, as the host's `set_parental` says.
+    if (!hideAdult && !pinAfter) throw new Error(ADULT_NEEDS_PIN_MESSAGE);
     if (masterPin) mockUnlockedUntil = nowSecs() + 30 * 60;
     mockParental = {
-      hideAdult, lockSettings,
-      hasMasterPin: masterPin !== undefined ? masterPin !== null : mockParental.hasMasterPin,
+      hideAdult, lockSettings: lockSettings && pinAfter,
+      hasMasterPin: pinAfter,
     };
     if (masterPin !== undefined) mockMasterPin = masterPin;
   },
