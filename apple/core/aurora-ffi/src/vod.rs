@@ -254,6 +254,14 @@ impl AuroraCore {
         self.facets(Kind::Series, browse)
     }
 
+    /// One film by id: what a search hit opens (Windows' `library.item`).
+    pub fn movie_detail(&self, movie_id: i64) -> Result<Movie> {
+        let db = self.db.lock();
+        library::movie(&db, movie_id)?
+            .map(Movie::from)
+            .ok_or_else(|| AuroraError::not_found("This film is no longer in your library."))
+    }
+
     pub fn series_detail(&self, series_id: i64) -> Result<Series> {
         let db = self.db.lock();
         library::series(&db, series_id)?
@@ -604,6 +612,16 @@ mod tests {
         assert!(core.movies(browse()).unwrap().is_empty());
         assert!(core.series_list(browse()).unwrap().is_empty());
         assert!(core.movie_shelves().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_film_is_found_by_its_id_and_a_gone_one_says_so() {
+        let (core, _dir) = core();
+        films(&core, &[("Heat", "Crime", r#"["Crime"]"#)]);
+        let id = core.movies(browse()).unwrap()[0].id;
+        assert_eq!(core.movie_detail(id).unwrap().title, "Heat");
+        let e = core.movie_detail(id + 1000).unwrap_err();
+        assert!(e.to_string().contains("no longer in your library"), "{e}");
     }
 
     #[test]

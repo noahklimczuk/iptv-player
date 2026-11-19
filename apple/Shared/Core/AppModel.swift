@@ -421,6 +421,11 @@ final class AppModel {
         await call(nil) { try $0.search(text: text, limit: 30) }
     }
 
+    /// One film by id, for a search hit to open; nil (and said) when it has gone.
+    func movieDetail(id: Int64) async -> Movie? {
+        await call(nil) { try $0.movieDetail(movieId: id) }
+    }
+
     func nowNext(channelIds: [Int64]) async -> [NowNext] {
         await call([]) { try $0.nowNext(channelIds: channelIds) }
     }

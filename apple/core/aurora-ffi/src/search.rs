@@ -1,5 +1,5 @@
-//! One search box across the whole library: channels, what is on now and later, films
-//! and series. `aurora_db::repo::search::grouped`, which also applies the viewer's
+//! One search box across the whole library: channels, what is on now and later, films,
+//! series, and the cast and crew of what is in it. `aurora_db::repo::search::grouped`, which also applies the viewer's
 //! library filters, so search never finds what they chose to hide.
 
 use aurora_db::repo::search;
@@ -9,7 +9,7 @@ use crate::{now_unix, AuroraCore};
 
 /// One result. What `id` names depends on the list it is in: a channel for `channels`,
 /// `on_now` and `upcoming` (so a programme opens its channel), a film for `movies`, a
-/// show for `series`.
+/// show for `series`, a TMDB person for `people`.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SearchHit {
     pub id: i64,
@@ -24,6 +24,8 @@ pub struct SearchResults {
     pub upcoming: Vec<SearchHit>,
     pub movies: Vec<SearchHit>,
     pub series: Vec<SearchHit>,
+    /// Only people credited on something in the library.
+    pub people: Vec<SearchHit>,
 }
 
 fn hits(from: Vec<search::SearchHit>) -> Vec<SearchHit> {
@@ -51,6 +53,7 @@ impl AuroraCore {
             upcoming: hits(r.upcoming),
             movies: hits(r.movies),
             series: hits(r.series),
+            people: hits(r.people),
         })
     }
 }
@@ -69,6 +72,6 @@ mod tests {
     fn an_empty_library_finds_nothing() {
         let (core, _dir) = core();
         let r = core.search("news".into(), 20).unwrap();
-        assert!(r.channels.is_empty() && r.movies.is_empty());
+        assert!(r.channels.is_empty() && r.movies.is_empty() && r.people.is_empty());
     }
 }

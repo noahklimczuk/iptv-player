@@ -165,17 +165,71 @@ struct GuideView: View {
         loaded = true
     }
 
+    /// Windows' `GuideToolbar` top line: the day, then −24h −1h Now +1h +24h, then
+    /// Tonight 8pm. On a phone the buttons go under the day and scroll sideways.
     private var controls: some View {
-        HStack {
-            Button("Earlier", systemImage: "chevron.backward") { start.addTimeInterval(-3600) }
-            Button("Now") { start = Self.windowStart(for: Date()) }
-            Button("Later", systemImage: "chevron.forward") { start.addTimeInterval(3600) }
-            Spacer()
-            Text(start, format: .dateTime.weekday(.wide).day().month())
-                .foregroundStyle(.secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                dayHeading
+                Spacer(minLength: 12)
+                shiftButtons
+                primeTimeButton
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                dayHeading
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        shiftButtons
+                        primeTimeButton
+                    }
+                }
+                .scrollClipDisabled()
+            }
         }
-        .buttonStyle(.bordered)
+        #if os(tvOS)
+        .focusSection()
+        #endif
         .padding(.horizontal)
+    }
+
+    private var dayHeading: some View {
+        Text(Self.dayLabel(start))
+            .font(.title2.weight(.heavy))
+            .lineLimit(1)
+    }
+
+    private var shiftButtons: some View {
+        ActionSegments(items: [
+            .init(title: "−24h") { start.addTimeInterval(-24 * 3600) },
+            .init(title: "−1h") { start.addTimeInterval(-3600) },
+            .init(title: "Now", systemImage: "clock", active: true) { start = Self.windowStart(for: Date()) },
+            .init(title: "+1h") { start.addTimeInterval(3600) },
+            .init(title: "+24h") { start.addTimeInterval(24 * 3600) },
+        ])
+    }
+
+    /// Eight in the evening today, half an hour in, as Windows' `primeTime(0)`. Worded
+    /// as Windows words it whatever the clock setting.
+    private var primeTimeButton: some View {
+        ActionSegments(items: [
+            .init(title: "Tonight 8pm", systemImage: "moon") {
+                let eight = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
+                start = eight.addingTimeInterval(-1800)
+            },
+        ])
+    }
+
+    /// Windows' `dayLabel`: Today, Tomorrow, Yesterday, else "Wed 19 Nov".
+    static func dayLabel(_ date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now),
+                                           to: calendar.startOfDay(for: date)).day ?? 0
+        switch days {
+        case 0: return "Today"
+        case 1: return "Tomorrow"
+        case -1: return "Yesterday"
+        default: return date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+        }
     }
 
     private func loadMoreChannels() async {

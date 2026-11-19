@@ -75,13 +75,14 @@ struct RecordingsView: View {
         }
     }
 
+    /// Windows' `dl-seg` tablist, each tab with its count.
     private var tabs: some View {
-        Picker("Recordings", selection: $tab) {
-            Text("Recorded \(count(.recorded))").tag(RecordingsTab.recorded)
-            Text("Scheduled \(count(.scheduled))").tag(RecordingsTab.scheduled)
-            Text("Series rules \(count(.rules))").tag(RecordingsTab.rules)
-        }
-        .pickerStyle(.segmented)
+        Segments(options: [
+            (RecordingsTab.recorded, "Recorded \(count(.recorded))"),
+            (RecordingsTab.scheduled, "Scheduled \(count(.scheduled))"),
+            (RecordingsTab.rules, "Series rules \(count(.rules))"),
+        ], selection: $tab)
+        .accessibilityLabel("Recordings")
     }
 
     @ViewBuilder private var content: some View {

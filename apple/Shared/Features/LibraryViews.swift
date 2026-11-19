@@ -536,6 +536,62 @@ struct Segments<Value: Hashable>: View {
     }
 }
 
+/// Windows' `dl-seg` holding actions rather than a choice (the guide's −24h … +24h):
+/// the same well, with `active` raised.
+struct ActionSegments: View {
+    struct Item {
+        let title: String
+        var systemImage: String?
+        var active = false
+        let action: () -> Void
+    }
+
+    let items: [Item]
+    @Environment(\.auroraTheme) private var theme
+
+    var body: some View {
+        #if os(tvOS)
+        HStack(spacing: 8) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                Button(action: item.action) { label(item) }
+            }
+        }
+        .buttonStyle(.bordered)
+        #else
+        HStack(spacing: 2) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                Button(action: item.action) {
+                    label(item)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(item.active ? (theme == .contrast ? Color.black : Color.primary) : Color.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background {
+                            if item.active {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(theme == .contrast ? theme.accent : theme.surface)
+                                    .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: 12))
+        .fixedSize()
+        #endif
+    }
+
+    @ViewBuilder private func label(_ item: Item) -> some View {
+        HStack(spacing: 6) {
+            if let image = item.systemImage { Image(systemName: image) }
+            Text(item.title).lineLimit(1)
+        }
+    }
+}
+
 struct FilterChip: View {
     let title: String
     let selected: Bool

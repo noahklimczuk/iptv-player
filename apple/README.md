@@ -26,7 +26,8 @@ screens. The app can:
   next, its progress, and the Dropped and Catch-up badges; Windows' empty-list wording,
 - show the guide grid (channels down, time across), fetching only the rows on screen
   as Windows does since R-130; choosing what's on plays the channel, choosing what
-  already aired replays it where the archive allows,
+  already aired replays it where the archive allows. Over it, Windows' header: the day
+  (Today, Tomorrow, Yesterday, or the date), −24h −1h Now +1h +24h, and Tonight 8pm,
 - filter the guide as Windows does: group chips to tap in or out, and a Filters sheet
   with every group searchable, shown only or hidden, plus with listings, favourites,
   catch-up, radio and quality. The rules are Windows' `guideFilters.ts` in the core
@@ -38,7 +39,12 @@ screens. The app can:
   core builds (Top Picks, Because you watched…, Trending with a metadata key, the
   shelves), each rail paging as it scrolls; long-press a card for "Not interested", or
   to take it off Continue Watching,
-- search channels, what's on now and later, films and series in one box,
+- search channels, what's on now and later, films, series and the people credited on
+  them in one box, as Windows' search palette: its groups in its order (Live Channels,
+  Movies, Series, On Now, Upcoming, People), four to a group until "Show N more", its
+  words when nothing is typed or found, and the total. A channel or a programme plays
+  the channel, a film or a series opens its page, and a person opens nothing, as on
+  Windows,
 - browse films and series by the provider's shelves, genre and first letter, sorted
   newest, A–Z, by year or by rating, with search, a page at a time and with the true
   total. Laid out as Windows lays it out: the sort as segments, the seven commonest
