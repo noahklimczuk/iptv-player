@@ -11,6 +11,10 @@ struct LiveView: View {
         NavigationStack {
             List {
                 PageHeading("Live TV")
+                #if os(tvOS)
+                // A row rather than the toolbar, which cuts the label to "Add…vider".
+                Button("Add provider", systemImage: "plus") { addingProvider = true }
+                #endif
                 if let progress = model.importProgress {
                     ImportProgressRow(progress: progress)
                 }
@@ -50,7 +54,9 @@ struct LiveView: View {
             }
             .auroraTitle("Live TV")
             .toolbar {
+                #if !os(tvOS)
                 Button("Add provider", systemImage: "plus") { addingProvider = true }
+                #endif
             }
             .sheet(isPresented: $addingProvider) {
                 SetupWizard(additional: true, onFinished: { addingProvider = false }, onSkip: { addingProvider = false })
@@ -282,6 +288,8 @@ private struct ChannelRow: View {
     /// The heart, where it can be pressed apart from the row (iPhone and iPad). A TV row
     /// is one thing to focus, so there the heart only shows; the long press changes it.
     var toggleFavorite: (() -> Void)?
+    /// tvOS: the focused row turns white, and a white bar would vanish on it.
+    @Environment(\.isFocused) private var focused
 
     var body: some View {
         HStack(spacing: 14) {
@@ -308,6 +316,9 @@ private struct ChannelRow: View {
                     .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 if let now = guide?.now, elapsed(now) > 0 {
                     ProgressView(value: elapsed(now))
+                        #if os(tvOS)
+                        .tint(focused ? .black : nil)
+                        #endif
                         .frame(maxWidth: 260)
                         .padding(.top, 4)
                         .accessibilityLabel("Programme progress")
