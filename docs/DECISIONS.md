@@ -782,3 +782,24 @@ PIN-protected Settings section. Only the second existed, and only as a screen
   code. Reading commands stay open, and so do refresh, validation and the metadata and
   artwork passes. A kids profile still sees its library refresh; it cannot change where
   the library comes from.
+
+## D32 — Only the parental PIN shows adult categories, and the database holds the rule
+
+**Context.** README §11 makes revealing adult content need "explicit opt-in plus the
+master PIN". The switch needed neither the PIN to exist nor to be entered
+(`AUDIT/findings.md` F-39).
+
+**Decision.**
+
+- **Showing needs a PIN that exists; hiding never needs one.** Entering the PIN is
+  already required for any parental change while a PIN exists (`require_parent`). What
+  was missing was the case with no PIN at all.
+- **A trigger, not only a check.** The `parental` row syncs whole, PIN hash included, so
+  the command isn't the only writer. The trigger corrects rather than refuses, because
+  sync has nobody to refuse to. The command checks first so the person at the screen
+  is told why.
+- **Removing the PIN hides adult categories,** rather than refusing the removal. A
+  parent removing the PIN is taking the guard away, and the safe state without a guard
+  is hidden.
+- **Existing libraries are brought into line once.** A library that showed adult
+  categories with no PIN hides them after the upgrade, until a PIN is set.

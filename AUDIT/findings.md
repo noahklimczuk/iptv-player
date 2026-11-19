@@ -51,6 +51,7 @@ commit and the test that would catch a regression.
 | F-36 | Critical | parental | No parental control reached a list or the player: a kids profile showed and played everything | Fixed |
 | F-37 | High | parental | A profile's daily viewing limit was stored and never counted, refused or set | Fixed |
 | F-38 | High | parental | Settings were locked by a screen only: a kids profile got in, and every command behind them answered anybody | Fixed |
+| F-39 | Medium | parental | Adult categories could be shown with no parental PIN, and clearing the PIN left them showing | Fixed |
 
 ---
 
@@ -1321,3 +1322,35 @@ section". Neither held.
 - `tests-e2e/parental.spec.ts`: a kids profile meets the locked screen, a command behind
   Settings asks for the PIN and gives nothing on cancel, the PIN opens Settings, and a
   grown-up's profile is not locked out.
+
+## F-39 — Medium — Adult categories could be shown without the parental PIN
+
+**Found by** reading README §11 against the code after F-38. It says adult content "is
+hidden by default on a fresh install and requires explicit opt-in plus the master PIN
+to reveal". The default held. The PIN did not:
+
+- With no parental PIN set, "Hide adult categories" was an ordinary switch. Anybody at
+  the keyboard, on any profile without an age limit, could turn it off in one click.
+- Removing the PIN while the switch was off left adult categories showing, with nothing
+  left that could hide them again behind a PIN.
+
+**Fix** (`docs/DECISIONS.md` D32):
+
+- Migration 21 adds the trigger `parental_adult_needs_pin`. Whenever the `parental` row
+  is updated so that adult categories show with no PIN, it turns the switch back on.
+  This covers every way in, including a row arriving from another device through sync.
+  The migration also applies the rule once to a library that already broke it.
+- `profiles.setParental` checks first and refuses with the reason ("Set a parental PIN
+  before showing adult categories…"). It now writes the PIN before the switches, so
+  setting a first PIN and showing adult categories in one save works. With no PIN it
+  also stores "Lock Settings" as off, since nothing could open them.
+- In Parental controls, the switch can't be turned off until a PIN exists, and its hint
+  says why. "Remove PIN" hides adult categories again.
+
+**Regression tests.**
+- `aurora-app` `profiles`: `adult_categories_show_only_while_there_is_a_parental_pin` and
+  `the_database_hides_adult_categories_again_when_the_pin_goes_another_way`.
+- `repo::profiles::adult_categories_are_hidden_by_default_for_everyone` now opts in
+  with a PIN.
+- `tests-e2e/parental.spec.ts`: the switch is locked without a PIN and the command
+  refuses, a PIN makes showing them a choice, and removing the PIN hides them again.

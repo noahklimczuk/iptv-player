@@ -168,6 +168,34 @@ test('a kids profile is kept out of Settings, and the host refuses what is behin
   await expect(page.getByRole('region', { name: 'Parental controls' })).toBeVisible();
 });
 
+test('adult categories show only with the parental PIN, and removing it hides them again', async ({ page }) => {
+  const section = await parentalSection(page);
+  const adult = section.getByRole('switch', { name: 'Hide adult categories' });
+
+  // No PIN: hidden, and nothing here can show them.
+  await expect(adult).toHaveAttribute('aria-checked', 'true');
+  await expect(adult).toBeDisabled();
+  await expect(section).toContainText('Set a parental PIN first to show them');
+  const refused = await invoke(page, 'profiles.setParental', { hideAdult: false, lockSettings: false })
+    .then(() => 'saved', (e: Error) => e.message);
+  expect(refused).toContain('Set a parental PIN before showing adult categories');
+
+  // With a PIN, showing them is a choice.
+  await section.getByRole('button', { name: 'Set a PIN' }).click();
+  await section.getByLabel('New parental PIN', { exact: true }).fill('2468');
+  await section.getByLabel('New parental PIN again').fill('2468');
+  await section.getByRole('button', { name: 'Save PIN' }).click();
+  await expect(adult).toBeEnabled();
+  await adult.click();
+  await expect(adult).toHaveAttribute('aria-checked', 'false');
+
+  // Removing the PIN hides them again.
+  await section.getByRole('button', { name: 'Remove PIN' }).click();
+  await expect(section.getByRole('button', { name: 'Set a PIN' })).toBeVisible();
+  await expect(adult).toHaveAttribute('aria-checked', 'true');
+  await expect(adult).toBeDisabled();
+});
+
 test('a profile that blocks unrated titles is told why its film library is empty', async ({ page }) => {
   // `?unenriched`: a panel's library before metadata is fetched, with no ratings at all.
   await page.goto('/?unenriched#/');
