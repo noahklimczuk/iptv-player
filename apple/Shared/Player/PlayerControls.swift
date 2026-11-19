@@ -279,6 +279,7 @@ struct PlayerOverlay: View {
 
 /// Title on top, progress and buttons below (`Dock.tsx`).
 private struct PlayerChrome: View {
+    @Environment(AppModel.self) private var model
     @Bindable var session: PlayerSession
     var focus: FocusState<PlayerFocus?>.Binding
     let close: () -> Void
@@ -300,6 +301,16 @@ private struct PlayerChrome: View {
                     }
                 }
                 Spacer()
+                // Live only: a film is already a file on the provider's disk.
+                if session.isLive {
+                    Button("Record what's on", systemImage: "record.circle") { session.recordNow(model: model) }
+                        .labelStyle(.iconOnly)
+                        .font(.title3)
+                        #if os(iOS)
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Circle())
+                        #endif
+                }
                 #if os(iOS)
                 Button("Close", systemImage: "xmark", action: close)
                     .labelStyle(.iconOnly)
@@ -309,6 +320,10 @@ private struct PlayerChrome: View {
                 #endif
             }
             Spacer()
+            if session.isLive, let guide = session.liveGuide {
+                LiveCards(guide: guide) { session.recordNext(model: model) }
+                    .padding(.bottom, 8)
+            }
             HStack(spacing: spacing) {
                 ProgressRow(session: session, interactive: true)
                 if session.behindLive > 0 {
@@ -347,6 +362,7 @@ private struct PlayerChrome: View {
         }
         .padding(edge)
         .foregroundStyle(.white)
+        .task(id: session.item) { await session.loadLiveGuide() }
         .background {
             LinearGradient(colors: [.black.opacity(0.7), .clear, .clear, .black.opacity(0.8)],
                            startPoint: .top, endPoint: .bottom)
@@ -426,6 +442,49 @@ private struct PlayerChrome: View {
         .buttonStyle(.plain)
         .padding(6)
         #endif
+    }
+}
+
+/// On now at the bottom left; next at the bottom right, with a Record button (Windows'
+/// `LiveCards`).
+private struct LiveCards: View {
+    let guide: NowNext
+    let recordNext: () -> Void
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            if let on = guide.now {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("On now · \(Format.clock(on.start))–\(Format.clock(on.stop))")
+                        .font(.caption.bold()).foregroundStyle(.white.opacity(0.75))
+                    Text(on.title).font(.title3.weight(.heavy)).lineLimit(1)
+                    if let text = on.description ?? on.subTitle {
+                        Text(text).font(.caption).lineLimit(2).foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: 420, alignment: .leading)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            }
+            Spacer(minLength: 0)
+            if let next = guide.next {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("NEXT · \(Format.clock(next.start))")
+                            .font(.caption.bold()).foregroundStyle(.white.opacity(0.75))
+                        Text(next.title).font(.callout.bold()).lineLimit(1)
+                    }
+                    Button("Record", systemImage: "record.circle", action: recordNext)
+                        .accessibilityLabel("Record \(next.title)")
+                        #if os(iOS)
+                        .buttonStyle(.bordered)
+                        #endif
+                }
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .accessibilityElement(children: .contain)
+            }
+        }
     }
 }
 
@@ -734,7 +793,7 @@ private struct WatchPanel: View {
     private var endLabel: String {
         switch session.item {
         case .episode: "End of episode"
-        case .catchup: "End of programme"
+        case .catchup, .recording: "End of programme"
         default: "End of film"
         }
     }

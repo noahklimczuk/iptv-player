@@ -16,13 +16,14 @@
 //! Scope today: the Phase 2 spike of docs/APPLE_PORT_AND_SYNC.md (open a library, add a
 //! provider, import it, list its channels, tune one), plus the guide's now/next and
 //! schedule, films and series, watch progress, favourite channels, search, catch-up, profiles and My List,
-//! and household sync (`sync.rs`).
+//! household sync (`sync.rs`), parental controls (`parental.rs`) and recordings (`dvr.rs`).
 
 uniffi::setup_scaffolding!();
 
 mod assistant;
 mod catchup;
 mod diagnostics;
+mod dvr;
 mod error;
 mod filters;
 mod gemini;
@@ -39,7 +40,7 @@ mod parental;
 mod playback;
 mod player;
 mod playlist;
-// The copy keeps Windows' whole `Frames` and `What`, recordings included, unused here.
+// The copy keeps Windows' whole `Frames` and `What`; not every part is used here.
 #[allow(dead_code)]
 mod preview;
 mod profiles;
@@ -65,6 +66,10 @@ use parking_lot::Mutex;
 pub use assistant::{AssistantListener, AssistantStatus, ChatItem, ChatMessage, SendResult};
 pub use catchup::CatchupTune;
 pub use diagnostics::{AboutCore, Diagnostics};
+pub use dvr::{
+    DvrListener, DvrStorage, FailedRecording, NewSeriesRule, Recording, RecordingConflict,
+    RecordingState, Reminder, ScheduleRecording, SeriesRule, TickReport,
+};
 pub use error::{AuroraError, Refusal, Result};
 pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
 pub use gemini::{AiPicks, GeminiStatus};
@@ -107,8 +112,9 @@ pub use vod::{
 #[derive(uniffi::Object)]
 pub struct AuroraCore {
     /// One connection. The Windows host adds a read pool beside its writer; the spike
-    /// does not need one yet, and adding it later changes nothing Swift sees.
-    db: Mutex<Connection>,
+    /// does not need one yet, and adding it later changes nothing Swift sees. Shared
+    /// with the recordings scheduler, whose threads write to it (`dvr.rs`).
+    db: Arc<Mutex<Connection>>,
     /// Shared: the TMDB client keeps its own handle to it.
     http: Arc<HttpClient>,
     credentials: Arc<dyn CredentialStore>,
@@ -127,6 +133,8 @@ pub struct AuroraCore {
     sync: Arc<sync::SyncHost>,
     /// The daily limit's clock (`parental.rs`).
     viewing: Mutex<parental::Viewing>,
+    /// The recordings scheduler (`dvr.rs`).
+    dvr: Arc<dvr::Dvr>,
 }
 
 #[uniffi::export]
@@ -186,8 +194,17 @@ impl AuroraCore {
             &db,
             Arc::clone(&credentials),
         ));
+        let db = Arc::new(Mutex::new(db));
+        // Beside the library until Swift says otherwise, as Windows keeps it
+        // (`Services::new`); `use_recordings_folder` moves it.
+        let dvr = Arc::new(dvr::Dvr::new(
+            Arc::clone(&db),
+            Arc::new(aurora_ingest::recorder::StreamRecorder),
+            data_dir.join("Recordings"),
+            Arc::clone(&credentials),
+        ));
         Ok(Arc::new(Self {
-            db: Mutex::new(db),
+            db,
             http,
             credentials,
             data_dir,
@@ -198,6 +215,7 @@ impl AuroraCore {
             replaced,
             sync,
             viewing: Mutex::new(parental::Viewing::default()),
+            dvr,
         }))
     }
 }

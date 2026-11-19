@@ -189,6 +189,7 @@ pub enum PreviewTitle {
     Movie { id: i64 },
     Episode { id: i64 },
     Catchup { channel: i64, start: i64, stop: i64 },
+    Recording { id: i64 },
 }
 
 impl From<PreviewTitle> for What {
@@ -197,6 +198,7 @@ impl From<PreviewTitle> for What {
             PreviewTitle::Channel { id } => What::Channel(id),
             PreviewTitle::Movie { id } => What::Movie(id),
             PreviewTitle::Episode { id } => What::Episode(id),
+            PreviewTitle::Recording { id } => What::Recording(id),
             PreviewTitle::Catchup {
                 channel,
                 start,

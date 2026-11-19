@@ -91,34 +91,7 @@ impl AuroraCore {
             )
         })?;
 
-        let mut access = HashMap::new();
-        let mut playable = Vec::new();
-        let mut last_refusal = None;
-        for source in sources::for_channel(&db, channel_id, now_unix())? {
-            match stream_url(
-                &db,
-                self.credentials.as_ref(),
-                &mut access,
-                MediaKind::Live,
-                &StreamRef::from(&source),
-            ) {
-                Ok(url) if !url.trim().is_empty() => playable.push(PlayableSource {
-                    source_id: source.id,
-                    url,
-                }),
-                Ok(_) => {}
-                // One source that cannot be rebuilt is no reason to refuse the others.
-                Err(e) => last_refusal = Some(e),
-            }
-        }
-        if playable.is_empty() {
-            return Err(last_refusal.unwrap_or_else(|| {
-                AuroraError::other(
-                    "Your provider listed this channel without a playable address, so \
-                     there is nothing to open. A library refresh may fill it in.",
-                )
-            }));
-        }
+        let playable = live_sources(&db, self.credentials.as_ref(), channel_id)?;
 
         // The URL is not part of it: Swift loads each source in turn under these.
         let timeshift = crate::timeshift::for_live(&db, &self.buffer_folder())?;
@@ -150,6 +123,46 @@ impl AuroraCore {
         }
         Ok(())
     }
+}
+
+/// A channel's sources with their addresses rebuilt, best bet first: what a tune tries in
+/// turn, and what the recorder takes the first of (Windows' `resolve::plan` for
+/// `What::Channel`, whose first candidate `dvr.rs` records).
+pub(crate) fn live_sources(
+    db: &Connection,
+    credentials: &dyn CredentialStore,
+    channel_id: i64,
+) -> Result<Vec<PlayableSource>> {
+    let mut access = HashMap::new();
+    let mut playable = Vec::new();
+    let mut last_refusal = None;
+    for source in sources::for_channel(db, channel_id, now_unix())? {
+        match stream_url(
+            db,
+            credentials,
+            &mut access,
+            MediaKind::Live,
+            &StreamRef::from(&source),
+        ) {
+            Ok(url) if !url.trim().is_empty() => playable.push(PlayableSource {
+                source_id: source.id,
+                url,
+            }),
+            Ok(_) => {}
+            // One source that cannot be rebuilt is no reason to refuse the others.
+            Err(e) => last_refusal = Some(e),
+        }
+    }
+    if playable.is_empty() {
+        return Err(last_refusal.unwrap_or_else(|| {
+            AuroraError::other(
+                "Your provider listed this channel without a playable address, so \
+                 there is nothing to open. A library refresh may fill it in.",
+            )
+        }));
+    }
+
+    Ok(playable)
 }
 
 /// What a stored row says about where to stream it from.

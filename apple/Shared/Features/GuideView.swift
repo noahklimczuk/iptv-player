@@ -12,6 +12,10 @@ struct GuideView: View {
     @State private var loader = GuideLoader()
     @State private var start = GuideView.windowStart(for: Date())
     @State private var playing: PlayerItem?
+    /// The programme whose details are up (Windows' info pane), and what it asked to
+    /// play: the player opens once the sheet has gone.
+    @State private var chosen: ChosenProgramme?
+    @State private var afterSheet: PlayerItem?
     /// The clock the grid draws "on now" and the now line from. Ticked, because a TV is
     /// often left on the guide, and both would otherwise stay where they were drawn.
     @State private var now = Date()
@@ -48,9 +52,9 @@ struct GuideView: View {
                         ForEach(channels, id: \.id) { channel in
                             GuideRowView(channel: channel, cells: loader.cells[channel.id],
                                          window: window, now: now, nameWidth: nameWidth,
-                                         height: rowHeight) { item in
+                                         height: rowHeight, marks: model.dvrMarks) { item in
                                 playing = item
-                            }
+                            } choose: { chosen = $0 }
                             .onAppear {
                                 loader.appeared(channel.id)
                                 if channel.id == channels.last?.id { Task { await loadMoreChannels() } }
@@ -89,6 +93,15 @@ struct GuideView: View {
                 }
             }
             .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
+            .sheet(item: $chosen, onDismiss: {
+                if let item = afterSheet { afterSheet = nil; playing = item }
+            }) { c in
+                ProgrammeDetail(channel: c.channel, programme: c.programme, replayable: c.replayable) { item in
+                    afterSheet = item
+                    chosen = nil
+                }
+            }
+            .task(id: model.recordingsVersion) { await model.loadDvrMarks() }
             .sheet(isPresented: $filtering) {
                 GuideFiltersSheet(groups: model.groups, filters: filterBinding, shown: shown)
             }
@@ -278,7 +291,10 @@ private struct GuideRowView: View {
     let now: Date
     let nameWidth: CGFloat
     let height: CGFloat
+    let marks: DvrMarks
     let play: (PlayerItem) -> Void
+    /// Open a programme's details (Windows: a click selects, the info pane shows it).
+    let choose: (ChosenProgramme) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -315,15 +331,16 @@ private struct GuideRowView: View {
         let to = CGFloat(min(p.stop, window.to) - window.from)
         let nowSecs = Int64(now.timeIntervalSince1970)
         let onNow = p.start <= nowSecs && nowSecs < p.stop
+        let recording = marks.recording(channelId: channel.id, p) != nil
         return Button {
-            if onNow {
-                play(.channel(id: channel.id, name: channel.name))
-            } else if cell.replayable {
-                play(.catchup(channelId: channel.id, title: p.title, start: p.start, stop: p.stop))
-            }
+            choose(ChosenProgramme(channel: channel, programme: p, replayable: cell.replayable))
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
+                    if recording {
+                        Circle().fill(.red).frame(width: 7, height: 7)
+                            .accessibilityLabel("Recording scheduled")
+                    }
                     if cell.replayable { Image(systemName: "gobackward").font(.caption2) }
                     Text(p.title).font(.callout).lineLimit(1)
                 }
@@ -336,11 +353,9 @@ private struct GuideRowView: View {
                         in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        // Aired and not archived, or still to come: shown, but there's nothing to play.
-        .disabled(!onNow && !cell.replayable)
         .frame(width: max(width * (to - from) / span - 3, 1))
         .offset(x: width * from / span)
-        .accessibilityLabel("\(p.title), \(onNow ? "on now" : cell.replayable ? "can be replayed" : "")")
+        .accessibilityLabel("\(p.title), \(onNow ? "on now" : cell.replayable ? "can be replayed" : "")\(recording ? ", recording scheduled" : "")")
     }
 
     private func nowLine(width: CGFloat) -> some View {

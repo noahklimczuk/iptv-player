@@ -26,6 +26,7 @@ struct HomeView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openSearch) private var openSearch
     @Environment(\.openAssistant) private var openAssistant
+    @Environment(\.openRecordings) private var openRecordings
 
     var body: some View {
         NavigationStack {
@@ -41,6 +42,11 @@ struct HomeView: View {
                     if openSettings != nil {
                         ToolbarItem(placement: .primaryAction) {
                             Button("Ask Aurora", systemImage: "sparkles") { openAssistant(nil) }
+                        }
+                    }
+                    if let openRecordings {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Recordings", systemImage: "record.circle", action: openRecordings)
                         }
                     }
                     if let openSettings {

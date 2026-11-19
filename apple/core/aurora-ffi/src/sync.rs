@@ -623,6 +623,8 @@ impl AuroraCore {
         let kind = match kind {
             VodKind::Movie => "movie",
             VodKind::Episode => "episode",
+            // This device's own files: never synced (`progress_get`).
+            VodKind::Recording => return,
         };
         self.sync.refresh_progress(enabled, profile_id, kind, id);
     }

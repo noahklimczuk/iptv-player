@@ -137,12 +137,44 @@ screens. The app can:
   limit, and what is locked; Live TV draws a padlock on locked channels, and an empty
   Films or Series page says when it is the age limit holding back unrated titles.
 
+- recordings, which the plan (docs/APPLE_PORT_AND_SYNC.md §2.3) left on Windows: the
+  Apple app records on the device itself instead. The core (`dvr.rs`) is `aurora-app`'s
+  `Dvr` and its `dvr_*` commands, line for line where it can be, over the shared schedule,
+  rules, conflicts and recorder; `mirrors.rs` checks its numbers, reasons and refusals,
+  and the Recordings screen's words, against Windows. The Recordings tab (from Home's
+  toolbar on an iPhone) has Windows' three tabs, storage meter, clash notice, cards with
+  Keep and a confirmed Delete, Coming up, the failures with their reasons, and series
+  rules with Pause and a confirmed Delete. Choosing a programme in the guide or a
+  channel's schedule opens Windows' info pane: Watch now, Watch from start, Record,
+  Record series and Remind me, and the guide marks what is set to record. The player has
+  Windows' Record what's on and the next programme's Record, and the strip that says
+  when recordings hold every stream the subscription allows. A recording plays and
+  resumes as a film does.
+
+  Where it differs, and why:
+  - it records while Aurora is running. Windows records while its window is open, even
+    minimised; iOS and tvOS suspend an app that is not in front, so a recording due
+    then is marked "Aurora was not running when this was due", as Windows marks one due
+    while it was closed, and one in flight finishes with what it had.
+  - when the system closes Aurora in the middle of a recording, as iOS and tvOS do
+    without warning, the next start finishes it with what reached the disk, cut short
+    with "Aurora was closed while this was recording" (or failed, if nothing did).
+    Windows always finishes its recordings on the way out, so it never needs this.
+  - recordings go in Application Support/Aurora/Recordings on an iPhone or iPad, kept out
+    of the iCloud backup, and in Caches/Recordings on an Apple TV, where the system may
+    empty them when space runs short: tvOS gives an app nowhere else that size.
+  - an app update moves the app's container, so a recording is found by its file name
+    in the recordings folder when the path it was written to has gone.
+  - Stop on a recording in flight stops the stream and removes the partial file.
+    Windows removes the row and leaves the stream writing until its window closes.
+  - reminders are kept and shown, as on Windows, which does not fire them either.
+
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
-Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
+Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
 under "More", whose navigation bar stacks on the tab's own and doubles every back
 button. iPad and Apple TV keep both as tabs.
 
-Not yet: recordings, and syncing provider passwords (each device keeps its own, as on
+Not yet: multi-view, and syncing provider passwords (each device keeps its own, as on
 Windows today).
 
 The app targets **iOS 26 and tvOS 26 only**.
@@ -215,7 +247,7 @@ guides, the columns a provider is saved with, the source a catch-up replay is bu
 from). If the Windows app changes one of them, `cargo test`
 in `apple/core` says which file to update.
 
-As more screens arrive (guide, films, series, DVR rules), the amount of mirrored glue
+As more screens arrive (guide, films, series, recordings), the amount of mirrored glue
 grows. At that point it's worth deciding whether to do the plan's Phase 1 after all.
 
 ## Building

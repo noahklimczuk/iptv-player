@@ -168,11 +168,13 @@ pub struct Shelf {
     pub count: u32,
 }
 
-/// What can be watched with a position: a film or an episode.
+/// What can be watched with a position: a film, an episode, or a recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum VodKind {
     Movie,
     Episode,
+    /// A file the recorder wrote on this device (`dvr.rs`). Never synced.
+    Recording,
 }
 
 impl From<VodKind> for ItemKind {
@@ -180,6 +182,7 @@ impl From<VodKind> for ItemKind {
         match k {
             VodKind::Movie => ItemKind::Movie,
             VodKind::Episode => ItemKind::Episode,
+            VodKind::Recording => ItemKind::Recording,
         }
     }
 }
@@ -389,12 +392,17 @@ impl AuroraCore {
     /// Mirrors the `What::Movie` and `What::Episode` arms of `aurora-app/src/play/resolve.rs`
     /// `resolve`, including the title shown (`shown_title`, R-76).
     fn tune_vod(&self, kind: VodKind, id: i64, start_at_secs: Option<f64>) -> Result<VodTune> {
+        if kind == VodKind::Recording {
+            return self.tune_recording(id, start_at_secs);
+        }
         let db = self.db.lock();
         crate::parental::allowed(
             &db,
             match kind {
                 VodKind::Movie => aurora_db::repo::parental::Target::Movie(id),
-                VodKind::Episode => aurora_db::repo::parental::Target::Episode(id),
+                VodKind::Episode | VodKind::Recording => {
+                    aurora_db::repo::parental::Target::Episode(id)
+                }
             },
         )?;
         let (sql, noun, media) = match kind {
@@ -405,7 +413,7 @@ impl AuroraCore {
                 "film",
                 MediaKind::Movie,
             ),
-            VodKind::Episode => (
+            VodKind::Episode | VodKind::Recording => (
                 "SELECT e.url, shown_title(e.title), e.stream_id, e.container, s.provider_id
                  FROM episodes e JOIN series s ON s.id = e.series_id
                  WHERE e.id = ?1",

@@ -68,6 +68,7 @@ final class AppModel {
             // The rewind buffer in Caches: not backed up, and the system's to reclaim.
             let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             core?.useBufferFolder(path: caches.appendingPathComponent("timeshift", isDirectory: true).path)
+            core?.useRecordingsFolder(path: Self.recordingsDirectory().path)
         } catch {
             core = nil
             self.error = "Aurora could not open its library. \(error.viewerMessage)"
@@ -84,6 +85,24 @@ final class AppModel {
     private static func dataDirectory() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Aurora", isDirectory: true)
+    }
+
+    /// Where recordings are written. Beside the library on an iPhone, as on Windows, but
+    /// left out of the iCloud backup: a recording is gigabytes. An Apple TV keeps only
+    /// Caches for anything that size, which the system may empty when space runs short
+    /// (apple/README.md).
+    private static func recordingsDirectory() -> URL {
+        #if os(tvOS)
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("Recordings", isDirectory: true)
+        #else
+        var folder = dataDirectory().appendingPathComponent("Recordings", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? folder.setResourceValues(values)
+        return folder
+        #endif
     }
 
     func reload() async {
@@ -774,6 +793,116 @@ final class AppModel {
         return (try? await Task.detached { try core.refreshHomeSignals(profileId: profile) }.value) ?? 0
     }
 
+    // MARK: Recordings (README §7.7)
+
+    /// Goes up after every scheduler tick that changed something: Windows' `dvr.tick`,
+    /// which the Recordings screen, the guide's marks and the stream warning refresh on.
+    private(set) var recordingsVersion = 0
+    /// The guide's marks: what is scheduled or recording, reminders, and rules.
+    private(set) var dvrMarks = DvrMarks()
+    private var dvrStarted = false
+
+    /// Start the scheduler's clock, once. Windows starts it when its window opens; here
+    /// it runs while Aurora does.
+    func startRecorder() {
+        guard let core, !dvrStarted else { return }
+        dvrStarted = true
+        core.dvrStart(listener: DvrTicks { [weak self] _ in self?.recordingsChanged() })
+    }
+
+    /// Something about recordings changed: say so to every screen that shows them.
+    func recordingsChanged() {
+        recordingsVersion += 1
+        Task { await loadDvrMarks() }
+    }
+
+    func loadDvrMarks() async {
+        guard let core else { return }
+        let marks = try? await Task.detached {
+            DvrMarks(
+                upcoming: try core.dvrList(state: .scheduled) + core.dvrList(state: .recording),
+                reminders: try core.dvrReminders(),
+                rules: try core.dvrRules())
+        }.value
+        if let marks { dvrMarks = marks }
+    }
+
+    /// Everything the Recordings screen draws, in one trip.
+    func recordingsPage() async -> RecordingsPage? {
+        await call(nil) { core in
+            RecordingsPage(recordings: try core.dvrList(state: nil), rules: try core.dvrRules(),
+                           conflicts: try core.dvrConflicts(), storage: try core.dvrStorage())
+        }
+    }
+
+    func dvrStorage() async -> DvrStorage? {
+        guard let core else { return nil }
+        return try? await Task.detached { try core.dvrStorage() }.value
+    }
+
+    func recordingsInFlight() async -> [Recording] {
+        guard let core else { return [] }
+        return (try? await Task.detached { try core.dvrList(state: .recording) }.value) ?? []
+    }
+
+    /// Run a recordings change; nil when it worked, the reason when it did not. Every
+    /// change is followed by a refresh, as Windows' `onChanged`.
+    @discardableResult
+    func changeRecordings<T: Sendable>(_ body: @escaping @Sendable (AuroraCore) throws -> T) async -> Result<T, Error> {
+        do {
+            let value = try await guarded(body)
+            recordingsChanged()
+            return .success(value)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// Schedule an airing, or cancel the recording it has: the guide's Record button
+    /// (`useDvrMarks.toggleRecord`).
+    func toggleRecord(channelId: Int64, _ p: Programme) async -> String? {
+        let existing = dvrMarks.recording(channelId: channelId, p)
+        return await changeRecordings { core in
+            if let existing {
+                _ = try core.dvrCancel(id: existing.id)
+            } else {
+                _ = try core.dvrSchedule(recording: ScheduleRecording(
+                    channelId: channelId, title: p.title, subTitle: p.subTitle, season: p.season,
+                    episode: p.episode, airStart: p.start, airStop: p.stop,
+                    prePaddingSecs: nil, postPaddingSecs: nil))
+            }
+        }.failureMessage
+    }
+
+    /// Remind me, or forget the reminder (`toggleReminder`).
+    func toggleReminder(channelId: Int64, _ p: Programme) async -> String? {
+        let existing = dvrMarks.reminder(channelId: channelId, p)
+        return await changeRecordings { core in
+            if let existing {
+                _ = try core.dvrRemoveReminder(id: existing)
+            } else {
+                _ = try core.dvrAddReminder(channelId: channelId, title: p.title, start: p.start, leadSecs: nil)
+            }
+        }.failureMessage
+    }
+
+    /// Record series, or stop: a rule for this title on this channel (`toggleSeries`).
+    func toggleSeries(channelId: Int64, _ p: Programme, anyChannel: Bool) async -> String? {
+        let existing = dvrMarks.rule(p)
+        return await changeRecordings { core in
+            if let existing {
+                _ = try core.dvrDeleteRule(id: existing)
+            } else {
+                // "This channel only" is the safer default, and `newOnly` false because
+                // no guide this subscription sends marks anything new (R-133).
+                _ = try core.dvrCreateRule(rule: NewSeriesRule(
+                    title: p.title, channelId: anyChannel ? nil : channelId, newOnly: false,
+                    weekdays: nil, aroundLocalMinute: nil, prePaddingSecs: nil,
+                    postPaddingSecs: nil, keepEpisodes: nil))
+            }
+        }.failureMessage
+    }
+
     /// Run one core call off the main actor; on failure, say why and return `fallback`.
     /// A refusal for want of the parental PIN asks for it and tries again (`guarded`).
     private func call<T: Sendable>(_ fallback: T, _ body: @escaping @Sendable (AuroraCore) throws -> T) async -> T {
@@ -853,6 +982,63 @@ private final class MetadataRelay: MetadataListener, ListingListener, @unchecked
     func progress(done: UInt64, total: UInt64) -> Bool {
         onProgress(done, total)
         return !stopped.withLock { $0 }
+    }
+}
+
+/// What the DVR already knows about the guide's airings (Windows' `useDvrMarks`): one
+/// fetch, answered from lookups rather than a call per cell.
+struct DvrMarks: Sendable {
+    private var byAiring: [String: Recording] = [:]
+    private var reminderKeys: [String: Int64] = [:]
+    private var ruleTitles: [String: Int64] = [:]
+
+    init() {}
+
+    init(upcoming: [Recording], reminders: [Reminder], rules: [SeriesRule]) {
+        for r in upcoming { byAiring[Self.key(r.channelId, r.title, r.airStart)] = r }
+        for r in reminders { reminderKeys[Self.key(r.channelId, r.title, r.start)] = r.id }
+        // Titles compared case-insensitively, as the core's match key does.
+        for r in rules where r.enabled { ruleTitles[r.title.lowercased()] = r.id }
+    }
+
+    /// How the host identifies one airing: channel, airtime, title.
+    private static func key(_ channelId: Int64, _ title: String, _ start: Int64) -> String {
+        "\(channelId):\(start):\(title)"
+    }
+
+    func recording(channelId: Int64, _ p: Programme) -> Recording? {
+        byAiring[Self.key(channelId, p.title, p.start)]
+    }
+
+    func reminder(channelId: Int64, _ p: Programme) -> Int64? {
+        reminderKeys[Self.key(channelId, p.title, p.start)]
+    }
+
+    func rule(_ p: Programme) -> Int64? { ruleTitles[p.title.lowercased()] }
+}
+
+/// The Recordings screen's data, fetched together.
+struct RecordingsPage: Sendable {
+    var recordings: [Recording]
+    var rules: [SeriesRule]
+    var conflicts: [RecordingConflict]
+    var storage: DvrStorage
+}
+
+extension Result {
+    /// The viewer's words for a failure; nil when it worked.
+    var failureMessage: String? {
+        if case .failure(let error) = self { return error.viewerMessage }
+        return nil
+    }
+}
+
+/// Hands the scheduler's ticks to the main actor.
+private final class DvrTicks: DvrListener, @unchecked Sendable {
+    private let onTick: @MainActor (TickReport) -> Void
+    init(_ onTick: @escaping @MainActor (TickReport) -> Void) { self.onTick = onTick }
+    func ticked(report: TickReport) {
+        Task { @MainActor in onTick(report) }
     }
 }
 

@@ -208,8 +208,7 @@ impl AuroraCore {
     /// writes, not the download, as on Windows.
     ///
     /// Mirrors `aurora-app/src/providers.rs` `refresh_provider`, less what the spike has
-    /// no use for yet: DVR rule expansion (Windows-only, docs §2.3), metadata enrichment
-    /// and the episode sweep (later phases).
+    /// no use for yet: metadata enrichment and the episode sweep (later phases).
     pub fn refresh(
         &self,
         provider_id: i64,
@@ -299,6 +298,17 @@ impl AuroraCore {
             Ok(0) => {}
             Ok(n) => tracing::info!(rows = n, "stored stream ids in place of stream URLs"),
             Err(e) => tracing::error!("could not rewrite stored stream URLs: {e}"),
+        }
+
+        // Fresh guide data is the moment a series rule can find new episodes, so the
+        // schedule is right as soon as the import is (`refresh_provider` does the same).
+        match crate::dvr::expand_rules_now(&db, now_unix()) {
+            Ok(added) if !added.is_empty() => {
+                tracing::info!("series rules scheduled {} new recordings", added.len());
+            }
+            Ok(_) => {}
+            // A rule that could not be expanded must not fail the import the user waited for.
+            Err(e) => tracing::warn!("could not expand series rules after refresh: {e}"),
         }
         drop(db);
 

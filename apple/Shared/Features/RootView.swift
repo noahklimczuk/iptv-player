@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The app's top level: Live TV, Guide, Films, Series, Settings, and Search.
+/// The app's top level: Home, Live TV, Guide, Films, Series, Recordings, the assistant,
+/// Settings, and Search.
 ///
 /// A `TabView` of `Tab`s: on tvOS the top bar the Siri Remote expects, on iPhone and
 /// iPad the floating tab bar. Search has the search role, so iOS 26 gives it its own
@@ -11,6 +12,7 @@ struct RootView: View {
     @State private var showingSettings = false
     @State private var showingSearch = false
     @State private var showingAssistant = false
+    @State private var showingRecordings = false
     /// The setup wizard was finished, or its import left running. Not stored: a library
     /// with no provider asks again next launch, as on Windows.
     @State private var setupFinished = false
@@ -24,7 +26,7 @@ struct RootView: View {
     @State private var demo: PlayerItem?
     #endif
 
-    enum AppTab: String { case home, live, guide, films, series, assistant, settings, search }
+    enum AppTab: String { case home, live, guide, films, series, recordings, assistant, settings, search }
 
     var body: some View {
         Group {
@@ -48,6 +50,9 @@ struct RootView: View {
         .task { await model.loadProfiles() }
         .task { await model.reload() }
         .task { await model.loadParental() }
+        // The recordings scheduler keeps its own time while Aurora runs, as Windows'
+        // does while its window is open.
+        .task { model.startRecorder() }
         // Sync while the app is in front; a new phase cancels the loop and, if active
         // again, starts it afresh.
         .task(id: scenePhase) {
@@ -60,17 +65,12 @@ struct RootView: View {
     }
 
     private var tabs: some View {
-        TabView(selection: $tab) {
-            Tab("Home", systemImage: "house", value: .home) { HomeView() }
-            Tab("Live TV", systemImage: "tv", value: .live) { LiveView() }
-            Tab("Guide", systemImage: "calendar", value: .guide) { GuideView() }
-            Tab("Films", systemImage: "film", value: .films) { MoviesView() }
-            Tab("Series", systemImage: "rectangle.stack", value: .series) { SeriesView() }
-            if !compact {
-                Tab("Assistant", systemImage: "sparkles", value: .assistant) { AssistantView() }
-                Tab("Settings", systemImage: "gear", value: .settings) { SettingsView() }
-                Tab(value: AppTab.search, role: .search) { SearchView() }
-            }
+        // Windows' `ConnectionBudget` heads the page while recordings use every stream
+        // there is. Above the tabs, not inset into them: a navigation bar's large title
+        // ignores an inset from outside its stack and would sit under the strip.
+        VStack(spacing: 0) {
+            ConnectionBudget()
+            tabView
         }
         // An iPhone's bar holds five, the search tab included; past that the rest go
         // under "More", whose own navigation bar stacks on top of the tab's and doubles
@@ -78,6 +78,7 @@ struct RootView: View {
         // from Home's toolbar.
         .environment(\.openSettings, compact ? { showingSettings = true } : nil)
         .environment(\.openSearch, compact ? { showingSearch = true } : nil)
+        .environment(\.openRecordings, compact ? { showingRecordings = true } : nil)
         // Its own tab where there is room (Windows' nav has one); a sheet from Home's
         // toolbar on an iPhone. `question` is asked as soon as it opens.
         .environment(\.openAssistant, { question in
@@ -87,6 +88,7 @@ struct RootView: View {
         .sheet(isPresented: $showingAssistant) { AssistantView(closable: true) }
         .sheet(isPresented: $showingSettings) { SettingsView(closable: true) }
         .sheet(isPresented: $showingSearch) { SearchView(closable: true) }
+        .sheet(isPresented: $showingRecordings) { RecordingsView(closable: true) }
         #if DEBUG
         // `-AuroraTab guide` at launch opens that tab (see DemoLaunch).
         .onAppear {
@@ -94,6 +96,7 @@ struct RootView: View {
                 if compact && start == .settings { showingSettings = true }
                 else if compact && start == .assistant { showingAssistant = true }
                 else if compact && start == .search { showingSearch = true }
+                else if compact && start == .recordings { showingRecordings = true }
                 else { tab = start }
             }
         }
@@ -105,6 +108,22 @@ struct RootView: View {
             Button("OK") { model.error = nil }
         } message: {
             Text(model.error ?? "")
+        }
+    }
+
+    private var tabView: some View {
+        TabView(selection: $tab) {
+            Tab("Home", systemImage: "house", value: .home) { HomeView() }
+            Tab("Live TV", systemImage: "tv", value: .live) { LiveView() }
+            Tab("Guide", systemImage: "calendar", value: .guide) { GuideView() }
+            Tab("Films", systemImage: "film", value: .films) { MoviesView() }
+            Tab("Series", systemImage: "rectangle.stack", value: .series) { SeriesView() }
+            if !compact {
+                Tab("Recordings", systemImage: "record.circle", value: .recordings) { RecordingsView() }
+                Tab("Assistant", systemImage: "sparkles", value: .assistant) { AssistantView() }
+                Tab("Settings", systemImage: "gear", value: .settings) { SettingsView() }
+                Tab(value: AppTab.search, role: .search) { SearchView() }
+            }
         }
     }
 
@@ -138,6 +157,49 @@ extension EnvironmentValues {
     @Entry var openSettings: (() -> Void)? = nil
     /// Opens Search where it isn't a tab (an iPhone); nil where it is.
     @Entry var openSearch: (() -> Void)? = nil
+    /// Opens Recordings where it isn't a tab (an iPhone); nil where it is.
+    @Entry var openRecordings: (() -> Void)? = nil
     /// Opens the assistant, asking `question` first when there is one.
     @Entry var openAssistant: (String?) -> Void = { _ in }
+}
+
+/// A strip that appears while recordings are using every stream the subscription allows
+/// (Windows' `ConnectionBudget`): watching something opens a connection too, and on a
+/// one-stream account a recording in flight means the next thing pressed cannot play.
+/// Visible only while it is true.
+private struct ConnectionBudget: View {
+    @Environment(AppModel.self) private var model
+    @State private var allowed: UInt32 = 0
+    @State private var inFlight: [Recording] = []
+
+    var body: some View {
+        Group {
+            if allowed > 0 && inFlight.count >= Int(allowed) {
+                let names = inFlight.map(\.title)
+                let what = names.count == 1 ? names[0] : "\(names.count) recordings"
+                HStack(spacing: 8) {
+                    Image(systemName: "record.circle.fill").font(.caption)
+                    (Text(what).bold().foregroundStyle(.primary)
+                     + Text(" ")
+                     + Text(allowed == 1
+                            ? "is using the only stream this subscription allows"
+                            : "are using all \(allowed) streams this subscription allows")
+                     + Text(". Starting something now may stop \(names.count == 1 ? "it" : "one of them")."))
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+            }
+        }
+        // On the scheduler's tick, as Windows' strip follows `dvr.tick`.
+        .task(id: model.recordingsVersion) {
+            allowed = await model.dvrStorage()?.maxConcurrent ?? 0
+            inFlight = await model.recordingsInFlight()
+        }
+    }
 }

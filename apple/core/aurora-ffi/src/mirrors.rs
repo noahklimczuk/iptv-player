@@ -997,3 +997,185 @@ fn parental_controls_offer_windows_limits() {
         assert_eq!(values(ours, "("), theirs_values, "{ts} values changed");
     }
 }
+
+/// The recordings scheduler keeps Windows' numbers, keys and reasons (`dvr.rs`).
+#[test]
+fn the_recorder_runs_on_windows_numbers() {
+    let src = app_src("dvr.rs");
+    let num = |name: &str| -> String {
+        app_const("dvr.rs", name)
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == '*')
+            .collect()
+    };
+    assert_eq!(
+        num("DEFAULT_MAX_CONCURRENT"),
+        crate::dvr::DEFAULT_MAX_CONCURRENT.to_string()
+    );
+    assert_eq!(num("STALL_SECS"), crate::dvr::STALL_SECS.to_string());
+    assert_eq!(
+        num("TICK_INTERVAL"),
+        crate::dvr::TICK_INTERVAL.as_secs().to_string()
+    );
+    assert_eq!(num("EXPANSION_HORIZON_SECS"), "14*86400");
+    assert_eq!(crate::dvr::EXPANSION_HORIZON_SECS, 14 * 86_400);
+    assert_eq!(
+        app_const("dvr.rs", "FOLDER_KEY"),
+        format!("{:?}", crate::dvr::FOLDER_KEY)
+    );
+    assert_eq!(
+        app_const("dvr.rs", "QUOTA_KEY"),
+        format!("{:?}", crate::dvr::QUOTA_KEY)
+    );
+    for reason in [
+        crate::dvr::MISSED,
+        crate::dvr::TOO_MANY,
+        crate::dvr::NOTHING_SENT,
+    ] {
+        assert!(
+            src.contains(&format!("{reason:?}")),
+            "aurora-app no longer says {reason:?}"
+        );
+    }
+    assert!(
+        src.contains(&format!("priority: {},", crate::dvr::MANUAL_PRIORITY)),
+        "a manual recording's priority changed in aurora-app"
+    );
+    assert!(
+        src.contains(&format!(
+            "lead_secs.unwrap_or({})",
+            crate::dvr::REMINDER_LEAD_SECS
+        )),
+        "a reminder's lead changed in aurora-app"
+    );
+    let line_limit = between(&src, "pub fn line_limit", "\n}\n");
+    let ours =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/dvr.rs")).unwrap();
+    let mine = between(&ours, "pub(crate) fn line_limit", "\n}\n");
+    assert_eq!(
+        quoted(line_limit),
+        quoted(mine),
+        "line_limit asks the database something else on Windows"
+    );
+}
+
+/// A recording that cannot play says what Windows says (`play/resolve.rs`).
+#[test]
+fn a_recording_that_cannot_play_says_what_windows_says() {
+    let resolve = app_src("play/resolve.rs");
+    let arm = between(&resolve, "What::Recording(id) => {", "Ok(Plan {");
+    let ours =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/dvr.rs")).unwrap();
+    let mine = between(&ours, "pub fn tune_recording", "Ok(VodTune {");
+    let words = |text: &str| -> String {
+        quoted(text)
+            .join(" ")
+            .replace("\\\n", "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    for sentence in [
+        "This recording has not started yet, so there is nothing to play.",
+        "This recording is still being written. It can be played once it finishes.",
+        "This recording has no file on disk. The Recordings screen says why.",
+        "The file for this recording is gone: {path}",
+        "It may have been deleted to stay under the storage quota.",
+    ] {
+        assert!(
+            words(arm).contains(sentence),
+            "aurora-app no longer says {sentence:?}"
+        );
+        assert!(
+            words(mine).contains(sentence),
+            "tune_recording must say {sentence:?}"
+        );
+    }
+}
+
+/// The Recordings screen uses Windows' words: every sentence a viewer reads on
+/// `RecordingsPage.tsx` appears in `RecordingsView.swift`.
+#[test]
+fn the_recordings_screen_says_what_windows_says() {
+    let page = ui_src("features/dvr/RecordingsPage.tsx");
+    let swift = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features/RecordingsView.swift"),
+    )
+    .unwrap();
+    for text in [
+        "Recordings",
+        "Recorded",
+        "Scheduled",
+        "Series rules",
+        "Storage",
+        "A recording clashes",
+        "Nothing recorded yet",
+        "Press Record on anything in the guide, or set up a series rule and Aurora will keep up with it for you.",
+        "Coming up",
+        "Nothing scheduled",
+        "Recordings you set from the guide show up here, with a countdown and anything that clashes.",
+        "No series rules",
+        "A series rule records every episode of a show as it airs. Set one from the Record button in the guide.",
+        "Cut short",
+        "New",
+        "Kept",
+        "Allow deleting to free space",
+        "Keep — never delete for space",
+        "Delete",
+        "Keep",
+        "Play",
+        "Series rule",
+        "Once",
+        "REC",
+        "Recording",
+        "Stop",
+        "Cancel",
+        "Skipped",
+        "Failed",
+        "Any channel",
+        "One channel",
+        " · New episodes only",
+        "Pause",
+        "Resume",
+        "Delete rule",
+        "Could not stop that recording",
+        "Could not dismiss that recording",
+        "Could not delete that rule",
+        "Could not pause that rule",
+        "Could not resume it",
+        "That did not work",
+    ] {
+        assert!(page.contains(text), "RecordingsPage.tsx no longer says {text:?}");
+        assert!(
+            swift.contains(&format!("\"{text}")) || swift.contains(&format!("{text}\"")),
+            "RecordingsView.swift must say {text:?}"
+        );
+    }
+    for (theirs, ours) in [
+        ("Didn&rsquo;t record", "Didn’t record"),
+        (
+            "more than your subscription allows.",
+            "more than your subscription allows.",
+        ),
+        ("will be dropped.", "will be dropped."),
+        ("Delete permanently, freeing", "Delete permanently, freeing"),
+        ("and forget this rule?", "and forget this rule?"),
+        ("tracked", " tracked"),
+    ] {
+        assert!(
+            page.contains(theirs),
+            "RecordingsPage.tsx no longer says {theirs:?}"
+        );
+        assert!(
+            swift.contains(ours),
+            "RecordingsView.swift must say {ours:?}"
+        );
+    }
+    let days = between(&page, "const WEEKDAYS = [", "];");
+    let mine = between(&swift, "private let weekdays = [", "]");
+    assert_eq!(
+        quoted(mine),
+        quoted(&days.replace('\'', "\"")),
+        "weekday names changed"
+    );
+}

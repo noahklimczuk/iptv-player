@@ -573,6 +573,75 @@ final class PlayerSession {
         }
     }
 
+    // MARK: Recording (Windows' `recordNow` and `LiveCards`)
+
+    /// What is on the live channel now and next, for the cards and Record.
+    private(set) var liveGuide: NowNext?
+
+    /// With no guide, a recording runs this long (`UNGUIDED_RECORDING_SECS`).
+    static let unguidedRecordingSecs: Int64 = 60 * 60
+    /// Joined this far into a programme, the notice says only the rest is recorded
+    /// (`PART_GONE_SECS`).
+    static let partGoneSecs: Int64 = 60
+
+    func loadLiveGuide() async {
+        guard case .channel(let id, _) = item else { liveGuide = nil; return }
+        let core = core
+        let answer = await Task.detached { try? core.nowNext(channelIds: [id]) }.value
+        guard case .channel(id, _) = item else { return }
+        liveGuide = answer?.first
+    }
+
+    /// Record from now to the end of what is on, or for an hour if the guide is silent.
+    func recordNow(model: AppModel) {
+        guard case .channel(let channelId, let name) = item else { return }
+        Task {
+            await loadLiveGuide()
+            let now = Int64(Date().timeIntervalSince1970)
+            let on = liveGuide?.now
+            let airStop = on?.stop ?? now + Self.unguidedRecordingSecs
+            let result = await model.changeRecordings { core in
+                try core.dvrSchedule(recording: ScheduleRecording(
+                    channelId: channelId, title: on?.title ?? name, subTitle: on?.subTitle,
+                    season: nil, episode: nil, airStart: now, airStop: airStop,
+                    prePaddingSecs: nil, postPaddingSecs: nil))
+            }
+            switch result {
+            case .success(nil):
+                say("That is already being recorded")
+            case .success:
+                let minutes = max(1, Int((Double(airStop - now) / 60).rounded()))
+                if let on {
+                    say(now - on.start >= Self.partGoneSecs
+                        ? "Recording the last \(minutes) minutes of \(on.title)"
+                        : "Recording \(on.title)")
+                } else {
+                    say("Recording the next hour — this channel has no guide data")
+                }
+            case .failure(let error):
+                say("Could not start recording. \(error.viewerMessage)")
+            }
+        }
+    }
+
+    /// The NEXT card's Record: the programme after this one.
+    func recordNext(model: AppModel) {
+        guard case .channel(let channelId, _) = item, let next = liveGuide?.next else { return }
+        Task {
+            let result = await model.changeRecordings { core in
+                try core.dvrSchedule(recording: ScheduleRecording(
+                    channelId: channelId, title: next.title, subTitle: next.subTitle,
+                    season: nil, episode: nil, airStart: next.start, airStop: next.stop,
+                    prePaddingSecs: nil, postPaddingSecs: nil))
+            }
+            switch result {
+            case .success(nil): say("That is already being recorded")
+            case .success: say("Recording \(next.title) at \(Format.clock(next.start))")
+            case .failure(let error): say("Could not schedule the recording. \(error.viewerMessage)")
+            }
+        }
+    }
+
     private func say(_ text: String) {
         channelBanner = nil
         banner = text
@@ -596,6 +665,7 @@ final class PlayerSession {
         case .movie(let id, _, _): .movie(id: id)
         case .episode(let id, _, _): .episode(id: id)
         case .catchup(let channel, _, let start, let stop): .catchup(channel: channel, start: start, stop: stop)
+        case .recording(let id, _, _): .recording(id: id)
         }
     }
 

@@ -23,6 +23,8 @@ pub struct Channel {
     pub stale: bool,
     /// In the list asked about: the profile's Favourites unless another was named.
     pub favorite: bool,
+    /// "HD", "4K" and the like, from the provider's listing.
+    pub quality: Option<String>,
 }
 
 /// One of a profile's channel lists.
@@ -43,6 +45,7 @@ impl From<channels::ChannelRow> for Channel {
             has_catchup: c.has_catchup,
             stale: c.stale,
             favorite: c.favorite,
+            quality: c.quality,
         }
     }
 }
