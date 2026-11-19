@@ -35,6 +35,7 @@ mod log;
 mod metadata;
 #[cfg(test)]
 mod mirrors;
+mod mosaic;
 mod mylist;
 mod parental;
 mod playback;
@@ -79,6 +80,7 @@ pub use home::{CatalogItem, Rail, RailItem, RailPage, RailProgress};
 pub use library::{Channel, ChannelGroup, FavoriteList};
 pub use log::LogSink;
 pub use metadata::{Coverage, Credit, MetadataListener, MetadataReport, MetadataStatus};
+pub use mosaic::{MosaicCheck, MosaicRect, SavedMosaicLayout};
 pub use mylist::{ItemMarks, ListKind, MyList};
 pub use parental::{
     ClockEvent, MasterPinChange, ParentalLock, ParentalLockKind, ParentalSettings, ParentalState,

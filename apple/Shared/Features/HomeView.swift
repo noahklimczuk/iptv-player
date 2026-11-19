@@ -31,7 +31,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Home")
+                .auroraTitle("Home")
                 .toolbar {
                     if let openSearch {
                         ToolbarItem(placement: .primaryAction) {
@@ -66,7 +66,7 @@ struct HomeView: View {
                                 version: model.aiVersion)) {
                     ai = await model.aiPicks().flatMap(Self.rail)
                 }
-                .sheet(item: $movie) { MovieDetail(movie: $0) }
+                .sheet(item: $movie) { MovieDetail(movie: $0).auroraAppearance() }
                 .navigationDestination(item: $series) { SeriesDetail(seriesId: $0) }
         }
     }

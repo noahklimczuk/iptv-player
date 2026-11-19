@@ -293,6 +293,12 @@ pub(crate) struct Dvr {
 }
 
 impl Dvr {
+    /// Recordings holding a connection now, starting ones included: what multi-view
+    /// counts against the line (Windows' `active_ids().len()`).
+    pub(crate) fn active_count(&self) -> usize {
+        self.active.lock().len() + self.starting.lock().len()
+    }
+
     pub(crate) fn new(
         db: Arc<Mutex<Connection>>,
         recorder: Arc<dyn Recorder>,

@@ -34,7 +34,7 @@ struct ChannelGuideView: View {
                                        description: Text("The provider's guide doesn't cover it."))
             }
         }
-        .navigationTitle(channel.name)
+        .auroraPageTitle(channel.name)
         .task(id: day) { await load() }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
         .programmeDetail(item: $chosen, onDismiss: {

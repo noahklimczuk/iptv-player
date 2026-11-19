@@ -14,6 +14,8 @@ struct MoviesView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                // The shelf, where one is chosen, as Windows' heading names it.
+                PageHeading(filters.shelf ?? "Movies")
                 ShelfPicker(shelves: facets?.categories ?? [], selection: $filters.shelf, myList: $filters.myList)
                 if !filters.myList {
                     FilterBar(filters: $filters, facets: facets, noun: ("film", "films"))
@@ -37,14 +39,14 @@ struct MoviesView: View {
                                            description: Text("Import films from a provider in Live TV → Add provider."))
                 }
             }
-            .navigationTitle("Films")
+            .auroraTitle("Movies")
             .searchable(text: $filters.search)
             .task(id: ReloadKey(filters: filters, library: model.libraryVersion, extra: selected == nil)) {
                 // Reloaded when a film's page closes, so My List shows what was just added.
                 guard selected == nil else { return }
                 await reload()
             }
-            .sheet(item: $selected) { MovieDetail(movie: $0) }
+            .sheet(item: $selected) { MovieDetail(movie: $0).auroraAppearance() }
         }
     }
 
@@ -122,6 +124,7 @@ struct SeriesView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                PageHeading(filters.shelf ?? "Series")
                 ShelfPicker(shelves: facets?.categories ?? [], selection: $filters.shelf, myList: $filters.myList)
                 if !filters.myList {
                     FilterBar(filters: $filters, facets: facets, noun: ("series", "series"))
@@ -145,7 +148,7 @@ struct SeriesView: View {
                                            description: Text("Import series from a provider in Live TV → Add provider."))
                 }
             }
-            .navigationTitle("Series")
+            .auroraTitle("Series")
             .searchable(text: $filters.search)
             .task(id: ReloadKey(filters: filters, library: model.libraryVersion)) { await reload() }
             .onAppear {
@@ -363,7 +366,7 @@ struct SeriesDetail: View {
                 }
             }
         }
-        .navigationTitle(detail?.title ?? "")
+        .auroraPageTitle(detail?.title ?? "")
         .task {
             detail = await model.seriesDetail(seriesId: seriesId)
             allEpisodes = await model.episodes(seriesId: seriesId, season: nil)

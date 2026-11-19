@@ -87,7 +87,7 @@ struct OnNowTile: View {
     }
 
     private func time(_ unix: Int64) -> String {
-        Date(timeIntervalSince1970: TimeInterval(unix)).formatted(.dateTime.hour().minute())
+        clockTime(unix: unix)
     }
 
     #if os(tvOS)

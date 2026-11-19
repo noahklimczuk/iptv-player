@@ -44,7 +44,7 @@ struct ProgrammeDetail: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(channel.name)
+            .auroraPageTitle(channel.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -168,10 +168,11 @@ extension View {
         onDismiss: (() -> Void)? = nil,
         @ViewBuilder content: @escaping (ChosenProgramme) -> Content
     ) -> some View {
+        // The theme too: a presentation keeps the system's appearance otherwise.
         #if os(tvOS)
-        fullScreenCover(item: item, onDismiss: onDismiss, content: content)
+        fullScreenCover(item: item, onDismiss: onDismiss) { content($0).auroraAppearance() }
         #else
-        sheet(item: item, onDismiss: onDismiss, content: content)
+        sheet(item: item, onDismiss: onDismiss) { content($0).auroraAppearance() }
         #endif
     }
 }

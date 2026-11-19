@@ -23,7 +23,7 @@ struct SearchView: View {
                         playing = .channel(id: hit.id, name: hit.subtitle ?? hit.title)
                     }
                     section("Later", r.upcoming, action: nil)
-                    section("Films", r.movies) { hit in
+                    section("Movies", r.movies) { hit in
                         playing = .movie(id: hit.id, title: hit.title, startAt: nil)
                     }
                     if !r.series.isEmpty {
@@ -41,7 +41,7 @@ struct SearchView: View {
                     ContentUnavailableView.search(text: text)
                 }
             }
-            .navigationTitle("Search")
+            .auroraPageTitle("Search")
             .toolbar {
                 if closable {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }

@@ -221,6 +221,16 @@ final class MPVPlayerController: UIViewController {
         }
     }
 
+    /// Silence this player or let it be heard: a multi-view wall has exactly one tile
+    /// with sound (Windows' `apply_audio`).
+    func setMuted(_ muted: Bool) {
+        queue.async { [self] in
+            guard let mpv else { return }
+            var flag: Int32 = muted ? 1 : 0
+            mpv_set_property(mpv, "mute", MPV_FORMAT_FLAG, &flag)
+        }
+    }
+
     func setAudioTrack(_ id: Int64) {
         queue.async { [self] in
             guard let mpv else { return }

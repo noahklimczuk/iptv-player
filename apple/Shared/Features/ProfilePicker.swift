@@ -69,12 +69,14 @@ struct ProfilePicker: View {
             } onUnlocked: {
                 unlocking = nil
             }
+            .auroraAppearance()
         }
         // Adding or removing a profile needs the parental PIN once one is set.
         .parentalPinHost()
         .sheet(item: $editing) { target in
             ProfileEditor(target: target, canDelete: model.profiles.count > 1)
                 .parentalPinHost()
+                .auroraAppearance()
         }
     }
 
@@ -142,7 +144,7 @@ private struct ProfileEditor: View {
                     Button("Delete profile", role: .destructive) { confirmingDelete = true }
                 }
             }
-            .navigationTitle(existing == nil ? "Add profile" : "Edit \(existing!.name)")
+            .auroraPageTitle(existing == nil ? "Add profile" : "Edit \(existing!.name)")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

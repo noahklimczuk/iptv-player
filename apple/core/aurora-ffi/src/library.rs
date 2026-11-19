@@ -174,3 +174,32 @@ mod tests {
         assert!(core.channel_groups().unwrap().is_empty());
     }
 }
+
+/// What the library holds, for Settings' Library section (Windows' `library_stats`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct LibraryStats {
+    pub channels: i64,
+    pub movies: i64,
+    pub series: i64,
+    pub episodes: i64,
+    /// Channels the guide has something for, of `channels`.
+    pub guide_matched: i64,
+    /// A few channels without a guide, to make "what is missing" answerable.
+    pub guide_unmatched: Vec<String>,
+}
+
+#[uniffi::export]
+impl AuroraCore {
+    /// The counts and guide coverage Windows' Settings shows under "Library".
+    pub fn library_stats(&self) -> Result<LibraryStats> {
+        let s = aurora_db::repo::library::stats(&self.db.lock())?;
+        Ok(LibraryStats {
+            channels: s.channels,
+            movies: s.movies,
+            series: s.series,
+            episodes: s.episodes,
+            guide_matched: s.epg_coverage.matched,
+            guide_unmatched: s.epg_coverage.unmatched,
+        })
+    }
+}

@@ -49,7 +49,7 @@ struct ParentalControlsView: View {
                 Text(failure).foregroundStyle(.red)
             }
         }
-        .navigationTitle("Parental controls")
+        .auroraPageTitle("Parental controls")
         .disabled(busy)
         .task { await model.loadParental() }
     }

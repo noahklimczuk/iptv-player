@@ -394,7 +394,7 @@ struct SetupWizard: View {
             Text("What should Aurora import?").font(.title3.weight(.bold))
                 .padding(.bottom, 6)
             contentRow("Live TV", "Channels and the programme guide", isOn: $content.live)
-            contentRow("Films", "On-demand films", isOn: $content.vod)
+            contentRow("Movies", "On-demand films", isOn: $content.vod)
             contentRow("Series", "Shows, seasons and episodes", isOn: $content.series)
             HStack {
                 Button("Back", systemImage: "chevron.left") { step = .source }
@@ -535,7 +535,7 @@ private struct DoneSummary: View {
             Grid(horizontalSpacing: 10) {
                 GridRow {
                     stat("Channels", report.channels)
-                    stat("Films", report.movies)
+                    stat("Movies", report.movies)
                     stat("Series", report.series)
                     stat("Episodes", report.episodes)
                 }

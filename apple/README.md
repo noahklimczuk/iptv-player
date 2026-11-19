@@ -55,7 +55,8 @@ screens. The app can:
   intros or recaps and to play the next episode. On Apple TV the remote jumps back 10 s
   and forward 30 s with the controls hidden, and Menu backs out one step at a time,
 - keep channels in named favourite lists, rename and empty them, and reorder them,
-- edit the playlist (Settings): rename, renumber, regroup or hide channels, films and
+- edit the playlist (its own Playlist tab, as Windows' nav item; Settings → Library on
+  an iPhone): rename, renumber, regroup or hide channels, films and
   series, hide everything a search matches, see a title's other copies, and put any of
   it back,
 - change channel from inside the player, as Windows does: channel up and down (on
@@ -82,6 +83,19 @@ screens. The app can:
   once playback is steady), so it exists only for moments that have been on screen. The
   rules are Windows' `Frames`, copied and checked by `mirrors.rs`. Apple TV has no
   drag to preview; it gets the banner only,
+- Settings in Windows' sections and order: Providers, Appearance, Sync, Parental
+  controls, Artwork and metadata, Recommendations, Privacy, Filtering, Pause live TV,
+  Library (the counts and guide coverage), About, Diagnostics. Departures:
+  - Appearance has Windows' theme (Dark, Oled, Light, Contrast, in its colours),
+    Animations and 24-hour clock, kept on the device as Windows keeps them. Interface
+    density is not offered (an Apple TV is always the 10-foot UI, a phone never is),
+    nor glass transparency (the system draws the glass), nor hover previews (nothing
+    hovers). Every page, pushed page and sheet sits on the theme's own background
+    (Dark is Windows' charcoal, not the system's black); the player keeps its own, as
+    on Windows. A switch between light and dark rebuilds the tabs and any open sheet
+    so the system's glass bars follow, which returns pushed pages to their tab's root.
+  - Updates and Keyboard are not there: the App Store updates the app, and neither a
+    remote nor a touchscreen has Windows' shortcuts.
 - Settings → Diagnostics and About, as on Windows. Diagnostics says when the library
   had to be started again, names the data folder and the video engine, and exports this
   run's log, with every address's login removed (`redact_log`), to share from an iPhone.
@@ -135,7 +149,7 @@ screens. The app can:
   closes the player when it runs out. Settings → Parental controls sets the PIN, hides
   adult categories, locks Settings, hides locked content, each profile's age and daily
   limit, and what is locked; Live TV draws a padlock on locked channels, and an empty
-  Films or Series page says when it is the age limit holding back unrated titles.
+  Movies or Series page says when it is the age limit holding back unrated titles.
 
 - recordings, which the plan (docs/APPLE_PORT_AND_SYNC.md §2.3) left on Windows: the
   Apple app records on the device itself instead. The core (`dvr.rs`) is `aurora-app`'s
@@ -168,13 +182,33 @@ screens. The app can:
   - Stop on a recording in flight stops the stream and removes the partial file.
     Windows removes the row and leaves the stream writing until its window closes.
   - reminders are kept and shown, as on Windows, which does not fire them either.
+- multi-view (README §7.4), on iPad and Apple TV: Windows' picker with the 2 × 2,
+  1 + 3, 1 + 5 and 3 × 3 arrangements, a channel per tile, the connection budget and its
+  refusal in Windows' words, the offer to rotate one stream round the wall (12 seconds a
+  tile, the rest showing what is on now and next), and saved layouts with a confirmed
+  Delete. On the wall one tile has sound; choosing a tile moves it (in a rotation,
+  brings the picture to it and stays), and the bar has Windows' countdown, Resume, Save
+  layout and Close. The core (`mosaic.rs`) gives the tiles' geometry, from the shared
+  `aurora_core::mosaic`, their tunes, the budget and the saved layouts; `mirrors.rs`
+  checks the refusal and the dwell against Windows.
 
-On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
-Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
+  Where it differs, and why:
+  - not on an iPhone, as the port's plan has it: four channels on a phone screen are
+    too small to tell apart, and four decoders too hot to hold.
+  - Swift keeps the session (which tile has sound, whose turn it is), because each tile
+    is an mpv view the app owns. On Windows the host keeps it, because it owns the
+    tiles' windows.
+  - a tile's channel is picked from a searchable list, grouped as Windows' dropdown
+    is, because a remote cannot type into a dropdown. The help says "tap"/"select" and
+    "double-tap"/"hold" where Windows says "click" and "double-click", and the `1`–`9`
+    keys are not there: a remote has no number keys.
+
+On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Movies, Series), and
+Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app (multi-view is not offered there, and the playlist editor opens from Settings → Library). A sixth tab would go
 under "More", whose navigation bar stacks on the tab's own and doubles every back
 button. iPad and Apple TV keep both as tabs.
 
-Not yet: multi-view, and syncing provider passwords (each device keeps its own, as on
+Not yet: syncing provider passwords (each device keeps its own, as on
 Windows today).
 
 The app targets **iOS 26 and tvOS 26 only**.

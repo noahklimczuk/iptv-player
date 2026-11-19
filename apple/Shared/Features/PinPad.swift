@@ -124,6 +124,7 @@ private struct ParentalPinHost: ViewModifier {
                         model.answerPin(false)
                     }
                     .interactiveDismissDisabled()
+                    .auroraAppearance()
                 }
             }
     }

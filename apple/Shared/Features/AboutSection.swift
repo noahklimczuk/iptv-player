@@ -97,7 +97,7 @@ private struct NoticesView: View {
             }
             .padding()
         }
-        .navigationTitle("Third-party notices")
+        .auroraPageTitle("Third-party notices")
     }
 
     private struct Block {

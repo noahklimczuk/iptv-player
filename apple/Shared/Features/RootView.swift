@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The app's top level: Home, Live TV, Guide, Films, Series, Recordings, the assistant,
-/// Settings, and Search.
+/// The app's top level: Home, Live TV, Guide, Movies, Series, Recordings, Multi-view, the
+/// assistant, the playlist, Settings, and Search.
 ///
 /// A `TabView` of `Tab`s: on tvOS the top bar the Siri Remote expects, on iPhone and
 /// iPad the floating tab bar. Search has the search role, so iOS 26 gives it its own
@@ -26,7 +26,7 @@ struct RootView: View {
     @State private var demo: PlayerItem?
     #endif
 
-    enum AppTab: String { case home, live, guide, films, series, recordings, assistant, settings, search }
+    enum AppTab: String { case home, live, guide, films, series, recordings, multiview, assistant, playlist, settings, search }
 
     var body: some View {
         Group {
@@ -47,6 +47,8 @@ struct RootView: View {
         }
         // The parental PIN dialog, wherever the core asks for it (`ParentalPinHost`).
         .parentalPinHost()
+        // Settings → Appearance: the theme, the clock and motion, for every screen.
+        .auroraAppearance(root: true)
         .task { await model.loadProfiles() }
         .task { await model.reload() }
         .task { await model.loadParental() }
@@ -71,7 +73,7 @@ struct RootView: View {
         // ignores an inset from outside its stack and would sit under the strip.
         VStack(spacing: 0) {
             ConnectionBudget()
-            tabView
+            tabView.auroraRebuildOnSwitch()
         }
         // An iPhone's bar holds five, the search tab included; past that the rest go
         // under "More", whose own navigation bar stacks on top of the tab's and doubles
@@ -86,10 +88,12 @@ struct RootView: View {
             model.assistantQuestion = question
             if compact { showingAssistant = true } else { tab = .assistant }
         })
-        .sheet(isPresented: $showingAssistant) { AssistantView(closable: true) }
-        .sheet(isPresented: $showingSettings) { SettingsView(closable: true) }
-        .sheet(isPresented: $showingSearch) { SearchView(closable: true) }
-        .sheet(isPresented: $showingRecordings) { RecordingsView(closable: true) }
+        // Each sheet is its own presentation and keeps the system's appearance unless
+        // given the theme itself.
+        .sheet(isPresented: $showingAssistant) { AssistantView(closable: true).auroraAppearance() }
+        .sheet(isPresented: $showingSettings) { SettingsView(closable: true).auroraAppearance() }
+        .sheet(isPresented: $showingSearch) { SearchView(closable: true).auroraAppearance() }
+        .sheet(isPresented: $showingRecordings) { RecordingsView(closable: true).auroraAppearance() }
         #if DEBUG
         // `-AuroraTab guide` at launch opens that tab (see DemoLaunch).
         .onAppear {
@@ -117,11 +121,19 @@ struct RootView: View {
             Tab("Home", systemImage: "house", value: .home) { HomeView() }
             Tab("Live TV", systemImage: "tv", value: .live) { LiveView() }
             Tab("Guide", systemImage: "calendar", value: .guide) { GuideView() }
-            Tab("Films", systemImage: "film", value: .films) { MoviesView() }
+            Tab("Movies", systemImage: "film", value: .films) { MoviesView() }
             Tab("Series", systemImage: "rectangle.stack", value: .series) { SeriesView() }
             if !compact {
                 Tab("Recordings", systemImage: "record.circle", value: .recordings) { RecordingsView() }
+                // iPad and Apple TV, as the port's plan has it (docs/APPLE_PORT_AND_SYNC.md
+                // §2): a phone has neither the screen for four channels nor the heat
+                // budget for four decoders.
+                Tab("Multi-view", systemImage: "square.grid.2x2", value: .multiview) { MultiViewPage() }
                 Tab("Assistant", systemImage: "sparkles", value: .assistant) { AssistantView() }
+                // Windows' nav item; on an iPhone it opens from Settings → Library.
+                Tab("Playlist", systemImage: "list.bullet.rectangle", value: .playlist) {
+                    NavigationStack { PlaylistEditorView() }
+                }
                 Tab("Settings", systemImage: "gear", value: .settings) { SettingsView() }
                 Tab(value: AppTab.search, role: .search) { SearchView() }
             }

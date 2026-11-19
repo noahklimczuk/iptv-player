@@ -1297,3 +1297,91 @@ fn sync_says_what_needs_a_newer_aurora_as_windows_does() {
     }
     assert!(swift.contains("status.unreadable > 0"));
 }
+
+/// Multi-view refuses in Windows' words, rotates on Windows' dwell, and checks the
+/// budget the way Windows' host does (README §7.4).
+#[test]
+fn multiview_refuses_and_rotates_as_windows_does() {
+    let host = app_src("mosaic.rs");
+    let fold = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let theirs = fold(between(&host, "fn refusal(", "\nfn channel_name"));
+    let ours_src = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mosaic.rs"),
+    )
+    .unwrap();
+    let ours = fold(between(&ours_src, "fn refusal(", "\n/// What the picker"));
+    for part in [
+        "\"That needs {needed} {streams} at once and your provider allows {limit}. \\ Remove {over} channel{} and try again\"",
+        "\"1 recording is\"",
+        "\"{recordings} recordings are\"",
+        "\" — {r} using the line as well\"",
+        "\" Or show them one at a time, each for a few seconds, on the single stream \\ your line allows.\"",
+    ] {
+        assert!(theirs.contains(part), "Windows' refusal no longer has {part}");
+        assert!(ours.contains(part), "our refusal must have {part}");
+    }
+    assert_eq!(
+        app_const("mosaic.rs", "DWELL_SECS"),
+        crate::mosaic::DWELL_SECS.to_string(),
+        "Windows changed how long a rotating tile holds the stream"
+    );
+    for sentence in [
+        "Pick at least one channel to show in the mosaic.",
+        "Your provider listed this channel without a stream.",
+        "Give the layout a name.",
+    ] {
+        assert!(host.contains(sentence), "Windows no longer says {sentence:?}");
+        assert!(ours_src.contains(sentence), "we must say {sentence:?}");
+    }
+    // Recordings in flight count against the line, as `Mosaic::recordings` counts them.
+    assert!(host.contains("self.dvr.active_ids().len()"));
+}
+
+/// Settings lists Windows' sections in Windows' order, less the two an Apple device has
+/// no use for (apple/README.md): a new Windows section, or a reordering, fails here.
+#[test]
+fn settings_sections_follow_windows_order() {
+    let page = ui_src("features/settings/SettingsPage.tsx");
+    let windows: Vec<&str> = page
+        .split("<Section title=\"")
+        .skip(1)
+        .map(|rest| &rest[..rest.find('"').unwrap()])
+        .filter(|t| !matches!(*t, "Updates" | "Keyboard"))
+        .collect();
+
+    let swift = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features/SettingsView.swift"),
+    )
+    .unwrap();
+    let body = between(&swift, "private var unlocked: some View {", "private struct ProviderRow");
+    // Each Windows title, and how the Swift page spells that section.
+    let marks = [
+        ("Providers", "Section(\"Providers\")"),
+        ("Appearance", "AppearanceSection()"),
+        ("Sync", "SyncSection()"),
+        ("Parental controls", "Text(\"Parental controls\")"),
+        ("Artwork and metadata", "MetadataSection()"),
+        ("Recommendations", "RecommendationsSection()"),
+        ("Privacy", "PrivacySection()"),
+        ("Filtering", "LibraryFiltersSection()"),
+        ("Pause live TV", "TimeshiftSection()"),
+        ("Library", "LibraryStatsSection()"),
+        ("About", "AboutSection()"),
+        ("Diagnostics", "DiagnosticsSection()"),
+    ];
+    let mut ours: Vec<(usize, &str)> = marks
+        .iter()
+        .map(|(title, mark)| {
+            let at = body
+                .find(mark)
+                .unwrap_or_else(|| panic!("Settings has no {title} section ({mark})"));
+            (at, *title)
+        })
+        .collect();
+    ours.sort();
+    let ours: Vec<&str> = ours.into_iter().map(|(_, t)| t).collect();
+    assert_eq!(ours, windows, "Settings' sections must be Windows', in Windows' order");
+    // The section titles the Swift subviews give themselves.
+    assert!(swift.contains("Text(\"Filtering\")"));
+    assert!(swift.contains("Text(\"Artwork and metadata\")"));
+}

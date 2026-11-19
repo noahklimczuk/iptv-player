@@ -83,7 +83,7 @@ struct GuideView: View {
                     }
                 }
             }
-            .navigationTitle("Guide")
+            .auroraTitle("Guide")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -109,6 +109,7 @@ struct GuideView: View {
             .task(id: model.recordingsVersion) { await model.loadDvrMarks() }
             .sheet(isPresented: $filtering) {
                 GuideFiltersSheet(groups: model.groups, filters: filterBinding, shown: shown)
+                    .auroraAppearance()
             }
         }
     }

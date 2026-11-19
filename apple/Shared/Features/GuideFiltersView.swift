@@ -111,7 +111,7 @@ struct GuideFiltersSheet: View {
                 }
             }
             .searchable(text: $query, prompt: "Search \(groups.count) groups…")
-            .navigationTitle("Guide filters")
+            .auroraPageTitle("Guide filters")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

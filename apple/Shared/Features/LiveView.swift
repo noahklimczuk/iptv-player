@@ -10,6 +10,7 @@ struct LiveView: View {
     var body: some View {
         NavigationStack {
             List {
+                PageHeading("Live TV")
                 if let progress = model.importProgress {
                     ImportProgressRow(progress: progress)
                 }
@@ -47,12 +48,13 @@ struct LiveView: View {
                     }
                 }
             }
-            .navigationTitle("Live TV")
+            .auroraTitle("Live TV")
             .toolbar {
                 Button("Add provider", systemImage: "plus") { addingProvider = true }
             }
             .sheet(isPresented: $addingProvider) {
                 SetupWizard(additional: true, onFinished: { addingProvider = false }, onSkip: { addingProvider = false })
+                    .auroraAppearance()
             }
             .task { await model.reload() }
             // Every time the screen comes back: a list made or emptied in a channel list
@@ -123,7 +125,7 @@ struct ChannelListView: View {
                                        description: Text("Long-press a channel to add it."))
             }
         }
-        .navigationTitle(favoritesOnly ? listTitle : group ?? "All channels")
+        .auroraPageTitle(favoritesOnly ? listTitle : group ?? "All channels")
         .toolbar {
             // A named list can be renamed or deleted; the default is always there.
             if favoritesOnly, list != nil {

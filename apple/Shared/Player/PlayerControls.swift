@@ -1109,7 +1109,7 @@ private let dockBackground = Color(white: 0.13).opacity(0.94)
 
 /// "21:04", in the viewer's own clock style.
 private func wallClock(_ unix: Int64) -> String {
-    Date(timeIntervalSince1970: TimeInterval(unix)).formatted(.dateTime.hour().minute())
+    clockTime(unix: unix)
 }
 
 #if os(iOS)

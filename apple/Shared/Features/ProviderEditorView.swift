@@ -108,7 +108,7 @@ struct ProviderEditorView: View {
                 }
             }
         }
-        .navigationTitle(provider.name)
+        .auroraPageTitle(provider.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

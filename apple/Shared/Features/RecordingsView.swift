@@ -20,13 +20,14 @@ struct RecordingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    PageHeading("Recordings")
                     header
                     content
                 }
                 .padding(.horizontal, edge)
                 .padding(.bottom, 24)
             }
-            .navigationTitle("Recordings")
+            .auroraTitle("Recordings")
             .toolbar {
                 if closable {
                     ToolbarItem(placement: .cancellationAction) {
@@ -332,6 +333,7 @@ private struct RecordedCard: View {
                         .accessibilityLabel("Delete \(rec.title)")
                     Button("Play", systemImage: "play.fill", action: play)
                         .buttonStyle(.borderedProminent)
+                        .lineLimit(1).fixedSize()
                 }
                 #if os(iOS)
                 .buttonStyle(.bordered)
@@ -593,9 +595,9 @@ enum Format {
         }
     }
 
-    /// The time of day, in the device's 12- or 24-hour style (`clockTime`).
+    /// The time of day, in the viewer's 12- or 24-hour style (`clockTime`).
     static func clock(_ unix: Int64) -> String {
-        Date(timeIntervalSince1970: TimeInterval(unix)).formatted(date: .omitted, time: .shortened)
+        clockTime(unix: unix)
     }
 
     /// "in 4 min", "in 3h 20m", or a day and time (`untilLabel`).
