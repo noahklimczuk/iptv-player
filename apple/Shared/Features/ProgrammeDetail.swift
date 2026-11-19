@@ -17,6 +17,9 @@ struct ProgrammeDetail: View {
 
     @State private var busy = false
     @State private var failure: String?
+    /// The channel's other copies, by quality (Windows' `ChannelSources`).
+    @State private var sources: [Alternate] = []
+    @Environment(\.searchFor) private var searchFor
 
     var body: some View {
         #if os(tvOS)
@@ -34,6 +37,7 @@ struct ProgrammeDetail: View {
         }
         .background(.regularMaterial)
         .task { await model.loadDvrMarks() }
+        .task { await loadSources() }
         #else
         NavigationStack {
             ScrollView {
@@ -52,6 +56,7 @@ struct ProgrammeDetail: View {
                 }
             }
             .task { await model.loadDvrMarks() }
+            .task { await loadSources() }
         }
         .presentationDetents([.medium, .large])
         #endif
@@ -146,9 +151,36 @@ struct ProgrammeDetail: View {
             }
         }
         .buttonStyle(.bordered)
+        // Windows' order: the channel's other copies, then the search, under the rest.
+        if !sources.isEmpty {
+            HStack(spacing: 6) {
+                Text("Also in").font(.caption).foregroundStyle(.tertiary)
+                ForEach(sources, id: \.id) { source in
+                    Button(source.quality ?? "Unknown") {
+                        play(.channel(id: source.id, name: source.name))
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+        }
+        Button("Search this title", systemImage: "magnifyingglass") {
+            let title = p.title
+            dismiss()
+            // Once this has gone: Search may be a sheet of its own on a phone, and one
+            // presentation cannot start while another is still leaving.
+            Task {
+                try? await Task.sleep(for: .milliseconds(450))
+                searchFor(title)
+            }
+        }
+        .buttonStyle(.borderless)
         if let failure {
             Text(failure).font(.callout).foregroundStyle(.red)
         }
+    }
+
+    private func loadSources() async {
+        sources = await model.alternates(.channels, id: channel.id).filter { $0.id != channel.id }
     }
 
     private func run(_ body: @escaping () async -> String?) {

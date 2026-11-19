@@ -315,6 +315,12 @@ final class AppModel {
     /// taken by the assistant screen once it has asked it.
     var assistantQuestion: String?
 
+    // MARK: Search
+
+    /// Text to open Search with ("Search this title" in the guide's info pane, Windows'
+    /// `paletteQuery`), taken by the search screen as it opens.
+    var searchQuery: String?
+
     func assistantStatus() async -> AssistantStatus? {
         let profile = profileId
         return await call(nil) { try $0.assistantStatus(profileId: profile) }

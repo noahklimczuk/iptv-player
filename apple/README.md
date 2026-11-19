@@ -160,7 +160,9 @@ screens. The app can:
   Keep and a confirmed Delete, Coming up, the failures with their reasons, and series
   rules with Pause and a confirmed Delete. Choosing a programme in the guide or a
   channel's schedule opens Windows' info pane: Watch now, Watch from start, Record,
-  Record series and Remind me, and the guide marks what is set to record. The player has
+  Record series and Remind me, the channel's other copies by quality ("Also in"), and
+  Search this title (Search, with the title typed), and the guide marks what is set to
+  record. The player has
   Windows' Record what's on and the next programme's Record, and the strip that says
   when recordings hold every stream the subscription allows. A recording plays and
   resumes as a film does.

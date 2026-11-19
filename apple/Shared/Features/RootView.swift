@@ -84,6 +84,11 @@ struct RootView: View {
         .environment(\.openRecordings, compact ? { showingRecordings = true } : nil)
         // Its own tab where there is room (Windows' nav has one); a sheet from Home's
         // toolbar on an iPhone. `question` is asked as soon as it opens.
+        // "Search this title": Search, with the title already typed.
+        .environment(\.searchFor, { query in
+            model.searchQuery = query
+            if compact { showingSearch = true } else { tab = .search }
+        })
         .environment(\.openAssistant, { question in
             model.assistantQuestion = question
             if compact { showingAssistant = true } else { tab = .assistant }
@@ -172,6 +177,8 @@ extension EnvironmentValues {
     @Entry var openSearch: (() -> Void)? = nil
     /// Opens Recordings where it isn't a tab (an iPhone); nil where it is.
     @Entry var openRecordings: (() -> Void)? = nil
+    /// Opens Search with `query` typed in.
+    @Entry var searchFor: (String) -> Void = { _ in }
     /// Opens the assistant, asking `question` first when there is one.
     @Entry var openAssistant: (String?) -> Void = { _ in }
 }

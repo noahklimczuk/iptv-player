@@ -55,6 +55,12 @@ struct SearchView: View {
                 results = text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : await model.search(text)
             }
             .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
+            // A title handed over by "Search this title", now or while already open.
+            .task(id: model.searchQuery) {
+                guard let query = model.searchQuery else { return }
+                model.searchQuery = nil
+                text = query
+            }
         }
     }
 
