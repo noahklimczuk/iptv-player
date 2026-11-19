@@ -7,6 +7,8 @@ enum PlayerItem: Identifiable, Hashable {
     case episode(id: Int64, title: String, startAt: Double?)
     /// A programme that already aired on a channel, `start..stop` in Unix seconds.
     case catchup(channelId: Int64, title: String, start: Int64, stop: Int64)
+    /// A file the recorder wrote on this device (`dvr.rs`), played as a film is.
+    case recording(id: Int64, title: String, startAt: Double?)
 
     var id: String {
         switch self {
@@ -14,13 +16,15 @@ enum PlayerItem: Identifiable, Hashable {
         case .movie(let id, _, _): "movie-\(id)"
         case .episode(let id, _, _): "episode-\(id)"
         case .catchup(let id, _, let start, _): "catchup-\(id)-\(start)"
+        case .recording(let id, _, _): "recording-\(id)"
         }
     }
 
     var title: String {
         switch self {
         case .channel(_, let name): name
-        case .movie(_, let title, _), .episode(_, let title, _), .catchup(_, let title, _, _): title
+        case .movie(_, let title, _), .episode(_, let title, _), .catchup(_, let title, _, _),
+             .recording(_, let title, _): title
         }
     }
 }
@@ -170,6 +174,7 @@ private struct PlayerContent: View {
                 case .episode(let id, _, let startAt): .vod(try core.tuneEpisode(episodeId: id, startAtSecs: startAt))
                 case .catchup(let id, _, let start, let stop):
                     .replay(try core.tuneCatchup(channelId: id, start: start, stop: stop))
+                case .recording(let id, _, let startAt): .vod(try core.tuneRecording(id: id, startAtSecs: startAt))
                 }
             }.value
             guard item == session.item else { return }

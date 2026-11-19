@@ -37,10 +37,11 @@ struct PlaylistEditorView: View {
 
     var body: some View {
         List {
+            PageHeading("Playlist")
             Section {
                 Picker("List", selection: $kind) {
                     Text("Live TV").tag(LibraryKind.channels)
-                    Text("Films").tag(LibraryKind.movies)
+                    Text("Movies").tag(LibraryKind.movies)
                     Text("Series").tag(LibraryKind.series)
                 }
                 .pickerStyle(.segmented)
@@ -61,7 +62,7 @@ struct PlaylistEditorView: View {
                 if loading { ProgressView().frame(maxWidth: .infinity) }
             }
         }
-        .navigationTitle("Playlist")
+        .auroraTitle("Playlist")
         .searchable(text: $text, prompt: "Search this list")
         // A second press, as on Windows (R-125): it acts on every match, not the page.
         .confirmationDialog("Hide all \(total.formatted()) \(noun(total))?", isPresented: $confirmingBulk,
@@ -75,9 +76,11 @@ struct PlaylistEditorView: View {
         .sheet(item: $editing) { row in
             NavigationStack { EntryEditor(kind: kind, entry: row, groups: groups) }
                 .parentalPinHost()
+                .auroraAppearance()
         }
         .sheet(item: $copiesOf) { row in
             NavigationStack { CopiesView(kind: kind, entry: row) }
+                .auroraAppearance()
         }
         .task(id: Key(kind: kind, text: text, group: group, show: show, dupes: duplicatesOnly,
                       version: model.libraryVersion)) {
@@ -292,7 +295,7 @@ private struct EntryEditor: View {
                 }
             }
         }
-        .navigationTitle(entry.name)
+        .auroraPageTitle(entry.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -361,7 +364,7 @@ private struct CopiesView: View {
         .overlay {
             if copies.isEmpty { ContentUnavailableView("No other copies", systemImage: "square.on.square") }
         }
-        .navigationTitle("Copies of \(entry.name)")
+        .auroraPageTitle("Copies of \(entry.name)")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

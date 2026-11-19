@@ -279,6 +279,7 @@ struct PlayerOverlay: View {
 
 /// Title on top, progress and buttons below (`Dock.tsx`).
 private struct PlayerChrome: View {
+    @Environment(AppModel.self) private var model
     @Bindable var session: PlayerSession
     var focus: FocusState<PlayerFocus?>.Binding
     let close: () -> Void
@@ -300,6 +301,16 @@ private struct PlayerChrome: View {
                     }
                 }
                 Spacer()
+                // Live only: a film is already a file on the provider's disk.
+                if session.isLive {
+                    Button("Record what's on", systemImage: "record.circle") { session.recordNow(model: model) }
+                        .labelStyle(.iconOnly)
+                        .font(.title3)
+                        #if os(iOS)
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Circle())
+                        #endif
+                }
                 #if os(iOS)
                 Button("Close", systemImage: "xmark", action: close)
                     .labelStyle(.iconOnly)
@@ -309,6 +320,10 @@ private struct PlayerChrome: View {
                 #endif
             }
             Spacer()
+            if session.isLive, let guide = session.liveGuide {
+                LiveCards(guide: guide) { session.recordNext(model: model) }
+                    .padding(.bottom, 8)
+            }
             HStack(spacing: spacing) {
                 ProgressRow(session: session, interactive: true)
                 if session.behindLive > 0 {
@@ -347,6 +362,7 @@ private struct PlayerChrome: View {
         }
         .padding(edge)
         .foregroundStyle(.white)
+        .task(id: session.item) { await session.loadLiveGuide() }
         .background {
             LinearGradient(colors: [.black.opacity(0.7), .clear, .clear, .black.opacity(0.8)],
                            startPoint: .top, endPoint: .bottom)
@@ -426,6 +442,49 @@ private struct PlayerChrome: View {
         .buttonStyle(.plain)
         .padding(6)
         #endif
+    }
+}
+
+/// On now at the bottom left; next at the bottom right, with a Record button (Windows'
+/// `LiveCards`).
+private struct LiveCards: View {
+    let guide: NowNext
+    let recordNext: () -> Void
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            if let on = guide.now {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("On now · \(Format.clock(on.start))–\(Format.clock(on.stop))")
+                        .font(.caption.bold()).foregroundStyle(.white.opacity(0.75))
+                    Text(on.title).font(.title3.weight(.heavy)).lineLimit(1)
+                    if let text = on.description ?? on.subTitle {
+                        Text(text).font(.caption).lineLimit(2).foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: 420, alignment: .leading)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            }
+            Spacer(minLength: 0)
+            if let next = guide.next {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("NEXT · \(Format.clock(next.start))")
+                            .font(.caption.bold()).foregroundStyle(.white.opacity(0.75))
+                        Text(next.title).font(.callout.bold()).lineLimit(1)
+                    }
+                    Button("Record", systemImage: "record.circle", action: recordNext)
+                        .accessibilityLabel("Record \(next.title)")
+                        #if os(iOS)
+                        .buttonStyle(.bordered)
+                        #endif
+                }
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .accessibilityElement(children: .contain)
+            }
+        }
     }
 }
 
@@ -734,7 +793,7 @@ private struct WatchPanel: View {
     private var endLabel: String {
         switch session.item {
         case .episode: "End of episode"
-        case .catchup: "End of programme"
+        case .catchup, .recording: "End of programme"
         default: "End of film"
         }
     }
@@ -1050,7 +1109,7 @@ private let dockBackground = Color(white: 0.13).opacity(0.94)
 
 /// "21:04", in the viewer's own clock style.
 private func wallClock(_ unix: Int64) -> String {
-    Date(timeIntervalSince1970: TimeInterval(unix)).formatted(.dateTime.hour().minute())
+    clockTime(unix: unix)
 }
 
 #if os(iOS)
@@ -1091,8 +1150,18 @@ private struct SeekBubble: View {
 
 /// Windows' `ChannelBanner` over the player: the channel's logo, number and name, what is
 /// on now with its times and how far through it is, what is on next, and the time.
+///
+/// On an iPhone held upright the time is left to the status bar above it, and the logo and
+/// number are a size smaller: Windows never lays the banner out that narrow, and there it
+/// left the name a letter or two.
 private struct ChannelBannerView: View {
     let banner: PlayerSession.ChannelBanner
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var narrow: Bool { sizeClass == .compact }
+    #else
+    private let narrow = false
+    #endif
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -1103,15 +1172,26 @@ private struct ChannelBannerView: View {
     private func content(now: Date) -> some View {
         HStack(spacing: 16) {
             ChannelTile(name: banner.channel.name, number: banner.channel.number, logo: banner.channel.logo,
-                        size: logoSize)
+                        size: narrow ? 44 : logoSize)
             if let number = banner.channel.number {
                 Text(String(number))
-                    .font(.system(.largeTitle, design: .rounded).weight(.heavy))
+                    .font(.system(narrow ? .title2 : numberStyle, design: .rounded).weight(.heavy))
                     .monospacedDigit()
                     .foregroundStyle(.tint)
+                    .lineLimit(1).fixedSize()
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(banner.channel.name).font(.headline.weight(.heavy)).lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(banner.channel.name).font(.headline.weight(.heavy)).lineLimit(1)
+                    // Windows' quiet tag: HD, FHD, 4K.
+                    if let quality = banner.channel.quality {
+                        Text(quality)
+                            .font(.caption2.weight(.heavy))
+                            .padding(.horizontal, 10).frame(height: 20)
+                            .background(.white.opacity(0.16), in: Capsule())
+                            .fixedSize()
+                    }
+                }
                 if let on = banner.guide?.now {
                     Text(on.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                     HStack(spacing: 12) {
@@ -1133,9 +1213,13 @@ private struct ChannelBannerView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(now, format: .dateTime.hour().minute())
-                .font(.title2.weight(.heavy))
-                .monospacedDigit()
+            if !narrow {
+                // `clockTime`, not the locale: the player is outside the theme's environment.
+                Text(clockTime(now))
+                    .font(.title2.weight(.heavy))
+                    .monospacedDigit()
+                    .lineLimit(1).fixedSize()
+            }
         }
         .foregroundStyle(.white)
         .padding(.vertical, 14).padding(.leading, 14).padding(.trailing, 22)
@@ -1160,8 +1244,11 @@ private struct ChannelBannerView: View {
     #if os(tvOS)
     private let logoSize: CGFloat = 80
     private let maxWidth: CGFloat = 760
+    private let numberStyle: Font.TextStyle = .largeTitle
     #else
     private let logoSize: CGFloat = 52
     private let maxWidth: CGFloat = 560
+    /// Windows' `--fs-2xl`: a five-digit number still leaves the name its room on a phone.
+    private let numberStyle: Font.TextStyle = .title
     #endif
 }

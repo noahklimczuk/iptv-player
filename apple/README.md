@@ -19,10 +19,15 @@ screens. The app can:
 - add an Xtream Codes panel or an M3U playlist (the password goes in the Keychain),
 - import it with progress: live TV only (the tvOS default) or with films and series,
 - list channels by group, with now/next from the guide,
-- keep favourite channels per profile (long-press a channel),
+- keep favourite channels per profile: the heart on each channel row, as on Windows
+  (on Apple TV, where a row is one thing to focus, a long press instead),
+- channel rows as Windows' `LivePage` draws them: number, logo, name with padlock and
+  quality, the programme on now with its start time (or "No guide data") and what is
+  next, its progress, and the Dropped and Catch-up badges; Windows' empty-list wording,
 - show the guide grid (channels down, time across), fetching only the rows on screen
   as Windows does since R-130; choosing what's on plays the channel, choosing what
-  already aired replays it where the archive allows,
+  already aired replays it where the archive allows. Over it, Windows' header: the day
+  (Today, Tomorrow, Yesterday, or the date), −24h −1h Now +1h +24h, and Tonight 8pm,
 - filter the guide as Windows does: group chips to tap in or out, and a Filters sheet
   with every group searchable, shown only or hidden, plus with listings, favourites,
   catch-up, radio and quality. The rules are Windows' `guideFilters.ts` in the core
@@ -34,10 +39,18 @@ screens. The app can:
   core builds (Top Picks, Because you watched…, Trending with a metadata key, the
   shelves), each rail paging as it scrolls; long-press a card for "Not interested", or
   to take it off Continue Watching,
-- search channels, what's on now and later, films and series in one box,
+- search channels, what's on now and later, films, series and the people credited on
+  them in one box, as Windows' search palette: its groups in its order (Live Channels,
+  Movies, Series, On Now, Upcoming, People), four to a group until "Show N more", its
+  words when nothing is typed or found, and the total. A channel or a programme plays
+  the channel, a film or a series opens its page, and a person opens nothing, as on
+  Windows,
 - browse films and series by the provider's shelves, genre and first letter, sorted
   newest, A–Z, by year or by rating, with search, a page at a time and with the true
-  total,
+  total. Laid out as Windows lays it out: the sort as segments, the seven commonest
+  genres as chips before the full list (which is not there when the library has no
+  genres), the letters only against A–Z, series starting A–Z and films newest first,
+  and "Nothing matches those filters" with Clear filters,
 - filter the whole library as Windows does: English only, also hide what's untagged,
   and one copy per title, each with what it would hide (Settings),
 - list providers in Settings with what each holds, and refresh, edit or remove one.
@@ -55,7 +68,8 @@ screens. The app can:
   intros or recaps and to play the next episode. On Apple TV the remote jumps back 10 s
   and forward 30 s with the controls hidden, and Menu backs out one step at a time,
 - keep channels in named favourite lists, rename and empty them, and reorder them,
-- edit the playlist (Settings): rename, renumber, regroup or hide channels, films and
+- edit the playlist (its own Playlist tab, as Windows' nav item; Settings → Library on
+  an iPhone): rename, renumber, regroup or hide channels, films and
   series, hide everything a search matches, see a title's other copies, and put any of
   it back,
 - change channel from inside the player, as Windows does: channel up and down (on
@@ -67,14 +81,25 @@ screens. The app can:
   app's Caches folder), up to 1 GB / 30 minutes by default and set in Settings. The bar
   runs from the oldest moment held to live, says how far behind live you are, and Back
   to live returns to the edge. The window is Windows' arithmetic (`aurora_core::timeshift`).
+- the featured billboard at the top of Home, as Windows' `HeroBillboard`: six titles
+  picked as Windows picks them (the head of For you, Top 10, Trending and Because you
+  watched first; nothing already on My List or part-way through; a new set each time the
+  app opens), one at a time over the backdrop, or the poster blurred when there is none,
+  with Play (resuming where left off), My List and More Info; it moves on every 12
+  seconds and holds while one of its buttons has the focus. Beside it in seven columns of
+  twelve, as Windows' bento, or above it on an iPhone, where My List and More Info show
+  only their icons. Windows plays the trailer over the backdrop after two seconds: not
+  here, as it is a YouTube embed and tvOS has no web view,
 - "On now" at the top of Home, as Windows' `OnNowTile`: the first six favourite
   channels, what each is airing with its times and progress, and a tap to tune; with no
   favourites, a line saying how to add some. Channels without a logo get Windows'
   `ChannelTile`: the number (or first letter) on one of the seven art colours, picked
   from the name the same way, so a channel is the same colour in both apps,
 - the channel banner over the player, as Windows' `ChannelBanner`: on every tune, the
-  channel's logo, number and name, what is on now with its times and how far through,
-  what is next (or "No guide data for this channel"), and the time, for 5 seconds,
+  channel's logo, number, name and quality tag, what is on now with its times and how
+  far through, what is next (or "No guide data for this channel"), and the time, for 5
+  seconds. On an upright iPhone the time is left to the status bar and the logo and
+  number are a size smaller, so the name has room (Windows never draws it that narrow),
 - the seek preview on iPhone and iPad (Windows' `Scrub.tsx` and `play/preview.rs`):
   dragging the bar shows a bubble with the time, the chapter or skip marker there, and on
   live TV the wall-clock moment and what was on. The picture in it comes from frames mpv
@@ -82,6 +107,19 @@ screens. The app can:
   once playback is steady), so it exists only for moments that have been on screen. The
   rules are Windows' `Frames`, copied and checked by `mirrors.rs`. Apple TV has no
   drag to preview; it gets the banner only,
+- Settings in Windows' sections and order: Providers, Appearance, Sync, Parental
+  controls, Artwork and metadata, Recommendations, Privacy, Filtering, Pause live TV,
+  Library (the counts and guide coverage), About, Diagnostics. Departures:
+  - Appearance has Windows' theme (Dark, Oled, Light, Contrast, in its colours),
+    Animations and 24-hour clock, kept on the device as Windows keeps them. Interface
+    density is not offered (an Apple TV is always the 10-foot UI, a phone never is),
+    nor glass transparency (the system draws the glass), nor hover previews (nothing
+    hovers). Every page, pushed page and sheet sits on the theme's own background
+    (Dark is Windows' charcoal, not the system's black); the player keeps its own, as
+    on Windows. A switch between light and dark rebuilds the tabs and any open sheet
+    so the system's glass bars follow, which returns pushed pages to their tab's root.
+  - Updates and Keyboard are not there: the App Store updates the app, and neither a
+    remote nor a touchscreen has Windows' shortcuts.
 - Settings → Diagnostics and About, as on Windows. Diagnostics says when the library
   had to be started again, names the data folder and the video engine, and exports this
   run's log, with every address's login removed (`redact_log`), to share from an iPhone.
@@ -135,14 +173,68 @@ screens. The app can:
   closes the player when it runs out. Settings → Parental controls sets the PIN, hides
   adult categories, locks Settings, hides locked content, each profile's age and daily
   limit, and what is locked; Live TV draws a padlock on locked channels, and an empty
-  Films or Series page says when it is the age limit holding back unrated titles.
+  Movies or Series page says when it is the age limit holding back unrated titles.
 
-On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
-Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
+- recordings, which the plan (docs/APPLE_PORT_AND_SYNC.md §2.3) left on Windows: the
+  Apple app records on the device itself instead. The core (`dvr.rs`) is `aurora-app`'s
+  `Dvr` and its `dvr_*` commands, line for line where it can be, over the shared schedule,
+  rules, conflicts and recorder; `mirrors.rs` checks its numbers, reasons and refusals,
+  and the Recordings screen's words, against Windows. The Recordings tab (from Home's
+  toolbar on an iPhone) has Windows' three tabs, storage meter, clash notice, cards with
+  Keep and a confirmed Delete, Coming up, the failures with their reasons, and series
+  rules with Pause and a confirmed Delete. Choosing a programme in the guide or a
+  channel's schedule opens Windows' info pane: Watch now, Watch from start, Record,
+  Record series and Remind me, the channel's other copies by quality ("Also in"), and
+  Search this title (Search, with the title typed), and the guide marks what is set to
+  record. The player has
+  Windows' Record what's on and the next programme's Record, and the strip that says
+  when recordings hold every stream the subscription allows. A recording plays and
+  resumes as a film does.
+
+  Where it differs, and why:
+  - it records while Aurora is running. Windows records while its window is open, even
+    minimised; iOS and tvOS suspend an app that is not in front, so a recording due
+    then is marked "Aurora was not running when this was due", as Windows marks one due
+    while it was closed, and one in flight finishes with what it had.
+  - when the system closes Aurora in the middle of a recording, as iOS and tvOS do
+    without warning, the next start finishes it with what reached the disk, cut short
+    with "Aurora was closed while this was recording" (or failed, if nothing did).
+    Windows always finishes its recordings on the way out, so it never needs this.
+  - recordings go in Application Support/Aurora/Recordings on an iPhone or iPad, kept out
+    of the iCloud backup, and in Caches/Recordings on an Apple TV, where the system may
+    empty them when space runs short: tvOS gives an app nowhere else that size.
+  - an app update moves the app's container, so a recording is found by its file name
+    in the recordings folder when the path it was written to has gone.
+  - Stop on a recording in flight stops the stream and removes the partial file.
+    Windows removes the row and leaves the stream writing until its window closes.
+  - reminders are kept and shown, as on Windows, which does not fire them either.
+- multi-view (README §7.4), on iPad and Apple TV: Windows' picker with the 2 × 2,
+  1 + 3, 1 + 5 and 3 × 3 arrangements, a channel per tile, the connection budget and its
+  refusal in Windows' words, the offer to rotate one stream round the wall (12 seconds a
+  tile, the rest showing what is on now and next), and saved layouts with a confirmed
+  Delete. On the wall one tile has sound; choosing a tile moves it (in a rotation,
+  brings the picture to it and stays), and the bar has Windows' countdown, Resume, Save
+  layout and Close. The core (`mosaic.rs`) gives the tiles' geometry, from the shared
+  `aurora_core::mosaic`, their tunes, the budget and the saved layouts; `mirrors.rs`
+  checks the refusal and the dwell against Windows.
+
+  Where it differs, and why:
+  - not on an iPhone, as the port's plan has it: four channels on a phone screen are
+    too small to tell apart, and four decoders too hot to hold.
+  - Swift keeps the session (which tile has sound, whose turn it is), because each tile
+    is an mpv view the app owns. On Windows the host keeps it, because it owns the
+    tiles' windows.
+  - a tile's channel is picked from a searchable list, grouped as Windows' dropdown
+    is, because a remote cannot type into a dropdown. The help says "tap"/"select" and
+    "double-tap"/"hold" where Windows says "click" and "double-click", and the `1`–`9`
+    keys are not there: a remote has no number keys.
+
+On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Movies, Series), and
+Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app (multi-view is not offered there, and the playlist editor opens from Settings → Library). A sixth tab would go
 under "More", whose navigation bar stacks on the tab's own and doubles every back
 button. iPad and Apple TV keep both as tabs.
 
-Not yet: recordings, and syncing provider passwords (each device keeps its own, as on
+Not yet: syncing provider passwords (each device keeps its own, as on
 Windows today).
 
 The app targets **iOS 26 and tvOS 26 only**.
@@ -215,7 +307,7 @@ guides, the columns a provider is saved with, the source a catch-up replay is bu
 from). If the Windows app changes one of them, `cargo test`
 in `apple/core` says which file to update.
 
-As more screens arrive (guide, films, series, DVR rules), the amount of mirrored glue
+As more screens arrive (guide, films, series, recordings), the amount of mirrored glue
 grows. At that point it's worth deciding whether to do the plan's Phase 1 after all.
 
 ## Building

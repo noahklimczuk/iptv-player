@@ -223,7 +223,7 @@ impl AuroraCore {
     }
 
     fn drop_gemini_cache(&self) {
-        let _ = settings::set(&self.db.lock(), CACHE_KEY, &String::new());
+        forget_cached(&self.db.lock());
     }
 
     /// The rail, from the cache when it is fresh and the viewer has not changed, and
@@ -365,6 +365,13 @@ impl AuroraCore {
         self.drop_gemini_cache();
         Ok(())
     }
+}
+
+/// Drop the cached suggestions, so the next ask is answered afresh (Windows'
+/// `gemini::forget_cached`). Settings → Privacy calls this when a viewer clears their
+/// history: the cache is a reading of that history.
+pub(crate) fn forget_cached(db: &aurora_db::rusqlite::Connection) {
+    let _ = settings::set(db, CACHE_KEY, &String::new());
 }
 
 #[cfg(test)]

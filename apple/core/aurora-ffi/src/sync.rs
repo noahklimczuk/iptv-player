@@ -108,6 +108,9 @@ pub struct SyncStatus {
     pub writes_today: u64,
     /// Past this device's share of the free quota, so syncing less often until it resets.
     pub thrifty: bool,
+    /// Records from other devices this version could not read: written by a newer
+    /// Aurora, or damaged. Skipped, never applied, and fetched again after an update.
+    pub unreadable: u64,
 }
 
 impl From<Status> for SyncStatus {
@@ -126,6 +129,7 @@ impl From<Status> for SyncStatus {
             reads_today: s.usage.reads,
             writes_today: s.usage.writes,
             thrifty: s.thrifty,
+            unreadable: s.unreadable as u64,
         }
     }
 }
@@ -623,6 +627,8 @@ impl AuroraCore {
         let kind = match kind {
             VodKind::Movie => "movie",
             VodKind::Episode => "episode",
+            // This device's own files: never synced (`progress_get`).
+            VodKind::Recording => return,
         };
         self.sync.refresh_progress(enabled, profile_id, kind, id);
     }

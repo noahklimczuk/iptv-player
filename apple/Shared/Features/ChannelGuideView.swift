@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// One channel's schedule, a day at a time. What is on now plays live; what already aired
-/// replays from the provider's archive where the channel keeps one (catch-up); what is
-/// still to come is listed.
+/// One channel's schedule, a day at a time. Choosing a programme opens its details, as
+/// the guide's do: what is on now plays live, what already aired replays from the
+/// provider's archive where the channel keeps one (catch-up), and anything still to come
+/// can be recorded or remembered.
 struct ChannelGuideView: View {
     @Environment(AppModel.self) private var model
     let channel: Channel
@@ -13,6 +14,8 @@ struct ChannelGuideView: View {
     @State private var replayable: Set<Int64> = []
     @State private var loading = true
     @State private var playing: PlayerItem?
+    @State private var chosen: ChosenProgramme?
+    @State private var afterSheet: PlayerItem?
 
     private var days: [Int] { channel.hasCatchup ? Array(-7...1) : [0, 1] }
 
@@ -31,31 +34,35 @@ struct ChannelGuideView: View {
                                        description: Text("The provider's guide doesn't cover it."))
             }
         }
-        .navigationTitle(channel.name)
+        .auroraPageTitle(channel.name)
         .task(id: day) { await load() }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
+        .programmeDetail(item: $chosen, onDismiss: {
+            if let item = afterSheet { afterSheet = nil; playing = item }
+        }) { c in
+            ProgrammeDetail(channel: c.channel, programme: c.programme, replayable: c.replayable) { item in
+                afterSheet = item
+                chosen = nil
+            }
+        }
+        .task(id: model.recordingsVersion) { await model.loadDvrMarks() }
     }
 
-    @ViewBuilder
     private func row(_ p: Programme) -> some View {
         let now = Int64(Date().timeIntervalSince1970)
         let onNow = p.start <= now && now < p.stop
-        if onNow {
-            Button { playing = .channel(id: channel.id, name: channel.name) } label: {
-                ProgrammeLabel(programme: p, onNow: true, mark: Text("Live").bold())
-            }
-        } else if replayable.contains(p.id) {
-            Button {
-                playing = .catchup(channelId: channel.id, title: p.title, start: p.start, stop: p.stop)
-            } label: {
-                // `.badge` would be the list idiom, but tvOS doesn't have it.
-                ProgrammeLabel(programme: p, onNow: false, mark: Text(Image(systemName: "gobackward")))
-            }
-            .accessibilityHint("Plays from the channel's archive")
-        } else {
-            ProgrammeLabel(programme: p, onNow: false, mark: nil)
-                .foregroundStyle(p.stop <= now ? .secondary : .primary)
+        let canReplay = replayable.contains(p.id)
+        let recording = model.dvrMarks.recording(channelId: channel.id, p) != nil
+        return Button {
+            chosen = ChosenProgramme(channel: channel, programme: p, replayable: canReplay)
+        } label: {
+            // `.badge` would be the list idiom, but tvOS doesn't have it.
+            ProgrammeLabel(programme: p, onNow: onNow, recording: recording,
+                           mark: onNow ? Text("Live").bold()
+                               : canReplay ? Text(Image(systemName: "gobackward")) : nil)
+                .foregroundStyle(p.stop <= now && !canReplay ? .secondary : .primary)
         }
+        .accessibilityHint(canReplay ? "Plays from the channel's archive" : "")
     }
 
     private func load() async {
@@ -84,6 +91,8 @@ struct ChannelGuideView: View {
 private struct ProgrammeLabel: View {
     let programme: Programme
     let onNow: Bool
+    /// A recording is scheduled for it (the guide's red dot).
+    var recording = false
     /// "Live", or the replay mark, at the end of the row.
     let mark: Text?
 
@@ -93,7 +102,13 @@ private struct ProgrammeLabel: View {
                 .monospacedDigit()
                 .foregroundStyle(onNow ? .primary : .secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(programme.title).fontWeight(onNow ? .semibold : .regular)
+                HStack(spacing: 5) {
+                    if recording {
+                        Circle().fill(.red).frame(width: 7, height: 7)
+                            .accessibilityLabel("Recording scheduled")
+                    }
+                    Text(programme.title).fontWeight(onNow ? .semibold : .regular)
+                }
                 if let sub = programme.subTitle {
                     Text(sub).font(.caption).foregroundStyle(.secondary)
                 }

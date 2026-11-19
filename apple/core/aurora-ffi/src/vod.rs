@@ -168,11 +168,13 @@ pub struct Shelf {
     pub count: u32,
 }
 
-/// What can be watched with a position: a film or an episode.
+/// What can be watched with a position: a film, an episode, or a recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum VodKind {
     Movie,
     Episode,
+    /// A file the recorder wrote on this device (`dvr.rs`). Never synced.
+    Recording,
 }
 
 impl From<VodKind> for ItemKind {
@@ -180,6 +182,7 @@ impl From<VodKind> for ItemKind {
         match k {
             VodKind::Movie => ItemKind::Movie,
             VodKind::Episode => ItemKind::Episode,
+            VodKind::Recording => ItemKind::Recording,
         }
     }
 }
@@ -249,6 +252,14 @@ impl AuroraCore {
     /// As [`Self::movie_facets`], for series.
     pub fn series_facets(&self, browse: Browse) -> Result<BrowseFacets> {
         self.facets(Kind::Series, browse)
+    }
+
+    /// One film by id: what a search hit opens (Windows' `library.item`).
+    pub fn movie_detail(&self, movie_id: i64) -> Result<Movie> {
+        let db = self.db.lock();
+        library::movie(&db, movie_id)?
+            .map(Movie::from)
+            .ok_or_else(|| AuroraError::not_found("This film is no longer in your library."))
     }
 
     pub fn series_detail(&self, series_id: i64) -> Result<Series> {
@@ -389,12 +400,17 @@ impl AuroraCore {
     /// Mirrors the `What::Movie` and `What::Episode` arms of `aurora-app/src/play/resolve.rs`
     /// `resolve`, including the title shown (`shown_title`, R-76).
     fn tune_vod(&self, kind: VodKind, id: i64, start_at_secs: Option<f64>) -> Result<VodTune> {
+        if kind == VodKind::Recording {
+            return self.tune_recording(id, start_at_secs);
+        }
         let db = self.db.lock();
         crate::parental::allowed(
             &db,
             match kind {
                 VodKind::Movie => aurora_db::repo::parental::Target::Movie(id),
-                VodKind::Episode => aurora_db::repo::parental::Target::Episode(id),
+                VodKind::Episode | VodKind::Recording => {
+                    aurora_db::repo::parental::Target::Episode(id)
+                }
             },
         )?;
         let (sql, noun, media) = match kind {
@@ -405,7 +421,7 @@ impl AuroraCore {
                 "film",
                 MediaKind::Movie,
             ),
-            VodKind::Episode => (
+            VodKind::Episode | VodKind::Recording => (
                 "SELECT e.url, shown_title(e.title), e.stream_id, e.container, s.provider_id
                  FROM episodes e JOIN series s ON s.id = e.series_id
                  WHERE e.id = ?1",
@@ -596,6 +612,16 @@ mod tests {
         assert!(core.movies(browse()).unwrap().is_empty());
         assert!(core.series_list(browse()).unwrap().is_empty());
         assert!(core.movie_shelves().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_film_is_found_by_its_id_and_a_gone_one_says_so() {
+        let (core, _dir) = core();
+        films(&core, &[("Heat", "Crime", r#"["Crime"]"#)]);
+        let id = core.movies(browse()).unwrap()[0].id;
+        assert_eq!(core.movie_detail(id).unwrap().title, "Heat");
+        let e = core.movie_detail(id + 1000).unwrap_err();
+        assert!(e.to_string().contains("no longer in your library"), "{e}");
     }
 
     #[test]

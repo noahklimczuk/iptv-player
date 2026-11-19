@@ -12,6 +12,10 @@ struct GuideView: View {
     @State private var loader = GuideLoader()
     @State private var start = GuideView.windowStart(for: Date())
     @State private var playing: PlayerItem?
+    /// The programme whose details are up (Windows' info pane), and what it asked to
+    /// play: the player opens once the sheet has gone.
+    @State private var chosen: ChosenProgramme?
+    @State private var afterSheet: PlayerItem?
     /// The clock the grid draws "on now" and the now line from. Ticked, because a TV is
     /// often left on the guide, and both would otherwise stay where they were drawn.
     @State private var now = Date()
@@ -20,6 +24,9 @@ struct GuideView: View {
     @State private var filters = GuideFilterStore.read()
     /// How many channels the filters leave, all pages together.
     @State private var shown: UInt32 = 0
+    /// The first page arrived: until then an empty list means "not read yet", not "no
+    /// channels", and a big library takes a few seconds on a TV.
+    @State private var loaded = false
     @State private var filtering = false
 
     #if os(tvOS)
@@ -48,9 +55,9 @@ struct GuideView: View {
                         ForEach(channels, id: \.id) { channel in
                             GuideRowView(channel: channel, cells: loader.cells[channel.id],
                                          window: window, now: now, nameWidth: nameWidth,
-                                         height: rowHeight) { item in
+                                         height: rowHeight, marks: model.dvrMarks) { item in
                                 playing = item
-                            }
+                            } choose: { chosen = $0 }
                             .onAppear {
                                 loader.appeared(channel.id)
                                 if channel.id == channels.last?.id { Task { await loadMoreChannels() } }
@@ -61,7 +68,9 @@ struct GuideView: View {
                 }
                 .overlay {
                     if channels.isEmpty {
-                        if let progress = model.importProgress {
+                        if !loaded {
+                            ProgressView()
+                        } else if let progress = model.importProgress {
                             ProgressView("Importing: \(progress.phase.label)")
                         } else if filters.activeCount > 0 {
                             ContentUnavailableView(
@@ -74,7 +83,7 @@ struct GuideView: View {
                     }
                 }
             }
-            .navigationTitle("Guide")
+            .auroraTitle("Guide")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -89,8 +98,18 @@ struct GuideView: View {
                 }
             }
             .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
+            .programmeDetail(item: $chosen, onDismiss: {
+                if let item = afterSheet { afterSheet = nil; playing = item }
+            }) { c in
+                ProgrammeDetail(channel: c.channel, programme: c.programme, replayable: c.replayable) { item in
+                    afterSheet = item
+                    chosen = nil
+                }
+            }
+            .task(id: model.recordingsVersion) { await model.loadDvrMarks() }
             .sheet(isPresented: $filtering) {
                 GuideFiltersSheet(groups: model.groups, filters: filterBinding, shown: shown)
+                    .auroraAppearance()
             }
         }
     }
@@ -143,19 +162,74 @@ struct GuideView: View {
         let page = await model.guideChannels(filters, limit: 200)
         channels = page.channels
         shown = page.shown
+        loaded = true
     }
 
+    /// Windows' `GuideToolbar` top line: the day, then −24h −1h Now +1h +24h, then
+    /// Tonight 8pm. On a phone the buttons go under the day and scroll sideways.
     private var controls: some View {
-        HStack {
-            Button("Earlier", systemImage: "chevron.backward") { start.addTimeInterval(-3600) }
-            Button("Now") { start = Self.windowStart(for: Date()) }
-            Button("Later", systemImage: "chevron.forward") { start.addTimeInterval(3600) }
-            Spacer()
-            Text(start, format: .dateTime.weekday(.wide).day().month())
-                .foregroundStyle(.secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                dayHeading
+                Spacer(minLength: 12)
+                shiftButtons
+                primeTimeButton
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                dayHeading
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        shiftButtons
+                        primeTimeButton
+                    }
+                }
+                .scrollClipDisabled()
+            }
         }
-        .buttonStyle(.bordered)
+        #if os(tvOS)
+        .focusSection()
+        #endif
         .padding(.horizontal)
+    }
+
+    private var dayHeading: some View {
+        Text(Self.dayLabel(start))
+            .font(.title2.weight(.heavy))
+            .lineLimit(1)
+    }
+
+    private var shiftButtons: some View {
+        ActionSegments(items: [
+            .init(title: "−24h") { start.addTimeInterval(-24 * 3600) },
+            .init(title: "−1h") { start.addTimeInterval(-3600) },
+            .init(title: "Now", systemImage: "clock", active: true) { start = Self.windowStart(for: Date()) },
+            .init(title: "+1h") { start.addTimeInterval(3600) },
+            .init(title: "+24h") { start.addTimeInterval(24 * 3600) },
+        ])
+    }
+
+    /// Eight in the evening today, half an hour in, as Windows' `primeTime(0)`. Worded
+    /// as Windows words it whatever the clock setting.
+    private var primeTimeButton: some View {
+        ActionSegments(items: [
+            .init(title: "Tonight 8pm", systemImage: "moon") {
+                let eight = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
+                start = eight.addingTimeInterval(-1800)
+            },
+        ])
+    }
+
+    /// Windows' `dayLabel`: Today, Tomorrow, Yesterday, else "Wed 19 Nov".
+    static func dayLabel(_ date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now),
+                                           to: calendar.startOfDay(for: date)).day ?? 0
+        switch days {
+        case 0: return "Today"
+        case 1: return "Tomorrow"
+        case -1: return "Yesterday"
+        default: return date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+        }
     }
 
     private func loadMoreChannels() async {
@@ -278,7 +352,10 @@ private struct GuideRowView: View {
     let now: Date
     let nameWidth: CGFloat
     let height: CGFloat
+    let marks: DvrMarks
     let play: (PlayerItem) -> Void
+    /// Open a programme's details (Windows: a click selects, the info pane shows it).
+    let choose: (ChosenProgramme) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -315,15 +392,16 @@ private struct GuideRowView: View {
         let to = CGFloat(min(p.stop, window.to) - window.from)
         let nowSecs = Int64(now.timeIntervalSince1970)
         let onNow = p.start <= nowSecs && nowSecs < p.stop
+        let recording = marks.recording(channelId: channel.id, p) != nil
         return Button {
-            if onNow {
-                play(.channel(id: channel.id, name: channel.name))
-            } else if cell.replayable {
-                play(.catchup(channelId: channel.id, title: p.title, start: p.start, stop: p.stop))
-            }
+            choose(ChosenProgramme(channel: channel, programme: p, replayable: cell.replayable))
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
+                    if recording {
+                        Circle().fill(.red).frame(width: 7, height: 7)
+                            .accessibilityLabel("Recording scheduled")
+                    }
                     if cell.replayable { Image(systemName: "gobackward").font(.caption2) }
                     Text(p.title).font(.callout).lineLimit(1)
                 }
@@ -336,11 +414,9 @@ private struct GuideRowView: View {
                         in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        // Aired and not archived, or still to come: shown, but there's nothing to play.
-        .disabled(!onNow && !cell.replayable)
         .frame(width: max(width * (to - from) / span - 3, 1))
         .offset(x: width * from / span)
-        .accessibilityLabel("\(p.title), \(onNow ? "on now" : cell.replayable ? "can be replayed" : "")")
+        .accessibilityLabel("\(p.title), \(onNow ? "on now" : cell.replayable ? "can be replayed" : "")\(recording ? ", recording scheduled" : "")")
     }
 
     private func nowLine(width: CGFloat) -> some View {

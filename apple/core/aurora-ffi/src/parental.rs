@@ -245,6 +245,49 @@ impl Default for Viewing {
     }
 }
 
+/// Why showing adult categories was refused (Windows' `ADULT_NEEDS_PIN`).
+pub(crate) const ADULT_NEEDS_PIN: &str =
+    "Set a parental PIN before showing adult categories, so that only you can show them.";
+
+/// What `set_parental` does once the caller may change it (Windows' `set_parental`).
+///
+/// Adult categories show only while there is a parental PIN (README §11, F-39), so a
+/// change that would show them with none -- the switch off before a PIN exists, or the
+/// PIN cleared while it is off -- is refused with the reason. The database holds the
+/// same rule with a trigger, for sync and anything else with nobody to tell.
+///
+/// The PIN is written before the switches: a first PIN and "show adult categories" in one
+/// save is allowed, and written the other way round the trigger would hide them again.
+pub(crate) fn set_parental(
+    db: &Connection,
+    hide_adult: bool,
+    lock_settings: bool,
+    master_pin: MasterPinChange,
+    now: i64,
+) -> Result<()> {
+    let pin_after = match &master_pin {
+        MasterPinChange::Keep => profiles::parental_settings(db)?.has_master_pin,
+        MasterPinChange::Set { .. } => true,
+        MasterPinChange::Remove => false,
+    };
+    if !hide_adult && !pin_after {
+        return Err(AuroraError::other(ADULT_NEEDS_PIN));
+    }
+    match master_pin {
+        MasterPinChange::Keep => {}
+        MasterPinChange::Set { pin } => {
+            profiles::set_master_pin(db, Some(&pin), now)?;
+            // Whoever just chose the PIN knows it: the rest of this visit to the
+            // settings should not ask for it straight back.
+            parental::unlock(db, now)?;
+        }
+        MasterPinChange::Remove => profiles::set_master_pin(db, None, now)?,
+    }
+    // Without a PIN there is nothing to open Settings with, so they cannot stay locked.
+    profiles::set_parental_flags(db, hide_adult, lock_settings && pin_after, now)?;
+    Ok(())
+}
+
 #[uniffi::export]
 impl AuroraCore {
     /// Choose who is watching, checking the profile's PIN when it has one. Anything the
@@ -282,18 +325,7 @@ impl AuroraCore {
         }
         let db = self.db.lock();
         require_parent(&db)?;
-        profiles::set_parental_flags(&db, hide_adult, lock_settings, now_unix())?;
-        match master_pin {
-            MasterPinChange::Keep => {}
-            MasterPinChange::Set { pin } => {
-                profiles::set_master_pin(&db, Some(&pin), now_unix())?;
-                // Whoever just chose the PIN knows it: the rest of this visit to the
-                // settings should not ask for it straight back.
-                parental::unlock(&db, now_unix())?;
-            }
-            MasterPinChange::Remove => profiles::set_master_pin(&db, None, now_unix())?,
-        }
-        Ok(())
+        set_parental(&db, hide_adult, lock_settings, master_pin, now_unix())
     }
 
     /// Enter the parental PIN: opens locks and the parental settings for half an hour.
@@ -403,6 +435,37 @@ mod tests {
     use aurora_db::repo::profiles::NewProfile;
 
     const NOW: i64 = 1_800_000_000;
+
+    fn adult_hidden(db: &Connection) -> bool {
+        profiles::parental_settings(db).unwrap().hide_adult
+    }
+
+    #[test]
+    fn adult_categories_show_only_while_there_is_a_parental_pin() {
+        let db = aurora_db::open_memory().unwrap();
+        assert!(adult_hidden(&db), "README §11: hidden on a fresh install");
+
+        let refused = set_parental(&db, false, false, MasterPinChange::Keep, NOW).unwrap_err();
+        assert!(
+            refused.to_string().contains("Set a parental PIN"),
+            "{refused}"
+        );
+        assert!(adult_hidden(&db));
+
+        // A first PIN and the opt-in in one save.
+        let first = MasterPinChange::Set { pin: "2468".into() };
+        set_parental(&db, false, false, first, NOW).unwrap();
+        assert!(!adult_hidden(&db));
+
+        // Clearing the PIN while they show is refused too.
+        assert!(set_parental(&db, false, false, MasterPinChange::Remove, NOW).is_err());
+        assert!(profiles::parental_settings(&db).unwrap().has_master_pin);
+
+        // Clearing it along with hiding them is fine, and unlocks Settings.
+        set_parental(&db, true, true, MasterPinChange::Remove, NOW).unwrap();
+        let after = profiles::parental_settings(&db).unwrap();
+        assert!(after.hide_adult && !after.lock_settings && !after.has_master_pin);
+    }
 
     /// A kids profile with an hour a day, chosen, and a parental PIN so the limit holds.
     fn an_hour_a_day() -> Connection {

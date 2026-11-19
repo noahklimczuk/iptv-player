@@ -72,6 +72,13 @@ struct SyncSection: View {
                 Text("\(status.parked) \(status.parked == 1 ? "change refers" : "changes refer") to channels or titles this device has not imported. They apply once it has.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            // Skipped, never applied, and asked for again by the update that can read
+            // them, which is the one thing the viewer can do about it (Windows' §3.8).
+            if status.unreadable > 0 {
+                let one = status.unreadable == 1
+                Text("\(status.unreadable) \(one ? "change" : "changes") from your other devices \(one ? "needs" : "need") a newer version of Aurora. \(one ? "It is" : "They are") kept on the server and will be read once this device updates.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text("Today this device has read \(status.readsToday.formatted()) and written \(status.writesToday.formatted()) of the free plan's 50,000 reads and 20,000 writes.")
                 .font(.caption).foregroundStyle(.secondary)
             if status.thrifty {

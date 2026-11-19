@@ -26,6 +26,7 @@ pub struct Programme {
     pub rating: Option<String>,
     pub is_new: bool,
     pub is_live: bool,
+    pub is_premiere: bool,
 }
 
 impl From<epg::ProgrammeRow> for Programme {
@@ -44,6 +45,7 @@ impl From<epg::ProgrammeRow> for Programme {
             rating: p.rating,
             is_new: p.is_new,
             is_live: p.is_live,
+            is_premiere: p.is_premiere,
         }
     }
 }

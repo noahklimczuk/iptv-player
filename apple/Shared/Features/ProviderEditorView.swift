@@ -68,6 +68,8 @@ struct ProviderEditorView: View {
                                     .accessibilityLabel(revealed ? "Hide the password" : "Show the password")
                                     #if os(iOS)
                                     .buttonStyle(.borderless)
+                                    #else
+                                    .buttonStyle(.bordered)
                                     #endif
                             }
                         }
@@ -106,7 +108,7 @@ struct ProviderEditorView: View {
                 }
             }
         }
-        .navigationTitle(provider.name)
+        .auroraPageTitle(provider.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

@@ -26,7 +26,7 @@ struct AssistantView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Ask Aurora")
+                .auroraTitle("Ask Aurora")
                 .toolbar {
                     if !messages.isEmpty {
                         ToolbarItem(placement: .primaryAction) {
@@ -49,6 +49,7 @@ struct AssistantView: View {
                                    description: Text("Add a Gemini API key in Settings → Recommendations, and this becomes a conversation about your own library."))
         } else {
             VStack(spacing: 0) {
+                PageHeading("Ask Aurora")
                 thread
                 input
             }

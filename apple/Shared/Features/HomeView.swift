@@ -12,8 +12,8 @@ import SwiftUI
 /// Watching, as Windows' `AiRail`: it can take seconds where the rest is a database
 /// query, and it shows nothing at all until it has something.
 ///
-/// "On now" (`OnNowTile`) heads the page, where Windows has it beside the billboard.
-/// Not here yet, for the look-and-feel pass: the hero billboard.
+/// The page opens on Windows' bento: the featured billboard (`HeroBillboard`) beside
+/// "On now" (`OnNowTile`).
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var rails: [Rail]?
@@ -23,14 +23,20 @@ struct HomeView: View {
     @State private var ai: Rail?
     @State private var movie: Movie?
     @State private var series: Int64?
+    /// The billboard's six, kept for the visit (Windows' `decidedOnOpen`).
+    @State private var hero: [CatalogItem]?
+    #if !os(tvOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openSearch) private var openSearch
     @Environment(\.openAssistant) private var openAssistant
+    @Environment(\.openRecordings) private var openRecordings
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Home")
+                .auroraTitle("Home")
                 .toolbar {
                     if let openSearch {
                         ToolbarItem(placement: .primaryAction) {
@@ -41,6 +47,11 @@ struct HomeView: View {
                     if openSettings != nil {
                         ToolbarItem(placement: .primaryAction) {
                             Button("Ask Aurora", systemImage: "sparkles") { openAssistant(nil) }
+                        }
+                    }
+                    if let openRecordings {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Recordings", systemImage: "record.circle", action: openRecordings)
                         }
                     }
                     if let openSettings {
@@ -60,7 +71,7 @@ struct HomeView: View {
                                 version: model.aiVersion)) {
                     ai = await model.aiPicks().flatMap(Self.rail)
                 }
-                .sheet(item: $movie) { MovieDetail(movie: $0) }
+                .sheet(item: $movie) { MovieDetail(movie: $0).auroraAppearance() }
                 .navigationDestination(item: $series) { SeriesDetail(seriesId: $0) }
         }
     }
@@ -74,10 +85,9 @@ struct HomeView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: railSpacing) {
-                        OnNowTile(reload: AnyHashable(AiKey(library: model.libraryVersion,
-                                                            profile: model.profileId, version: 0)))
-                            .frame(maxWidth: onNowWidth, alignment: .leading)
-                            .padding(.horizontal, onNowInset)
+                        bento(rails)
+                            // In line with the rails' headings.
+                            .padding(.horizontal)
                         ForEach(shown, id: \.id) { rail in
                             RailRow(rail: rail, hidden: hidden, open: open,
                                     dismiss: dismissAction(for: rail),
@@ -90,6 +100,35 @@ struct HomeView: View {
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// The billboard and "On now": side by side, seven columns to five, where there is
+    /// the width (Windows' bento); one above the other on an iPhone.
+    @ViewBuilder private func bento(_ rails: [Rail]) -> some View {
+        let featured = hero ?? HeroBillboard.pick(from: rails)
+        let onNow = OnNowTile(reload: AnyHashable(AiKey(library: model.libraryVersion,
+                                                        profile: model.profileId, version: 0)))
+        if featured.isEmpty {
+            onNow.frame(maxWidth: onNowWidth, alignment: .leading)
+        } else if compact {
+            VStack(spacing: 16) {
+                HeroBillboard(items: featured, open: open)
+                onNow
+            }
+        } else {
+            BentoRow(spacing: 16) {
+                HeroBillboard(items: featured, open: open)
+                onNow
+            }
+        }
+    }
+
+    private var compact: Bool {
+        #if os(tvOS)
+        false
+        #else
+        sizeClass == .compact
+        #endif
     }
 
     /// Continue Watching first, then the Gemini rail, then the feed's order; rails
@@ -111,6 +150,9 @@ struct HomeView: View {
     private func load() async {
         let built = await model.homeRails()
         rails = built
+        // Chosen once, when the screen first has rails: adding a title to My List from
+        // the billboard rebuilds the rails, and must not swap the title being looked at.
+        if hero == nil, !built.isEmpty { hero = HeroBillboard.pick(from: built) }
         hidden = []
         // Once a visit, as Windows does: fetch what the feed reads from TMDB, and build
         // again if anything new came back.
@@ -174,11 +216,9 @@ struct HomeView: View {
     private let railSpacing: CGFloat = 48
     /// Windows gives it five of twelve columns beside the billboard.
     private let onNowWidth: CGFloat = 900
-    private let onNowInset: CGFloat = 80
     #else
     private let railSpacing: CGFloat = 24
     private let onNowWidth: CGFloat = 640
-    private let onNowInset: CGFloat = 16
     #endif
 }
 
