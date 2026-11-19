@@ -18,6 +18,7 @@ pub mod mosaic;
 pub mod parental;
 pub mod play;
 pub mod playlist;
+pub mod privacy;
 pub mod profiles;
 pub mod providers;
 pub mod recommend;

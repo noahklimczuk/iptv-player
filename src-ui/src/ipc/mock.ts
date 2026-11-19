@@ -14,7 +14,7 @@ import type {
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
   ProviderCredentials, SleepDeadline, SleepState,
-  TimeshiftSettings, TimeshiftWindow, UpdateDownload,
+  TimeshiftSettings, TimeshiftWindow, UpdateDownload, WatchHistory,
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
@@ -94,6 +94,8 @@ const liked = new Set<string>(['movie:4', 'series:2']);
 let mockGeminiKey = '';
 /** Set through `gemini.setEnabled`. On by default, as a release build is. */
 let mockGeminiEnabled = true;
+/** Settings → Privacy's window in days; null keeps history for good, as the host does. */
+let mockHistoryDays: number | null = null;
 /**
  * `?builtInKey` — model a build that was compiled with a Gemini key.
  *
@@ -418,7 +420,7 @@ const SETTINGS_GUARDED: ReadonlySet<CommandName> = new Set<CommandName>([
   'gemini.setEnabled', 'gemini.setKey', 'updates.setAutomatic',
   'timeshift.setSettings', 'timeshift.clear',
   'playlist.update', 'playlist.setHidden', 'playlist.hideMatching', 'playlist.reset',
-  'library.setFilters',
+  'library.setFilters', 'privacy.setHistoryDays', 'privacy.clearHistory',
 ]);
 function channelLocked(c: { id: number; group: string | null }): boolean {
   return mockLocks.some((l) => (l.kind === 'channel' && l.value === String(c.id))
@@ -2685,6 +2687,31 @@ const handlers: { [K in CommandName]: Handler<K> } = {
         durationSecs: p.durationSecs,
         completed: p.completed,
       })),
+
+  // Settings → Privacy. The mock keeps one history for everybody, so "this profile's"
+  // is all of it.
+  'privacy.history': (): WatchHistory => ({ days: mockHistoryDays, items: progress.size }),
+  'privacy.setHistoryDays': ({ days }) => {
+    if (days != null && (!Number.isInteger(days) || days < 1 || days > 3650)) {
+      throw new Error('History can be kept for 1 to 3650 days, or for good.');
+    }
+    mockHistoryDays = days;
+    if (days == null) return 0;
+    const cutoff = Math.floor(Date.now() / 1000) - days * 86_400;
+    let removed = 0;
+    for (const [key, p] of progress) {
+      if (p.updatedAt < cutoff) {
+        progress.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  },
+  'privacy.clearHistory': () => {
+    const removed = progress.size;
+    progress.clear();
+    return removed;
+  },
 
   /**
    * Which episode Play opens, mirroring `aurora_db::repo::progress::resume_point`.

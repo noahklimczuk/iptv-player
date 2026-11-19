@@ -359,6 +359,10 @@ fn the_fields_the_host_sends_are_the_ones_the_contract_declares() {
             v(aurora_db::repo::profiles::Profile::default()).unwrap(),
         ),
         (
+            "WatchHistory",
+            v(aurora_db::repo::progress::WatchHistory::default()).unwrap(),
+        ),
+        (
             "CreditEntry",
             v(aurora_db::repo::enrichment::CreditRow::default()).unwrap(),
         ),

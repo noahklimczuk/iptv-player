@@ -402,6 +402,86 @@ pub fn mark_watched(
     Ok(())
 }
 
+// Privacy (README §15) -----------------------------------------------------------------
+
+/// How many days of watch history to keep. Unset keeps it for good, which is the default.
+///
+/// Synced (it is a choice about the person's history, and the deletions it causes sync
+/// anyway), so the household's other devices keep to the same window.
+pub const HISTORY_DAYS_KEY: &str = "privacy.history_days";
+
+/// The longest window anybody may ask for: ten years is "forever" in all but name, and a
+/// cap keeps `days * 86_400` far from overflowing.
+pub const MAX_HISTORY_DAYS: u32 = 3650;
+
+/// What Settings → Privacy shows: the window, and how much this profile has watched.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchHistory {
+    /// `None` keeps everything.
+    pub days: Option<u32>,
+    /// Titles and channels this profile has a position or a "watched" for.
+    pub items: i64,
+}
+
+/// The retention window, or `None` to keep history for good.
+pub fn history_days(conn: &Connection) -> Result<Option<u32>> {
+    Ok(super::settings::get::<u32>(conn, HISTORY_DAYS_KEY)?
+        .filter(|d| (1..=MAX_HISTORY_DAYS).contains(d)))
+}
+
+/// Keep history for `days`, or for good with `None`.
+///
+/// Forever is the setting's absence rather than a stored zero, so a device that never
+/// touched it and one that went back to it are the same state.
+pub fn set_history_days(conn: &Connection, days: Option<u32>) -> Result<()> {
+    match days.filter(|d| (1..=MAX_HISTORY_DAYS).contains(d)) {
+        Some(d) => super::settings::set(conn, HISTORY_DAYS_KEY, &d),
+        None => super::settings::clear(conn, super::settings::GLOBAL, HISTORY_DAYS_KEY).map(|_| ()),
+    }
+}
+
+/// Forget everything older than the retention window, for every profile.
+///
+/// "Older" is by when it was last watched, not first: a film somebody is halfway through
+/// and came back to yesterday is recent, whenever they started it. Returns how many
+/// entries went.
+pub fn prune_history(conn: &Connection, now: i64) -> Result<usize> {
+    let Some(days) = history_days(conn)? else {
+        return Ok(0);
+    };
+    let cutoff = now - i64::from(days) * 86_400;
+    Ok(conn.execute(
+        "DELETE FROM watch_progress WHERE updated_at < ?1",
+        params![cutoff],
+    )?)
+}
+
+/// Forget everything one profile has watched: Continue Watching, the ticks on episodes,
+/// what recommendations are built from.
+///
+/// Deliberately not `watch_time`. That is the minutes a kids profile has used today, and
+/// clearing it would hand a child a fresh daily limit.
+pub fn clear_history(conn: &Connection, profile_id: i64) -> Result<usize> {
+    Ok(conn.execute(
+        "DELETE FROM watch_progress WHERE profile_id = ?1",
+        params![profile_id],
+    )?)
+}
+
+/// The retention window and the size of one profile's history.
+pub fn watch_history(conn: &Connection, profile_id: i64) -> Result<WatchHistory> {
+    let items: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM watch_progress WHERE profile_id = ?1",
+        params![profile_id],
+        |r| r.get(0),
+    )?;
+    Ok(WatchHistory {
+        days: history_days(conn)?,
+        items,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,5 +962,75 @@ mod tests {
         mark_watched(&conn, 1, ItemKind::Episode, 7102, true, 20).unwrap();
         mark_watched(&conn, 1, ItemKind::Episode, 7103, true, 30).unwrap();
         assert_eq!(resume_point(&conn, 1, 7).unwrap(), Some((7001, 0)));
+    }
+
+    #[test]
+    fn clearing_history_forgets_one_profile_and_keeps_the_kids_minutes() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO profiles (id, name, created_at) VALUES (2,'Kid',0)",
+            [],
+        )
+        .unwrap();
+        seeded_movies(&conn, &[1, 2]);
+        save(&conn, 1, ItemKind::Movie, 1, 600, 6000, 10).unwrap();
+        save(&conn, 1, ItemKind::Movie, 2, 600, 6000, 10).unwrap();
+        save(&conn, 2, ItemKind::Movie, 1, 600, 6000, 10).unwrap();
+        conn.execute(
+            "INSERT INTO watch_time (profile_id, day, seconds) VALUES (1, '2026-11-18', 900)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(watch_history(&conn, 1).unwrap().items, 2);
+        assert_eq!(clear_history(&conn, 1).unwrap(), 2);
+
+        assert_eq!(watch_history(&conn, 1).unwrap().items, 0);
+        assert!(continue_watching(&conn, 1, 10).unwrap().is_empty());
+        // Somebody else's history is theirs.
+        assert_eq!(watch_history(&conn, 2).unwrap().items, 1);
+        // And today's minutes are a limit, not a history.
+        let used: i64 = conn
+            .query_row(
+                "SELECT seconds FROM watch_time WHERE profile_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(used, 900);
+    }
+
+    #[test]
+    fn history_is_kept_for_good_until_a_window_is_chosen() {
+        let conn = db();
+        seeded_movies(&conn, &[1, 2, 3]);
+        let day = 86_400;
+        let now = 400 * day;
+        save(&conn, 1, ItemKind::Movie, 1, 600, 6000, now - 200 * day).unwrap();
+        save(&conn, 1, ItemKind::Movie, 2, 600, 6000, now - 40 * day).unwrap();
+        save(&conn, 1, ItemKind::Movie, 3, 600, 6000, now - day).unwrap();
+
+        // Nothing chosen: nothing goes, however old.
+        assert_eq!(history_days(&conn).unwrap(), None);
+        assert_eq!(prune_history(&conn, now).unwrap(), 0);
+
+        // Ninety days: the film from two hundred days ago goes.
+        set_history_days(&conn, Some(90)).unwrap();
+        assert_eq!(watch_history(&conn, 1).unwrap().days, Some(90));
+        assert_eq!(prune_history(&conn, now).unwrap(), 1);
+
+        // Watching it again is what makes something recent, not when it was started.
+        save(&conn, 1, ItemKind::Movie, 2, 900, 6000, now).unwrap();
+        set_history_days(&conn, Some(30)).unwrap();
+        assert_eq!(prune_history(&conn, now).unwrap(), 0);
+        assert_eq!(watch_history(&conn, 1).unwrap().items, 2);
+
+        // Back to forever is the setting's absence, and out-of-range asks mean forever.
+        set_history_days(&conn, None).unwrap();
+        assert_eq!(history_days(&conn).unwrap(), None);
+        set_history_days(&conn, Some(0)).unwrap();
+        assert_eq!(history_days(&conn).unwrap(), None);
+        set_history_days(&conn, Some(MAX_HISTORY_DAYS + 1)).unwrap();
+        assert_eq!(history_days(&conn).unwrap(), None);
     }
 }

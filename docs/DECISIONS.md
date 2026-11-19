@@ -803,3 +803,25 @@ master PIN". The switch needed neither the PIN to exist nor to be entered
   is hidden.
 - **Existing libraries are brought into line once.** A library that showed adult
   categories with no PIN hides them after the upgrade, until a PIN is set.
+
+## D33 — Watch history is kept for good unless the viewer chooses a window, and clearing it is per profile
+
+**Context.** README §15 promises "history retention, clear history" under Privacy, and
+neither existed (`AUDIT/findings.md` F-40).
+
+**Decision.**
+
+- **Forever stays the default.** Continue Watching and resume points are the history, so a
+  window nobody chose would quietly lose somebody's place in a film. The window is opt-in.
+- **"Older" means last watched, not first.** `updated_at` is what is compared, so a film
+  somebody came back to yesterday is recent, whenever they started it.
+- **The window syncs; clearing is per profile.** The history syncs, and so do the
+  deletions a window causes, so a window that differed by device would end up as the
+  shortest one anyway. Clearing is one person's choice about their own history, so other
+  profiles keep theirs.
+- **Both changes are behind the Settings lock.** A kids profile clearing what it watched
+  would defeat the reason a parent looks.
+- **`watch_time` is not history.** It is today's minutes against a kids profile's daily
+  limit (D30), and clearing it would reset that limit.
+- **Clearing drops the cached Gemini suggestions.** They are a reading of the history,
+  and keeping them would keep the history in another form.
