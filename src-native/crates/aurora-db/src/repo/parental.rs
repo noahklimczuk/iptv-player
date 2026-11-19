@@ -313,6 +313,49 @@ pub fn time_left(conn: &Connection, now: i64) -> Result<Option<i64>> {
     Ok(Some(limit - watched_today(conn, now)?))
 }
 
+/// Whether Settings are closed to whoever is at the keyboard (README §11: a Kids
+/// profile "disables settings access", and Parental controls can PIN-protect the
+/// Settings section for everybody).
+///
+/// Both were a screen in the front end and nothing more: every command behind Settings
+/// answered whoever called it, so the lock held only as long as nothing reached those
+/// commands another way, and a kids profile was not locked out at all unless the
+/// household had also ticked the switch for everybody.
+///
+/// Closed while there is a parental PIN, it has not been entered, and either the switch
+/// is on or a kids profile is watching. With nobody chosen it is closed if any profile
+/// is a kids profile, the same fail-closed reading the gate gives an age limit. Without
+/// a PIN nothing could open it again, so it never closes: the household has chosen not
+/// to guard anything.
+pub fn settings_locked(conn: &Connection, now: i64) -> Result<bool> {
+    let (pin, everybody): (bool, bool) = conn
+        .query_row(
+            "SELECT master_pin IS NOT NULL, lock_settings != 0 FROM parental WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .unwrap_or((false, false));
+    if !pin || is_unlocked(conn, now)? {
+        return Ok(false);
+    }
+    if everybody {
+        return Ok(true);
+    }
+    Ok(match active_profile(conn)? {
+        Some(id) => conn.query_row(
+            "SELECT COALESCE((SELECT is_kids != 0 FROM profiles WHERE id = ?1), 0)",
+            [id],
+            |r| r.get(0),
+        )?,
+        None => conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM profiles WHERE is_kids != 0)",
+            [],
+            |r| r.get(0),
+        )?,
+    })
+}
+
 /* ── Who is watching ─────────────────────────────────────────────────────── */
 
 /// Choose who is watching. Closes anything the PIN had opened: the next person to sit
@@ -402,6 +445,8 @@ pub struct ParentalState {
     pub time_left_secs: Option<i64>,
     /// Seconds watched today on this device by whoever is watching.
     pub watched_today_secs: i64,
+    /// Settings are closed until the parental PIN is entered (see [`settings_locked`]).
+    pub settings_locked: bool,
 }
 
 pub fn state(conn: &Connection, now: i64) -> Result<ParentalState> {
@@ -430,6 +475,7 @@ pub fn state(conn: &Connection, now: i64) -> Result<ParentalState> {
         titles,
         time_left_secs: time_left(conn, now)?,
         watched_today_secs: watched_today(conn, now)?,
+        settings_locked: settings_locked(conn, now)?,
     })
 }
 
@@ -668,6 +714,60 @@ mod tests {
             Verdict::Allowed
         );
         assert_eq!(watched_today(&conn, NOW).unwrap(), 7200);
+    }
+
+    #[test]
+    fn a_kids_profile_is_kept_out_of_settings_until_the_pin() {
+        let conn = library();
+        let grown_up = profiles::create(
+            &conn,
+            &NewProfile {
+                name: "Alex".into(),
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        let sam = kid(&conn);
+
+        select_profile(&conn, grown_up).unwrap();
+        assert!(!settings_locked(&conn, NOW).unwrap());
+
+        select_profile(&conn, sam).unwrap();
+        assert!(settings_locked(&conn, NOW).unwrap(), "README §11");
+        assert!(state(&conn, NOW).unwrap().settings_locked);
+
+        unlock(&conn, NOW).unwrap();
+        assert!(!settings_locked(&conn, NOW).unwrap());
+        assert!(settings_locked(&conn, NOW + UNLOCK_SECS + 1).unwrap());
+
+        // Nobody chosen yet: closed, because it could be the child.
+        clear_session(&conn).unwrap();
+        assert!(settings_locked(&conn, NOW).unwrap());
+    }
+
+    #[test]
+    fn the_settings_switch_locks_them_for_everybody_and_only_with_a_pin() {
+        let conn = library();
+        let grown_up = profiles::create(
+            &conn,
+            &NewProfile {
+                name: "Alex".into(),
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        select_profile(&conn, grown_up).unwrap();
+        profiles::set_parental_flags(&conn, true, true, 0).unwrap();
+        assert!(settings_locked(&conn, NOW).unwrap());
+
+        // No PIN, nothing could open them again: nothing is locked.
+        profiles::set_master_pin(&conn, None, 0).unwrap();
+        assert!(!settings_locked(&conn, NOW).unwrap());
+        let sam = kid(&conn);
+        select_profile(&conn, sam).unwrap();
+        assert!(!settings_locked(&conn, NOW).unwrap());
     }
 
     #[test]

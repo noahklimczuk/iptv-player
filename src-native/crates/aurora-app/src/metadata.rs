@@ -72,6 +72,7 @@ pub fn metadata_set_concurrency(
     services: State<'_, Services>,
     args: ConcurrencyArgs,
 ) -> Result<u32> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let wanted = args.concurrency.clamp(
         *enrich::CONCURRENCY_RANGE.start(),
         *enrich::CONCURRENCY_RANGE.end(),
@@ -105,6 +106,7 @@ pub struct SetKeyArgs {
 
 #[tauri::command(async)]
 pub fn metadata_set_key(services: State<'_, Services>, args: SetKeyArgs) -> Result<()> {
+    crate::profiles::require_settings(&services.db.lock())?;
     match args
         .key
         .map(|k| k.trim().to_string())
@@ -487,6 +489,7 @@ pub fn artwork_prefetch(
 /// Empty the cache. Always safe: the library keeps the remote URLs.
 #[tauri::command(async)]
 pub fn artwork_clear(services: State<'_, Services>) -> Result<usize> {
+    crate::profiles::require_settings(&services.db.lock())?;
     Ok(services.artwork.clear())
 }
 

@@ -441,6 +441,7 @@ pub struct SetEnabledArgs {
 /// they asked for it to stop.
 #[tauri::command(async)]
 pub fn gemini_set_enabled(services: State<'_, Services>, args: SetEnabledArgs) -> Result<()> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let db = services.db.lock();
     aurora_db::repo::settings::set(&db, ENABLED_KEY, &args.enabled)?;
     if !args.enabled {
@@ -451,6 +452,7 @@ pub fn gemini_set_enabled(services: State<'_, Services>, args: SetEnabledArgs) -
 
 #[tauri::command(async)]
 pub fn gemini_set_key(services: State<'_, Services>, args: SetKeyArgs) -> Result<()> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let key = args.key.trim();
     if key.is_empty() {
         let _ = services.credentials.delete(CREDENTIAL_KEY);

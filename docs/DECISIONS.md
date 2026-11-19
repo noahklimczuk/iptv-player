@@ -760,3 +760,25 @@ it is kept, and what lets a child keep watching.
 - **Enforced to within ten seconds.** Viewing is written down every ten seconds rather
   than on every 250 ms tick. The limit can overrun by that much, and the library is not
   written four times a second.
+
+## D31 — The host decides when Settings are locked, and refuses what is behind them
+
+**Context.** README §11 promises a Kids profile that "disables settings access" and a
+PIN-protected Settings section. Only the second existed, and only as a screen
+(`AUDIT/findings.md` F-38).
+
+**Decision.**
+
+- **One answer, in the database layer.** `settings_locked` sits beside `check` and
+  `time_left`. The page, the mock and the commands all read the same rule.
+- **A kids profile is locked out with or without the household switch.** The switch locks
+  Settings for everybody. A kids profile does not need it.
+- **Only with a PIN.** As with locks and the daily limit, nothing is closed without a
+  parental PIN, because nothing could open it again.
+- **Nobody chosen fails closed** when any profile is a kids profile, as the gate does.
+- **The commands are guarded, not the page.** The guard covers 22 commands: those that
+  change providers, keys, sync, the channel editor, the content filter, automatic updates
+  or the timeshift cache, and those that reveal the stream password or the sync recovery
+  code. Reading commands stay open, and so do refresh, validation and the metadata and
+  artwork passes. A kids profile still sees its library refresh; it cannot change where
+  the library comes from.

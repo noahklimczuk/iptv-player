@@ -340,6 +340,7 @@ pub struct CreateArgs {
 
 #[tauri::command(async)]
 pub fn sync_create_account(services: State<'_, Services>, args: CreateArgs) -> Result<Joined> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let joined = services.sync.with_conn(|household, conn| {
         let account = Account {
             email: &args.email,
@@ -369,6 +370,7 @@ pub struct SignInArgs {
 
 #[tauri::command(async)]
 pub fn sync_sign_in(services: State<'_, Services>, args: SignInArgs) -> Result<Joined> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let unlock = match (args.passphrase, args.recovery_code) {
         (_, Some(code)) if !code.trim().is_empty() => Unlock::RecoveryCode(code),
         (Some(p), _) => Unlock::Passphrase(p),
@@ -408,6 +410,7 @@ pub fn sync_now(services: State<'_, Services>) -> Result<Report> {
 /// Throw away the household's server copy and upload this PC's library in its place.
 #[tauri::command(async)]
 pub fn sync_reset(services: State<'_, Services>) -> Result<Report> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let outcome = services
         .sync
         .with_conn(|household, conn| Ok(household.reset(conn)))?;
@@ -418,6 +421,7 @@ pub fn sync_reset(services: State<'_, Services>) -> Result<Report> {
 
 #[tauri::command(async)]
 pub fn sync_sign_out(services: State<'_, Services>) -> Result<()> {
+    crate::profiles::require_settings(&services.db.lock())?;
     services
         .sync
         .with_conn(|household, conn| household.sign_out(conn).map_err(sync_error))?;
@@ -434,6 +438,7 @@ pub struct RecoveryArgs {
 /// The recovery code again, for someone who knows the passphrase. Works offline.
 #[tauri::command(async)]
 pub fn sync_recovery_code(services: State<'_, Services>, args: RecoveryArgs) -> Result<String> {
+    crate::profiles::require_settings(&services.db.lock())?;
     // The reader: this only reads `sync_state`, and Argon2 takes a second -- no reason to
     // make a round wait for it, or it for a round.
     let household = services.sync.household()?;

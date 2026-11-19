@@ -21,8 +21,9 @@ import { useProfile } from '@/state/profile';
 import { useUi } from '@/state/ui';
 
 /**
- * Settings, behind the parental PIN when the household asked for that (README §11:
- * "a PIN-protected Settings section").
+ * Settings, behind the parental PIN when the household asked for that or a kids profile
+ * is watching (README §11: "a PIN-protected Settings section", and a Kids profile
+ * "disables settings access").
  *
  * Leaving closes what the PIN opened, so the next person to come here is asked again
  * rather than inheriting the parent's half hour.
@@ -40,8 +41,12 @@ export function SettingsPage({ onAddProvider }: { onAddProvider: () => void }) {
     if (guarded) invoke('parental.relock').catch(() => {});
   }, [guarded]);
 
-  const open = state?.unlockedUntil != null && state.unlockedUntil > Date.now() / 1000;
-  if (parental?.lockSettings && guarded && !open) {
+  // The host's answer (`settingsLocked`): a kids profile is kept out as well as everybody
+  // when the household locked Settings, and the host refuses the commands behind this
+  // page while it holds, so this screen is a courtesy rather than the lock. Until the
+  // state arrives, the household switch is the best guess, and the closed one.
+  const locked = state ? state.settingsLocked : Boolean(parental?.lockSettings && guarded);
+  if (locked) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', padding: 'var(--sp-7) var(--sp-5)' }}>
         <div className="dl-panel settings-card" style={{ maxWidth: 520, textAlign: 'center' }}>
