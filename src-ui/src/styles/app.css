@@ -140,6 +140,19 @@ body {
   animation: aurora-page-in var(--t-base) var(--ease-out) backwards;
   isolation: isolate;
 }
+/* Room for the floating tab bar at the end of a page taller than the window.
+
+   `main` keeps that room as bottom padding, but this wrapper is `height: 100%` (App.tsx
+   says why), so a page longer than the window overflows it -- and padding goes after the
+   wrapper's box, not after what overflows it. Home's last rail ended 60px under the tab
+   bar with nothing below it to scroll to. A spacer in flow after the page goes after
+   whatever height the page reached. For a page that fills the wrapper exactly it ends
+   where `main`'s padding does, so it adds nothing there. */
+.aurora-page::after {
+  content: '';
+  display: block;
+  height: var(--navpill-space);
+}
 
 /* The boot screen's indeterminate bar. A sweep rather than a fill: there is no
    percentage to be honest about, and this reads as "working" without claiming progress
