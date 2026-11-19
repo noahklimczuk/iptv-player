@@ -6,7 +6,7 @@ use aurora_app::play::player::Player;
 use aurora_app::play::sleep::{SleepAction, SleepDeadline};
 use aurora_app::{
     assistant, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, parental,
-    playlist, profiles, providers, recommend,
+    playlist, privacy, profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
     sync, updates, window,
@@ -539,6 +539,9 @@ fn main() {
                         supervised("playlist refresh", || {
                             if let Some(services) = refresh_handle.try_state::<Services>() {
                                 providers::refresh_stale(&refresh_handle, &services, now_unix());
+                                // Settings → Privacy's window, kept by a device left on
+                                // for weeks as well as by one restarted every evening.
+                                privacy::prune(&services, now_unix());
                             }
                         });
                         std::thread::sleep(REFRESH_SWEEP_INTERVAL);
@@ -726,6 +729,9 @@ fn main() {
             library::favorites_delete_list,
             library::progress_get,
             library::progress_forget,
+            privacy::privacy_history,
+            privacy::privacy_set_history_days,
+            privacy::privacy_clear_history,
             library::progress_for_series,
             library::progress_resume_point,
             library::progress_set_watched,

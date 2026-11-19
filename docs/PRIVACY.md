@@ -129,10 +129,30 @@ Downloads are verified against the SHA-256 GitHub publishes before anything is s
 
 ## What there is none of
 
-No analytics. No crash reporting. No usage counting. No account, no sign-in, no server
-belonging to this project — there is no such server. The only machine that knows what you
+No analytics. No crash reporting. No usage counting. No account or sign-in unless you
+turn on sync, and then only an encrypted one (above). The only machine that knows what you
 watch is yours, with the exception above, which is written in full because it is the
 exception.
+
+## Your watch history
+
+What you have watched is kept in the library so that Continue Watching, the ticks on
+episodes and recommendations work. In **Settings → Privacy** you can clear it for the
+profile you are on, and choose how long it is kept: forever (the default), a year, 90
+days or 30 days. Anything not watched within the window is forgotten.
+
+Clearing doesn't reset a kids profile's daily viewing limit. Both controls need the
+parental PIN when Settings are locked, so a kids profile can't clear its own history.
+
+## Sync between your devices
+
+If you turn on sync, your providers and their sign-ins, profiles, parental settings,
+favourites, lists, watch progress, recording rules, reminders and settings go to Google
+Firebase so that your other devices can fetch them. They are **encrypted on your device first**,
+with a key only your devices hold, unlocked by your sync passphrase. Firebase stores
+ciphertext and can't tell a film's progress from a favourite. Clearing your history or
+choosing a window removes those entries on your other devices too. Sync is off until you
+set it up in **Settings → Sync**.
 
 ## Where your data lives
 

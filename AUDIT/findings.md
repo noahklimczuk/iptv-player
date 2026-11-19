@@ -52,6 +52,7 @@ commit and the test that would catch a regression.
 | F-37 | High | parental | A profile's daily viewing limit was stored and never counted, refused or set | Fixed |
 | F-38 | High | parental | Settings were locked by a screen only: a kids profile got in, and every command behind them answered anybody | Fixed |
 | F-39 | Medium | parental | Adult categories could be shown with no parental PIN, and clearing the PIN left them showing | Fixed |
+| F-40 | Medium | privacy | Watch history could not be cleared or limited: it was kept for good, fed recommendations and synced | Fixed |
 
 ---
 
@@ -1354,3 +1355,44 @@ to reveal". The default held. The PIN did not:
   with a PIN.
 - `tests-e2e/parental.spec.ts`: the switch is locked without a PIN and the command
   refuses, a PIN makes showing them a choice, and removing the PIN hides them again.
+
+## F-40 — Medium — Watch history could not be cleared or limited
+
+**Found by** reading README §15 against Settings. Its Privacy section promises "history
+retention, clear history". Settings had no Privacy section, and the host had neither
+command:
+
+- The only way to forget anything watched was one card at a time off Continue Watching.
+  Episode ticks, finished films and channels had no way out at all.
+- History was kept for good. It fed "Because you watched", the Gemini rail (which sends
+  titles to Google, `docs/PRIVACY.md`), and synced to every device in the household.
+- `docs/PRIVACY.md` didn't mention sync, so it didn't say where a synced history goes.
+
+**Fix** (`docs/DECISIONS.md` D33):
+
+- `aurora_db::repo::progress` gains `clear_history`, `prune_history`,
+  `set_history_days` and `watch_history`, with the window stored as the synced setting
+  `privacy.history_days`. Unset keeps history for good, which stays the default.
+- New commands `privacy.history`, `privacy.setHistoryDays` and `privacy.clearHistory`.
+  The two that change anything are behind the Settings lock (D31), so a kids profile
+  can't clear what it watched.
+- Choosing a window applies it at once. The refresh sweep applies it again two minutes
+  after launch and every half hour, so a PC left on keeps to it too.
+- Clearing also drops the cached Gemini suggestions, which are a reading of that
+  history.
+- Clearing doesn't touch `watch_time`, the minutes a kids profile has used today.
+  Clearing that would reset a child's daily limit (D30).
+- Settings → Privacy: "Keep watch history" (Forever, 1 year, 90 days, 30 days), "Clear
+  watch history" with a count and a second press to confirm, and a line saying no usage
+  data is sent.
+- `docs/PRIVACY.md` now has a section on watch history and one on sync.
+
+**Regression tests.**
+- `repo::progress`: `clearing_history_forgets_one_profile_and_keeps_the_kids_minutes`
+  and `history_is_kept_for_good_until_a_window_is_chosen`.
+- `aurora-app` `privacy`: `choosing_a_window_applies_it_at_once_and_refuses_nonsense`.
+- `aurora-contract`: `WatchHistory` is in the field check, and `privacy.history_days`
+  is classified for sync.
+- `tests-e2e/privacy.spec.ts`: clearing empties Continue Watching after a second press,
+  the window defaults to Forever and keeps what is chosen, and the panel says no usage
+  data is sent.
