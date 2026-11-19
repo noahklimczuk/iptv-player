@@ -139,8 +139,11 @@ struct GuideFiltersSheet: View {
                 }
                 .disabled(filters.groups.isEmpty)
             }
+            // Each its own focus on tvOS, not one block for the row (see ProviderRow).
             #if os(iOS)
             .buttonStyle(.borderless)
+            #else
+            .buttonStyle(.bordered)
             #endif
             if matching.isEmpty {
                 Text("No group matches “\(query)”.").foregroundStyle(.secondary)

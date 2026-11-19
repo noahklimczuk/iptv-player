@@ -1179,3 +1179,84 @@ fn the_recordings_screen_says_what_windows_says() {
         "weekday names changed"
     );
 }
+
+/// Adult categories show only with a parental PIN (F-39): the refusal is Windows' word for
+/// word, and the panel says what Windows' panel says while the switch cannot be turned off.
+#[test]
+fn adult_categories_need_the_pin_as_on_windows() {
+    let theirs = app_const("profiles.rs", "ADULT_NEEDS_PIN");
+    assert!(
+        theirs.contains(crate::parental::ADULT_NEEDS_PIN),
+        "aurora-app's ADULT_NEEDS_PIN is now {theirs}"
+    );
+    let panel = ui_src("features/settings/ParentalPanel.tsx");
+    let swift = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Shared/Features/ParentalControlsView.swift"),
+    )
+    .unwrap();
+    let hint = "For every profile. Set a parental PIN first to show them: only the PIN can show adult categories.";
+    assert!(
+        panel.contains(hint),
+        "ParentalPanel no longer says {hint:?}"
+    );
+    assert!(
+        swift.contains(hint),
+        "ParentalControlsView must say {hint:?}"
+    );
+}
+
+/// Settings → Privacy (F-40) offers Windows' windows and says what Windows' panel says,
+/// and the core refuses the same nonsense in the same words.
+#[test]
+fn privacy_says_and_keeps_what_windows_does() {
+    let panel = ui_src("features/settings/PrivacyPanel.tsx");
+    let swift = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features/PrivacySection.swift"),
+    )
+    .unwrap();
+    for (days, label) in [
+        ("null", "Forever"),
+        ("365", "1 year"),
+        ("90", "90 days"),
+        ("30", "30 days"),
+    ] {
+        let theirs = format!("{{ days: {days}, label: '{label}' }}");
+        assert!(
+            panel.contains(&theirs),
+            "PrivacyPanel no longer offers {theirs}"
+        );
+        let ours = format!(
+            "({}, \"{label}\")",
+            if days == "null" { "nil" } else { days }
+        );
+        assert!(swift.contains(&ours), "PrivacySection must offer {ours}");
+    }
+    for sentence in [
+        "Keep watch history",
+        "Anything not watched for longer than this is forgotten, on every device you sync with.",
+        "Clear watch history",
+        " Continue Watching, episode ticks and recommendations start again from nothing. Other profiles keep theirs.",
+        "Yes, clear it",
+        "Clear history",
+        "Usage data",
+        "None sent",
+        "Aurora sends none: there is no analytics or crash reporting to switch on.",
+        "Watch history is kept for good.",
+        "older than that.",
+        "There was nothing to forget.",
+    ] {
+        assert!(panel.contains(sentence), "PrivacyPanel no longer says {sentence:?}");
+        assert!(swift.contains(sentence), "PrivacySection must say {sentence:?}");
+    }
+    let theirs = app_src("privacy.rs");
+    let refusal = "History can be kept for 1 to {MAX_HISTORY_DAYS} days, or for good.";
+    assert!(
+        theirs.contains(refusal),
+        "aurora-app no longer says {refusal:?}"
+    );
+    let ours =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/privacy.rs"))
+            .unwrap();
+    assert!(ours.contains(refusal));
+}

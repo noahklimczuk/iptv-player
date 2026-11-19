@@ -17,10 +17,14 @@ struct ParentalControlsView: View {
                 MasterPinSection(settings: settings, busy: $busy, run: run)
                 Section {
                     toggle("Hide adult categories",
-                           hint: "For every profile. Categories named adult, XXX or 18+ are left out of every list and refused if played. A profile with an age limit always hides them.",
+                           hint: settings.hasMasterPin || !settings.hideAdult
+                               ? "For every profile. Categories named adult, XXX or 18+ are left out of every list and refused if played. A profile with an age limit always hides them."
+                               : "For every profile. Set a parental PIN first to show them: only the PIN can show adult categories.",
                            isOn: settings.hideAdult) { on in
                         run { try $0.setParental(hideAdult: on, lockSettings: settings.lockSettings, masterPin: .keep) }
                     }
+                    // Showing them needs the PIN (README §11, F-39); hiding them never does.
+                    .disabled(settings.hideAdult && !settings.hasMasterPin)
                     toggle("Ask for the PIN to open Settings",
                            hint: settings.hasMasterPin
                                ? "Settings stays closed until the parental PIN is entered."
@@ -169,7 +173,8 @@ private struct MasterPinSection: View {
         let settings = settings
         run {
             try $0.setParental(
-                hideAdult: settings.hideAdult,
+                // Clearing the PIN hides adult categories again: only the PIN can show them.
+                hideAdult: change == .remove ? true : settings.hideAdult,
                 // Without a PIN nothing could open a locked Settings again.
                 lockSettings: change == .remove ? false : settings.lockSettings,
                 masterPin: change)

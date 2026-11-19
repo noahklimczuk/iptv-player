@@ -923,6 +923,17 @@ final class AppModel {
     /// parental PIN (a lock, the day's time, Settings or a guarded change), ask for the
     /// PIN and try again, as Windows' `invoke` does; cancelling the dialog throws the
     /// refusal. Every other failure is thrown as it came.
+    /// Keep watch history to the window Settings → Privacy chose: two minutes after
+    /// launch and every half hour after, as Windows' refresh sweep does.
+    func runPrivacySweep() async {
+        guard let core else { return }
+        try? await Task.sleep(for: .seconds(120))
+        while !Task.isCancelled {
+            await Task.detached { core.privacyPrune() }.value
+            try? await Task.sleep(for: .seconds(30 * 60))
+        }
+    }
+
     func guarded<T: Sendable>(_ body: @escaping @Sendable (AuroraCore) throws -> T) async throws -> T {
         guard let core else { throw CancellationError() }
         while true {

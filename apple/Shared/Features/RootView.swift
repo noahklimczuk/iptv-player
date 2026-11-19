@@ -53,6 +53,7 @@ struct RootView: View {
         // The recordings scheduler keeps its own time while Aurora runs, as Windows'
         // does while its window is open.
         .task { model.startRecorder() }
+        .task { await model.runPrivacySweep() }
         // Sync while the app is in front; a new phase cancels the loop and, if active
         // again, starts it afresh.
         .task(id: scenePhase) {

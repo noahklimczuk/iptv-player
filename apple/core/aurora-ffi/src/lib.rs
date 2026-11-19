@@ -43,6 +43,7 @@ mod playlist;
 // The copy keeps Windows' whole `Frames` and `What`; not every part is used here.
 #[allow(dead_code)]
 mod preview;
+mod privacy;
 mod profiles;
 mod provider_edit;
 mod providers;
@@ -87,6 +88,7 @@ pub use player::{
     AspectChoice, ChapterMark, MarkerKind, MarkerSource, PictureAspect, PlaybackAids, PlayerMenus,
     SeriesPrefs, SkipMarker,
 };
+pub use privacy::WatchHistory;
 pub use profiles::{PinChange, PinOutcome, Profile};
 pub use provider_edit::{DetectedSource, ProviderCheck, ProviderDraft, ProviderSettings};
 pub use providers::{ImportContent, ImportListener, ImportPhase, ImportReport, Provider};

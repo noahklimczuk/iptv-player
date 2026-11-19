@@ -68,6 +68,8 @@ struct ProviderEditorView: View {
                                     .accessibilityLabel(revealed ? "Hide the password" : "Show the password")
                                     #if os(iOS)
                                     .buttonStyle(.borderless)
+                                    #else
+                                    .buttonStyle(.bordered)
                                     #endif
                             }
                         }

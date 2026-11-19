@@ -91,6 +91,7 @@ struct SettingsView: View {
                 TimeshiftSection()
                 MetadataSection()
                 RecommendationsSection()
+                PrivacySection()
                 if let progress = model.importProgress {
                     Section("Importing") {
                         Text(progress.phase.label)
@@ -129,9 +130,13 @@ private struct ProviderRow: View {
                 // (Windows' Edit opens the same editor).
                 Button("Edit", systemImage: "pencil") { editing = true }
             }
+            // Two buttons in one row: each takes its own taps (on tvOS, its own focus),
+            // not the whole row's. With the default style tvOS focuses the row as one
+            // white block that hides the provider's name.
             #if os(iOS)
-            // Two buttons in one row: each takes its own taps, not the whole row's.
             .buttonStyle(.borderless)
+            #else
+            .buttonStyle(.bordered)
             #endif
             .disabled(model.importProgress != nil)
         }
