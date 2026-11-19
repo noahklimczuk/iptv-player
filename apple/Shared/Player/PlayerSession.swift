@@ -89,6 +89,12 @@ final class PlayerSession {
     /// The timer ran out: the screen closes.
     private(set) var sleptAt: Date?
 
+    // MARK: Daily limit (F-37)
+
+    /// Today's viewing time ran out: playback has stopped and the screen closes.
+    private(set) var timeUpAt: Date?
+    private var lastViewingSample: TimeInterval = 0
+
     weak var controller: MPVPlayerController?
     let core: AuroraCore
     private let profileId: Int64
@@ -140,6 +146,9 @@ final class PlayerSession {
     func stop() {
         ticker?.invalidate()
         ticker = nil
+        // Nothing is playing from here: the clock stops counting.
+        let core = core
+        Task.detached { _ = core.viewingSample(watching: false) }
     }
 
     private func tick() {
@@ -159,6 +168,7 @@ final class PlayerSession {
             previewTick(now)
         }
         #endif
+        viewingTick()
         sleep = core.sleepState()
         if core.sleepDue() {
             controller?.stop()
@@ -167,6 +177,36 @@ final class PlayerSession {
         if let deadline = upNextDeadline, Date() >= deadline {
             upNextDeadline = nil
             playNext()
+        }
+    }
+
+    /// The daily limit's clock, sampled once a second as Windows' heartbeat does: playing
+    /// or buffering counts, paused or failed does not. The core keeps the time and says
+    /// when it is nearly or wholly used up.
+    private func viewingTick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastViewingSample >= 1, timeUpAt == nil else { return }
+        lastViewingSample = now
+        let watching: Bool = switch status {
+        case .playing?, .noPicture?: !state.paused
+        case .opening?: true
+        case .failed?, nil: false
+        }
+        // Off the main actor: writing the time down takes the library, which an import
+        // may be holding.
+        let core = core
+        Task {
+            let event = await Task.detached { core.viewingSample(watching: watching) }.value
+            switch event {
+            case .timeUp:
+                guard timeUpAt == nil else { return }
+                controller?.stop()
+                timeUpAt = Date()
+            case .warning(let secsLeft):
+                say("\(max(1, Int((Double(secsLeft) / 60).rounded()))) minutes of viewing left today")
+            case nil:
+                break
+            }
         }
     }
 

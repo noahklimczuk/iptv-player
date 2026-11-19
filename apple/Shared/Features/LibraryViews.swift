@@ -25,6 +25,9 @@ struct MoviesView: View {
                 } else if movies.isEmpty && filters.narrowed {
                     ContentUnavailableView("No films match", systemImage: "line.3.horizontal.decrease",
                                            description: Text("Try another letter, genre or shelf."))
+                } else if movies.isEmpty, let why = model.unratedHiddenReason {
+                    ContentUnavailableView("Nothing rated for this profile yet", systemImage: "lock",
+                                           description: Text(why))
                 } else if movies.isEmpty {
                     ContentUnavailableView("No films", systemImage: "film",
                                            description: Text("Import films from a provider in Live TV → Add provider."))
@@ -124,6 +127,9 @@ struct SeriesView: View {
                 } else if series.isEmpty && filters.narrowed {
                     ContentUnavailableView("No series match", systemImage: "line.3.horizontal.decrease",
                                            description: Text("Try another letter, genre or shelf."))
+                } else if series.isEmpty, let why = model.unratedHiddenReason {
+                    ContentUnavailableView("Nothing rated for this profile yet", systemImage: "lock",
+                                           description: Text(why))
                 } else if series.isEmpty {
                     ContentUnavailableView("No series", systemImage: "rectangle.stack",
                                            description: Text("Import series from a provider in Live TV → Add provider."))

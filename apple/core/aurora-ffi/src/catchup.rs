@@ -70,6 +70,7 @@ impl AuroraCore {
     pub fn tune_catchup(&self, channel_id: i64, start: i64, stop: i64) -> Result<CatchupTune> {
         let now = now_unix();
         let db = self.db.lock();
+        crate::parental::allowed(&db, aurora_db::repo::parental::Target::Channel(channel_id))?;
 
         // The channel's best source, as Windows' `What::Catchup` picks it.
         let (name, mode, source, days, stream) = db

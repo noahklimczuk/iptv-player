@@ -15,11 +15,67 @@ struct SettingsView: View {
                     LabeledContent("Watching as", value: model.activeProfile?.name ?? "")
                     Button("Profiles", systemImage: "person.2") { model.picking = true }
                 }
+                if locked {
+                    // The core's answer (`settingsLocked`): a kids profile is kept out as
+                    // well as everybody when the household locked Settings, and the core
+                    // refuses what is behind them while it holds, so this is a courtesy
+                    // rather than the lock. "Who's watching?" stays above it.
+                    Section {
+                        VStack(spacing: 12) {
+                            Image(systemName: "lock.fill").font(.largeTitle)
+                            Text("Settings are locked").font(.title2.bold())
+                            Text("Enter the parental PIN to change them.").foregroundStyle(.secondary)
+                            Button("Enter the PIN", systemImage: "lock.open") {
+                                Task { _ = await model.askParentalPin(.pinRequired) }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical)
+                    }
+                } else {
+                    unlocked
+                }
+            }
+            .navigationTitle("Settings")
+            .toolbar {
+                if closable {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
+            }
+            .sheet(isPresented: $adding) {
+                SetupWizard(additional: true, onFinished: { adding = false }, onSkip: { adding = false })
+                    .parentalPinHost()
+            }
+        }
+        .parentalPinHost()
+        .task { await model.loadParental() }
+        // Leaving closes what the PIN opened, so the next person here is asked again
+        // rather than inheriting the parent's half hour (Windows' `SettingsPage`).
+        .onDisappear { Task { await model.parentalRelock() } }
+    }
+
+    /// Until the gate has answered, the household switch is the best guess, and the
+    /// closed one.
+    private var locked: Bool {
+        if let state = model.parental { return state.settingsLocked }
+        return model.parentalSettings.map { $0.lockSettings && $0.hasMasterPin } ?? false
+    }
+
+    @ViewBuilder private var unlocked: some View {
                 Section("Providers") {
                     ForEach(model.providers, id: \.id) { provider in
                         ProviderRow(provider: provider)
                     }
                     Button("Add a provider", systemImage: "plus") { adding = true }
+                }
+                Section {
+                    NavigationLink {
+                        ParentalControlsView()
+                    } label: {
+                        Label("Parental controls", systemImage: "lock")
+                    }
+                } footer: {
+                    Text("What each profile may watch, and what needs the PIN.")
                 }
                 LibraryFiltersSection()
                 Section {
@@ -45,15 +101,6 @@ struct SettingsView: View {
                 }
                 DiagnosticsSection()
                 AboutSection()
-            }
-            .navigationTitle("Settings")
-            .toolbar {
-                if closable {
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                }
-            }
-            .sheet(isPresented: $adding) { SetupWizard(additional: true, onFinished: { adding = false }, onSkip: { adding = false }) }
-        }
     }
 }
 
@@ -263,7 +310,7 @@ private struct TimeshiftSection: View {
 
     private func empty() {
         guard let core = model.core else { return }
-        let freed = core.emptyTimeshift()
+        let freed = (try? core.emptyTimeshift()) ?? 0
         message = freed > 0 ? "Freed \(bytes(freed))." : "Nothing to empty."
         settings = try? core.timeshiftSettings()
     }

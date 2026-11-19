@@ -120,14 +120,30 @@ screens. The app can:
   `AURORA_FIREBASE_PROJECT_ID` in the environment when the core is built
   (`scripts/build-core.sh`); without them Settings says the build has no sync.
 
+- parental controls, as Windows applies them since F-36 to F-38. The shared database's
+  gate (`aurora_db::repo::parental`) already hides from every list what the profile
+  watching may not see; the core (`parental.rs`, mirrored from `aurora-app` and checked by
+  `mirrors.rs`) does the host's part. "Who's watching?" chooses through the core, which
+  checks the profile's PIN and forgets the choice at every launch (until then the
+  strictest profile applies). Playing something over the profile's age limit or in an
+  adult category is refused; a locked channel or category, or a day's viewing time used
+  up, asks for the parental PIN over the player and then plays. With a parental PIN set,
+  adding or deleting profiles, changing someone else's PIN, limits and locks need it, and
+  a kids profile (or everybody, if the household chose) is kept out of Settings: the
+  page says so, and the 19 core calls behind it refuse until the PIN is entered. The
+  daily limit is counted by the player once a second, warns five minutes before, and
+  closes the player when it runs out. Settings → Parental controls sets the PIN, hides
+  adult categories, locks Settings, hides locked content, each profile's age and daily
+  limit, and what is locked; Live TV draws a padlock on locked channels, and an empty
+  Films or Series page says when it is the age limit holding back unrated titles.
+
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Films, Series), and
 Search and Settings open from Home's toolbar, as in Apple's TV app. A sixth tab would go
 under "More", whose navigation bar stacks on the tab's own and doubles every back
 button. iPad and Apple TV keep both as tabs.
 
-Not yet: profile age and daily limits (being fixed on Windows first; the Apple app will
-follow the same rule), recordings, and syncing provider passwords (each device keeps its
-own, as on Windows today).
+Not yet: recordings, and syncing provider passwords (each device keeps its own, as on
+Windows today).
 
 The app targets **iOS 26 and tvOS 26 only**.
 

@@ -82,6 +82,16 @@ private struct PlayerContent: View {
         .onChange(of: controller != nil) { playIfReady() }
         .onChange(of: resolved?.item) { playIfReady() }
         .onChange(of: session.sleptAt) { if session.sleptAt != nil { dismiss() } }
+        // The day's viewing time ran out (F-37): the player has stopped; close and say so.
+        .onChange(of: session.timeUpAt) {
+            if session.timeUpAt != nil {
+                dismiss()
+                model.viewingTimeUp()
+            }
+        }
+        // A locked channel or the day's time asks for the parental PIN here, over the
+        // player (`ParentalPinHost`).
+        .parentalPinHost()
         .onAppear {
             session.start()
             focus = .playPause
@@ -164,6 +174,15 @@ private struct PlayerContent: View {
             }.value
             guard item == session.item else { return }
             resolved = (item, tune)
+        } catch where error.wantsParentalPin {
+            // Locked, or the day's time is used up: the parental PIN opens it, and then it
+            // plays, as Windows' `invoke` retries. Cancelled, the player says why.
+            guard item == session.item, let refusal = error.refusal else { return }
+            if await model.askParentalPin(refusal), item == session.item {
+                await resolve(item)
+            } else if item == session.item {
+                session.status = .failed(error.viewerMessage)
+            }
         } catch {
             // A channel zapped past while it was still resolving isn't the one failing.
             guard item == session.item else { return }

@@ -35,6 +35,7 @@ mod metadata;
 #[cfg(test)]
 mod mirrors;
 mod mylist;
+mod parental;
 mod playback;
 mod player;
 mod playlist;
@@ -64,7 +65,7 @@ use parking_lot::Mutex;
 pub use assistant::{AssistantListener, AssistantStatus, ChatItem, ChatMessage, SendResult};
 pub use catchup::CatchupTune;
 pub use diagnostics::{AboutCore, Diagnostics};
-pub use error::{AuroraError, Result};
+pub use error::{AuroraError, Refusal, Result};
 pub use filters::{FilterCounts, LibraryFilters, LibraryKind};
 pub use gemini::{AiPicks, GeminiStatus};
 pub use guide::{GuideCell, GuideRow, NowNext, Programme};
@@ -73,6 +74,9 @@ pub use library::{Channel, ChannelGroup, FavoriteList};
 pub use log::LogSink;
 pub use metadata::{Coverage, Credit, MetadataListener, MetadataReport, MetadataStatus};
 pub use mylist::{ItemMarks, ListKind, MyList};
+pub use parental::{
+    ClockEvent, MasterPinChange, ParentalLock, ParentalLockKind, ParentalSettings, ParentalState,
+};
 pub use playback::{LiveTune, MpvOption, PlayableSource};
 pub use player::{
     AspectChoice, ChapterMark, MarkerKind, MarkerSource, PictureAspect, PlaybackAids, PlayerMenus,
@@ -121,6 +125,8 @@ pub struct AuroraCore {
     replaced: Option<PathBuf>,
     /// Household sync, on a connection of its own (`sync.rs`).
     sync: Arc<sync::SyncHost>,
+    /// The daily limit's clock (`parental.rs`).
+    viewing: Mutex<parental::Viewing>,
 }
 
 #[uniffi::export]
@@ -167,6 +173,12 @@ impl AuroraCore {
             aurora_db::Opened::Intact => None,
             aurora_db::Opened::Replaced { corrupt_copy } => Some(corrupt_copy),
         };
+        // Nobody has said who is watching yet, and nothing the parental PIN opened last
+        // time is still open: until the picker answers, the strictest profile's limits
+        // apply. A failure is logged, not fatal, as on Windows (`Services::start`).
+        if let Err(e) = aurora_db::repo::parental::clear_session(&db) {
+            tracing::warn!("could not reset who is watching: {e}");
+        }
         let http = Arc::new(HttpClient::new(HttpConfig::default())?);
         let credentials: Arc<dyn CredentialStore> = Arc::new(secrets::Bridged(secrets));
         let sync = Arc::new(sync_host(
@@ -185,6 +197,7 @@ impl AuroraCore {
             buffer_dir: Mutex::new(None),
             replaced,
             sync,
+            viewing: Mutex::new(parental::Viewing::default()),
         }))
     }
 }

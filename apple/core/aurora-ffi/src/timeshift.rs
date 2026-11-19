@@ -251,6 +251,8 @@ impl AuroraCore {
 
     /// Store a change, clamped into the documented range, and return what was stored.
     pub fn set_timeshift(&self, change: TimeshiftChange) -> Result<TimeshiftSettings> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         {
             let db = self.db.lock();
             if let Some(on) = change.enabled {
@@ -270,12 +272,14 @@ impl AuroraCore {
     }
 
     /// Delete the leftovers; the bytes freed.
-    pub fn empty_timeshift(&self) -> u64 {
-        leftovers(&self.buffer_folder())
+    pub fn empty_timeshift(&self) -> Result<u64> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
+        Ok(leftovers(&self.buffer_folder())
             .into_iter()
             .filter(|(p, _)| fs::remove_file(p).is_ok())
             .map(|(_, n)| n)
-            .sum()
+            .sum())
     }
 }
 
@@ -342,7 +346,7 @@ mod tests {
         fs::write(buffers.join("old"), vec![0u8; 1000]).unwrap();
         core.use_buffer_folder(buffers.display().to_string());
         assert_eq!(core.timeshift_settings().unwrap().reclaimable_bytes, 1000);
-        assert_eq!(core.empty_timeshift(), 1000);
+        assert_eq!(core.empty_timeshift().unwrap(), 1000);
         assert_eq!(core.timeshift_settings().unwrap().reclaimable_bytes, 0);
     }
 

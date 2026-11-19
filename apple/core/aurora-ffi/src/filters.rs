@@ -98,6 +98,8 @@ impl AuroraCore {
     /// Save the switches and return them as saved. Every list reads them, so the app
     /// reloads what it shows afterwards.
     pub fn set_library_filters(&self, filters: LibraryFilters) -> Result<LibraryFilters> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let db = self.db.lock();
         LibraryFilter::from(filters).save(&db)?;
         Ok(LibraryFilter::load(&db)?.into())

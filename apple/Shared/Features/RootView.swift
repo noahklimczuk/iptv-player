@@ -43,8 +43,11 @@ struct RootView: View {
                     .id(model.profileId)
             }
         }
+        // The parental PIN dialog, wherever the core asks for it (`ParentalPinHost`).
+        .parentalPinHost()
         .task { await model.loadProfiles() }
         .task { await model.reload() }
+        .task { await model.loadParental() }
         // Sync while the app is in front; a new phase cancels the loop and, if active
         // again, starts it afresh.
         .task(id: scenePhase) {

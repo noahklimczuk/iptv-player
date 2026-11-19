@@ -25,9 +25,51 @@ pub enum AuroraError {
     /// provider that was removed.
     #[error("{message}")]
     NotFound { message: String },
+    /// The parental gate said no (`parental.rs`). `refusal` says what would open it:
+    /// the parental PIN for a lock, the day's time or a guarded change, another profile
+    /// for something over this one's limit. The message is Windows' own (`AppError`).
+    #[error("{message}")]
+    Parental { refusal: Refusal, message: String },
     /// Everything else, already worded for the viewer.
     #[error("{message}")]
     Other { message: String },
+}
+
+/// Why the parental gate refused, as Windows' four `AppError` variants for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Refusal {
+    /// Over the age limit of the profile watching, or an adult category it hides. The
+    /// parental PIN does not open it; another profile might.
+    NotAllowed,
+    /// A channel or category a parent locked. The PIN opens it.
+    Locked,
+    /// Today's viewing time for the profile watching is used up. The PIN gives more.
+    TimeUp,
+    /// A change to parental controls, profiles or Settings that needs the PIN.
+    PinRequired,
+}
+
+impl Refusal {
+    /// Windows' words for it, `aurora-app/src/error.rs`, checked by `mirrors.rs`.
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::NotAllowed => "This profile can't watch that. Switch to a profile that can.",
+            Self::Locked => "This is locked. Enter the parental PIN to watch it.",
+            Self::TimeUp => {
+                "Today's viewing time is used up. Enter the parental PIN to keep watching."
+            }
+            Self::PinRequired => "Enter the parental PIN to change this.",
+        }
+    }
+}
+
+impl From<Refusal> for AuroraError {
+    fn from(refusal: Refusal) -> Self {
+        Self::Parental {
+            refusal,
+            message: refusal.message().to_string(),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, AuroraError>;

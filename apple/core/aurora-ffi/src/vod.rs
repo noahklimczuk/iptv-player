@@ -390,6 +390,13 @@ impl AuroraCore {
     /// `resolve`, including the title shown (`shown_title`, R-76).
     fn tune_vod(&self, kind: VodKind, id: i64, start_at_secs: Option<f64>) -> Result<VodTune> {
         let db = self.db.lock();
+        crate::parental::allowed(
+            &db,
+            match kind {
+                VodKind::Movie => aurora_db::repo::parental::Target::Movie(id),
+                VodKind::Episode => aurora_db::repo::parental::Target::Episode(id),
+            },
+        )?;
         let (sql, noun, media) = match kind {
             VodKind::Movie => (
                 "SELECT url, shown_title(COALESCE(custom_title, tmdb_title, title)),

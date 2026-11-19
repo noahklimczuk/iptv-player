@@ -32,7 +32,7 @@ fn clean_name(name: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-fn check_pin(pin: &str) -> Result<()> {
+pub(crate) fn check_pin(pin: &str) -> Result<()> {
     if pin.len() == PIN_DIGITS && pin.bytes().all(|b| b.is_ascii_digit()) {
         Ok(())
     } else {
@@ -49,6 +49,12 @@ pub struct Profile {
     pub is_kids: bool,
     /// A PIN must be entered to use it.
     pub has_pin: bool,
+    /// The age limit, as a minimum age (`aurora_core::parental`); `None` is no limit.
+    pub max_age: Option<u8>,
+    /// Titles with no rating get past the age limit.
+    pub allow_unrated: bool,
+    /// Minutes a day, counted while a parental PIN exists (F-37).
+    pub daily_limit_min: Option<u32>,
 }
 
 impl From<profiles::Profile> for Profile {
@@ -59,6 +65,9 @@ impl From<profiles::Profile> for Profile {
             avatar: p.avatar,
             is_kids: p.is_kids,
             has_pin: p.has_pin,
+            max_age: p.max_age,
+            allow_unrated: p.allow_unrated,
+            daily_limit_min: p.daily_limit_min,
         }
     }
 }
@@ -113,6 +122,7 @@ impl AuroraCore {
             check_pin(pin)?;
         }
         let db = self.db.lock();
+        crate::parental::require_parent(&db)?;
         let id = profiles::create(
             &db,
             &profiles::NewProfile {
@@ -140,6 +150,13 @@ impl AuroraCore {
         let db = self.db.lock();
         let current = profiles::get(&db, profile_id)?
             .ok_or_else(|| AuroraError::not_found("That profile no longer exists."))?;
+        // Your own PIN is yours to change: you had to know it to be watching as yourself.
+        // Anybody else's is a parent's (`aurora-app` `profiles_set_pin`).
+        if pin != PinChange::Keep
+            && aurora_db::repo::parental::active_profile(&db)? != Some(profile_id)
+        {
+            crate::parental::require_parent(&db)?;
+        }
         if current.name != name {
             profiles::rename(&db, profile_id, &name)?;
         }
@@ -155,6 +172,7 @@ impl AuroraCore {
     /// (the shared database refuses), so this returns false for it.
     pub fn delete_profile(&self, profile_id: i64) -> Result<bool> {
         let db = self.db.lock();
+        crate::parental::require_parent(&db)?;
         Ok(profiles::delete(&db, profile_id)?)
     }
 }

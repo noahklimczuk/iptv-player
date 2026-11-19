@@ -230,6 +230,8 @@ impl AuroraCore {
     /// Save the viewer's own TMDB key, or clear it with `None` (or a blank one), which
     /// falls back to the build's key.
     pub fn set_metadata_key(&self, key: Option<String>) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         match key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
             Some(key) => self.credentials.set(CREDENTIAL_KEY, &key)?,
             // Clearing a key that was never set is success, not an error.
