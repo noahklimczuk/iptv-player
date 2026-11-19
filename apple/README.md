@@ -19,7 +19,11 @@ screens. The app can:
 - add an Xtream Codes panel or an M3U playlist (the password goes in the Keychain),
 - import it with progress: live TV only (the tvOS default) or with films and series,
 - list channels by group, with now/next from the guide,
-- keep favourite channels per profile (long-press a channel),
+- keep favourite channels per profile: the heart on each channel row, as on Windows
+  (on Apple TV, where a row is one thing to focus, a long press instead),
+- channel rows as Windows' `LivePage` draws them: number, logo, name with padlock and
+  quality, the programme on now with its start time (or "No guide data") and what is
+  next, its progress, and the Dropped and Catch-up badges; Windows' empty-list wording,
 - show the guide grid (channels down, time across), fetching only the rows on screen
   as Windows does since R-130; choosing what's on plays the channel, choosing what
   already aired replays it where the archive allows,

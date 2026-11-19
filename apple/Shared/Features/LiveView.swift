@@ -113,16 +113,21 @@ struct ChannelListView: View {
                 playing = .channel(id: channel.id, name: channel.name)
             } label: {
                 ChannelRow(channel: channel, guide: guide[channel.id],
-                           locked: model.isLocked(channelId: channel.id, group: channel.group))
+                           locked: model.isLocked(channelId: channel.id, group: channel.group),
+                           toggleFavorite: heart(channel))
             }
             // Long-press on the Siri Remote, long-press or right-click on iPhone and iPad.
             .contextMenu { menu(for: channel) }
         }
         .overlay {
             if favoritesOnly && channels.isEmpty && loaded {
-                ContentUnavailableView(list == nil ? "No favourites yet" : "\(listTitle) is empty",
+                // Windows' words, with its "heart beside any channel" where there is one.
+                ContentUnavailableView(list == nil ? "No favourite channels yet" : "\(listTitle) is empty",
                                        systemImage: "heart",
-                                       description: Text("Long-press a channel to add it."))
+                                       description: Text(heartHint))
+            } else if channels.isEmpty && loaded {
+                ContentUnavailableView("No channels", systemImage: "tv",
+                                       description: Text(emptyReason))
             }
         }
         .auroraPageTitle(favoritesOnly ? listTitle : group ?? "All channels")
@@ -188,6 +193,39 @@ struct ChannelListView: View {
         }
     }
 
+    /// The heart beside each row, where a row has room for a second thing to press.
+    private func heart(_ channel: Channel) -> (() -> Void)? {
+        #if os(tvOS)
+        nil
+        #else
+        { Task { await toggle(channel) } }
+        #endif
+    }
+
+    private var heartHint: String {
+        #if os(tvOS)
+        "Press and hold any channel in the list to add it here."
+        #else
+        "Use the heart beside any channel in the list to add it here."
+        #endif
+    }
+
+    /// Windows' `emptyReason`: why a list with no channels is empty.
+    private var emptyReason: String {
+        let providers = model.providers
+        if providers.isEmpty { return "Add a provider in Settings to populate your channel list." }
+        let imported = providers.reduce(0) { $0 + Int($1.channelCount) }
+        if imported == 0 {
+            let names = providers.map(\.name).joined(separator: ", ")
+            return "\(names) imported no live channels. Some accounts carry films and series "
+                + "but no live streams; if yours should have them, press Refresh next to the "
+                + "provider in Settings and check the count it reports."
+        }
+        return "Your library has \(imported) channels, but none are visible here. Check "
+            + "the group filter above, and Settings → Filtering for English-only and "
+            + "hide-duplicates."
+    }
+
     private func load() async {
         channels = await model.channels(group: group, favoritesOnly: favoritesOnly, list: list)
         loaded = true
@@ -233,51 +271,122 @@ struct ChannelListView: View {
     }
 }
 
+/// Windows' channel row (`LivePage`): the number, the logo, the name with its padlock and
+/// quality, what is on (its start time and title, or "No guide data") and what is next,
+/// how far through, then the Dropped and Catch-up badges and the heart.
 private struct ChannelRow: View {
     let channel: Channel
     let guide: NowNext?
     /// Locked by a parent: playing it asks for the parental PIN.
     var locked = false
+    /// The heart, where it can be pressed apart from the row (iPhone and iPad). A TV row
+    /// is one thing to focus, so there the heart only shows; the long press changes it.
+    var toggleFavorite: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 12) {
-            if let number = channel.number {
-                Text("\(number)").monospacedDigit().foregroundStyle(.secondary)
-            }
+        HStack(spacing: 14) {
+            Text(channel.number.map(String.init) ?? "")
+                .font(.body.weight(.heavy)).monospacedDigit()
+                .foregroundStyle(.tertiary)
+                // A provider's numbers run to five digits.
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .frame(width: numberWidth, alignment: .trailing)
+            ChannelTile(name: channel.name, number: channel.number, logo: channel.logo, size: logoSize)
             VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(channel.name)
+                HStack(spacing: 6) {
+                    Text(channel.name).font(.headline.weight(.heavy)).lineLimit(1)
                     if locked {
                         Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Locked: needs the parental PIN")
                     }
-                    if channel.favorite {
-                        Image(systemName: "heart.fill").font(.caption).foregroundStyle(.pink)
-                            .accessibilityLabel("Favourite")
-                    }
-                    if channel.hasCatchup {
-                        Image(systemName: "gobackward").font(.caption).foregroundStyle(.secondary)
-                            .accessibilityLabel("Catch-up")
-                    }
-                    if channel.stale {
-                        Text("Dropped").font(.caption).foregroundStyle(.orange)
+                    if let quality = channel.quality {
+                        Badge(text: quality, style: .neutral)
                     }
                 }
-                if let now = guide?.now {
-                    Text("Now: \(now.title)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    ProgressView(value: elapsed(now)).tint(.secondary)
+                (Text(guide?.now.map { "\(clockTime(unix: $0.start)) \($0.title)" } ?? "No guide data")
+                 + Text(guide?.next.map { "  ·  Next: \($0.title)" } ?? "").foregroundStyle(.tertiary))
+                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                if let now = guide?.now, elapsed(now) > 0 {
+                    ProgressView(value: elapsed(now))
+                        .frame(maxWidth: 260)
+                        .padding(.top, 4)
+                        .accessibilityLabel("Programme progress")
                 }
-                if let next = guide?.next {
-                    Text("Next: \(next.title)").font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                if channel.stale {
+                    Badge(text: "Dropped", style: .warning)
+                        .accessibilityHint("Your provider no longer lists this channel")
+                }
+                if channel.hasCatchup { Badge(text: "Catch-up", style: .new) }
+                if let toggleFavorite {
+                    Button(action: toggleFavorite) {
+                        Image(systemName: channel.favorite ? "heart.fill" : "heart")
+                            .foregroundStyle(channel.favorite ? Color.accentColor : Color.secondary)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(channel.favorite ? "Remove \(channel.name) from favourites"
+                                                         : "Add \(channel.name) to favourites")
+                } else if channel.favorite {
+                    Image(systemName: "heart.fill").foregroundStyle(Color.accentColor)
+                        .accessibilityLabel("Favourite")
                 }
             }
         }
+        // A list tints a button's label; the row is text, not a link. Not on tvOS, where
+        // the focused row turns white and its text must turn dark with it.
+        #if os(iOS)
+        .foregroundStyle(Color.primary)
+        #endif
     }
+
+    #if os(tvOS)
+    private let numberWidth: CGFloat = 80
+    private let logoSize: CGFloat = 72
+    #else
+    private let numberWidth: CGFloat = 40
+    private let logoSize: CGFloat = 44
+    #endif
 
     private func elapsed(_ p: Programme) -> Double {
         let now = Date().timeIntervalSince1970
         let span = Double(p.stop - p.start)
         guard span > 0 else { return 0 }
         return min(max((now - Double(p.start)) / span, 0), 1)
+    }
+}
+
+/// Windows' `Badge`, in the tones the channel row uses.
+struct Badge: View {
+    enum Style { case neutral, new, warning }
+    let text: String
+    let style: Style
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.heavy))
+            .lineLimit(1).fixedSize()
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .foregroundStyle(foreground)
+            .background(background, in: Capsule())
+            .overlay { if style == .warning { Capsule().strokeBorder(.orange) } }
+    }
+
+    private var foreground: Color {
+        switch style {
+        case .neutral: .primary
+        case .new: .white
+        case .warning: .orange
+        }
+    }
+
+    private var background: Color {
+        switch style {
+        case .neutral: Color.secondary.opacity(0.18)
+        case .new: .green
+        case .warning: .clear
+        }
     }
 }
