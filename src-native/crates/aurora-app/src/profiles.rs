@@ -23,6 +23,22 @@ pub(crate) fn require_parent(db: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a change behind Settings while Settings are locked to whoever is watching:
+/// a kids profile, or everybody when the household switched that on (README §11, see
+/// `parental::settings_locked`).
+///
+/// The front end shows a locked page, but that was the whole of the lock: providers,
+/// keys, sync, the channel editor and the content filter all answered any caller, and
+/// the stream password came back to anyone who asked for it. Every command behind
+/// Settings that changes something or reveals a secret asks this first. It takes its
+/// own short lock, so call it before the command takes the database.
+pub(crate) fn require_settings(db: &Connection) -> Result<()> {
+    if parental::settings_locked(db, now_unix())? {
+        return Err(AppError::ParentalPinRequired);
+    }
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn profiles_list(services: State<'_, Services>) -> Result<Vec<Profile>> {
     let db = services.db.lock();

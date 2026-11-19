@@ -140,6 +140,17 @@ def run(d, ctx):
     assert [f["id"] for f in fallback] == [f["id"] for f in kid_films], (
         "with nobody chosen, the list is not the kids profile's")
     print("   restart: nobody watching, nothing unlocked, the strictest profile's list")
+
+    # 5. Settings stay shut to whoever might be the child (F-38) ----------------------
+    # Nobody chosen and a kids profile exists, so Settings are locked, and the host
+    # refuses what is behind them -- the stream password above all -- not just the page.
+    assert d.invoke("parental.state")["settingsLocked"], "Settings are open with a kids profile possible"
+    line = ctx.rows("SELECT id FROM providers ORDER BY id LIMIT 1")[0][0]
+    _refused(d, "providers.credentials", {"providerId": line}, PIN_REQUIRED)
+    assert d.invoke("parental.unlock", {"pin": PIN}) == "ok"
+    assert not d.invoke("parental.state")["settingsLocked"], "the PIN did not open Settings"
+    assert d.invoke("providers.credentials", {"providerId": line})["username"], "no credentials after the PIN"
+    print("   settings: locked with a kids profile possible, the password refused until the PIN")
     ctx.assert_no_panic()
 
 

@@ -50,6 +50,7 @@ commit and the test that would catch a regression.
 | F-35 | Medium | artwork | Prefetching an unordered `LIMIT` caches an arbitrary subset, so the cache never holds what is on screen | Fixed |
 | F-36 | Critical | parental | No parental control reached a list or the player: a kids profile showed and played everything | Fixed |
 | F-37 | High | parental | A profile's daily viewing limit was stored and never counted, refused or set | Fixed |
+| F-38 | High | parental | Settings were locked by a screen only: a kids profile got in, and every command behind them answered anybody | Fixed |
 
 ---
 
@@ -1285,3 +1286,38 @@ screen set the limit. Settings → Parental controls passed the stored value bac
   once, and time-up.
 - `tests-e2e/parental.spec.ts`: setting the limit, the warning, playback stopped at the
   limit, and the PIN giving more time.
+
+## F-38 — High — Settings were locked by a screen, and a kids profile was not locked out
+
+**Found by** reading README §11 against the code after F-37. It says a Kids profile
+"disables settings access" and that Parental controls offer "a PIN-protected Settings
+section". Neither held.
+
+- **A kids profile walked straight into Settings.** The only lock was the household's
+  "Lock Settings" switch, so a kids profile got in unless the parent had also locked
+  Settings for every grown-up.
+- **The lock was a screen.** `SettingsPage` drew "Settings are locked" in place of the
+  panels, and nothing else checked. Every command behind Settings answered whoever
+  called it. That covered deleting or rewriting a provider, the TMDB and Gemini keys,
+  sync sign-in and reset, the channel editor, the content filter and the timeshift cache.
+  `providers.credentials` returned the line's stream password. Only profile and parental
+  changes went through `require_parent`.
+
+**Fix** (`docs/DECISIONS.md` D31):
+
+- `repo::parental::settings_locked` is the one answer. Settings are closed while a parental
+  PIN exists, it has not been entered, and either the household switch is on or a kids
+  profile is watching. With nobody chosen, they are closed if any profile is a kids
+  profile. `ParentalState.settingsLocked` carries the answer to the page.
+- `profiles::require_settings` refuses with `ParentalPinRequired` while that holds. It is
+  the first line of the 22 commands behind Settings that change something or reveal a
+  secret. The `invoke` wrapper already answers that refusal with the PIN dialog and a
+  retry, so a call from outside Settings asks for the PIN rather than failing.
+- `SettingsPage` shows the locked screen from `settingsLocked` instead of working it out.
+
+**Regression tests.**
+- `repo::parental`: `a_kids_profile_is_kept_out_of_settings_until_the_pin` and
+  `the_settings_switch_locks_them_for_everybody_and_only_with_a_pin`.
+- `tests-e2e/parental.spec.ts`: a kids profile meets the locked screen, a command behind
+  Settings asks for the PIN and gives nothing on cancel, the PIN opens Settings, and a
+  grown-up's profile is not locked out.

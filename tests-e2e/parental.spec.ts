@@ -132,6 +132,42 @@ test('Settings can be locked behind the PIN', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Parental controls' })).toBeVisible();
 });
 
+test('a kids profile is kept out of Settings, and the host refuses what is behind them', async ({ page }) => {
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  const sam = await invoke<number>(page, 'profiles.create', {
+    name: 'Sam', avatar: null, isKids: true, maxAge: 12, dailyLimitMin: null,
+  });
+  // The switch for everybody stays off: a kids profile is locked out without it.
+  await invoke(page, 'profiles.setParental', { hideAdult: true, lockSettings: false, masterPin: '2468' });
+  await invoke(page, 'profiles.select', { profileId: sam });
+
+  await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Settings are locked' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Parental controls' })).toBeHidden();
+
+  // Reaching a command behind Settings some other way asks for the PIN too, and
+  // cancelling it leaves the stream password unread.
+  // Settled into a string at once: it rejects while the test is still pressing Escape,
+  // and a rejection nobody is listening for yet fails the test on its own.
+  const credentials = invoke(page, 'providers.credentials', { providerId: 1 })
+    .then(() => 'answered', (e: Error) => e.message);
+  const dialog = page.getByRole('dialog', { name: 'Parental PIN' });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(await credentials).toContain('Enter the parental PIN to change this');
+
+  await page.getByRole('button', { name: 'Enter the PIN' }).click();
+  await typePin(page, '2468');
+  await expect(page.getByRole('region', { name: 'Parental controls' })).toBeVisible();
+
+  // A grown-up's profile is not locked out.
+  await page.goto('/#/');
+  await invoke(page, 'profiles.select', { profileId: 1 });
+  await page.goto('/#/settings');
+  await expect(page.getByRole('region', { name: 'Parental controls' })).toBeVisible();
+});
+
 test('a profile that blocks unrated titles is told why its film library is empty', async ({ page }) => {
   // `?unenriched`: a panel's library before metadata is fetched, with no ratings at all.
   await page.goto('/?unenriched#/');

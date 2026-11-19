@@ -309,6 +309,7 @@ fn the_fields_the_host_sends_are_the_ones_the_contract_declares() {
                 titles: 0,
                 time_left_secs: Some(300),
                 watched_today_secs: 0,
+                settings_locked: false,
             })
             .unwrap(),
         ),

@@ -562,6 +562,7 @@ pub struct SavedProvider {
 /// gets only a reference to it.
 #[tauri::command(async)]
 pub fn providers_save(services: State<'_, Services>, args: ValidateArgs) -> Result<SavedProvider> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let db = services.db.lock();
     let id = save_provider(&db, services.credentials.as_ref(), args.draft, now_unix())?;
     Ok(SavedProvider { id })
@@ -670,6 +671,7 @@ pub fn providers_credentials(
     services: State<'_, Services>,
     args: ProviderIdArgs,
 ) -> Result<ProviderCredentials> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let (name, kind, url, username, credential): (String, String, String, String, Option<String>) = {
         let db = services.db.lock();
         db.query_row(
@@ -710,6 +712,7 @@ pub struct UpdateArgs {
 /// the password every time someone changed only the name.
 #[tauri::command(async)]
 pub fn providers_update(services: State<'_, Services>, args: UpdateArgs) -> Result<bool> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let id = args.provider_id;
     let draft = args.draft;
     let db = services.db.lock();
@@ -780,6 +783,7 @@ pub fn providers_update(services: State<'_, Services>, args: UpdateArgs) -> Resu
 /// account it belongs to is gone.
 #[tauri::command(async)]
 pub fn providers_delete(services: State<'_, Services>, args: ProviderIdArgs) -> Result<bool> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let id = args.provider_id;
     let db = services.db.lock();
 

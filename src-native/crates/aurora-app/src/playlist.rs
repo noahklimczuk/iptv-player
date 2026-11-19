@@ -38,6 +38,7 @@ pub fn library_set_filters(
     services: State<'_, Services>,
     args: LibraryFilter,
 ) -> Result<LibraryFilter> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let db = services.db.lock();
     args.save(&db)?;
     Ok(LibraryFilter::load(&db)?)
@@ -151,6 +152,7 @@ pub struct UpdateArgs {
 
 #[tauri::command(async)]
 pub fn playlist_update(services: State<'_, Services>, args: UpdateArgs) -> Result<()> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let kind = kind_of(&args.kind)?;
     let db = services.db.lock();
     playlist::update(&db, kind, args.id, &args.patch)?;
@@ -167,6 +169,7 @@ pub struct SetHiddenArgs {
 
 #[tauri::command(async)]
 pub fn playlist_set_hidden(services: State<'_, Services>, args: SetHiddenArgs) -> Result<usize> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let kind = kind_of(&args.kind)?;
     let mut db = services.db.lock();
     Ok(playlist::set_hidden_many(
@@ -194,6 +197,7 @@ pub fn playlist_hide_matching(
     services: State<'_, Services>,
     args: HideMatchingArgs,
 ) -> Result<usize> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let query = Query {
         kind: kind_of(&args.kind)?,
         text: args.text.clone(),
@@ -215,6 +219,7 @@ pub struct ResetArgs {
 
 #[tauri::command(async)]
 pub fn playlist_reset(services: State<'_, Services>, args: ResetArgs) -> Result<usize> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let kind = kind_of(&args.kind)?;
     let mut db = services.db.lock();
     Ok(playlist::reset(&mut db, kind, &args.ids)?)

@@ -758,6 +758,12 @@ export interface ParentalState {
   timeLeftSecs: number | null;
   /** Seconds watched today on this device by whoever is watching. */
   watchedTodaySecs: number;
+  /**
+   * Settings are closed until the parental PIN is entered: there is a PIN, and either a
+   * kids profile is watching or the household locked them for everybody. The host refuses
+   * the commands behind Settings while this holds.
+   */
+  settingsLocked: boolean;
 }
 
 export type LockKind = 'channel' | 'category';

@@ -397,6 +397,27 @@ function requireParent(): void {
     throw new Error(PIN_REQUIRED_MESSAGE);
   }
 }
+/**
+ * The host's `settings_locked`: Settings are closed while there is a PIN, it has not been
+ * entered, and the household locked them for everybody or a kids profile is watching
+ * (any kids profile, with nobody chosen).
+ */
+function settingsLocked(): boolean {
+  if (mockMasterPin == null || mockUnlockedUntil > nowSecs()) return false;
+  if (mockParental.lockSettings) return true;
+  const watching = mockProfiles.find((p) => p.id === mockSession);
+  return watching ? watching.isKids : mockProfiles.some((p) => p.isKids);
+}
+/** The commands behind Settings that the host refuses while they are locked. */
+const SETTINGS_GUARDED: ReadonlySet<CommandName> = new Set<CommandName>([
+  'providers.save', 'providers.credentials', 'providers.update', 'providers.delete',
+  'metadata.setKey', 'metadata.setConcurrency', 'artwork.clear',
+  'sync.createAccount', 'sync.signIn', 'sync.reset', 'sync.signOut', 'sync.recoveryCode',
+  'gemini.setEnabled', 'gemini.setKey', 'updates.setAutomatic',
+  'timeshift.setSettings', 'timeshift.clear',
+  'playlist.update', 'playlist.setHidden', 'playlist.hideMatching', 'playlist.reset',
+  'library.setFilters',
+]);
 function channelLocked(c: { id: number; group: string | null }): boolean {
   return mockLocks.some((l) => (l.kind === 'channel' && l.value === String(c.id))
     || (l.kind === 'category' && c.group != null && l.value === c.group));
@@ -413,6 +434,7 @@ function parentalState(): ParentalState {
     titles: editedMovies().length + editedSeries().length,
     timeLeftSecs: timeLeft(),
     watchedTodaySecs: mockWatched.get(mockProfiles.find((p) => p.id === mockSession)?.id ?? 0) ?? 0,
+    settingsLocked: settingsLocked(),
   };
 }
 
@@ -3609,6 +3631,7 @@ export async function invokeMock<K extends CommandName>(
   }
   const fn = handlers[name] as Handler<K> | undefined;
   if (!fn) throw new Error(`unknown command: ${name}`);
+  if (SETTINGS_GUARDED.has(name) && settingsLocked()) throw new Error(PIN_REQUIRED_MESSAGE);
   const result = await fn(args);
   // Recorded before the wait, not after: the question was asked when it was asked, and
   // a journey that polls `__auroraCalls` to know the request went out should not have

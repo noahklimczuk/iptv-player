@@ -871,6 +871,7 @@ pub fn updates_set_automatic(
     services: State<'_, Services>,
     args: SetAutomaticArgs,
 ) -> Result<bool> {
+    crate::profiles::require_settings(&services.db.lock())?;
     let db = services.db.lock();
     settings::set(&db, AUTOMATIC_KEY, &args.enabled)?;
     Ok(args.enabled)

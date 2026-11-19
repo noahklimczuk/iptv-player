@@ -313,11 +313,13 @@ pub fn timeshift_set_settings(
     services: State<'_, Services>,
     args: Change,
 ) -> Result<TimeshiftSettings> {
+    crate::profiles::require_settings(&services.db.lock())?;
     services.player.timeshift_change(args)
 }
 
 #[tauri::command(async)]
 pub fn timeshift_clear(services: State<'_, Services>) -> Result<u64> {
+    crate::profiles::require_settings(&services.db.lock())?;
     services.player.timeshift_clear()
 }
 
