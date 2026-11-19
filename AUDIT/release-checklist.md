@@ -40,8 +40,8 @@ What is **not** retired is everything about whether the app works: items 1, 1b, 
 Items 1, 1b, 1c, 6, 7 and 8 are **done**: item 1 was run on a Windows machine and is
 reported in `AUDIT/test-report.md` §11, with one number outside its budget, and item 7
 is reported in §14. Item 3 is **mostly answered** — a real subscription imported and
-drew, logos decoded, the recorder reached a provider — with catch-up and the recording's
-file on disk still open. Item 5 is half done: the upgrade is verified, the install and
+drew, logos decoded, the recorder reached a provider — with only catch-up still open; the
+recording's file on disk is answered. Item 5 is half done: the upgrade is verified, the install and
 uninstall need an administrator. Items 2, 4, 9 and 10 are closed by the scoping decision
 above rather than by work.
 
@@ -65,14 +65,13 @@ licence obligation met, and advisories checked on both ecosystems in CI.
 |---|---|
 | **Code signing** | The publisher and the user are the same person on the same machine. SmartScreen warns somebody who built the app. The updater verifies the SHA-256 GitHub published. Revisit the moment anyone else is asked to install this. |
 | **Catch-up (F-23)** | Two subscriptions advertise `tv_archive`; neither serves one. Eighteen requests across three channels returned 404 or an empty 200. The timezone fix cannot be made against evidence, and a guessed URL that fails at the player is worse than the message the viewer gets now. |
-| **A recording's file on disk** | The recorder reaches a provider and reports its states correctly; the assertion that the file exceeds 64 kB has not had a green run, because the harness wipe needs a build outside OneDrive. One run with credentials closes it. |
 | **Per-machine install and uninstall** | The *upgrade* path is verified with a real library behind it. A per-machine NSIS install needs an administrator account, which this machine does not have. The per-user MSI path is what is actually used. |
 | **ARM64** | No ARM64 machine, and no ARM64 libmpv upstream. x64 only, said plainly on the release page. |
-| **Zap time** | **1.92s against the 1.5s in README §16, now measured on a real subscription** and not only a public CDN — the two agree to within 10ms, so the number is the app's and not the network's. Reported rather than asserted. Where the time goes has not been measured, and that is the thing to do before anything is optimised. |
+| **Zap time** | **Met at the median, not comfortably.** Re-measured against the panel on 2026-10-24: a median of 1.24s over nine zaps against README §16's 1.5s, two of nine over, 0.02s of it inside this app. The earlier 1.92s was a public CDN. Pre-buffering needs a second connection the line does not allow. `tests-host/scenarios/zap_budget.py` is the standing measurement. |
 
 **Not built, by choice:** Stalker portals; drag-to-reorder, custom logos, named favourite
-lists and the rules engine; PiP, sleep timer, tray, backup/restore; media keys and global
-shortcuts. Parental locks are built (F-36). The phase table in
+lists and the rules engine; tray and backup/restore; media keys and global shortcuts.
+PiP and the sleep timer are built. Parental locks are built (F-36). The phase table in
 `docs/ROADMAP.md` is the authority on each.
 
 ---
