@@ -7,7 +7,7 @@ import { installGlobalErrorHandlers } from './lib/errors';
 import {
   clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setNoPictureMock, setPlayerErrorMock,
   setPlayerStatusMock,
-  setSilentDurationMock, slowMock,
+  setSilentDurationMock, setWatchedTodayMock, slowMock,
 } from './ipc';
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
@@ -45,6 +45,8 @@ installGlobalErrorHandlers();
   setPlayerErrorMock;
 // …and hold it opening or refilling, which is when the spinner is meant to show (C24).
 (window as unknown as { __auroraPlayerStatus?: unknown }).__auroraPlayerStatus = setPlayerStatusMock;
+// How long the profile watching has watched today, as the host's heartbeat counts it (F-37).
+(window as unknown as { __auroraWatched?: unknown }).__auroraWatched = setWatchedTodayMock;
 // …and hold back the first frame, which is when the window used to turn see-through.
 (window as unknown as { __auroraNoPicture?: unknown }).__auroraNoPicture = setNoPictureMock;
 // …and the icon set, so a test can measure every glyph's geometry rather than only the

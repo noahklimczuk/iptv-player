@@ -724,6 +724,11 @@ export interface ParentalSettings {
  * The parental gate on this device (`aurora_db::repo::parental`): who is watching, and
  * whether the parental PIN has opened locked content and the parental settings.
  */
+/** `aurora_app::parental::ClockEvent`. */
+export type ParentalClockEvent =
+  | { kind: 'warning'; secsLeft: number }
+  | { kind: 'timeUp' };
+
 export interface ParentalState {
   /** The profile chosen with `profiles.select`; null until somebody has been chosen. */
   profileId: number | null;
@@ -745,6 +750,14 @@ export interface ParentalState {
    */
   ratedTitles: number;
   titles: number;
+  /**
+   * Seconds of today's viewing left for whoever is watching; null when no daily limit
+   * applies: the profile has none, there is no parental PIN, or the PIN was entered.
+   * Below zero once the limit is passed.
+   */
+  timeLeftSecs: number | null;
+  /** Seconds watched today on this device by whoever is watching. */
+  watchedTodaySecs: number;
 }
 
 export type LockKind = 'channel' | 'category';
@@ -2066,6 +2079,12 @@ export interface Events {
   'sleep.state': SleepState;
   /** The timer came due and acted. Carries what it was, so a toast can say so. */
   'sleep.fired': SleepDeadline;
+  /**
+   * The daily limit's clock, kept by the host's heartbeat (F-37): a warning five minutes
+   * before the day's viewing time runs out, then `timeUp` once the host has stopped
+   * playback.
+   */
+  'parental.clock': ParentalClockEvent;
   /** One lookup the assistant just ran, so a long turn shows its working. */
   'assistant.step': { step: string };
   /** Emitted shortly after launch when a newer build turns out to be published. */

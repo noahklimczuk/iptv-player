@@ -8,3 +8,6 @@
  */
 export const LOCKED_MESSAGE = 'This is locked. Enter the parental PIN to watch it.';
 export const PIN_REQUIRED_MESSAGE = 'Enter the parental PIN to change this.';
+/** `AppError::TimeUp`: today's viewing time for the profile watching is used up. */
+export const TIME_UP_MESSAGE =
+  "Today's viewing time is used up. Enter the parental PIN to keep watching.";

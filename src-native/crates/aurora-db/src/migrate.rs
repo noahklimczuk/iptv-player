@@ -90,6 +90,7 @@ mod tests {
     /// `recording_rules` and `reminders` were documented in the README from the start
     /// and never actually created. A missing table is only found by naming it.
     const EXPECTED_TABLES: &[&str] = &[
+        "watch_time",
         "providers",
         "channels",
         "channel_sources",

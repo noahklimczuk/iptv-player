@@ -6,7 +6,7 @@
 import type {
   CommandArgs, CommandName, CommandResult, Events, IngestProgress, PlayerState,
 } from '@shared/ipc';
-import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE } from './parentalMessages';
+import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE } from './parentalMessages';
 import { subscribe } from './subscribe';
 import {
   invokeMock,
@@ -18,6 +18,7 @@ import {
   onMosaicState as onMockMosaicState,
   onSleepState as onMockSleepState,
   onSleepFired as onMockSleepFired,
+  onParentalClock as onMockParentalClock,
   onAssistantStep as onMockAssistantStep,
   onPlayerState as onMockPlayerState,
 } from './mock';
@@ -55,10 +56,13 @@ export const hasVideoSurface = (): boolean =>
  * `AppError::ParentalPinRequired`). Matched on the text, as `superseded` is: the error
  * crosses the bridge as a string.
  */
-export { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE };
+export { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE };
 
-/** Why the PIN is being asked for: to watch something locked, or to change a setting. */
-export type ParentalReason = 'watch' | 'change';
+/**
+ * Why the PIN is being asked for: to watch something locked, to keep watching once the
+ * day's viewing time is used up, or to change a setting.
+ */
+export type ParentalReason = 'watch' | 'time' | 'change';
 
 let askParentalPin: ((reason: ParentalReason) => Promise<boolean>) | null = null;
 let asking: Promise<boolean> | null = null;
@@ -104,7 +108,8 @@ export async function invoke<K extends CommandName>(
     const text = refusalText(e);
     const reason: ParentalReason | null = text.includes(LOCKED_MESSAGE)
       ? 'watch'
-      : text.includes(PIN_REQUIRED_MESSAGE) ? 'change' : null;
+      : text.includes(TIME_UP_MESSAGE) ? 'time'
+        : text.includes(PIN_REQUIRED_MESSAGE) ? 'change' : null;
     if (!reason || !askParentalPin || name === 'parental.unlock') throw e;
     // Several refusals at once -- a guarded save of three settings -- share one dialog.
     if (!(await requestParentalPin(reason))) throw e;
@@ -176,6 +181,15 @@ export function onSleepState(fn: (s: Events['sleep.state']) => void): () => void
 export function onSleepFired(fn: (d: Events['sleep.fired']) => void): () => void {
   if (!isNativeHost()) return onMockSleepFired(fn);
   return subscribe<Events['sleep.fired']>('sleep.fired', fn);
+}
+
+/**
+ * The daily limit's clock (F-37). The host has already stopped playback when it says
+ * `timeUp`; the page closes the player and says why.
+ */
+export function onParentalClock(fn: (e: Events['parental.clock']) => void): () => void {
+  if (!isNativeHost()) return onMockParentalClock(fn);
+  return subscribe<Events['parental.clock']>('parental.clock', fn);
 }
 
 /** How far the update installer has got (docs/DECISIONS.md D17). */

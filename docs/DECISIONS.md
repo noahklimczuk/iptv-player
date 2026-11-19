@@ -734,3 +734,29 @@ from libraries where they used to show; Settings → Parental controls is where 
 back. A device that never chooses a profile -- the Apple app, until its picker calls
 `repo::parental::select_profile` -- gets the strictest profile's limits, which with one
 profile is that profile.
+
+## D30 — The daily limit is counted by the host, per device, and opened by the parental PIN
+
+**Context.** README §11's daily viewing limit was stored and never counted
+(`AUDIT/findings.md` F-37). Building it raised three choices: who keeps the time, where
+it is kept, and what lets a child keep watching.
+
+**Decision.**
+
+- **The host keeps the time,** on the heartbeat that already keeps the sleep timer. The
+  page cannot: a backgrounded or minimised window is throttled, and a television left on
+  is exactly the case the limit is for.
+- **Per device, unsynced.** `watch_time` sits beside `session`, with no sync triggers. A
+  household-wide total would need every device's heartbeat to write to a shared clock,
+  for a quota whose point is the screen in front of the child. Two devices, two totals.
+  That is said here rather than discovered.
+- **The day is the viewer's local date** (SQLite's `localtime`), so the limit resets at
+  the viewer's midnight.
+- **The parental PIN gives more time,** for as long as it opens locks: thirty minutes,
+  until a profile is chosen, or until the app closes. There is no "add fifteen minutes"
+  control. That would be a second, smaller kind of unlock to explain, and entering the
+  PIN again is already the answer to "a bit longer".
+- **Only with a PIN.** Like a lock, a daily limit holds only while a parental PIN exists.
+- **Enforced to within ten seconds.** Viewing is written down every ten seconds rather
+  than on every 250 ms tick. The limit can overrun by that much, and the library is not
+  written four times a second.

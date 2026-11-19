@@ -162,6 +162,7 @@ mod event_name_tests {
         // The sleep timer's countdown, and the moment it acts (README §13).
         "sleep.state",
         "sleep.fired",
+        "parental.clock",
     ];
 
     /// Every event name this crate passes to an emit, read out of its own source.
