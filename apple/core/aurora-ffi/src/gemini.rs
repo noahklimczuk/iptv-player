@@ -367,6 +367,13 @@ impl AuroraCore {
     }
 }
 
+/// Drop the cached suggestions, so the next ask is answered afresh (Windows'
+/// `gemini::forget_cached`). Settings → Privacy calls this when a viewer clears their
+/// history: the cache is a reading of that history.
+pub(crate) fn forget_cached(db: &aurora_db::rusqlite::Connection) {
+    let _ = settings::set(db, CACHE_KEY, &String::new());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,11 +651,4 @@ mod tests {
         assert_eq!(key_from(false, Some("mine"), None), None);
         assert_eq!(key_from(false, None, None), None);
     }
-}
-
-/// Drop the cached suggestions, so the next ask is answered afresh (Windows'
-/// `gemini::forget_cached`). Settings → Privacy calls this when a viewer clears their
-/// history: the cache is a reading of that history.
-pub(crate) fn forget_cached(db: &aurora_db::rusqlite::Connection) {
-    let _ = settings::set(db, CACHE_KEY, &String::new());
 }

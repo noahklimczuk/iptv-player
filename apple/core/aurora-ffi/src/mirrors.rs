@@ -1305,10 +1305,9 @@ fn multiview_refuses_and_rotates_as_windows_does() {
     let host = app_src("mosaic.rs");
     let fold = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     let theirs = fold(between(&host, "fn refusal(", "\nfn channel_name"));
-    let ours_src = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mosaic.rs"),
-    )
-    .unwrap();
+    let ours_src =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mosaic.rs"))
+            .unwrap();
     let ours = fold(between(&ours_src, "fn refusal(", "\n/// What the picker"));
     for part in [
         "\"That needs {needed} {streams} at once and your provider allows {limit}. \\ Remove {over} channel{} and try again\"",
@@ -1330,7 +1329,10 @@ fn multiview_refuses_and_rotates_as_windows_does() {
         "Your provider listed this channel without a stream.",
         "Give the layout a name.",
     ] {
-        assert!(host.contains(sentence), "Windows no longer says {sentence:?}");
+        assert!(
+            host.contains(sentence),
+            "Windows no longer says {sentence:?}"
+        );
         assert!(ours_src.contains(sentence), "we must say {sentence:?}");
     }
     // Recordings in flight count against the line, as `Mosaic::recordings` counts them.
@@ -1353,7 +1355,11 @@ fn settings_sections_follow_windows_order() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features/SettingsView.swift"),
     )
     .unwrap();
-    let body = between(&swift, "private var unlocked: some View {", "private struct ProviderRow");
+    let body = between(
+        &swift,
+        "private var unlocked: some View {",
+        "private struct ProviderRow",
+    );
     // Each Windows title, and how the Swift page spells that section.
     let marks = [
         ("Providers", "Section(\"Providers\")"),
@@ -1380,7 +1386,10 @@ fn settings_sections_follow_windows_order() {
         .collect();
     ours.sort();
     let ours: Vec<&str> = ours.into_iter().map(|(_, t)| t).collect();
-    assert_eq!(ours, windows, "Settings' sections must be Windows', in Windows' order");
+    assert_eq!(
+        ours, windows,
+        "Settings' sections must be Windows', in Windows' order"
+    );
     // The section titles the Swift subviews give themselves.
     assert!(swift.contains("Text(\"Filtering\")"));
     assert!(swift.contains("Text(\"Artwork and metadata\")"));
