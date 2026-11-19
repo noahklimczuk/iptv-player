@@ -22,6 +22,25 @@ enum AuroraTheme: String, CaseIterable, Identifiable {
         }
     }
 
+    /// `--surface`: a raised panel, and the chosen segment.
+    var surface: Color {
+        switch self {
+        case .light: .white
+        case .dark: Color(red: 0x20 / 255, green: 0x20 / 255, blue: 0x26 / 255)
+        case .oled: Color(red: 0x16 / 255, green: 0x16 / 255, blue: 0x1A / 255)
+        case .contrast: .black
+        }
+    }
+
+    /// `--surface-sunk`: a well, such as behind a segmented control.
+    var surfaceSunk: Color {
+        switch self {
+        case .light: Color(red: 0xE9 / 255, green: 0xE7 / 255, blue: 0xE0 / 255)
+        case .dark: Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x12 / 255)
+        case .oled, .contrast: .black
+        }
+    }
+
     /// `--accent`: Daylight's blue, and the contrast theme's yellow.
     var accent: Color {
         self == .contrast

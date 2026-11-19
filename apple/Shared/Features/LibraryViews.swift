@@ -29,14 +29,16 @@ struct MoviesView: View {
                     ContentUnavailableView("Nothing on My List", systemImage: "plus",
                                            description: Text("Add a film from its page."))
                 } else if movies.isEmpty && filters.narrowed {
-                    ContentUnavailableView("No films match", systemImage: "line.3.horizontal.decrease",
-                                           description: Text("Try another letter, genre or shelf."))
+                    ContentUnavailableView {
+                        Label("Nothing matches those filters", systemImage: "line.3.horizontal.decrease")
+                    } actions: {
+                        Button("Clear filters") { filters.clear() }
+                    }
                 } else if movies.isEmpty, let why = model.unratedHiddenReason {
                     ContentUnavailableView("Nothing rated for this profile yet", systemImage: "lock",
                                            description: Text(why))
                 } else if movies.isEmpty {
-                    ContentUnavailableView("No films", systemImage: "film",
-                                           description: Text("Import films from a provider in Live TV → Add provider."))
+                    ContentUnavailableView("Nothing here yet", systemImage: "film")
                 }
             }
             .auroraTitle("Movies")
@@ -115,7 +117,8 @@ struct MovieDetail: View {
 
 struct SeriesView: View {
     @Environment(AppModel.self) private var model
-    @State private var filters = BrowseFilters()
+    /// A–Z to start, as Windows opens its series page.
+    @State private var filters = BrowseFilters(sort: .title)
     @State private var facets: BrowseFacets?
     @State private var series: [Series] = []
     /// The first page arrived: until then empty means "not read yet", not "none".
@@ -138,14 +141,16 @@ struct SeriesView: View {
                     ContentUnavailableView("Nothing on My List", systemImage: "plus",
                                            description: Text("Add a series from its page."))
                 } else if series.isEmpty && filters.narrowed {
-                    ContentUnavailableView("No series match", systemImage: "line.3.horizontal.decrease",
-                                           description: Text("Try another letter, genre or shelf."))
+                    ContentUnavailableView {
+                        Label("Nothing matches those filters", systemImage: "line.3.horizontal.decrease")
+                    } actions: {
+                        Button("Clear filters") { filters.clear() }
+                    }
                 } else if series.isEmpty, let why = model.unratedHiddenReason {
                     ContentUnavailableView("Nothing rated for this profile yet", systemImage: "lock",
                                            description: Text(why))
                 } else if series.isEmpty {
-                    ContentUnavailableView("No series", systemImage: "rectangle.stack",
-                                           description: Text("Import series from a provider in Live TV → Add provider."))
+                    ContentUnavailableView("Nothing here yet", systemImage: "rectangle.stack")
                 }
             }
             .auroraTitle("Series")
@@ -197,59 +202,67 @@ extension BrowseFilters {
     /// Narrowed by more than the shelf: an empty list then means "nothing matches",
     /// not "nothing imported".
     var narrowed: Bool { shelf != nil || genre != nil || letter != nil || !search.isEmpty }
+
+    /// Windows' "Clear filters": genre, shelf, letter and search; the sort stays.
+    mutating func clear() {
+        genre = nil
+        shelf = nil
+        letter = nil
+        search = ""
+    }
 }
 
-/// Sort, genre and the total on one row, the letters under it: the browse filters
-/// Windows' film and series pages have.
+/// The browse filters Windows' film and series pages have, in its order: the sort's
+/// segments, the commonest genres as chips, the whole genre list and the total, then the
+/// letters, which only mean something against A–Z.
 struct FilterBar: View {
     @Binding var filters: BrowseFilters
     let facets: BrowseFacets?
     let noun: (one: String, many: String)
 
+    /// Windows' `CHIP_GENRES`.
+    private static let chipGenres = 7
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Sort, genre and the total on one line where they fit (a TV, an iPad); on a
-            // phone the total goes underneath rather than squeezing the genre to "A…".
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 16) {
-                    sortMenu
-                    genreMenu
-                    Spacer(minLength: 16)
-                    total
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 12) {
-                        sortMenu
-                        genreMenu
+            Segments(options: BrowseSort.all.map { ($0, $0.label) }, selection: $filters.sort)
+                .accessibilityLabel("Sort")
+            if let genres = facets?.genres, !genres.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        FilterChip(title: "All", selected: filters.genre == nil) { filters.genre = nil }
+                        ForEach(genres.prefix(Self.chipGenres), id: \.name) { genre in
+                            FilterChip(title: genre.name, selected: filters.genre == genre.name) {
+                                filters.genre = filters.genre == genre.name ? nil : genre.name
+                            }
+                        }
                     }
-                    total
                 }
+                .accessibilityLabel("Popular genres")
+            }
+            HStack(spacing: 16) {
+                // Only with genres to offer: an "All genres" menu with nothing in it looks
+                // broken, and is, on a library its provider sends no genres for.
+                if !(facets?.genres.isEmpty ?? true) { genreMenu }
+                Spacer(minLength: 16)
+                total
             }
             #if os(tvOS)
-            // The two menus sit at the left, so moving up from a letter on the right
-            // would otherwise find nothing above it and jump past them to the shelves.
+            // The menu sits at the left, so moving up from a letter on the right would
+            // otherwise find nothing above it and jump past it to the chips.
             .focusSection()
             #endif
             LetterBar(selection: $filters.letter)
+                // Picking "W" while the list is newest first would quietly hide most of
+                // the W titles from view: only against A–Z, as on Windows.
+                .disabled(filters.sort != .title)
+                .opacity(filters.sort == .title ? 1 : 0.4)
         }
         .buttonStyle(.bordered)
         .padding(.horizontal)
-    }
-
-    private var sortMenu: some View {
-        Menu {
-            ForEach(BrowseSort.all, id: \.self) { sort in
-                Button {
-                    filters.sort = sort
-                } label: {
-                    if filters.sort == sort { Label(sort.label, systemImage: "checkmark") } else { Text(sort.label) }
-                }
-            }
-        } label: {
-            Label(filters.sort.label, systemImage: "arrow.up.arrow.down")
-                .lineLimit(1)
+        .onChange(of: filters.sort) { _, sort in
+            if sort != .title { filters.letter = nil }
         }
-        .fixedSize()
     }
 
     private var genreMenu: some View {
@@ -273,8 +286,6 @@ struct FilterBar: View {
             Label(filters.genre ?? "All genres", systemImage: "theatermasks")
                 .lineLimit(1)
         }
-        // A library without TMDB data has shelves but no genres.
-        .disabled(facets?.genres.isEmpty ?? true)
     }
 
     @ViewBuilder
@@ -478,6 +489,53 @@ struct ShelfPicker: View {
 }
 
 /// One choice in a row of them, tinted when chosen.
+/// Windows' `dl-seg`: a few choices in a well, the chosen one raised, each as wide as
+/// its words (a system segmented control makes them equal, and cut "Recently added" to
+/// "Recently ad…"). On a TV, chips, which the focus moves along.
+struct Segments<Value: Hashable>: View {
+    let options: [(Value, String)]
+    @Binding var selection: Value
+    @Environment(\.auroraTheme) private var theme
+
+    var body: some View {
+        #if os(tvOS)
+        HStack(spacing: 8) {
+            ForEach(options, id: \.0) { value, label in
+                FilterChip(title: label, selected: value == selection) { selection = value }
+            }
+        }
+        .buttonStyle(.bordered)
+        #else
+        HStack(spacing: 2) {
+            ForEach(options, id: \.0) { value, label in
+                let active = value == selection
+                Button { selection = value } label: {
+                    Text(label)
+                        .font(.subheadline.weight(.bold))
+                        .lineLimit(1)
+                        .foregroundStyle(active ? (theme == .contrast ? Color.black : Color.primary) : Color.secondary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 32)
+                        .background {
+                            if active {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(theme == .contrast ? theme.accent : theme.surface)
+                                    .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(active ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: 12))
+        .fixedSize()
+        #endif
+    }
+}
+
 struct FilterChip: View {
     let title: String
     let selected: Bool

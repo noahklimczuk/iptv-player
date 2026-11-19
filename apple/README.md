@@ -41,7 +41,10 @@ screens. The app can:
 - search channels, what's on now and later, films and series in one box,
 - browse films and series by the provider's shelves, genre and first letter, sorted
   newest, A–Z, by year or by rating, with search, a page at a time and with the true
-  total,
+  total. Laid out as Windows lays it out: the sort as segments, the seven commonest
+  genres as chips before the full list (which is not there when the library has no
+  genres), the letters only against A–Z, series starting A–Z and films newest first,
+  and "Nothing matches those filters" with Clear filters,
 - filter the whole library as Windows does: English only, also hide what's untagged,
   and one copy per title, each with what it would hide (Settings),
 - list providers in Settings with what each holds, and refresh, edit or remove one.
