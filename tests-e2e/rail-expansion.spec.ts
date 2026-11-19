@@ -182,3 +182,48 @@ test('a reason under a card does not make the card wider', async ({ page }) => {
   );
   expect(cut, 'the reason is neither ellipsed nor short').toBe(true);
 });
+
+test('a rail opens at its start, with its first card level with the heading', async ({ page }) => {
+  // Cards snap to `start`, and without scroll padding "start" was the scroller's edge,
+  // so every rail snapped 24px in as it laid out: its first card cut against the
+  // panel and a "Scroll left" arrow over it, though nothing had been scrolled.
+  await homeWithRails(page);
+  // A rail long enough to scroll: one that fits has nowhere to snap to, so it never drifted.
+  const rail = page.locator('section')
+    .filter({ has: page.getByRole('button', { name: 'Scroll right' }) }).first();
+  await rail.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(600);
+  await expect(rail.getByRole('button', { name: 'Scroll left' })).toHaveCount(0);
+
+  const { scrollLeft, cardX, headingX } = await rail.evaluate((el) => {
+    const scroller = el.querySelector('.no-scrollbar') as HTMLElement;
+    return {
+      scrollLeft: scroller.scrollLeft,
+      cardX: el.querySelector('[data-testid="catalog-card"]')!.getBoundingClientRect().x,
+      headingX: el.querySelector('h2')!.getBoundingClientRect().x,
+    };
+  });
+  expect(scrollLeft).toBe(0);
+  expect(Math.abs(cardX - headingX)).toBeLessThan(2);
+});
+
+test('paging a rail lands a whole card at the gutter', async ({ page }) => {
+  await homeWithRails(page);
+  const rail = page.locator('section')
+    .filter({ has: page.getByRole('button', { name: 'Scroll right' }) }).first();
+  await rail.getByRole('button', { name: 'Scroll right' }).click();
+  await expect(rail.getByRole('button', { name: 'Scroll left' })).toBeVisible();
+  await page.waitForTimeout(900);
+
+  const { offset } = await rail.evaluate((el) => {
+    const scroller = el.querySelector('.no-scrollbar') as HTMLElement;
+    const left = scroller.getBoundingClientRect().x + 24;
+    // The first card whose right edge is past the gutter is the one at the start.
+    const first = [...el.querySelectorAll('[data-testid="catalog-card"]')]
+      .map((c) => c.getBoundingClientRect())
+      .find((r) => r.right > left)!;
+    return { offset: first.x - left };
+  });
+  // Ended mid-card before: `clientWidth - CARD_W` is not a whole number of cards.
+  expect(Math.abs(offset)).toBeLessThan(2);
+});
