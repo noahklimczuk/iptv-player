@@ -91,6 +91,8 @@ struct ChannelListView: View {
     /// Windows. Nil is the default Favourites.
     var list: String?
     @State private var channels: [Channel] = []
+    /// The first read finished: until then empty means "not read yet".
+    @State private var loaded = false
     @State private var guide: [Int64: NowNext] = [:]
     @State private var playing: PlayerItem?
     @State private var guideFor: Channel?
@@ -115,7 +117,7 @@ struct ChannelListView: View {
             .contextMenu { menu(for: channel) }
         }
         .overlay {
-            if favoritesOnly && channels.isEmpty {
+            if favoritesOnly && channels.isEmpty && loaded {
                 ContentUnavailableView(list == nil ? "No favourites yet" : "\(listTitle) is empty",
                                        systemImage: "heart",
                                        description: Text("Long-press a channel to add it."))
@@ -186,6 +188,7 @@ struct ChannelListView: View {
 
     private func load() async {
         channels = await model.channels(group: group, favoritesOnly: favoritesOnly, list: list)
+        loaded = true
         let answer = await model.nowNext(channelIds: channels.map(\.id))
         guide = Dictionary(answer.map { ($0.channelId, $0) }, uniquingKeysWith: { a, _ in a })
     }

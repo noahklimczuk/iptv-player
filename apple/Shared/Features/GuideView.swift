@@ -24,6 +24,9 @@ struct GuideView: View {
     @State private var filters = GuideFilterStore.read()
     /// How many channels the filters leave, all pages together.
     @State private var shown: UInt32 = 0
+    /// The first page arrived: until then an empty list means "not read yet", not "no
+    /// channels", and a big library takes a few seconds on a TV.
+    @State private var loaded = false
     @State private var filtering = false
 
     #if os(tvOS)
@@ -65,7 +68,9 @@ struct GuideView: View {
                 }
                 .overlay {
                     if channels.isEmpty {
-                        if let progress = model.importProgress {
+                        if !loaded {
+                            ProgressView()
+                        } else if let progress = model.importProgress {
                             ProgressView("Importing: \(progress.phase.label)")
                         } else if filters.activeCount > 0 {
                             ContentUnavailableView(
@@ -93,7 +98,7 @@ struct GuideView: View {
                 }
             }
             .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
-            .sheet(item: $chosen, onDismiss: {
+            .programmeDetail(item: $chosen, onDismiss: {
                 if let item = afterSheet { afterSheet = nil; playing = item }
             }) { c in
                 ProgrammeDetail(channel: c.channel, programme: c.programme, replayable: c.replayable) { item in
@@ -156,6 +161,7 @@ struct GuideView: View {
         let page = await model.guideChannels(filters, limit: 200)
         channels = page.channels
         shown = page.shown
+        loaded = true
     }
 
     private var controls: some View {

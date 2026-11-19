@@ -37,7 +37,7 @@ struct ChannelGuideView: View {
         .navigationTitle(channel.name)
         .task(id: day) { await load() }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
-        .sheet(item: $chosen, onDismiss: {
+        .programmeDetail(item: $chosen, onDismiss: {
             if let item = afterSheet { afterSheet = nil; playing = item }
         }) { c in
             ProgrammeDetail(channel: c.channel, programme: c.programme, replayable: c.replayable) { item in

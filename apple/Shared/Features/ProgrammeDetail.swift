@@ -19,27 +19,33 @@ struct ProgrammeDetail: View {
     @State private var failure: String?
 
     var body: some View {
+        #if os(tvOS)
+        // A page of its own, as the TV app shows a programme: a sheet on a TV is a narrow
+        // card that cut the buttons off. Menu closes it, so there is no Done.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(channel.name).font(.headline).foregroundStyle(.secondary)
+                details
+                actions.padding(.top, 12)
+            }
+            .padding(80)
+            .frame(maxWidth: 1400, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(.regularMaterial)
+        .task { await model.loadDvrMarks() }
+        #else
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    badges
-                    Text(p.title).font(.title.weight(.heavy))
-                    if let sub = p.subTitle {
-                        Text(sub).foregroundStyle(.secondary)
-                    }
-                    Text(timing).font(.callout).monospacedDigit().foregroundStyle(.tertiary)
-                    if let description = p.description {
-                        Text(description).font(.callout).foregroundStyle(.secondary)
-                    }
+                    details
                     actions.padding(.top, 8)
                 }
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle(channel.name)
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -48,6 +54,20 @@ struct ProgrammeDetail: View {
             .task { await model.loadDvrMarks() }
         }
         .presentationDetents([.medium, .large])
+        #endif
+    }
+
+    /// What it is and when, above the buttons.
+    @ViewBuilder private var details: some View {
+        badges
+        Text(p.title).font(.title.weight(.heavy))
+        if let sub = p.subTitle {
+            Text(sub).foregroundStyle(.secondary)
+        }
+        Text(timing).font(.callout).monospacedDigit().foregroundStyle(.tertiary)
+        if let description = p.description {
+            Text(description).font(.callout).foregroundStyle(.secondary)
+        }
     }
 
     private var p: Programme { programme }
@@ -84,7 +104,14 @@ struct ProgrammeDetail: View {
         let recording = marks.recording(channelId: channel.id, p)
         let reminder = marks.reminder(channelId: channel.id, p)
         let rule = marks.rule(p)
-        VStack(alignment: .leading, spacing: 8) {
+        // A row on a TV, where the remote moves sideways between them; a column on a
+        // phone, where a row of four would not fit.
+        #if os(tvOS)
+        let layout = AnyLayout(HStackLayout(spacing: 24))
+        #else
+        let layout = AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+        #endif
+        layout {
             if airing {
                 Button("Watch now", systemImage: "play.fill") {
                     play(.channel(id: channel.id, name: channel.name))
@@ -117,11 +144,11 @@ struct ProgrammeDetail: View {
                 .tint(reminder != nil ? .accentColor : nil)
                 .disabled(busy)
             }
-            if let failure {
-                Text(failure).font(.callout).foregroundStyle(.red)
-            }
         }
         .buttonStyle(.bordered)
+        if let failure {
+            Text(failure).font(.callout).foregroundStyle(.red)
+        }
     }
 
     private func run(_ body: @escaping () async -> String?) {
@@ -131,6 +158,21 @@ struct ProgrammeDetail: View {
             failure = await body()
             busy = false
         }
+    }
+}
+
+extension View {
+    /// Show `ProgrammeDetail`: a sheet on iPhone and iPad, a page of its own on a TV.
+    func programmeDetail<Content: View>(
+        item: Binding<ChosenProgramme?>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping (ChosenProgramme) -> Content
+    ) -> some View {
+        #if os(tvOS)
+        fullScreenCover(item: item, onDismiss: onDismiss, content: content)
+        #else
+        sheet(item: item, onDismiss: onDismiss, content: content)
+        #endif
     }
 }
 

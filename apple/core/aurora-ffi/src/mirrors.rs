@@ -1260,3 +1260,40 @@ fn privacy_says_and_keeps_what_windows_does() {
             .unwrap();
     assert!(ours.contains(refusal));
 }
+
+/// Windows' Sync panel says how many changes need a newer Aurora (§3.8); so does the
+/// Sync section, in the same words, from the same count.
+#[test]
+fn sync_says_what_needs_a_newer_aurora_as_windows_does() {
+    // JSX breaks the sentence over lines; compare with the whitespace folded.
+    let fold = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let panel = fold(&ui_src("features/settings/SyncPanel.tsx"));
+    let swift = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features/SyncSection.swift"),
+    )
+    .unwrap();
+    for part in [
+        "from your other devices",
+        "a newer version of Aurora.",
+        "kept on the server and will be read once this device updates.",
+    ] {
+        assert!(panel.contains(part), "SyncPanel no longer says {part:?}");
+        assert!(swift.contains(part), "SyncSection must say {part:?}");
+    }
+    for (one, many) in [
+        ("'change'", "'changes'"),
+        ("'needs'", "'need'"),
+        ("'It is'", "'They are'"),
+    ] {
+        assert!(
+            panel.contains(one) && panel.contains(many),
+            "SyncPanel changed {one}/{many}"
+        );
+        let (one, many) = (one.replace('\'', "\""), many.replace('\'', "\""));
+        assert!(
+            swift.contains(&one) && swift.contains(&many),
+            "SyncSection must say {one}/{many}"
+        );
+    }
+    assert!(swift.contains("status.unreadable > 0"));
+}

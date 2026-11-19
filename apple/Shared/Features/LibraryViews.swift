@@ -7,6 +7,8 @@ struct MoviesView: View {
     @State private var filters = BrowseFilters()
     @State private var facets: BrowseFacets?
     @State private var movies: [Movie] = []
+    /// The first page arrived: until then empty means "not read yet", not "none".
+    @State private var loaded = false
     @State private var selected: Movie?
 
     var body: some View {
@@ -19,7 +21,9 @@ struct MoviesView: View {
                 PosterGrid(items: movies.map { PosterItem(id: $0.id, title: $0.title, year: $0.year, poster: $0.poster) },
                            onSelect: { id in selected = movies.first { $0.id == id } },
                            onReachEnd: { Task { await loadMore() } })
-                if movies.isEmpty && filters.myList {
+                if movies.isEmpty && !loaded {
+                    ProgressView().padding(.top, 40)
+                } else if movies.isEmpty && filters.myList {
                     ContentUnavailableView("Nothing on My List", systemImage: "plus",
                                            description: Text("Add a film from its page."))
                 } else if movies.isEmpty && filters.narrowed {
@@ -48,6 +52,7 @@ struct MoviesView: View {
         let asked = filters
         if asked.myList {
             movies = await model.myList()?.movies ?? []
+            loaded = true
             if facets == nil { facets = await model.movieFacets(BrowseFilters().browse()) }
             return
         }
@@ -57,6 +62,7 @@ struct MoviesView: View {
         guard asked == filters else { return }
         movies = rows
         facets = f
+        loaded = true
     }
 
     /// The next page, when the last poster comes on screen and there is more.
@@ -110,6 +116,8 @@ struct SeriesView: View {
     @State private var filters = BrowseFilters()
     @State private var facets: BrowseFacets?
     @State private var series: [Series] = []
+    /// The first page arrived: until then empty means "not read yet", not "none".
+    @State private var loaded = false
 
     var body: some View {
         NavigationStack {
@@ -121,7 +129,9 @@ struct SeriesView: View {
                 PosterGrid(items: series.map { PosterItem(id: $0.id, title: $0.title, year: $0.year, poster: $0.poster) },
                            destination: { id in SeriesDetail(seriesId: id) },
                            onReachEnd: { Task { await loadMore() } })
-                if series.isEmpty && filters.myList {
+                if series.isEmpty && !loaded {
+                    ProgressView().padding(.top, 40)
+                } else if series.isEmpty && filters.myList {
                     ContentUnavailableView("Nothing on My List", systemImage: "plus",
                                            description: Text("Add a series from its page."))
                 } else if series.isEmpty && filters.narrowed {
@@ -150,6 +160,7 @@ struct SeriesView: View {
         let asked = filters
         if asked.myList {
             series = await model.myList()?.series ?? []
+            loaded = true
             if facets == nil { facets = await model.seriesFacets(BrowseFilters().browse()) }
             return
         }
@@ -159,6 +170,7 @@ struct SeriesView: View {
         guard asked == filters else { return }
         series = rows
         facets = f
+        loaded = true
     }
 
     private func loadMore() async {
