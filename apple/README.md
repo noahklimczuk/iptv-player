@@ -72,6 +72,15 @@ screens. The app can:
   app's Caches folder), up to 1 GB / 30 minutes by default and set in Settings. The bar
   runs from the oldest moment held to live, says how far behind live you are, and Back
   to live returns to the edge. The window is Windows' arithmetic (`aurora_core::timeshift`).
+- the featured billboard at the top of Home, as Windows' `HeroBillboard`: six titles
+  picked as Windows picks them (the head of For you, Top 10, Trending and Because you
+  watched first; nothing already on My List or part-way through; a new set each time the
+  app opens), one at a time over the backdrop, or the poster blurred when there is none,
+  with Play (resuming where left off), My List and More Info; it moves on every 12
+  seconds and holds while one of its buttons has the focus. Beside it in seven columns of
+  twelve, as Windows' bento, or above it on an iPhone, where My List and More Info show
+  only their icons. Windows plays the trailer over the backdrop after two seconds: not
+  here, as it is a YouTube embed and tvOS has no web view,
 - "On now" at the top of Home, as Windows' `OnNowTile`: the first six favourite
   channels, what each is airing with its times and progress, and a tap to tune; with no
   favourites, a line saying how to add some. Channels without a logo get Windows'

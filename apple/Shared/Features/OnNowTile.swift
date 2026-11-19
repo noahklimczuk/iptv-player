@@ -45,6 +45,8 @@ struct OnNowTile: View {
             .focusSection()
             #endif
         }
+        // As tall as the billboard beside it.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(EdgeInsets(top: 24, leading: 24, bottom: 20, trailing: 24))
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 24))
         .task(id: [reload, AnyHashable(playing == nil)]) { if playing == nil { await load() } }
