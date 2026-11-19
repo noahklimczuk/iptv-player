@@ -14,14 +14,16 @@ import type {
   GuideSlice, IngestProgress, MarkerKind, Movie, PlaybackAids, PlayerState, Programme,
   Progress, Rail, SearchHit, SearchResults, Series, SeriesPrefs, SkipMarker, SyncReport,
   ProviderCredentials, SleepDeadline, SleepState,
-  TimeshiftSettings, TimeshiftWindow, UpdateDownload,
+  TimeshiftSettings, TimeshiftWindow, UpdateDownload, WatchHistory,
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
 import type { SyncJoined, SyncRound, SyncStatus } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
 import * as fx from './fixtures';
-import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE } from './parentalMessages';
+import {
+  ADULT_NEEDS_PIN_MESSAGE, LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE,
+} from './parentalMessages';
 
 /**
  * A pretend published build, one patch ahead of whatever this bundle was built from.
@@ -92,6 +94,8 @@ const liked = new Set<string>(['movie:4', 'series:2']);
 let mockGeminiKey = '';
 /** Set through `gemini.setEnabled`. On by default, as a release build is. */
 let mockGeminiEnabled = true;
+/** Settings → Privacy's window in days; null keeps history for good, as the host does. */
+let mockHistoryDays: number | null = null;
 /**
  * `?builtInKey` — model a build that was compiled with a Gemini key.
  *
@@ -416,7 +420,7 @@ const SETTINGS_GUARDED: ReadonlySet<CommandName> = new Set<CommandName>([
   'gemini.setEnabled', 'gemini.setKey', 'updates.setAutomatic',
   'timeshift.setSettings', 'timeshift.clear',
   'playlist.update', 'playlist.setHidden', 'playlist.hideMatching', 'playlist.reset',
-  'library.setFilters',
+  'library.setFilters', 'privacy.setHistoryDays', 'privacy.clearHistory',
 ]);
 function channelLocked(c: { id: number; group: string | null }): boolean {
   return mockLocks.some((l) => (l.kind === 'channel' && l.value === String(c.id))
@@ -2684,6 +2688,31 @@ const handlers: { [K in CommandName]: Handler<K> } = {
         completed: p.completed,
       })),
 
+  // Settings → Privacy. The mock keeps one history for everybody, so "this profile's"
+  // is all of it.
+  'privacy.history': (): WatchHistory => ({ days: mockHistoryDays, items: progress.size }),
+  'privacy.setHistoryDays': ({ days }) => {
+    if (days != null && (!Number.isInteger(days) || days < 1 || days > 3650)) {
+      throw new Error('History can be kept for 1 to 3650 days, or for good.');
+    }
+    mockHistoryDays = days;
+    if (days == null) return 0;
+    const cutoff = Math.floor(Date.now() / 1000) - days * 86_400;
+    let removed = 0;
+    for (const [key, p] of progress) {
+      if (p.updatedAt < cutoff) {
+        progress.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  },
+  'privacy.clearHistory': () => {
+    const removed = progress.size;
+    progress.clear();
+    return removed;
+  },
+
   /**
    * Which episode Play opens, mirroring `aurora_db::repo::progress::resume_point`.
    *
@@ -2861,10 +2890,13 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'profiles.parental': (): ParentalSettings => mockParental,
   'profiles.setParental': ({ hideAdult, lockSettings, masterPin }) => {
     requireParent();
+    const pinAfter = masterPin !== undefined ? masterPin !== null : mockParental.hasMasterPin;
+    // Adult categories show only while there is a PIN, as the host's `set_parental` says.
+    if (!hideAdult && !pinAfter) throw new Error(ADULT_NEEDS_PIN_MESSAGE);
     if (masterPin) mockUnlockedUntil = nowSecs() + 30 * 60;
     mockParental = {
-      hideAdult, lockSettings,
-      hasMasterPin: masterPin !== undefined ? masterPin !== null : mockParental.hasMasterPin,
+      hideAdult, lockSettings: lockSettings && pinAfter,
+      hasMasterPin: pinAfter,
     };
     if (masterPin !== undefined) mockMasterPin = masterPin;
   },

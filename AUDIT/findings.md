@@ -51,6 +51,8 @@ commit and the test that would catch a regression.
 | F-36 | Critical | parental | No parental control reached a list or the player: a kids profile showed and played everything | Fixed |
 | F-37 | High | parental | A profile's daily viewing limit was stored and never counted, refused or set | Fixed |
 | F-38 | High | parental | Settings were locked by a screen only: a kids profile got in, and every command behind them answered anybody | Fixed |
+| F-39 | Medium | parental | Adult categories could be shown with no parental PIN, and clearing the PIN left them showing | Fixed |
+| F-40 | Medium | privacy | Watch history could not be cleared or limited: it was kept for good, fed recommendations and synced | Fixed |
 
 ---
 
@@ -1321,3 +1323,76 @@ section". Neither held.
 - `tests-e2e/parental.spec.ts`: a kids profile meets the locked screen, a command behind
   Settings asks for the PIN and gives nothing on cancel, the PIN opens Settings, and a
   grown-up's profile is not locked out.
+
+## F-39 — Medium — Adult categories could be shown without the parental PIN
+
+**Found by** reading README §11 against the code after F-38. It says adult content "is
+hidden by default on a fresh install and requires explicit opt-in plus the master PIN
+to reveal". The default held. The PIN did not:
+
+- With no parental PIN set, "Hide adult categories" was an ordinary switch. Anybody at
+  the keyboard, on any profile without an age limit, could turn it off in one click.
+- Removing the PIN while the switch was off left adult categories showing, with nothing
+  left that could hide them again behind a PIN.
+
+**Fix** (`docs/DECISIONS.md` D32):
+
+- Migration 21 adds the trigger `parental_adult_needs_pin`. Whenever the `parental` row
+  is updated so that adult categories show with no PIN, it turns the switch back on.
+  This covers every way in, including a row arriving from another device through sync.
+  The migration also applies the rule once to a library that already broke it.
+- `profiles.setParental` checks first and refuses with the reason ("Set a parental PIN
+  before showing adult categories…"). It now writes the PIN before the switches, so
+  setting a first PIN and showing adult categories in one save works. With no PIN it
+  also stores "Lock Settings" as off, since nothing could open them.
+- In Parental controls, the switch can't be turned off until a PIN exists, and its hint
+  says why. "Remove PIN" hides adult categories again.
+
+**Regression tests.**
+- `aurora-app` `profiles`: `adult_categories_show_only_while_there_is_a_parental_pin` and
+  `the_database_hides_adult_categories_again_when_the_pin_goes_another_way`.
+- `repo::profiles::adult_categories_are_hidden_by_default_for_everyone` now opts in
+  with a PIN.
+- `tests-e2e/parental.spec.ts`: the switch is locked without a PIN and the command
+  refuses, a PIN makes showing them a choice, and removing the PIN hides them again.
+
+## F-40 — Medium — Watch history could not be cleared or limited
+
+**Found by** reading README §15 against Settings. Its Privacy section promises "history
+retention, clear history". Settings had no Privacy section, and the host had neither
+command:
+
+- The only way to forget anything watched was one card at a time off Continue Watching.
+  Episode ticks, finished films and channels had no way out at all.
+- History was kept for good. It fed "Because you watched", the Gemini rail (which sends
+  titles to Google, `docs/PRIVACY.md`), and synced to every device in the household.
+- `docs/PRIVACY.md` didn't mention sync, so it didn't say where a synced history goes.
+
+**Fix** (`docs/DECISIONS.md` D33):
+
+- `aurora_db::repo::progress` gains `clear_history`, `prune_history`,
+  `set_history_days` and `watch_history`, with the window stored as the synced setting
+  `privacy.history_days`. Unset keeps history for good, which stays the default.
+- New commands `privacy.history`, `privacy.setHistoryDays` and `privacy.clearHistory`.
+  The two that change anything are behind the Settings lock (D31), so a kids profile
+  can't clear what it watched.
+- Choosing a window applies it at once. The refresh sweep applies it again two minutes
+  after launch and every half hour, so a PC left on keeps to it too.
+- Clearing also drops the cached Gemini suggestions, which are a reading of that
+  history.
+- Clearing doesn't touch `watch_time`, the minutes a kids profile has used today.
+  Clearing that would reset a child's daily limit (D30).
+- Settings → Privacy: "Keep watch history" (Forever, 1 year, 90 days, 30 days), "Clear
+  watch history" with a count and a second press to confirm, and a line saying no usage
+  data is sent.
+- `docs/PRIVACY.md` now has a section on watch history and one on sync.
+
+**Regression tests.**
+- `repo::progress`: `clearing_history_forgets_one_profile_and_keeps_the_kids_minutes`
+  and `history_is_kept_for_good_until_a_window_is_chosen`.
+- `aurora-app` `privacy`: `choosing_a_window_applies_it_at_once_and_refuses_nonsense`.
+- `aurora-contract`: `WatchHistory` is in the field check, and `privacy.history_days`
+  is classified for sync.
+- `tests-e2e/privacy.spec.ts`: clearing empties Continue Watching after a second press,
+  the window defaults to Forever and keeps what is chosen, and the panel says no usage
+  data is sent.

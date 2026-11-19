@@ -11,6 +11,7 @@ import { FilterPanel } from '@/features/settings/FilterPanel';
 import { GeminiPanel } from '@/features/settings/GeminiPanel';
 import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { ParentalPanel } from '@/features/settings/ParentalPanel';
+import { PrivacyPanel } from '@/features/settings/PrivacyPanel';
 import { SyncPanel } from '@/features/settings/SyncPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
 import { RefreshButton } from '@/features/settings/RefreshButton';
@@ -334,6 +335,10 @@ function SettingsContent({ onAddProvider }: { onAddProvider: () => void }) {
         <GeminiPanel />
       </Section>
 
+      <Section title="Privacy">
+        <PrivacyPanel />
+      </Section>
+
       <Section title="Filtering">
         <FilterPanel />
       </Section>
@@ -436,7 +441,7 @@ function SettingsContent({ onAddProvider }: { onAddProvider: () => void }) {
 /** The sections, in page order, for the index. */
 const SECTIONS = [
   'Providers', 'Appearance', 'Parental controls', 'Artwork and metadata', 'Recommendations',
-  'Filtering',
+  'Privacy', 'Filtering',
   'Pause live TV', 'Library', 'Updates', 'About', 'Diagnostics', 'Keyboard',
 ];
 
@@ -447,6 +452,7 @@ const SECTION_ICONS: Record<string, IconName> = {
   'Parental controls': 'lock',
   'Artwork and metadata': 'film',
   Recommendations: 'sparkle',
+  Privacy: 'clock',
   Filtering: 'grid',
   'Pause live TV': 'pause',
   Library: 'stack',
@@ -464,6 +470,7 @@ const SECTION_BLURBS: Record<string, string> = {
   Providers: 'The playlists and Xtream lines your library is built from.',
   Appearance: 'How Aurora looks and moves.',
   'Parental controls': 'What each profile may watch, and what needs the PIN.',
+  Privacy: 'What Aurora remembers you watched, and for how long.',
   Filtering: 'What your library shows, and what it hides.',
   'Pause live TV': 'Rewind and pause the channel you are watching.',
   Library: 'What your providers have given you.',

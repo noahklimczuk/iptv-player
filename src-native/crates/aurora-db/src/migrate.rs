@@ -121,6 +121,7 @@ mod tests {
         "enrichment",
         "not_interested",
         "tmdb_lists",
+        "parental_adult_needs_pin",
     ];
 
     fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {

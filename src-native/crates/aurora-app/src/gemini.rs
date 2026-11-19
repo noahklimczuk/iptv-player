@@ -465,8 +465,16 @@ pub fn gemini_set_key(services: State<'_, Services>, args: SetKeyArgs) -> Result
     // The cached answer was generated with the old key and may be a refusal; the next ask
     // should be a real one.
     let db = services.db.lock();
-    let _ = aurora_db::repo::settings::set(&db, CACHE_KEY, &String::new());
+    forget_cached(&db);
     Ok(())
+}
+
+/// Drop the cached suggestions, so the next ask is answered afresh.
+///
+/// Settings → Privacy calls this when a viewer clears their history: the cache is a
+/// reading of that history, and keeping it would keep the history in another form.
+pub(crate) fn forget_cached(db: &aurora_db::rusqlite::Connection) {
+    let _ = aurora_db::repo::settings::set(db, CACHE_KEY, &String::new());
 }
 
 #[cfg(test)]

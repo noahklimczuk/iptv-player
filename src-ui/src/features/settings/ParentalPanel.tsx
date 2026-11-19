@@ -76,9 +76,12 @@ export function ParentalPanel() {
 
       <Toggle
         label="Hide adult categories"
-        hint="For every profile. Categories named adult, XXX or 18+ are left out of every list and refused if played. A profile with an age limit always hides them."
+        hint={parental.hasMasterPin || !parental.hideAdult
+          ? 'For every profile. Categories named adult, XXX or 18+ are left out of every list and refused if played. A profile with an age limit always hides them.'
+          : 'For every profile. Set a parental PIN first to show them: only the PIN can show adult categories.'}
         checked={parental.hideAdult}
-        disabled={busy}
+        // Showing them needs the PIN (README §11); hiding them never does.
+        disabled={busy || (parental.hideAdult && !parental.hasMasterPin)}
         onChange={(hideAdult) => void setFlags({ hideAdult })}
       />
       <Toggle
@@ -172,7 +175,8 @@ function MasterPin({
 
   const save = (masterPin: string | null) => run(async () => {
     await invoke('profiles.setParental', {
-      hideAdult: parental.hideAdult,
+      // Clearing the PIN hides adult categories again: only the PIN can show them.
+      hideAdult: masterPin === null ? true : parental.hideAdult,
       lockSettings: masterPin === null ? false : parental.lockSettings,
       masterPin,
     });

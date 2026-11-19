@@ -444,6 +444,14 @@ export interface SleepState {
   warning: boolean;
 }
 
+/** Settings → Privacy: how long history is kept, and how much one profile has. */
+export interface WatchHistory {
+  /** Days of history kept; null keeps it for good, the default. */
+  days: number | null;
+  /** Titles and channels this profile has a position or a "watched" for. */
+  items: number;
+}
+
 export interface TimeshiftSettings {
   enabled: boolean;
   /** Rewind budget. Both caps are real and the tighter one decides the window. */
@@ -1744,6 +1752,19 @@ export interface Commands {
     profileId: number;
     seriesId: number;
   }) => EpisodeProgress[];
+  /** How long watch history is kept, and how much this profile has. */
+  'privacy.history': (args: { profileId: number }) => WatchHistory;
+  /**
+   * Keep history for `days` (1 to 3650), or for good with null. Applied at once;
+   * returns how many entries the new window removed. Behind the Settings lock.
+   */
+  'privacy.setHistoryDays': (args: { days: number | null }) => number;
+  /**
+   * Forget everything this profile has watched: Continue Watching, episode ticks, what
+   * recommendations are built from. Not the minutes a kids profile has used today.
+   * Returns how many entries went. Behind the Settings lock.
+   */
+  'privacy.clearHistory': (args: { profileId: number }) => number;
   /**
    * Which episode Play should open for a show, and where to start in it.
    *

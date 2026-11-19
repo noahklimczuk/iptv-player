@@ -32,6 +32,9 @@ pub const SETTINGS: &[(&str, SettingSync)] = &[
     ("gemini.enabled", Personal),
     // The household's parental choice, like the locks it applies to.
     ("parental.hide_locked", Personal),
+    // How long watch history is kept. The history syncs, and so do the deletions this
+    // causes, so a window that differed by device would only be the shortest one anyway.
+    ("privacy.history_days", Personal),
     // Per-device by nature.
     //
     // The assistant's history is per profile but can run to many kilobytes, and a
