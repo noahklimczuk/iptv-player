@@ -328,6 +328,59 @@ fn a_damaged_record_is_skipped_not_fatal() {
 }
 
 #[test]
+fn a_skipped_record_is_noted_and_only_a_newer_build_asks_for_it_again() {
+    use aurora_sync::engine::{reader, CURSOR};
+    use aurora_sync::transport::SyncTransport;
+
+    // 1. Something this build cannot read is noted, not just counted.
+    let (server, mut a, mut b) = household();
+    use aurora_sync::transport::Envelope;
+    server
+        .push(&[Envelope {
+            doc_id: "favorite:{}".into(),
+            payload: b"from a newer Aurora".to_vec(),
+            writer: "someone".into(),
+        }])
+        .unwrap();
+    b.sync();
+    assert_eq!(db::unreadable_len(&b.conn).unwrap(), 1);
+    // The same build would only fail again, so it does not ask.
+    assert!(db::unreadable_by_others(&b.conn, &reader(), 10)
+        .unwrap()
+        .is_empty());
+    b.sync();
+    assert_eq!(db::unreadable_len(&b.conn).unwrap(), 1);
+
+    // 2. A favourite the TV skipped under an older build: the cursor is past it, so no
+    //    pull will bring it back.
+    lists::toggle_favorite(&a.conn, 1, 10, None, 1).unwrap();
+    a.sync();
+    let page = server.pull(None, 500).unwrap();
+    let skipped = page
+        .records
+        .iter()
+        .find(|e| e.writer == "pc" && e.doc_id.starts_with("favorite:"))
+        .expect("the PC's favourite is on the server")
+        .doc_id
+        .clone();
+    db::set_state(&b.conn, CURSOR, page.cursor.as_deref().unwrap()).unwrap();
+    db::note_unreadable(&b.conn, &skipped, "v0:older", 1).unwrap();
+    assert_eq!(b.favorites(), 0);
+
+    // 3. This build reads it, applies it and forgets the note. The damaged record from
+    //    step 1 stays noted, under this build now.
+    let report = b.sync();
+    assert!(report.applied >= 1, "{report:?}");
+    assert_eq!(b.favorites(), 1);
+    assert_eq!(db::unreadable_len(&b.conn).unwrap(), 1);
+    assert_eq!(
+        db::outbox_len(&b.conn).unwrap(),
+        0,
+        "applying it queued nothing"
+    );
+}
+
+#[test]
 fn a_device_that_never_joins_captures_nothing() {
     let server = MemoryTransport::new();
     let d = device(&server, "pc", 0, true);

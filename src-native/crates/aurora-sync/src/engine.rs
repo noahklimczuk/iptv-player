@@ -32,6 +32,25 @@ pub const BATCH: usize = 500;
 
 /// Where the pull cursor is kept in `sync_state`.
 pub const CURSOR: &str = "cursor";
+
+/// How many skipped records one round fetches again. Each costs a read or two, and a
+/// household that skipped thousands should spend a few rounds on them, not one day's
+/// quota in one go.
+pub const REREAD_PER_ROUND: usize = 50;
+
+/// What this build can read: the record format and every kind of record it knows.
+///
+/// A record that would not decode is noted under this (`aurora_db::repo::sync::
+/// note_unreadable`). An update that reads more -- a new record version, a new kind --
+/// has a different answer, and that difference is what makes it fetch the record again
+/// (§3.8). The same build asking again would only be skipped again.
+pub fn reader() -> String {
+    format!(
+        "v{}:{}",
+        crate::vault::RECORD_VERSION,
+        local::KINDS.join(",")
+    )
+}
 /// This device's id in `sync_state`, set when it joins.
 pub const DEVICE: &str = "device";
 const APPLYING: &str = "applying";
@@ -130,12 +149,14 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
         Ok(report)
     }
 
-    /// One round: push, pull, retry parked records.
+    /// One round: push, pull, retry parked records, and read again what an older build
+    /// skipped.
     pub fn sync(&self, conn: &mut Connection) -> Result<Report> {
         let mut report = Report::default();
         self.push(conn, &mut report)?;
         self.pull(conn, &mut report)?;
         report.applied += self.retry_pending(conn)?;
+        report.applied += self.reread_unreadable(conn)?;
         Ok(report)
     }
 
@@ -214,6 +235,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
     pub fn pull(&self, conn: &mut Connection, report: &mut Report) -> Result<()> {
         let mut cursor = db::get_state(conn, CURSOR)?;
         let mut adopted_ids = Vec::new();
+        let reader = reader();
         loop {
             let page = self.transport.pull(cursor.as_deref(), BATCH)?;
             let tx = conn.transaction()?;
@@ -223,13 +245,17 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
                 if env.writer == self.device {
                     continue;
                 }
+                // Skipped, and noted: the cursor moves past it, so the note is the only
+                // way an update that can read it will know to ask for it again.
                 let Ok(remote) = self.codec.decode(&env.doc_id, &env.payload) else {
                     report.undecodable += 1;
+                    db::note_unreadable(&tx, &env.doc_id, &reader, now())?;
                     tracing::warn!(doc = %env.doc_id, "skipping a sync record that will not decode");
                     continue;
                 };
                 if !local::KINDS.contains(&remote.kind.as_str()) {
                     report.undecodable += 1;
+                    db::note_unreadable(&tx, &env.doc_id, &reader, now())?;
                     continue;
                 }
                 db::observe_clock(&tx, remote.max_clock())?;
@@ -353,6 +379,52 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
             }
         }
         tx.commit()?;
+        Ok(applied)
+    }
+
+    /// Fetch again the records an older build skipped, now that this one may read them
+    /// (§3.8). Returns how many applied.
+    ///
+    /// Only records noted by a different [`reader`]: this build failing on its own notes
+    /// again would cost a read each round for nothing. A record this build cannot read
+    /// either becomes its note, and one gone from the server is forgotten.
+    pub fn reread_unreadable(&self, conn: &mut Connection) -> Result<usize> {
+        let reader = reader();
+        let ids = db::unreadable_by_others(conn, &reader, REREAD_PER_ROUND)?;
+        let mut applied = 0;
+        for doc_id in ids {
+            let mut merged: Option<Record> = None;
+            let mut unreadable = false;
+            for env in self.transport.get(&doc_id)? {
+                if env.writer == self.device {
+                    continue;
+                }
+                match self.codec.decode(&env.doc_id, &env.payload) {
+                    Ok(copy) if local::KINDS.contains(&copy.kind.as_str()) => {
+                        merged = Some(match merged {
+                            Some(m) => m.merge(&copy),
+                            None => copy,
+                        });
+                    }
+                    _ => unreadable = true,
+                }
+            }
+            let tx = conn.transaction()?;
+            if unreadable {
+                db::note_unreadable(&tx, &doc_id, &reader, now())?;
+            } else {
+                db::forget_unreadable(&tx, &doc_id)?;
+            }
+            if let Some(remote) = merged {
+                db::observe_clock(&tx, remote.max_clock())?;
+                if !device_local(&remote.kind, &remote.ident)
+                    && self.apply_remote(&tx, &remote)? == Applied::Done
+                {
+                    applied += 1;
+                }
+            }
+            tx.commit()?;
+        }
         Ok(applied)
     }
 

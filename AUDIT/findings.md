@@ -53,6 +53,7 @@ commit and the test that would catch a regression.
 | F-38 | High | parental | Settings were locked by a screen only: a kids profile got in, and every command behind them answered anybody | Fixed |
 | F-39 | Medium | parental | Adult categories could be shown with no parental PIN, and clearing the PIN left them showing | Fixed |
 | F-40 | Medium | privacy | Watch history could not be cleared or limited: it was kept for good, fed recommendations and synced | Fixed |
+| F-41 | Medium | sync | A sync record this version could not read was skipped for good: no note of it, no count shown, never fetched again | Fixed |
 
 ---
 
@@ -1396,3 +1397,38 @@ command:
 - `tests-e2e/privacy.spec.ts`: clearing empties Continue Watching after a second press,
   the window defaults to Forever and keeps what is chosen, and the panel says no usage
   data is sent.
+
+## F-41 — Medium — A sync record this version could not read was lost for good
+
+**Found by** reading `docs/APPLE_PORT_AND_SYNC.md` §3.8 against `aurora-sync`. For a
+record that will not decode (written by a newer Aurora, or damaged), it says: skipped
+and counted, never applied, the cursor still advances, "and the record is re-fetched
+when the app updates". The skip and the cursor were built. The rest wasn't:
+
+- The engine counted the record in that round's `Report.undecodable` and nothing read
+  the count. No screen said anything had been skipped.
+- Nothing recorded which record it was, and the cursor had moved past it. An update that
+  could read it would never see it again, so a change made on a newer device (a
+  favourite, a position, a profile edit) was lost on this one for good.
+
+**Fix:**
+
+- Migration 22 adds `sync_unreadable (doc_id, reader, seen_at)`. It is device-local, has
+  no capture triggers, and signing out clears it.
+- A skipped record is noted under `engine::reader()`, which says what this build can
+  read: the record format version and every kind it knows.
+- `Engine::sync` ends with `reread_unreadable`. It fetches again, by id, the records
+  noted by a *different* reader, up to 50 a round. One that now reads is applied and
+  forgotten. One that still doesn't is noted under this reader, and the same build
+  never asks twice.
+- `Status.unreadable` carries the count, and Settings → Sync says how many changes need
+  a newer version of Aurora.
+
+**Regression tests.**
+- `repo::sync::a_skipped_record_is_remembered_until_another_reader_reads_it`.
+- `aurora-sync` `tests/devices.rs`:
+  `a_skipped_record_is_noted_and_only_a_newer_build_asks_for_it_again`. A record skipped
+  under an older reader, with the cursor already past it, is applied on the next round.
+  A damaged one stays noted and isn't asked for again by the same build.
+- `tests-e2e/sync.spec.ts`: the panel shows the count with what will fix it, and
+  nothing when there is none.

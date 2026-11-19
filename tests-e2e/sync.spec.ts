@@ -35,6 +35,34 @@ test('a second device joins the household and is told what it has spent today', 
   await page.screenshot({ path: `${SHOTS}/60-sync-signed-in.png` });
 });
 
+test('changes only a newer Aurora can read are counted, and say what will fix them', async ({ page }) => {
+  await openSync(page, '?syncUnreadable');
+  await page.getByRole('tab', { name: 'Join my household' }).click();
+  await page.getByTestId('sync-email').fill('home@example.com');
+  await page.getByTestId('sync-password').fill('hunter22');
+  await page.getByTestId('sync-passphrase').fill('correct horse');
+  await page.getByTestId('sync-device-name').fill('Bedroom PC');
+  await page.getByRole('button', { name: 'Join', exact: true }).click();
+
+  await expect(page.getByTestId('sync-signed-in')).toBeVisible();
+  await expect(page.getByTestId('sync-unreadable')).toContainText(
+    '2 changes from your other devices need a newer version of Aurora',
+  );
+  await expect(page.getByTestId('sync-unreadable')).toContainText('once this device updates');
+});
+
+test('with nothing unreadable, the panel says nothing about it', async ({ page }) => {
+  await openSync(page);
+  await page.getByRole('tab', { name: 'Join my household' }).click();
+  await page.getByTestId('sync-email').fill('home@example.com');
+  await page.getByTestId('sync-password').fill('hunter22');
+  await page.getByTestId('sync-passphrase').fill('correct horse');
+  await page.getByTestId('sync-device-name').fill('Bedroom PC');
+  await page.getByRole('button', { name: 'Join', exact: true }).click();
+  await expect(page.getByTestId('sync-signed-in')).toBeVisible();
+  await expect(page.getByTestId('sync-unreadable')).toHaveCount(0);
+});
+
 test('a wrong passphrase is called that, and nothing is signed in', async ({ page }) => {
   await openSync(page);
   await page.getByRole('tab', { name: 'Join my household' }).click();

@@ -413,7 +413,7 @@ paid plan, or that sharing taken into account; no local count can see it.
 | Quota exhausted | Treated as offline until midnight Pacific time, when Firestore resets the quotas. Logged once, not per attempt. |
 | Token expired or revoked | The device stops syncing and shows "Sign in again"; local data is untouched. |
 | Wrong passphrase | Wrapping uses AEAD, so a wrong passphrase is detected. It is reported as such and never as "corrupt data". |
-| A record that will not decrypt (written by a newer app version or corrupted) | Skipped and counted in Diagnostics, never applied. The cursor still advances, and the record is re-fetched when the app updates. |
+| A record that will not decrypt (written by a newer app version or corrupted) | Skipped and never applied. It is noted in `sync_unreadable` under what this build can read (`engine::reader`), and Settings → Sync shows the count. The cursor still advances; a build that reads more fetches the record again by id, up to 50 a round (F-41). |
 | Two devices add the same provider before either has synced | They are merged by the fingerprint in §3.3; both sides' favorites and progress survive. |
 
 ---

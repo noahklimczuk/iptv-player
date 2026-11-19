@@ -35,7 +35,7 @@ const ID_LABEL: &[u8] = b"aurora-sync/doc-id/v1";
 const RECORD_LABEL: &[u8] = b"aurora-sync/record/v1";
 /// The first byte of every record ciphertext, so the format can change later without a
 /// newer record being mistaken for a damaged one by an older app.
-const RECORD_VERSION: u8 = 1;
+pub const RECORD_VERSION: u8 = 1;
 const NONCE_LEN: usize = 24;
 
 #[derive(Debug, Error, PartialEq, Eq)]

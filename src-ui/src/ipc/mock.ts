@@ -1871,6 +1871,10 @@ const SYNC_AVAILABLE =
 const SYNC_OFFLINE =
   typeof window !== 'undefined'
   && new URLSearchParams(window.location.search).has('syncOffline');
+/** `?syncUnreadable` — the household holds two records only a newer Aurora can read. */
+const SYNC_UNREADABLE =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('syncUnreadable');
 
 /** The household on the "server": accounts by email, and the one vault. */
 const mockSyncAccounts = new Map<string, { password: string; passphrase: string; code: string }>([
@@ -1910,6 +1914,7 @@ function mockSyncStatus(): SyncStatus {
     secretsPersistent: false,
     usage: mockSync ? { reads: 46, writes: 43 } : { reads: 0, writes: 0 },
     thrifty: false,
+    unreadable: mockSync && SYNC_UNREADABLE ? 2 : 0,
   };
 }
 
