@@ -74,8 +74,10 @@ screens. The app can:
   `ChannelTile`: the number (or first letter) on one of the seven art colours, picked
   from the name the same way, so a channel is the same colour in both apps,
 - the channel banner over the player, as Windows' `ChannelBanner`: on every tune, the
-  channel's logo, number and name, what is on now with its times and how far through,
-  what is next (or "No guide data for this channel"), and the time, for 5 seconds,
+  channel's logo, number, name and quality tag, what is on now with its times and how
+  far through, what is next (or "No guide data for this channel"), and the time, for 5
+  seconds. On an upright iPhone the time is left to the status bar and the logo and
+  number are a size smaller, so the name has room (Windows never draws it that narrow),
 - the seek preview on iPhone and iPad (Windows' `Scrub.tsx` and `play/preview.rs`):
   dragging the bar shows a bubble with the time, the chapter or skip marker there, and on
   live TV the wall-clock moment and what was on. The picture in it comes from frames mpv

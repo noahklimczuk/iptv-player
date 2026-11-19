@@ -57,6 +57,7 @@ final class PlayerSession {
         let name: String
         let number: UInt32?
         var logo: String? = nil
+        var quality: String? = nil
     }
 
     /// The channel banner (Windows' `ChannelBanner`): the channel just tuned, what is on
@@ -756,6 +757,7 @@ func clock(_ seconds: Double) -> String {
 
 extension PlayerSession.Tuned {
     init(_ channel: Channel) {
-        self.init(id: channel.id, name: channel.name, number: channel.number, logo: channel.logo)
+        self.init(id: channel.id, name: channel.name, number: channel.number, logo: channel.logo,
+                  quality: channel.quality)
     }
 }

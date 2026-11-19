@@ -1150,8 +1150,18 @@ private struct SeekBubble: View {
 
 /// Windows' `ChannelBanner` over the player: the channel's logo, number and name, what is
 /// on now with its times and how far through it is, what is on next, and the time.
+///
+/// On an iPhone held upright the time is left to the status bar above it, and the logo and
+/// number are a size smaller: Windows never lays the banner out that narrow, and there it
+/// left the name a letter or two.
 private struct ChannelBannerView: View {
     let banner: PlayerSession.ChannelBanner
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var narrow: Bool { sizeClass == .compact }
+    #else
+    private let narrow = false
+    #endif
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -1162,15 +1172,26 @@ private struct ChannelBannerView: View {
     private func content(now: Date) -> some View {
         HStack(spacing: 16) {
             ChannelTile(name: banner.channel.name, number: banner.channel.number, logo: banner.channel.logo,
-                        size: logoSize)
+                        size: narrow ? 44 : logoSize)
             if let number = banner.channel.number {
                 Text(String(number))
-                    .font(.system(.largeTitle, design: .rounded).weight(.heavy))
+                    .font(.system(narrow ? .title2 : numberStyle, design: .rounded).weight(.heavy))
                     .monospacedDigit()
                     .foregroundStyle(.tint)
+                    .lineLimit(1).fixedSize()
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(banner.channel.name).font(.headline.weight(.heavy)).lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(banner.channel.name).font(.headline.weight(.heavy)).lineLimit(1)
+                    // Windows' quiet tag: HD, FHD, 4K.
+                    if let quality = banner.channel.quality {
+                        Text(quality)
+                            .font(.caption2.weight(.heavy))
+                            .padding(.horizontal, 10).frame(height: 20)
+                            .background(.white.opacity(0.16), in: Capsule())
+                            .fixedSize()
+                    }
+                }
                 if let on = banner.guide?.now {
                     Text(on.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                     HStack(spacing: 12) {
@@ -1192,9 +1213,13 @@ private struct ChannelBannerView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(now, format: .dateTime.hour().minute())
-                .font(.title2.weight(.heavy))
-                .monospacedDigit()
+            if !narrow {
+                // `clockTime`, not the locale: the player is outside the theme's environment.
+                Text(clockTime(now))
+                    .font(.title2.weight(.heavy))
+                    .monospacedDigit()
+                    .lineLimit(1).fixedSize()
+            }
         }
         .foregroundStyle(.white)
         .padding(.vertical, 14).padding(.leading, 14).padding(.trailing, 22)
@@ -1219,8 +1244,11 @@ private struct ChannelBannerView: View {
     #if os(tvOS)
     private let logoSize: CGFloat = 80
     private let maxWidth: CGFloat = 760
+    private let numberStyle: Font.TextStyle = .largeTitle
     #else
     private let logoSize: CGFloat = 52
     private let maxWidth: CGFloat = 560
+    /// Windows' `--fs-2xl`: a five-digit number still leaves the name its room on a phone.
+    private let numberStyle: Font.TextStyle = .title
     #endif
 }
