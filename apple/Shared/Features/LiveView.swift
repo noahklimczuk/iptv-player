@@ -108,7 +108,8 @@ struct ChannelListView: View {
             Button {
                 playing = .channel(id: channel.id, name: channel.name)
             } label: {
-                ChannelRow(channel: channel, guide: guide[channel.id])
+                ChannelRow(channel: channel, guide: guide[channel.id],
+                           locked: model.isLocked(channelId: channel.id, group: channel.group))
             }
             // Long-press on the Siri Remote, long-press or right-click on iPhone and iPad.
             .contextMenu { menu(for: channel) }
@@ -131,6 +132,8 @@ struct ChannelListView: View {
             }
         }
         .task { await load() }
+        // The padlocks: what a parent locked, read again each visit (Windows' `LivePage`).
+        .task { await model.loadParental() }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
         .navigationDestination(item: $guideFor) { ChannelGuideView(channel: $0) }
         .alert("Add to a new list", isPresented: Binding(get: { newListFor != nil }, set: { if !$0 { newListFor = nil } })) {
@@ -228,6 +231,8 @@ struct ChannelListView: View {
 private struct ChannelRow: View {
     let channel: Channel
     let guide: NowNext?
+    /// Locked by a parent: playing it asks for the parental PIN.
+    var locked = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -237,6 +242,10 @@ private struct ChannelRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(channel.name)
+                    if locked {
+                        Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Locked: needs the parental PIN")
+                    }
                     if channel.favorite {
                         Image(systemName: "heart.fill").font(.caption).foregroundStyle(.pink)
                             .accessibilityLabel("Favourite")

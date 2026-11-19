@@ -194,6 +194,8 @@ impl AuroraCore {
 
     /// Change one entry.
     pub fn playlist_update(&self, kind: LibraryKind, id: i64, patch: PlaylistPatch) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let db = self.db.lock();
         playlist::update(&db, kind.into(), id, &patch.into())?;
         Ok(())
@@ -206,12 +208,16 @@ impl AuroraCore {
         ids: Vec<i64>,
         hidden: bool,
     ) -> Result<u32> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let mut db = self.db.lock();
         Ok(playlist::set_hidden_many(&mut db, kind.into(), &ids, hidden)? as u32)
     }
 
     /// Hide or show everything the query matches, not just the page on screen.
     pub fn playlist_hide_matching(&self, query: PlaylistQuery, hidden: bool) -> Result<u32> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         // Paging doesn't apply: `hide_matching` acts on the whole match.
         let q = query.query(1, 0);
         let db = self.db.lock();
@@ -220,6 +226,8 @@ impl AuroraCore {
 
     /// Put these entries back to what the provider says. Returns how many changed.
     pub fn playlist_reset(&self, kind: LibraryKind, ids: Vec<i64>) -> Result<u32> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let mut db = self.db.lock();
         Ok(playlist::reset(&mut db, kind.into(), &ids)? as u32)
     }

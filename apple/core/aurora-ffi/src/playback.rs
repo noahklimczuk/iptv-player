@@ -84,6 +84,7 @@ impl AuroraCore {
     /// Everything needed to play a live channel.
     pub fn tune_live(&self, channel_id: i64) -> Result<LiveTune> {
         let db = self.db.lock();
+        crate::parental::allowed(&db, aurora_db::repo::parental::Target::Channel(channel_id))?;
         let channel = channels::get(&db, channel_id)?.ok_or_else(|| {
             AuroraError::not_found(
                 "That channel is no longer in the library. A refresh may have removed it.",

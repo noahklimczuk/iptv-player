@@ -505,8 +505,7 @@ final class AppModel {
     /// A provider's saved settings, password included, for the editor. Throws, so the
     /// editor can say why it has nothing to show.
     func providerSettings(_ id: Int64) async throws -> ProviderSettings {
-        guard let core else { throw CancellationError() }
-        return try await Task.detached { try core.providerSettings(providerId: id) }.value
+        try await guarded { try $0.providerSettings(providerId: id) }
     }
 
     /// "Check connection": what the form holds, tried without saving it.
@@ -517,8 +516,7 @@ final class AppModel {
 
     /// Save edits to a provider. Throws, so the editor keeps the form and says why.
     func updateProvider(_ id: Int64, draft: ProviderDraft) async throws {
-        guard let core else { return }
-        try await Task.detached { try core.updateProvider(providerId: id, draft: draft) }.value
+        try await guarded { try $0.updateProvider(providerId: id, draft: draft) }
         await reload()
     }
 
@@ -543,6 +541,9 @@ final class AppModel {
         if let still {
             activeProfile = still
         } else if all.count == 1, let only = all.first, !only.hasPin {
+            // Chosen through the core, as Windows does: what a profile may see is
+            // decided there, so who is watching must be too.
+            _ = await call(nil) { try $0.selectProfile(profileId: only.id, pin: nil) }
             activeProfile = only
             profileId = only.id
             if atLaunch { picking = false }
@@ -574,14 +575,141 @@ final class AppModel {
         return gone
     }
 
-    func activate(_ profile: Profile) {
-        activeProfile = profile
-        profileId = profile.id
-        picking = false
+    /// Choose who is watching (`profiles.select`): the core checks the profile's PIN, if
+    /// it has one, and applies its limits from now on. Returns what the PIN came to, or
+    /// nil when it could not be asked; the profile is active only on `.ok` or
+    /// `.notRequired`.
+    @discardableResult
+    func choose(_ profile: Profile, pin: String? = nil) async -> PinOutcome? {
+        let outcome = await call(nil) { try $0.selectProfile(profileId: profile.id, pin: pin) }
+        if outcome == .ok || outcome == .notRequired {
+            activeProfile = profile
+            profileId = profile.id
+            picking = false
+            await loadParental()
+        }
+        return outcome
     }
 
-    func verifyPin(_ profile: Profile, pin: String) async -> PinOutcome? {
-        await call(nil) { try $0.verifyProfilePin(profileId: profile.id, pin: pin) }
+    // MARK: Parental controls (README §11, F-36 to F-38)
+
+    /// The gate as it stands for whoever is watching (`parental_state`).
+    private(set) var parental: ParentalState?
+    /// The household's parental settings: the PIN, hide adult, lock Settings.
+    private(set) var parentalSettings: ParentalSettings?
+    /// What a parent locked, for the padlocks and Parental controls.
+    private(set) var locks: [ParentalLock] = []
+
+    /// Read the gate again. After every change and every PIN, as Windows' `useParental`.
+    func loadParental() async {
+        guard let core else { return }
+        let read = try? await Task.detached {
+            (try core.parentalState(), try core.parentalSettings(), try core.parentalLocks())
+        }.value
+        guard let read else { return }
+        (parental, parentalSettings, locks) = read
+    }
+
+    /// Why the film and series pages are empty for this profile, when it is the age limit
+    /// holding back every title without a rating, in a library that has titles: panels
+    /// rarely send ratings (Windows' `BrowsePage`, F-36).
+    var unratedHiddenReason: String? {
+        guard let gate = parental, gate.unratedHidden, gate.ratedTitles < gate.titles else { return nil }
+        return [
+            "This profile only sees titles with a rating, and",
+            gate.ratedTitles == 0
+                ? "none of this library's are rated."
+                : "\(gate.ratedTitles.formatted()) of \(gate.titles.formatted()) titles are rated.",
+            "Your provider doesn't send ratings, so a parent can fetch them in Settings →",
+            "Artwork and metadata, or allow unrated titles in Settings → Parental controls.",
+        ].joined(separator: " ")
+    }
+
+    /// A channel is locked by itself or by the category it is filed under, and only while
+    /// a parental PIN exists: without one the core applies no locks, so a padlock would
+    /// be a lie (Windows' `isChannelLocked`).
+    func isLocked(channelId: Int64, group: String?) -> Bool {
+        guard parentalSettings?.hasMasterPin == true else { return false }
+        let id = String(channelId)
+        return locks.contains { lock in
+            switch lock.kind {
+            case .channel: lock.value == id
+            case .category: group != nil && lock.value == group
+            }
+        }
+    }
+
+    /// The parental PIN being asked for: by the one dialog that answers every refusal
+    /// (`ParentalPinHost`), as Windows' `ParentalPinDialog`.
+    struct PinRequest: Identifiable {
+        let id = UUID()
+        let refusal: Refusal
+        fileprivate let answer: CheckedContinuation<Bool, Never>
+    }
+    private(set) var pinRequest: PinRequest?
+    /// The views able to show the dialog, the most recent on top: a sheet can only be
+    /// presented from whatever is frontmost, so the newest host shows it.
+    private(set) var pinHosts: [UUID] = []
+
+    func addPinHost(_ id: UUID) { pinHosts.append(id) }
+    func removePinHost(_ id: UUID) { pinHosts.removeAll { $0 == id } }
+
+    /// Ask for the parental PIN. True once it has been entered and opened things.
+    func askParentalPin(_ refusal: Refusal) async -> Bool {
+        // One at a time: a second refusal while the dialog is up waits for its answer.
+        if pinRequest != nil { return false }
+        let opened = await withCheckedContinuation { answer in
+            pinRequest = PinRequest(refusal: refusal, answer: answer)
+        }
+        if opened {
+            await loadParental()
+            // Hidden locked content may have just come into view.
+            libraryVersion += 1
+        }
+        return opened
+    }
+
+    /// The dialog's answer.
+    func answerPin(_ opened: Bool) {
+        guard let request = pinRequest else { return }
+        pinRequest = nil
+        request.answer.resume(returning: opened)
+    }
+
+    func parentalUnlock(_ pin: String) async -> PinOutcome? {
+        guard let core else { return nil }
+        do {
+            return try await Task.detached { try core.parentalUnlock(pin: pin) }.value
+        } catch {
+            self.error = error.viewerMessage
+            return nil
+        }
+    }
+
+    /// Close what the PIN opened, as when leaving Settings.
+    func parentalRelock() async {
+        guard parentalSettings?.hasMasterPin == true, let core else { return }
+        parental = try? await Task.detached { try core.parentalRelock() }.value
+    }
+
+    /// Run a change to parental controls and read everything back, as Windows' panel's
+    /// `run`. The PIN, if wanted, is asked for by `guarded`. Returns why it failed.
+    func changeParental(_ body: @escaping @Sendable (AuroraCore) throws -> Void) async -> String? {
+        var failure: String?
+        do {
+            try await guarded(body)
+        } catch {
+            failure = error.viewerMessage
+        }
+        await loadParental()
+        await loadProfiles()
+        libraryVersion += 1
+        return failure
+    }
+
+    /// The daily limit's clock said time is up, and the player closed: say so.
+    func viewingTimeUp() {
+        error = "Today's viewing time is used up."
     }
 
     // MARK: My List
@@ -647,13 +775,33 @@ final class AppModel {
     }
 
     /// Run one core call off the main actor; on failure, say why and return `fallback`.
+    /// A refusal for want of the parental PIN asks for it and tries again (`guarded`).
     private func call<T: Sendable>(_ fallback: T, _ body: @escaping @Sendable (AuroraCore) throws -> T) async -> T {
-        guard let core else { return fallback }
         do {
-            return try await Task.detached { try body(core) }.value
+            return try await guarded(body)
+        } catch is CancellationError {
+            return fallback
+        } catch where error.wantsParentalPin {
+            // The viewer was asked for the PIN and said never mind: nothing to report.
+            return fallback
         } catch {
             self.error = error.viewerMessage
             return fallback
+        }
+    }
+
+    /// Run one core call off the main actor. When the core refuses it for want of the
+    /// parental PIN (a lock, the day's time, Settings or a guarded change), ask for the
+    /// PIN and try again, as Windows' `invoke` does; cancelling the dialog throws the
+    /// refusal. Every other failure is thrown as it came.
+    func guarded<T: Sendable>(_ body: @escaping @Sendable (AuroraCore) throws -> T) async throws -> T {
+        guard let core else { throw CancellationError() }
+        while true {
+            do {
+                return try await Task.detached { try body(core) }.value
+            } catch where error.wantsParentalPin {
+                guard let refusal = error.refusal, await askParentalPin(refusal) else { throw error }
+            }
         }
     }
 }

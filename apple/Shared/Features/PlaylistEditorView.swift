@@ -74,6 +74,7 @@ struct PlaylistEditorView: View {
         }
         .sheet(item: $editing) { row in
             NavigationStack { EntryEditor(kind: kind, entry: row, groups: groups) }
+                .parentalPinHost()
         }
         .sheet(item: $copiesOf) { row in
             NavigationStack { CopiesView(kind: kind, entry: row) }

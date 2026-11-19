@@ -342,6 +342,8 @@ impl AuroraCore {
     /// Turn the rail and the assistant off, or back on. Switching off drops the cached
     /// answer too: it was generated from this viewer's history.
     pub fn set_gemini_enabled(&self, enabled: bool) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         settings::set(&self.db.lock(), ENABLED_KEY, &enabled)?;
         if !enabled {
             self.drop_gemini_cache();
@@ -352,6 +354,8 @@ impl AuroraCore {
     /// Save the viewer's own key, or clear it with a blank one (which falls back to the
     /// build's). The cached answer goes either way: it may be a refusal from the old key.
     pub fn set_gemini_key(&self, key: String) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let key = key.trim();
         if key.is_empty() {
             let _ = self.credentials.delete(CREDENTIAL_KEY);

@@ -501,6 +501,8 @@ impl AuroraCore {
         passphrase: String,
         device_name: String,
     ) -> Result<SyncJoined> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let joined = self.sync.with_conn(|household, conn| {
             let account = Account {
                 email: &email,
@@ -525,6 +527,8 @@ impl AuroraCore {
         recovery_code: Option<String>,
         device_name: String,
     ) -> Result<SyncJoined> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let unlock = match (passphrase, recovery_code) {
             (_, Some(code)) if !code.trim().is_empty() => Unlock::RecoveryCode(code),
             (Some(p), _) => Unlock::Passphrase(p),
@@ -563,6 +567,8 @@ impl AuroraCore {
     /// Delete everything the household has on the server and upload this device's
     /// library in its place. Other devices keep their own libraries.
     pub fn sync_reset(&self) -> Result<SyncReport> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let outcome = self
             .sync
             .with_conn(|household, conn| Ok(household.reset(conn)))?;
@@ -574,6 +580,8 @@ impl AuroraCore {
 
     /// Stop syncing here. The library is untouched; only what sync knew is forgotten.
     pub fn sync_sign_out(&self) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         self.sync
             .with_conn(|household, conn| household.sign_out(conn).map_err(sync_error))?;
         *self.sync.pacer.lock() = Pacer::default();
@@ -582,6 +590,8 @@ impl AuroraCore {
 
     /// The recovery code again, for someone who knows the passphrase. Works offline.
     pub fn sync_recovery_code(&self, passphrase: String) -> Result<String> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let household = self.sync.household()?;
         let db = self.db.lock();
         household

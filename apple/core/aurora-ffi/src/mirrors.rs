@@ -174,6 +174,7 @@ fn a_provider_is_removed_the_way_windows_removes_one() {
         "SELECT credential_ref FROM providers WHERE id = ?1",
         "DELETE FROM providers WHERE id = ?1",
         "credentials.delete(&key)",
+        "require_settings(",
     ] {
         assert!(
             windows.contains(needle),
@@ -662,4 +663,337 @@ fn the_seek_preview_is_windows_seek_preview() {
         ours.len(),
         "preview.rs and aurora-app's differ in length"
     );
+}
+
+/* ── Parental controls (F-36 to F-38) ─────────────────────────────────────── */
+
+#[test]
+fn a_parental_refusal_says_what_windows_says() {
+    use crate::error::Refusal;
+    let errors = app_src("error.rs");
+    for (refusal, variant) in [
+        (Refusal::NotAllowed, "NotAllowed,"),
+        (Refusal::Locked, "Locked,"),
+        (Refusal::TimeUp, "TimeUp,"),
+        (Refusal::PinRequired, "ParentalPinRequired,"),
+    ] {
+        // `#[error("…")]` sits just above the variant it words.
+        let at = errors
+            .find(&format!("    {variant}"))
+            .unwrap_or_else(|| panic!("AppError::{variant} is gone from aurora-app"));
+        let attr = errors[..at]
+            .rfind("#[error(")
+            .expect("an #[error] above it");
+        let words = quoted(&errors[attr..at]).concat();
+        assert_eq!(
+            refusal.message(),
+            words,
+            "AppError::{variant} changed its words"
+        );
+    }
+}
+
+/// Every Windows command that `require_settings` guards, and what guards the same thing
+/// here. A command Windows starts guarding fails this until it is placed.
+#[test]
+fn settings_are_locked_where_windows_locks_them() {
+    // (aurora-app source, its command, our file, our function or why there is none)
+    const GUARDED: &[(&str, &str, &str, Option<&str>)] = &[
+        (
+            "gemini.rs",
+            "gemini_set_enabled",
+            "gemini.rs",
+            Some("set_gemini_enabled"),
+        ),
+        (
+            "gemini.rs",
+            "gemini_set_key",
+            "gemini.rs",
+            Some("set_gemini_key"),
+        ),
+        (
+            "metadata.rs",
+            "metadata_set_key",
+            "metadata.rs",
+            Some("set_metadata_key"),
+        ),
+        // No concurrency setting, artwork cache or self-update on Apple.
+        ("metadata.rs", "metadata_set_concurrency", "", None),
+        ("metadata.rs", "artwork_clear", "", None),
+        ("updates.rs", "updates_set_automatic", "", None),
+        (
+            "sync.rs",
+            "sync_create_account",
+            "sync.rs",
+            Some("sync_create_account"),
+        ),
+        ("sync.rs", "sync_sign_in", "sync.rs", Some("sync_sign_in")),
+        ("sync.rs", "sync_reset", "sync.rs", Some("sync_reset")),
+        ("sync.rs", "sync_sign_out", "sync.rs", Some("sync_sign_out")),
+        (
+            "sync.rs",
+            "sync_recovery_code",
+            "sync.rs",
+            Some("sync_recovery_code"),
+        ),
+        (
+            "providers.rs",
+            "providers_save",
+            "providers.rs",
+            Some("save_provider"),
+        ),
+        (
+            "providers.rs",
+            "providers_credentials",
+            "provider_edit.rs",
+            Some("provider_settings"),
+        ),
+        (
+            "providers.rs",
+            "providers_update",
+            "provider_edit.rs",
+            Some("update_provider"),
+        ),
+        (
+            "providers.rs",
+            "providers_delete",
+            "providers.rs",
+            Some("remove_provider"),
+        ),
+        (
+            "playlist.rs",
+            "library_set_filters",
+            "filters.rs",
+            Some("set_library_filters"),
+        ),
+        (
+            "playlist.rs",
+            "playlist_update",
+            "playlist.rs",
+            Some("playlist_update"),
+        ),
+        (
+            "playlist.rs",
+            "playlist_set_hidden",
+            "playlist.rs",
+            Some("playlist_set_hidden"),
+        ),
+        (
+            "playlist.rs",
+            "playlist_hide_matching",
+            "playlist.rs",
+            Some("playlist_hide_matching"),
+        ),
+        (
+            "playlist.rs",
+            "playlist_reset",
+            "playlist.rs",
+            Some("playlist_reset"),
+        ),
+        (
+            "play/commands.rs",
+            "timeshift_set_settings",
+            "timeshift.rs",
+            Some("set_timeshift"),
+        ),
+        (
+            "play/commands.rs",
+            "timeshift_clear",
+            "timeshift.rs",
+            Some("empty_timeshift"),
+        ),
+    ];
+    let ours = |file: &str| -> String {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
+        std::fs::read_to_string(root).unwrap()
+    };
+    /// The body of `fn name(` up to the next `fn `.
+    fn body<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+        let from = text.find(&format!("fn {name}("))?;
+        let rest = &text[from + 3..];
+        Some(&rest[..rest.find("fn ").unwrap_or(rest.len())])
+    }
+    for &(app_file, command, our_file, our_fn) in GUARDED {
+        let app = app_src(app_file);
+        let theirs = body(&app, command)
+            .unwrap_or_else(|| panic!("{command} is gone from aurora-app {app_file}"));
+        assert!(
+            theirs.contains("require_settings("),
+            "aurora-app {command} no longer asks require_settings; update this list"
+        );
+        if let Some(our_fn) = our_fn {
+            let text = ours(our_file);
+            let mine = body(&text, our_fn).unwrap_or_else(|| panic!("no {our_fn} in {our_file}"));
+            assert!(
+                mine.contains("require_settings("),
+                "{our_fn} must refuse while Settings are locked, as {command} does"
+            );
+        }
+    }
+    // And nothing Windows guards is missing from the list.
+    for file in [
+        "gemini.rs",
+        "metadata.rs",
+        "updates.rs",
+        "sync.rs",
+        "providers.rs",
+        "playlist.rs",
+        "play/commands.rs",
+    ] {
+        let app = app_src(file);
+        for (i, _) in app.match_indices("require_settings(&services") {
+            let head = &app[..i];
+            let at = head.rfind("pub fn ").unwrap();
+            let name: String = head[at + 7..]
+                .chars()
+                .take_while(|c| *c == '_' || c.is_ascii_alphanumeric())
+                .collect();
+            assert!(
+                GUARDED.iter().any(|g| g.1 == name),
+                "aurora-app {file} {name} now needs Settings unlocked; place it in GUARDED"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_daily_limit_clock_is_windows_clock() {
+    let app = app_src("parental.rs");
+    let ours = include_str!("parental.rs");
+    for decl in [
+        "pub const FLUSH_SECS: f64 =",
+        "pub const WARN_SECS: i64 =",
+        "const MAX_GAP_SECS: f64 =",
+    ] {
+        assert_eq!(
+            between(ours, decl, ";").trim(),
+            between(&app, decl, ";").trim(),
+            "aurora-app parental.rs `{decl}` changed"
+        );
+    }
+    let strip = |s: &str| -> String { s.split_whitespace().collect::<Vec<_>>().join(" ") };
+    for (start, end) in [
+        ("pub fn sample(", "\n    }\n"),
+        ("pub fn flush(", "\n    }\n"),
+    ] {
+        let theirs = strip(between(&app, start, end));
+        let mine = strip(between(ours, start, end));
+        assert_eq!(
+            mine, theirs,
+            "aurora-app ViewingClock `{start}` changed; copy it again"
+        );
+    }
+}
+
+#[test]
+fn parental_changes_need_the_pin_where_windows_asks_for_it() {
+    let profiles = app_src("profiles.rs");
+    let parental = app_src("parental.rs");
+    let ours_profiles = include_str!("profiles.rs");
+    let ours_parental = include_str!("parental.rs");
+    for (theirs, command, mine, ours) in [
+        (
+            &profiles,
+            "pub fn profiles_create(",
+            ours_profiles,
+            "pub fn create_profile(",
+        ),
+        (
+            &profiles,
+            "pub fn profiles_delete(",
+            ours_profiles,
+            "pub fn delete_profile(",
+        ),
+        (
+            &profiles,
+            "pub fn profiles_set_limits(",
+            ours_parental,
+            "pub fn set_profile_limits(",
+        ),
+        (
+            &profiles,
+            "pub fn profiles_set_pin(",
+            ours_profiles,
+            "pub fn update_profile(",
+        ),
+        (
+            &profiles,
+            "pub fn profiles_set_parental(",
+            ours_parental,
+            "pub fn set_parental(",
+        ),
+        (
+            &parental,
+            "pub fn parental_set_lock(",
+            ours_parental,
+            "pub fn parental_set_lock(",
+        ),
+        (
+            &parental,
+            "pub fn parental_set_hide_locked(",
+            ours_parental,
+            "pub fn parental_set_hide_locked(",
+        ),
+    ] {
+        assert!(
+            between(theirs, command, "\n}\n").contains("require_parent("),
+            "aurora-app `{command}` no longer asks require_parent"
+        );
+        assert!(
+            between(mine, ours, "\n    }\n").contains("require_parent("),
+            "`{ours}` must ask for the parental PIN, as `{command}` does"
+        );
+    }
+}
+
+/// Parental controls offers Windows' age and daily limits, with Windows' labels. The
+/// Swift screen is not Rust, so it is read as text, as Windows' panel is.
+#[test]
+fn parental_controls_offer_windows_limits() {
+    let panel = ui_src("features/settings/ParentalPanel.tsx");
+    let swift = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Shared/Features/ParentalControlsView.swift"),
+    )
+    .unwrap();
+    for (ts, sw) in [
+        ("const AGE_LIMITS", "private let ageLimits"),
+        ("const DAILY_LIMITS", "private let dailyLimits"),
+    ] {
+        // The entries only, past the type: `= [` opens the list in both.
+        let theirs = between(&panel, ts, "];");
+        let theirs = &theirs[theirs.find("= [").unwrap() + 3..];
+        let ours = between(&swift, sw, "]\n");
+        let ours = &ours[ours.find("= [").unwrap() + 3..];
+        // value, label pairs, in order: `{ value: 6, label: 'Up to PG' }` against
+        // `(6, "Up to PG")`.
+        let labels = |text: &str, q: char| -> Vec<String> {
+            text.split(q)
+                .skip(1)
+                .step_by(2)
+                .map(str::to_string)
+                .collect()
+        };
+        assert_eq!(
+            labels(ours, '"'),
+            labels(theirs, '\''),
+            "{ts} labels changed"
+        );
+        let values = |text: &str, key: &str| -> Vec<String> {
+            text.split(key)
+                .skip(1)
+                .map(|v| {
+                    v.trim_start()
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric())
+                        .collect()
+                })
+                .collect()
+        };
+        let theirs_values: Vec<String> = values(theirs, "value:")
+            .into_iter()
+            .map(|v| if v == "null" { "nil".into() } else { v })
+            .collect();
+        assert_eq!(values(ours, "("), theirs_values, "{ts} values changed");
+    }
 }

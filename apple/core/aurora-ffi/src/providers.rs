@@ -161,6 +161,8 @@ impl AuroraCore {
     /// cascades), and its password leaves the Keychain. Returns false if it was already
     /// gone. Mirrors `aurora-app/src/providers.rs` `providers_delete`.
     pub fn remove_provider(&self, provider_id: i64) -> Result<bool> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let db = self.db.lock();
         let credential: Option<String> = db
             .query_row(
@@ -319,6 +321,8 @@ impl AuroraCore {
         username: Option<&str>,
         password: Option<String>,
     ) -> Result<i64> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         if url.is_empty() {
             return Err(AuroraError::other("Enter the provider's address."));
         }

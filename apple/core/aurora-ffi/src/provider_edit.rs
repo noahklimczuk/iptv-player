@@ -266,6 +266,8 @@ impl AuroraCore {
     /// A provider's saved settings and password, for the editor
     /// (`providers_credentials`).
     pub fn provider_settings(&self, provider_id: i64) -> Result<ProviderSettings> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let (name, kind, url, username, credential): (
             String,
             String,
@@ -297,6 +299,8 @@ impl AuroraCore {
     /// rule: `None` keeps the saved one, `""` clears it, anything else replaces it.
     /// Imports nothing: refresh afterwards to see what the new settings bring in.
     pub fn update_provider(&self, provider_id: i64, draft: ProviderDraft) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
         let url = draft.url.trim();
         if url.is_empty() {
             return Err(AuroraError::other("Enter the provider's address."));
