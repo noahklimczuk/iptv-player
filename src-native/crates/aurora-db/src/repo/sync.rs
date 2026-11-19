@@ -90,7 +90,46 @@ pub fn disable(conn: &mut Connection) -> Result<()> {
     tx.execute("DELETE FROM sync_outbox", [])?;
     tx.execute("DELETE FROM sync_shadow", [])?;
     tx.execute("DELETE FROM sync_pending", [])?;
+    tx.execute("DELETE FROM sync_unreadable", [])?;
     tx.commit()?;
+    Ok(())
+}
+
+// Records this device could not read (§3.8) -----------------------------------------
+
+/// Note a record that would not decode, under the reader that tried.
+///
+/// Seeing it again under the same reader just refreshes the time; under a new one it is
+/// the new reader's failure now.
+pub fn note_unreadable(conn: &Connection, doc_id: &str, reader: &str, now: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO sync_unreadable (doc_id, reader, seen_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT (doc_id) DO UPDATE SET reader = excluded.reader, seen_at = excluded.seen_at",
+        params![doc_id, reader, now],
+    )?;
+    Ok(())
+}
+
+/// How many records this device has skipped and not yet managed to read.
+pub fn unreadable_len(conn: &Connection) -> Result<usize> {
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM sync_unreadable", [], |r| r.get(0))?;
+    Ok(usize::try_from(n).unwrap_or(0))
+}
+
+/// Records skipped by a reader other than `reader`: the ones worth fetching again.
+pub fn unreadable_by_others(conn: &Connection, reader: &str, limit: usize) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT doc_id FROM sync_unreadable WHERE reader != ?1 ORDER BY seen_at LIMIT ?2",
+    )?;
+    let ids = stmt
+        .query_map(params![reader, limit as i64], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(ids)
+}
+
+/// A record that has now been read, or is gone from the server.
+pub fn forget_unreadable(conn: &Connection, doc_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM sync_unreadable WHERE doc_id = ?1", [doc_id])?;
     Ok(())
 }
 
@@ -744,5 +783,32 @@ mod tests {
                 "item key lookup scans a table: {plan:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_skipped_record_is_remembered_until_another_reader_reads_it() {
+        let mut conn = crate::open_memory().unwrap();
+        note_unreadable(&conn, "doc-a", "r1", 10).unwrap();
+        note_unreadable(&conn, "doc-b", "r1", 11).unwrap();
+        // Seen again by the same reader: still one note.
+        note_unreadable(&conn, "doc-a", "r1", 12).unwrap();
+        assert_eq!(unreadable_len(&conn).unwrap(), 2);
+
+        // The reader that failed has nothing to retry; a newer one has both.
+        assert!(unreadable_by_others(&conn, "r1", 10).unwrap().is_empty());
+        assert_eq!(
+            unreadable_by_others(&conn, "r2", 10).unwrap(),
+            ["doc-b", "doc-a"]
+        );
+
+        // The newer reader fails on one too: it is that reader's now, so not retried by it.
+        note_unreadable(&conn, "doc-a", "r2", 20).unwrap();
+        forget_unreadable(&conn, "doc-b").unwrap();
+        assert!(unreadable_by_others(&conn, "r2", 10).unwrap().is_empty());
+        assert_eq!(unreadable_len(&conn).unwrap(), 1);
+
+        // Signing out forgets them with the rest of sync's state.
+        disable(&mut conn).unwrap();
+        assert_eq!(unreadable_len(&conn).unwrap(), 0);
     }
 }

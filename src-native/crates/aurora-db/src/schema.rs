@@ -868,9 +868,14 @@ CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
         name: "adult_needs_pin",
         sql: ADULT_NEEDS_PIN,
     },
+    Migration {
+        version: 22,
+        name: "sync_unreadable",
+        sql: SYNC_UNREADABLE,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 21;
+pub const LATEST_VERSION: u32 = 22;
 
 /// Migration 21: adult categories show only while there is a parental PIN (README §11:
 /// "requires explicit opt-in plus the master PIN to reveal"; `AUDIT/findings.md` F-39).
@@ -883,6 +888,22 @@ pub const LATEST_VERSION: u32 = 21;
 /// update inside does not fire it again, and `sync_parental_update` sends the corrected
 /// row on.
 ///
+/// Migration 22: sync records this device could not read (`docs/APPLE_PORT_AND_SYNC.md`
+/// §3.8, `AUDIT/findings.md` F-41).
+///
+/// A record written by a newer Aurora, or damaged, is skipped and the pull cursor moves
+/// past it, so without a note of it the record is never seen again: an update that could
+/// read it would not know to ask. `reader` is what this build can read
+/// (`aurora_sync::engine::reader`), and a different one is the sign to fetch the record
+/// again. Device-local, like the rest of sync's own state, and with no capture triggers.
+const SYNC_UNREADABLE: &str = r#"
+CREATE TABLE sync_unreadable (
+    doc_id   TEXT    PRIMARY KEY,
+    reader   TEXT    NOT NULL,
+    seen_at  INTEGER NOT NULL
+) WITHOUT ROWID;
+"#;
+
 /// The `UPDATE` applies the rule to a library that already broke it.
 const ADULT_NEEDS_PIN: &str = r#"
 UPDATE parental SET hide_adult = 1 WHERE id = 1 AND hide_adult = 0 AND master_pin IS NULL;

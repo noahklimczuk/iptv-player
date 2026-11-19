@@ -642,6 +642,11 @@ export interface SyncStatus {
    * other devices' changes every ten minutes instead of every one or two until it resets.
    */
   thrifty: boolean;
+  /**
+   * Records from other devices this version could not read: written by a newer Aurora,
+   * or damaged. Skipped, never applied, and fetched again after Aurora updates.
+   */
+  unreadable: number;
 }
 
 /** What one sync round did. */

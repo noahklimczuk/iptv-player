@@ -353,6 +353,16 @@ export function SyncPanel() {
             channels or titles this device has not imported. They apply once it has.
           </div>
         )}
+        {/* §3.8: skipped, never applied, and asked for again by the update that can
+            read them -- which is the one thing the viewer can do about it. */}
+        {status.unreadable > 0 && (
+          <div style={MUTED} data-testid="sync-unreadable">
+            {status.unreadable} {status.unreadable === 1 ? 'change' : 'changes'} from
+            your other devices {status.unreadable === 1 ? 'needs' : 'need'} a newer
+            version of Aurora. {status.unreadable === 1 ? 'It is' : 'They are'} kept
+            on the server and will be read once this device updates.
+          </div>
+        )}
         <div style={{ ...MUTED, color: 'var(--text-faint)' }} data-testid="sync-usage">
           Today this device has read {status.usage.reads.toLocaleString()} and
           written {status.usage.writes.toLocaleString()} of the free plan&apos;s 50,000

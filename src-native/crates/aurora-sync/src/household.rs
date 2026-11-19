@@ -116,6 +116,10 @@ pub struct Status {
     pub usage: Usage,
     /// Past its share of the quota, so syncing less often until it resets.
     pub thrifty: bool,
+    /// Records from other devices this version could not read -- written by a newer
+    /// Aurora, or damaged. Skipped, never applied, and fetched again after an update
+    /// (§3.8).
+    pub unreadable: usize,
 }
 
 /// How a device proves it may open the household's vault.
@@ -234,6 +238,7 @@ impl<H: Http + Clone> Household<H> {
             secrets_persistent: self.secrets.is_persistent(),
             usage,
             thrifty: usage.is_thrifty(),
+            unreadable: db::unreadable_len(conn)?,
         })
     }
 
