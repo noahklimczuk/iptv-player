@@ -16,6 +16,10 @@ app itself, in turn:
      that position.
   3. **B** stops the film later on and syncs; **A** comes back and opening the film must
      resume at B's position (`progress.get`, which asks the server for that one record).
+  4. Sign-ins and keys (D34): A turns sharing on and sets a Gemini key; B must end up
+     holding that key in its credential store, with sharing shown as on, and neither
+     library file may contain it. Each portable copy has its own Credential Manager
+     service, so nothing here reaches the installed app's keys.
 
 Items are matched by the provider's own stream key, not by row id: row 4,812 on A is not
 row 4,812 on B, which is the whole reason sync has keys.
@@ -54,6 +58,10 @@ PASSPHRASE = "two installs, one household"
 A_STOPPED_AT = 1234
 B_STOPPED_AT = 2345
 DURATION = 5400
+
+
+# A Gemini key only this scenario uses: shared by A, looked for on B and in both files.
+SHARED_KEY = "aurora-sync-shared-key-" + secrets.token_hex(8)
 
 
 class Skipped(Exception):
@@ -102,7 +110,12 @@ def run(d, ctx):
             "profileId": a_profile, "kind": "movie", "id": movie,
             "positionSecs": A_STOPPED_AT, "durationSecs": DURATION,
         })
+        # Sign-ins and keys: off until chosen, then on, with a key only A was given.
+        assert d.invoke("sync.status")["sharesSecrets"] is False, "sharing was on by default"
+        d.invoke("sync.setShareSecrets", {"enabled": True})
+        d.invoke("gemini.setKey", {"key": SHARED_KEY})
         _sync(d)
+        _no_plaintext(ctx, "A")
         a_device = d.invoke("sync.status")["deviceId"]
         a_profile_sync = ctx.rows("SELECT sync_id FROM profiles WHERE id = ?", (a_profile,))[0][0]
         print(f"   A: favourited channel {channel_key}, stopped film {movie_key} at {A_STOPPED_AT}s")
@@ -134,6 +147,14 @@ def run(d, ctx):
             f"B should resume A's film at {A_STOPPED_AT}s and has {got!r}")
         print("   B: has the favourite and resumes the film where A stopped")
 
+        status = d.invoke("sync.status")
+        assert status["sharesSecrets"] is True, "A turned sharing on and B does not know"
+        gemini = d.invoke("gemini.status", {"profileId": b_profile})
+        assert gemini["keyIsBuiltIn"] is False, (
+            "B is still on the built-in Gemini key: A's key did not reach its credential store")
+        _no_plaintext(ctx, "B")
+        print("   B: holds the Gemini key A set, and its library file does not")
+
         d.invoke("progress.save", {
             "profileId": b_profile, "kind": "movie", "id": b_movie,
             "positionSecs": B_STOPPED_AT, "durationSecs": DURATION,
@@ -160,6 +181,15 @@ def run(d, ctx):
         _delete_household(email, password)
         runner.reclaim_credentials(parked)
         runner.wipe(parked)
+
+
+def _no_plaintext(ctx, who):
+    """Sync's tables must hold a fingerprint of a shared key, never the key."""
+    for table, column in (("sync_shadow", "record"), ("sync_pending", "record"),
+                          ("sync_outbox", "ident"), ("sync_state", "value"),
+                          ("settings", "value")):
+        n = ctx.rows(f"SELECT count(*) FROM {table} WHERE {column} LIKE ?", (f"%{SHARED_KEY}%",))[0][0]
+        assert n == 0, f"{who}'s {table} holds the shared key in the clear"
 
 
 def _wait_for_ui(d):

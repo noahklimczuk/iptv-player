@@ -767,6 +767,7 @@ fn main() {
             sync::sync_now,
             sync::sync_reset,
             sync::sync_sign_out,
+            sync::sync_set_share_secrets,
             sync::sync_recovery_code,
             sync::sync_device_name,
         ])

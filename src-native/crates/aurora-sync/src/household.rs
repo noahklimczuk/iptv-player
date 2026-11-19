@@ -25,6 +25,7 @@ use crate::codec::Codec;
 use crate::engine::{self, Engine, Report};
 use crate::error::{Result, SyncError};
 use crate::firebase::{self, FirebaseConfig, FirestoreTransport, Http, Session, Used};
+use crate::secrets::{self, SharedSecrets};
 use crate::transport::SyncTransport;
 use crate::vault::{KdfParams, VaultCodec, VaultKey, WrappedKey};
 
@@ -120,6 +121,10 @@ pub struct Status {
     /// Aurora, or damaged. Skipped, never applied, and fetched again after an update
     /// (§3.8).
     pub unreadable: usize,
+    /// Whether the household shares sign-ins and keys (§3.4). Off unless chosen.
+    pub shares_secrets: bool,
+    /// Whether this device could: whether its host gave sync a credential store.
+    pub can_share_secrets: bool,
 }
 
 /// How a device proves it may open the household's vault.
@@ -169,6 +174,8 @@ pub struct Household<H: Http + Clone> {
     /// The session as last used, ID token and all, so each round does not mint a new
     /// one. Only its long-lived half is in `secrets`.
     live: Mutex<Option<Session>>,
+    /// The host's provider passwords and API keys, when it can share them (§3.4).
+    shared: Option<Arc<dyn SharedSecrets>>,
 }
 
 /// What goes in the credential store: the session without its ID token.
@@ -195,7 +202,31 @@ impl<H: Http + Clone> Household<H> {
             secrets,
             kdf: KdfParams::default(),
             live: Mutex::new(None),
+            shared: None,
         }
+    }
+
+    /// Let this household sync the host's sign-ins and keys, once somebody turns that on
+    /// ([`Household::set_share_secrets`]). A host that never calls this cannot share them,
+    /// and skips them when they arrive until it can (§3.8).
+    pub fn with_shared_secrets(mut self, shared: Arc<dyn SharedSecrets>) -> Self {
+        self.shared = Some(shared);
+        self
+    }
+
+    /// Turn sharing sign-ins and keys on or off for the household. The choice is a
+    /// setting that syncs, so it is the household's, not just this device's.
+    ///
+    /// Off stops the sending. What was sent stays in the household's encrypted records
+    /// until sync is reset, because removing it would also remove it from every device
+    /// that had received it -- which is deleting somebody's passwords, not unsharing them.
+    pub fn set_share_secrets(&self, conn: &Connection, on: bool) -> Result<()> {
+        if on && self.shared.is_none() {
+            return Err(SyncError::Account(
+                "This device cannot keep sign-ins from other devices.".into(),
+            ));
+        }
+        secrets::set_sharing(conn, on)
     }
 
     /// A cheaper key derivation, for tests.
@@ -239,6 +270,8 @@ impl<H: Http + Clone> Household<H> {
             usage,
             thrifty: usage.is_thrifty(),
             unreadable: db::unreadable_len(conn)?,
+            shares_secrets: secrets::sharing(conn)?,
+            can_share_secrets: self.shared.is_some(),
         })
     }
 
@@ -348,7 +381,8 @@ impl<H: Http + Clone> Household<H> {
         db::set_state(conn, WRAPPED, &serde_json::to_string(&wrapped)?)?;
         db::set_state(conn, engine::DEVICE, &device)?;
 
-        let engine = Engine::new(transport, VaultCodec::new(&key), device);
+        let engine =
+            Engine::new(transport, VaultCodec::new(&key), device).with_secrets(self.shared.clone());
         let outcome = engine.join(conn);
         self.record(conn, &engine, &outcome)?;
         Ok(Joined {
@@ -487,7 +521,8 @@ impl<H: Http + Clone> Household<H> {
             FirestoreTransport::new(self.http.clone(), cfg, session),
             VaultCodec::new(&key),
             device,
-        ))
+        )
+        .with_secrets(self.shared.clone()))
     }
 
     /// Keep a rotated session, and note how the round went for the panel.

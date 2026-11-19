@@ -305,7 +305,7 @@ export function SyncPanel() {
       Keeps favourites, My List, watch progress, profiles, parental settings and recording
       rules the same on every device in the household. Everything is encrypted on this
       device before it is uploaded, with a passphrase only your devices know. Playlist
-      passwords are never synced: each device keeps its own.
+      passwords and API keys stay on each device unless you choose to share them too.
     </div>
   );
 
@@ -381,6 +381,44 @@ export function SyncPanel() {
         <div style={{ ...MUTED, color: 'var(--warning)' }}>
           There is no credential store on this platform, so this sign-in lasts only until
           Aurora closes.
+        </div>
+      )}
+
+      {/* D34: a password is a different promise from a favourite, so this is a choice
+          somebody makes, off until they do -- and the panel says what it means both ways. */}
+      {status.canShareSecrets && (
+        <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'start' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 650, fontSize: 'var(--fs-sm)' }}>
+              Also share sign-ins and keys
+            </div>
+            <div style={MUTED}>
+              {status.sharesSecrets
+                ? 'Playlist passwords and your TMDB and Gemini keys go to the household’s '
+                  + 'other devices, encrypted like everything else, so a new device needs '
+                  + 'only the sync passphrase. Turning this off stops sending them; what was '
+                  + 'sent stays in the household’s encrypted sync until you reset it.'
+                : 'Off: each device keeps its own playlist passwords and TMDB and Gemini '
+                  + 'keys. On sends them to your other devices, encrypted with your sync '
+                  + 'passphrase, so nobody has to type them twice.'}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="dl-switch"
+            data-testid="sync-share-secrets"
+            aria-pressed={status.sharesSecrets}
+            aria-label={status.sharesSecrets
+              ? 'Stop sharing sign-ins and keys' : 'Share sign-ins and keys'}
+            disabled={busy}
+            onClick={() => void run(async () => {
+              const on = !status.sharesSecrets;
+              await invoke('sync.setShareSecrets', { enabled: on });
+              return on
+                ? 'Sign-ins and keys will go to your other devices from the next sync.'
+                : 'Sign-ins and keys are no longer sent.';
+            }, 'Could not change that')}
+          />
         </div>
       )}
 

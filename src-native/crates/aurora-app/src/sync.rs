@@ -25,11 +25,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aurora_db::rusqlite::Connection;
-use aurora_ingest::credentials::CredentialStore;
+use aurora_ingest::credentials::{credential_ref, CredentialStore};
 use aurora_sync::firebase::{FirebaseConfig, ReqwestHttp};
 use aurora_sync::household::{
     Account, Household, Joined, Pacer, Problem, Secrets, Status, Unlock, Waiting,
 };
+use aurora_sync::secrets::SharedSecrets;
 use aurora_sync::{Report, SyncError};
 use parking_lot::Mutex;
 use tauri::State;
@@ -64,6 +65,106 @@ fn config() -> Option<FirebaseConfig> {
 }
 
 /// The household's secrets, in the OS credential store.
+/// The sign-ins and keys sync may share (§3.4, D34), where Windows keeps them: each
+/// provider's password under its `credential_ref`, and the TMDB and Gemini keys under
+/// their own names. Sync sends them only while the household has sharing on.
+struct WindowsSecrets {
+    store: Arc<dyn CredentialStore>,
+    namespace: String,
+}
+
+const SHARED_TMDB: &str = "tmdb";
+const SHARED_GEMINI: &str = "gemini";
+const SHARED_PROVIDER: &str = "provider:";
+
+impl SharedSecrets for WindowsSecrets {
+    fn list(&self, conn: &Connection) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let providers: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT sync_id, credential_ref FROM providers
+                  WHERE sync_id IS NOT NULL AND credential_ref IS NOT NULL",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (sync_id, key) in providers {
+            if let Ok(v) = self.store.get(&key) {
+                if !v.is_empty() {
+                    out.push((format!("{SHARED_PROVIDER}{sync_id}"), v));
+                }
+            }
+        }
+        for (name, key) in [
+            (SHARED_TMDB, aurora_ingest::tmdb::CREDENTIAL_KEY),
+            (SHARED_GEMINI, crate::gemini::CREDENTIAL_KEY),
+        ] {
+            if let Ok(v) = self.store.get(key) {
+                if !v.is_empty() {
+                    out.push((name.to_string(), v));
+                }
+            }
+        }
+        out
+    }
+
+    fn store(
+        &self,
+        conn: &Connection,
+        name: &str,
+        value: Option<&str>,
+    ) -> aurora_sync::Result<bool> {
+        let refused = |e: String| {
+            SyncError::Account(format!(
+                "Windows would not keep a sign-in from another device: {e}"
+            ))
+        };
+        let key = if let Some(sync_id) = name.strip_prefix(SHARED_PROVIDER) {
+            let id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM providers WHERE sync_id = ?1",
+                    [sync_id],
+                    |r| r.get(0),
+                )
+                .map(Some)
+                .or_else(|e| match e {
+                    aurora_db::rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    e => Err(e),
+                })?;
+            // The provider itself has not arrived here yet: wait for it.
+            let Some(id) = id else {
+                return Ok(false);
+            };
+            credential_ref(&self.namespace, id)
+        } else {
+            match name {
+                SHARED_TMDB => aurora_ingest::tmdb::CREDENTIAL_KEY.to_string(),
+                SHARED_GEMINI => crate::gemini::CREDENTIAL_KEY.to_string(),
+                // A kind of secret from a newer Aurora: nothing here would use it.
+                _ => return Ok(true),
+            }
+        };
+        match value {
+            Some(v) => self
+                .store
+                .set(&key, v)
+                .map_err(|e| refused(e.to_string()))?,
+            None => {
+                let _ = self.store.delete(&key);
+            }
+        }
+        if let Some(sync_id) = name.strip_prefix(SHARED_PROVIDER) {
+            conn.execute(
+                "UPDATE providers SET credential_ref = ?2 WHERE sync_id = ?1",
+                aurora_db::rusqlite::params![sync_id, value.map(|_| key)],
+            )?;
+        }
+        Ok(true)
+    }
+}
+
 struct CredentialSecrets {
     store: Arc<dyn CredentialStore>,
     /// `aurora-{namespace}-sync-`, so two libraries on one Windows account never share.
@@ -122,14 +223,20 @@ impl Sync {
             aurora_ingest::credentials::namespace(db),
             ReqwestHttp::new(),
         ) {
-            (Ok(ns), Ok(http)) => Some(Household::new(
-                http,
-                config(),
-                Arc::new(CredentialSecrets {
+            (Ok(ns), Ok(http)) => Some(
+                Household::new(
+                    http,
+                    config(),
+                    Arc::new(CredentialSecrets {
+                        store: credentials.clone(),
+                        prefix: format!("aurora-{ns}-sync-"),
+                    }),
+                )
+                .with_shared_secrets(Arc::new(WindowsSecrets {
                     store: credentials,
-                    prefix: format!("aurora-{ns}-sync-"),
-                }),
-            )),
+                    namespace: ns,
+                })),
+            ),
             (Err(e), _) => {
                 tracing::error!("sync is unavailable: no credential namespace: {e}");
                 None
@@ -431,6 +538,24 @@ pub fn sync_sign_out(services: State<'_, Services>) -> Result<()> {
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ShareSecretsArgs {
+    pub enabled: bool,
+}
+
+/// Share provider passwords and API keys with the household's other devices, or stop
+/// (§3.4, D34). Off unless chosen; behind the Settings lock like the rest of sync.
+#[tauri::command(async)]
+pub fn sync_set_share_secrets(services: State<'_, Services>, args: ShareSecretsArgs) -> Result<()> {
+    crate::profiles::require_settings(&services.db.lock())?;
+    services.sync.with_conn(|household, conn| {
+        household
+            .set_share_secrets(conn, args.enabled)
+            .map_err(sync_error)
+    })
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecoveryArgs {
     pub passphrase: String,
 }
@@ -456,4 +581,99 @@ pub fn sync_device_name() -> Result<String> {
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "Windows PC".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aurora_ingest::credentials::MemoryStore;
+
+    fn library() -> Connection {
+        let conn = aurora_db::open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,username,credential_ref,created_at)
+                  VALUES (1,'Line','xtream','http://panel.example/','viewer','aurora-ns-provider-1',0),
+                         (2,'Other','xtream','http://other.example/','viewer',NULL,0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn secrets(store: &Arc<MemoryStore>) -> WindowsSecrets {
+        WindowsSecrets {
+            store: store.clone(),
+            namespace: "ns".into(),
+        }
+    }
+
+    fn sync_id(conn: &Connection, id: i64) -> String {
+        conn.query_row("SELECT sync_id FROM providers WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn it_lists_what_windows_holds_under_names_every_device_shares() {
+        let conn = library();
+        let store = Arc::new(MemoryStore::default());
+        store.set("aurora-ns-provider-1", "line-password").unwrap();
+        store
+            .set(aurora_ingest::tmdb::CREDENTIAL_KEY, "tmdb-key")
+            .unwrap();
+        let listed = secrets(&store).list(&conn);
+
+        let line = format!("provider:{}", sync_id(&conn, 1));
+        assert!(
+            listed.contains(&(line, "line-password".into())),
+            "{listed:?}"
+        );
+        assert!(
+            listed.contains(&("tmdb".into(), "tmdb-key".into())),
+            "{listed:?}"
+        );
+        // A provider with no password, and a key nobody set, are not listed.
+        assert_eq!(listed.len(), 2, "{listed:?}");
+    }
+
+    #[test]
+    fn a_password_lands_on_the_provider_it_names_or_waits_for_it() {
+        let conn = library();
+        let store = Arc::new(MemoryStore::default());
+        let shared = secrets(&store);
+
+        // A provider this device does not have: wait.
+        assert!(!shared
+            .store(&conn, "provider:not-here", Some("pw"))
+            .unwrap());
+
+        // The second provider had no password; now it has one, under its own reference.
+        let other = format!("provider:{}", sync_id(&conn, 2));
+        assert!(shared.store(&conn, &other, Some("from-the-tv")).unwrap());
+        let key: String = conn
+            .query_row(
+                "SELECT credential_ref FROM providers WHERE id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(key, credential_ref("ns", 2));
+        assert_eq!(store.get(&key).unwrap(), "from-the-tv");
+
+        // Removed on another device: removed here, and the reference cleared.
+        assert!(shared.store(&conn, &other, None).unwrap());
+        assert!(store.get(&key).is_err());
+        let cleared: Option<String> = conn
+            .query_row(
+                "SELECT credential_ref FROM providers WHERE id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cleared, None);
+
+        // The Gemini key goes where the Gemini panel reads it.
+        assert!(shared.store(&conn, "gemini", Some("g-key")).unwrap());
+        assert_eq!(store.get(crate::gemini::CREDENTIAL_KEY).unwrap(), "g-key");
+    }
 }

@@ -51,6 +51,29 @@ test('changes only a newer Aurora can read are counted, and say what will fix th
   await expect(page.getByTestId('sync-unreadable')).toContainText('once this device updates');
 });
 
+test('sharing sign-ins and keys is off until chosen, and says what it means', async ({ page }) => {
+  await openSync(page);
+  await page.getByRole('tab', { name: 'Join my household' }).click();
+  await page.getByTestId('sync-email').fill('home@example.com');
+  await page.getByTestId('sync-password').fill('hunter22');
+  await page.getByTestId('sync-passphrase').fill('correct horse');
+  await page.getByTestId('sync-device-name').fill('Bedroom PC');
+  await page.getByRole('button', { name: 'Join', exact: true }).click();
+
+  const share = page.getByTestId('sync-share-secrets');
+  await expect(share).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByText(/each device keeps its own playlist passwords/)).toBeVisible();
+
+  await share.click();
+  await expect(share).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText(/will go to your other devices from the next sync/)).toBeVisible();
+  await expect(page.getByText(/stays in the household.s encrypted sync until you reset it/)).toBeVisible();
+
+  await share.click();
+  await expect(share).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByText('Sign-ins and keys are no longer sent.')).toBeVisible();
+});
+
 test('with nothing unreadable, the panel says nothing about it', async ({ page }) => {
   await openSync(page);
   await page.getByRole('tab', { name: 'Join my household' }).click();
