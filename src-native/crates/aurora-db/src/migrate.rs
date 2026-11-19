@@ -122,6 +122,7 @@ mod tests {
         "not_interested",
         "tmdb_lists",
         "parental_adult_needs_pin",
+        "sync_unreadable",
     ];
 
     fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
