@@ -214,3 +214,112 @@ extension ButtonStyle where Self == DaylightButtonStyle {
         DaylightButtonStyle(variant: variant, size: size, iconOnly: iconOnly)
     }
 }
+
+extension AuroraTheme {
+    /// `--text-faint`: an empty cell's dash, what the provider calls a renamed row.
+    var textFaint: Color {
+        switch self {
+        case .light: Color(red: 0x6A / 255, green: 0x6A / 255, blue: 0x72 / 255)
+        case .dark, .oled: Color(red: 0x8B / 255, green: 0x8B / 255, blue: 0x95 / 255)
+        case .contrast: Color(white: 0xE0 / 255)
+        }
+    }
+}
+
+/// Windows' `Badge`: a small pill, on the sunk ground, the accent, or only outlined.
+struct DaylightBadge: View {
+    enum Tone { case neutral, accent, outline }
+    let text: String
+    var tone: Tone = .neutral
+    @Environment(\.auroraTheme) private var theme
+
+    init(_ text: String, tone: Tone = .neutral) {
+        self.text = text
+        self.tone = tone
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: Daylight.px(12), weight: .heavy))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.vertical, Daylight.px(3)).padding(.horizontal, Daylight.px(9))
+            .foregroundStyle(tone == .accent ? theme.accentText : tone == .outline ? theme.textMuted : theme.text)
+            .background {
+                switch tone {
+                case .neutral: Capsule().fill(theme.surfaceSunk)
+                case .accent: Capsule().fill(theme.accent)
+                case .outline: Capsule().strokeBorder(theme.borderStrong, lineWidth: 1.5)
+                }
+            }
+    }
+}
+
+/// Windows' `dl-switch`: the sunk well, blue (Contrast: ringed white) when on, its white
+/// knob sliding across.
+struct DaylightSwitch: View {
+    let isOn: Bool
+    let label: String
+    let action: () -> Void
+    @Environment(\.auroraTheme) private var theme
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule().fill(isOn ? theme.accent : theme.surfaceSunk)
+                if theme == .contrast { Capsule().strokeBorder(Color.white, lineWidth: 2) }
+                Circle()
+                    .fill(theme == .contrast && isOn ? Color.black : Color.white)
+                    .shadow(color: Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255).opacity(0.25), radius: 1.5, y: 1)
+                    .padding(Daylight.px(3))
+            }
+            .frame(width: Daylight.px(46), height: Daylight.px(28))
+            .animation(.spring(duration: 0.25), value: isOn)
+        }
+        .buttonStyle(FocusRingStyle(radius: Daylight.px(14)))
+        .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
+    }
+}
+
+/// A checkbox as Windows' fields draw one: the accent with a tick when on, an outlined
+/// square when off.
+struct DaylightCheckbox: View {
+    let isOn: Bool
+    @Environment(\.auroraTheme) private var theme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Daylight.px(5), style: .continuous)
+        ZStack {
+            if isOn {
+                shape.fill(theme.accent)
+                Image(systemName: "checkmark")
+                    .font(.system(size: Daylight.px(12), weight: .heavy))
+                    .foregroundStyle(theme.accentText)
+            } else {
+                shape.fill(theme.surface)
+                shape.strokeBorder(theme.borderStrong, lineWidth: 1.5)
+            }
+        }
+        .frame(width: Daylight.px(20), height: Daylight.px(20))
+    }
+}
+
+/// A bare button that shows nothing but Windows' focus ring when the remote is on it.
+struct FocusRingStyle: ButtonStyle {
+    var radius: CGFloat = Daylight.px(8)
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @Environment(\.isFocused) private var focused
+    #else
+    private let focused = false
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .daylightFocusRing(focused, radius: radius, theme: theme)
+            .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}

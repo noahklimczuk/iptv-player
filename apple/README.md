@@ -71,7 +71,16 @@ screens. The app can:
 - edit the playlist (its own Playlist tab, as Windows' nav item; Settings → Library on
   an iPhone): rename, renumber, regroup or hide channels, films and
   series, hide everything a search matches, see a title's other copies, and put any of
-  it back,
+  it back. Laid out as Windows' `PlaylistPage`: the list's segments beside the title,
+  the search field, Group and Show selects, Duplicates only and the count, the bulk
+  bar (Select all listed, Hide, Show, Reset, and Hide all N matching with its second
+  press), and the table as one raised panel with Windows' columns, cells that edit in
+  place, quality and "+N" copies badges, and Daylight's switch; the row dims when
+  hidden, and Show more reads the next 300. Departures: on an iPhone each row folds its
+  group and language under the name (Windows' columns need 760 points); on an Apple TV
+  a cell is flat text that opens the keyboard when selected, because tvOS draws its own
+  pill behind every text field; a "+N" badge opens the other copies, and a row's
+  context menu has Hide, Other copies and Back to the provider's,
 - change channel from inside the player, as Windows does: channel up and down (on
   Apple TV, up and down on the remote), a number typed on a keypad (up to 4 digits,
   tuned 1.8 s after the last one), and back to the last channel. A banner names where
