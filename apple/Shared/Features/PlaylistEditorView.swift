@@ -118,7 +118,7 @@ struct PlaylistEditorView: View {
         HStack(spacing: 20) {
             #if os(tvOS)
             Text("Playlist")
-                .font(.largeTitle.weight(.heavy))
+                .displayFont(.largeTitle)
                 .accessibilityAddTraits(.isHeader)
             #endif
             Segments(options: [(LibraryKind.channels, "Live TV"), (.movies, "Movies"), (.series, "Series")],
@@ -166,7 +166,7 @@ struct PlaylistEditorView: View {
     private var count: some View {
         Text("\(String(total)) \(total == 1 ? "entry" : "entries")"
              + (Int64(rows.count) < total ? " · showing \(rows.count)" : ""))
-            .font(.system(size: Daylight.px(13), weight: .semibold))
+            .font(.ui(size: Daylight.px(13), weight: .semibold))
             .foregroundStyle(theme.textMuted)
             .fixedSize()
     }
@@ -198,7 +198,7 @@ struct PlaylistEditorView: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "chevron.down").font(.system(size: Daylight.px(13), weight: .bold))
+                Image(systemName: "chevron.down").font(.ui(size: Daylight.px(13), weight: .bold))
                 Text(value).frame(maxWidth: Daylight.px(200), alignment: .leading)
             }
         }
@@ -215,7 +215,7 @@ struct PlaylistEditorView: View {
             } label: {
                 HStack(spacing: 8) {
                     DaylightCheckbox(isOn: allListedSelected)
-                    Text("Select all listed").font(.system(size: Daylight.px(13), weight: .semibold))
+                    Text("Select all listed").font(.ui(size: Daylight.px(13), weight: .semibold))
                 }
             }
             .buttonStyle(FocusRingStyle())
@@ -237,7 +237,7 @@ struct PlaylistEditorView: View {
                 // and undoing it is a page of select-and-reset per 300 (R-125).
                 if confirmingBulk {
                     Text("Hide all \(String(total))? Undoing this is \((total + 299) / 300) pages of select-and-reset.")
-                        .font(.system(size: Daylight.px(13)))
+                        .font(.ui(size: Daylight.px(13)))
                         .foregroundStyle(theme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Hide them") {
@@ -280,11 +280,11 @@ struct PlaylistEditorView: View {
                     .padding(.top, 8)
                 } else if rows.isEmpty {
                     VStack(spacing: 8) {
-                        Text("Nothing here").font(.system(size: Daylight.px(17), weight: .heavy))
+                        Text("Nothing here").font(.ui(size: Daylight.px(17), weight: .heavy))
                         Text(text.isEmpty && group == nil && !duplicatesOnly
                              ? "This list is empty until a provider has been imported."
                              : "No entry in this list matches those filters.")
-                            .font(.system(size: Daylight.px(15)))
+                            .font(.ui(size: Daylight.px(15)))
                             .foregroundStyle(theme.textMuted)
                             .multilineTextAlignment(.center)
                     }
@@ -328,7 +328,7 @@ struct PlaylistEditorView: View {
             Text("Language").frame(width: Daylight.px(110), alignment: .leading)
             Text("Shown").frame(width: Daylight.px(150), alignment: .trailing)
         }
-        .font(.system(size: Daylight.px(13), weight: .bold))
+        .font(.ui(size: Daylight.px(13), weight: .bold))
         .foregroundStyle(theme.textMuted)
         .padding(.vertical, Daylight.px(10)).padding(.horizontal, Daylight.px(16))
         .accessibilityHidden(true)
@@ -430,7 +430,7 @@ private struct PlaylistRow: View {
                         .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                         .lineLimit(1)
                 }
-                .font(.system(size: 12))
+                .font(.ui(size: 12))
                 .foregroundStyle(theme.textMuted)
                 .padding(.horizontal, 6)
             }
@@ -472,7 +472,7 @@ private struct PlaylistRow: View {
             }
             if wide, row.edited, row.providerName != row.name {
                 Text(row.providerName)
-                    .font(.system(size: Daylight.px(12)))
+                    .font(.ui(size: Daylight.px(12)))
                     .foregroundStyle(theme.textFaint)
                     .lineLimit(1)
                     .padding(.horizontal, 6)
@@ -490,7 +490,7 @@ private struct PlaylistRow: View {
             }
         } else {
             Text(row.group ?? "—")
-                .font(.system(size: Daylight.px(13)))
+                .font(.ui(size: Daylight.px(13)))
                 .foregroundStyle(theme.textMuted)
                 .lineLimit(1)
         }
@@ -533,9 +533,9 @@ private struct PlaylistRow: View {
 
     @ViewBuilder private var language: some View {
         if let name = row.lang.flatMap(languageName) {
-            Text(name).font(.system(size: Daylight.px(13))).foregroundStyle(theme.textMuted).lineLimit(1)
+            Text(name).font(.ui(size: Daylight.px(13))).foregroundStyle(theme.textMuted).lineLimit(1)
         } else {
-            Text("Untagged").font(.system(size: Daylight.px(13))).foregroundStyle(theme.textFaint)
+            Text("Untagged").font(.ui(size: Daylight.px(13))).foregroundStyle(theme.textFaint)
         }
     }
 
@@ -585,7 +585,7 @@ private struct EditableCell: View {
                     Text(value)
                 }
             }
-            .font(.system(size: Daylight.px(15), weight: weight))
+            .font(.ui(size: Daylight.px(15), weight: weight))
             .lineLimit(1)
             .padding(.horizontal, 6).padding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -605,7 +605,7 @@ private struct EditableCell: View {
         let shape = RoundedRectangle(cornerRadius: Daylight.px(8), style: .continuous)
         TextField(label, text: $draft, prompt: Text("—").foregroundStyle(theme.textFaint))
             .textFieldStyle(.plain)
-            .font(.system(size: Daylight.px(15), weight: focused ? .regular : weight))
+            .font(.ui(size: Daylight.px(15), weight: focused ? .regular : weight))
             .lineLimit(1)
             .autocorrectionDisabled()
             .keyboardType(numeric ? .numberPad : url ? .URL : .default)
@@ -654,7 +654,7 @@ private struct CopiesView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(copy.name)
                 Text([copy.quality, copy.provider].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.ui(.caption)).foregroundStyle(.secondary)
             }
             .contextMenu {
                 Button("Hide this copy", systemImage: "eye.slash") {

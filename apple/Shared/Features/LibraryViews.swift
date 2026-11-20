@@ -415,7 +415,7 @@ struct FilterChip: View {
                 Text(title).strikethrough(selected && struck)
                 if let count {
                     Text(verbatim: count.formatted())
-                        .font(.system(size: Daylight.px(12), weight: .bold).monospacedDigit())
+                        .font(.ui(size: Daylight.px(12), weight: .bold).monospacedDigit())
                         .opacity(0.6)
                 }
             }
@@ -505,12 +505,12 @@ struct PosterCard: View {
             } placeholder: {
                 ZStack {
                     Rectangle().fill(.quaternary)
-                    Text(item.title).font(.caption).multilineTextAlignment(.center).padding(6)
+                    Text(item.title).font(.ui(.caption)).multilineTextAlignment(.center).padding(6)
                 }
             }
             .aspectRatio(2 / 3, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            Text(item.title).font(.caption).lineLimit(1)
+            Text(item.title).font(.ui(.caption)).lineLimit(1)
         }
     }
 }

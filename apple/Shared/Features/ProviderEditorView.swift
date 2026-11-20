@@ -183,15 +183,15 @@ struct CheckResult: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(result.message, systemImage: result.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .foregroundStyle(result.ok ? .green : .red)
-                .font(.headline)
+                .font(.ui(.headline))
             if let detail = result.detail {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).font(.ui(.caption)).foregroundStyle(.secondary)
             }
             if result.ok, let summary = accountSummary {
-                Text(summary).font(.caption).foregroundStyle(.secondary)
+                Text(summary).font(.ui(.caption)).foregroundStyle(.secondary)
             }
             if !result.ok, let suggested = result.suggestedUrl {
-                Text(suggestion(suggested)).font(.caption)
+                Text(suggestion(suggested)).font(.ui(.caption))
                 Button(result.suggestedKind == "m3u" ? "Use its playlist instead" : "Use that address") {
                     use(suggested)
                 }

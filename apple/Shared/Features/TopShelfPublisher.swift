@@ -15,9 +15,9 @@ enum TopShelf {
             }
             switch entry.item {
             case .movie(let m):
-                return .init(kind: .movie, id: m.id, title: m.title, image: m.backdrop ?? m.poster, progress: progress)
+                return .init(kind: .movie, id: m.id, title: m.title, backdrop: m.backdrop, poster: m.poster, progress: progress)
             case .series(let s):
-                return .init(kind: .series, id: s.id, title: s.title, image: s.backdrop ?? s.poster, progress: progress)
+                return .init(kind: .series, id: s.id, title: s.title, backdrop: s.backdrop, poster: s.poster, progress: progress)
             }
         }
         if TopShelfSnapshot(items: Array(items)).write() {

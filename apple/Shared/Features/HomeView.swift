@@ -279,11 +279,11 @@ struct RailRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(rail.title).font(.title3.bold())
+                Text(rail.title).displayFont(.title3)
                 Spacer()
                 if let ask {
                     Button("Ask about these", systemImage: "sparkles", action: ask)
-                        .font(.caption.weight(.semibold))
+                        .font(.ui(.caption).weight(.semibold))
                         #if os(iOS)
                         .buttonStyle(.borderless)
                         #endif
@@ -351,7 +351,7 @@ struct RailCard: View {
             } placeholder: {
                 ZStack {
                     Rectangle().fill(.quaternary)
-                    Text(entry.item.title).font(.caption).multilineTextAlignment(.center).padding(6)
+                    Text(entry.item.title).font(.ui(.caption)).multilineTextAlignment(.center).padding(6)
                 }
             }
             .frame(width: width, height: width * 3 / 2)
@@ -363,9 +363,9 @@ struct RailCard: View {
                         .padding(6)
                 }
             }
-            Text(entry.item.title).font(.caption).lineLimit(1)
+            Text(entry.item.title).font(.ui(.caption)).lineLimit(1)
             if let reason = entry.reason {
-                Text(reason).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(reason).font(.ui(.caption2)).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .frame(width: width)

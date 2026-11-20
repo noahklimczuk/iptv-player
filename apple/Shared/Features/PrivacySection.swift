@@ -38,12 +38,12 @@ struct PrivacySection: View {
                         Text("Clear watch history").fontWeight(.heavy)
                         Spacer()
                         Text(Self.entries(history.items))
-                            .font(.caption.bold())
+                            .font(.ui(.caption).bold())
                             .padding(.horizontal, 8).padding(.vertical, 3)
                             .overlay(Capsule().strokeBorder(.secondary))
                     }
                     Text("\(who) Continue Watching, episode ticks and recommendations start again from nothing. Other profiles keep theirs.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                     // Two steps, because there is no undo, and the deletion syncs.
                     if confirming {
                         HStack {
@@ -64,17 +64,17 @@ struct PrivacySection: View {
                         Text("Usage data").fontWeight(.heavy)
                         Spacer()
                         Text("None sent")
-                            .font(.caption.bold())
+                            .font(.ui(.caption).bold())
                             .padding(.horizontal, 8).padding(.vertical, 3)
                             .overlay(Capsule().strokeBorder(.secondary))
                     }
                     Text("Aurora sends none: there is no analytics or crash reporting to switch on. docs/PRIVACY.md lists everything that does leave this device.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                 }
                 if let failure {
-                    Text(failure).font(.callout).foregroundStyle(.red)
+                    Text(failure).font(.ui(.callout)).foregroundStyle(.red)
                 } else if let message {
-                    Text(message).font(.callout).foregroundStyle(.green)
+                    Text(message).font(.ui(.callout)).foregroundStyle(.green)
                 }
             } else {
                 ProgressView()

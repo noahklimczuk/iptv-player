@@ -316,13 +316,28 @@ screens. The app can:
 - AirPlay on iPhone and iPad: the system's picker in the player's top bar, as one of
   its glass buttons. It sends the sound to a speaker or TV; mpv draws its own picture,
   so the picture goes with the screen only when it is mirrored. Windows has no AirPlay.
+- Windows' icon on both apps: the white "A" on the violet-to-teal diagonal, redrawn as
+  vectors by `scripts/make-icons.swift` at every size Apple asks for. On the Apple TV
+  it is a two-layer icon, so the A lifts off the gradient when focused, with the
+  static shelf images the TV shows before Aurora has written its own.
 - Windows' Home error state: when the rails cannot be read at all, "Couldn't load your
   library" and why, in their place.
 
-On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Movies, Series), and
-Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app (multi-view is not offered there, and the playlist editor opens from Settings → Library). A sixth tab would go
-under "More", whose navigation bar stacks on the tab's own and doubles every back
-button. iPad and Apple TV keep both as tabs.
+- Windows' typefaces everywhere: Manrope for the interface (at Windows' body weight,
+  500) and Bricolage Grotesque at 800, tracked in, for headings (`dl-display`,
+  `dl-page-title`): page and rail titles, the hero and title pages, profile names.
+  They are Windows' own fontsource files, rebuilt as TrueType by
+  `scripts/make-fonts.swift` (iOS and tvOS can't load WOFF2) and committed in
+  `Shared/Fonts`; `Typography.swift` has `.ui(...)`, `.display(...)` and
+  `displayFont(...)`, and sets the navigation bars' titles.
+- Windows' tab bar on every device (`AuroraTabBar`, from `TabBar.tsx`): the floating
+  glass bar at the foot of the screen with Windows' ten destinations in its order, its
+  own icons (`AuroraIcon`, drawn from `Icon.tsx`'s SVG paths), 84-point tabs and the
+  platter that slides to the current one. It scrolls sideways where the screen is too
+  narrow, as Windows' does in a narrow window; a phone leaves out Multi-view. Search
+  opens from Home's toolbar, as Windows' opens from its top bar. Not yet: dragging the
+  platter from tab to tab, and on Apple TV the Menu button does not jump back to the
+  bar (down does).
 
 Provider passwords and the TMDB and Gemini keys sync only when the household turns on
 "Also share sign-ins and keys" in Settings → Sync (D34), as on Windows; they go from and
@@ -344,7 +359,7 @@ Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 | mpv's **picture** | ⏳ not on the simulator on an Intel Mac. There MoltenVK used to fail cleanly (`VK_ERROR_INCOMPATIBLE_DRIVER`); as of 2026-11-17 the simulator's Metal driver crashes the app while MoltenVK probes it, so Intel simulator builds don't start the picture at all (`vid=no`) and the app says "only the sound is playing". Needs a real Apple TV/iPhone, or an Apple-silicon Mac |
 | Guide grid against the real Xtream panel (6,699 channels): rows fetched as they scroll in, "No guide" rows, Earlier/Later, the now line, replay marked only where the channel keeps an archive | ✅ tvOS 26.5 simulator, driven with the remote |
 | Live and catch-up playback from the guide, left running | ✅ sound plays, no crash. A panel that has no archive for a programme gets "archive would not play" (MS NOW's 404s on the test panel) |
-| iPhone tab bar on the iOS 26 simulator | ⚠️ draws as an empty glass shape on this Intel Mac; the same `TabView` draws correctly on tvOS. To check on a device |
+| Windows' tab bar and typefaces | ✅ iOS 26.5 (scrolls to Settings, switches pages) and tvOS 26.5 (reached with the remote, selects Live TV) simulators |
 | Playback on a real Apple TV, import time for a big panel, zap time | ⏳ needs hardware: the remaining Phase 2 exit criteria |
 
 ## The separation rule

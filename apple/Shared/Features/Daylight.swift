@@ -146,7 +146,7 @@ struct DaylightButtonStyle: ButtonStyle {
         let radius = Daylight.px(size == .lg ? 18 : 14)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         let label = configuration.label
-            .font(.system(size: Daylight.px(fontSize), weight: .heavy))
+            .font(.ui(size: Daylight.px(fontSize), weight: .heavy))
             .labelStyle(.titleAndIcon)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
@@ -251,7 +251,7 @@ struct DaylightBadge: View {
 
     var body: some View {
         Text(tone == .live ? text.uppercased() : text)
-            .font(.system(size: Daylight.px(12), weight: .heavy))
+            .font(.ui(size: Daylight.px(12), weight: .heavy))
             .lineLimit(1)
             .fixedSize()
             .padding(.vertical, tight ? 0 : Daylight.px(3)).padding(.horizontal, Daylight.px(tight ? 4 : 9))
@@ -318,7 +318,7 @@ struct DaylightCheckbox: View {
             if isOn {
                 shape.fill(theme.accent)
                 Image(systemName: "checkmark")
-                    .font(.system(size: Daylight.px(12), weight: .heavy))
+                    .font(.ui(size: Daylight.px(12), weight: .heavy))
                     .foregroundStyle(theme.accentText)
             } else {
                 shape.fill(theme.surface)
@@ -346,7 +346,7 @@ struct DaylightSegmentStyle: ButtonStyle {
         let radius = Daylight.px(10)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         configuration.label
-            .font(.system(size: Daylight.px(13), weight: .bold))
+            .font(.ui(size: Daylight.px(13), weight: .bold))
             .lineLimit(1)
             .padding(.horizontal, Daylight.px(14))
             .frame(height: Daylight.px(height))
@@ -393,7 +393,7 @@ struct DaylightFilterStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let radius = Daylight.px(14)
         configuration.label
-            .font(.system(size: Daylight.px(13), weight: .bold))
+            .font(.ui(size: Daylight.px(13), weight: .bold))
             .lineLimit(1)
             .foregroundStyle(selected ? theme.accentText : theme.text)
             .padding(.horizontal, Daylight.px(16))
@@ -457,7 +457,7 @@ struct DaylightSearchField: View {
                 Text(text.isEmpty ? placeholder : text).lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .font(.system(size: Daylight.px(15), weight: .medium))
+            .font(.ui(size: Daylight.px(15), weight: .medium))
             .foregroundStyle(text.isEmpty ? theme.textFaint : theme.text)
             .padding(.vertical, Daylight.px(10)).padding(.horizontal, Daylight.px(14))
             .frame(width: Daylight.px(width), alignment: .leading)
@@ -476,12 +476,12 @@ struct DaylightSearchField: View {
         HStack(spacing: 8) {
             if icon {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.ui(size: 14, weight: .semibold))
                     .foregroundStyle(theme.textFaint)
             }
             TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(theme.textFaint))
                 .textFieldStyle(.plain)
-                .font(.system(size: 15, weight: .medium))
+                .font(.ui(size: 15, weight: .medium))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .submitLabel(.search)

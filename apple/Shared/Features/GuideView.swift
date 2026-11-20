@@ -176,7 +176,7 @@ struct GuideView: View {
                         filterBinding.wrappedValue.withListings.toggle()
                     }
                     Text("With listings")
-                        .font(.system(size: Daylight.px(13), weight: .bold))
+                        .font(.ui(size: Daylight.px(13), weight: .bold))
                         .foregroundStyle(theme.textMuted)
                         .accessibilityHidden(true)
                 }
@@ -230,7 +230,7 @@ struct GuideView: View {
 
     private var dayHeading: some View {
         Text(Self.dayLabel(start))
-            .font(.title2.weight(.heavy))
+            .displayFont(.title2)
             .lineLimit(1)
     }
 
@@ -371,7 +371,7 @@ private struct TimeAxis: View {
     var body: some View {
         HStack(spacing: 0) {
             Text("CHANNEL")
-                .font(.system(size: Daylight.px(12), weight: .heavy))
+                .font(.ui(size: Daylight.px(12), weight: .heavy))
                 .tracking(Daylight.px(12) * 0.06)
                 .foregroundStyle(theme.textFaint)
                 .padding(.horizontal, 16)
@@ -379,7 +379,7 @@ private struct TimeAxis: View {
             GeometryReader { geo in
                 ForEach(0..<Int(span / 1800), id: \.self) { i in
                     Text(start.addingTimeInterval(Double(i) * 1800), format: .dateTime.hour().minute())
-                        .font(.system(size: Daylight.px(15), weight: .semibold).monospacedDigit())
+                        .font(.ui(size: Daylight.px(15), weight: .semibold).monospacedDigit())
                         .foregroundStyle(theme.textMuted)
                         .padding(.horizontal, 8)
                         .frame(maxHeight: .infinity)
@@ -440,7 +440,7 @@ private struct GuideRowView: View {
                 // Windows' 30-pixel column, which a five-digit number runs past rather
                 // than wrapping.
                 Text(verbatim: channel.number.map { String($0) } ?? "")
-                    .font(.system(size: Daylight.px(12), weight: .bold).monospacedDigit())
+                    .font(.ui(size: Daylight.px(12), weight: .bold).monospacedDigit())
                     .foregroundStyle(theme.textFaint)
                     .lineLimit(1)
                     .fixedSize()
@@ -449,14 +449,14 @@ private struct GuideRowView: View {
             ChannelTile(name: channel.name, number: channel.number, logo: channel.logo,
                         size: narrow ? 32 : Daylight.px(40))
             Text(channel.name)
-                .font(.system(size: Daylight.px(13), weight: .heavy))
+                .font(.ui(size: Daylight.px(13), weight: .heavy))
                 .foregroundStyle(theme.text)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if channel.hasCatchup {
                 Image(systemName: "gobackward.10")
-                    .font(.system(size: Daylight.px(13)))
+                    .font(.ui(size: Daylight.px(13)))
                     .foregroundStyle(theme.textFaint)
                     .accessibilityLabel("Catch-up available")
             }
@@ -516,12 +516,12 @@ private struct ProgrammeLabel: View {
                 if programme.isNew { DaylightBadge("New", tone: .new, tight: true) }
                 if programme.isLive { DaylightBadge("Live", tone: .live, tight: true) }
                 Text(programme.title)
-                    .font(.system(size: Daylight.px(13), weight: .heavy))
+                    .font(.ui(size: Daylight.px(13), weight: .heavy))
                     .lineLimit(1)
             }
             if showsTimes {
                 Text(verbatim: times)
-                    .font(.system(size: Daylight.px(12), weight: .bold))
+                    .font(.ui(size: Daylight.px(12), weight: .bold))
                     .lineLimit(1)
                     .modifier(FaintUnlessChosen())
             }
@@ -646,7 +646,7 @@ private struct FromTheName: View {
             strip(tagged: true)
             strip(tagged: false)
         }
-        .font(.system(size: Daylight.px(13)))
+        .font(.ui(size: Daylight.px(13)))
         .foregroundStyle(theme.textMuted)
         .padding(.horizontal, 14)
         .frame(maxWidth: Daylight.px(640), maxHeight: .infinity, alignment: .leading)
@@ -659,22 +659,22 @@ private struct FromTheName: View {
         let g = NameGuide(channel.name)
         return HStack(spacing: 10) {
             Image(systemName: icon(g))
-                .font(.system(size: Daylight.px(14)))
+                .font(.ui(size: Daylight.px(14)))
                 .opacity(0.7)
             Text(g.title)
-                .font(.system(size: Daylight.px(13), weight: plain(g) ? .bold : .heavy))
+                .font(.ui(size: Daylight.px(13), weight: plain(g) ? .bold : .heavy))
                 .foregroundStyle(plain(g) ? theme.textMuted : theme.text)
                 .lineLimit(1)
                 // Whole beside the tag, or the tag gives way (see `body`).
                 .fixedSize(horizontal: tagged, vertical: false)
             if let when = when(g) {
                 Text(verbatim: when)
-                    .font(.system(size: Daylight.px(13), weight: .bold).monospacedDigit())
+                    .font(.ui(size: Daylight.px(13), weight: .bold).monospacedDigit())
                     .fixedSize()
             }
             if tagged {
                 Text("from channel name")
-                    .font(.system(size: Daylight.px(12), weight: .bold))
+                    .font(.ui(size: Daylight.px(12), weight: .bold))
                     .foregroundStyle(theme.textFaint)
                     .padding(.vertical, 2).padding(.horizontal, 8)
                     .background(theme.surfaceSunk, in: Capsule())

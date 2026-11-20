@@ -71,6 +71,8 @@ targets:
         # Pairing with a phone over the home network (Shared/Core/Pairing.swift).
         NSLocalNetworkUsageDescription: Aurora looks for your iPhone on this network so it can sign this Apple TV in to sync.
         NSBonjourServices: [_aurora-pair._tcp]
+        # Windows' typefaces (Shared/Fonts, from scripts/make-fonts.swift).
+        UIAppFonts: [Manrope.ttf, BricolageGrotesque.ttf]
     platform: tvOS
     sources:
       - path: AuroraTV
@@ -83,6 +85,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tv.aurora.tv
+        # The layered icon and shelf images (AuroraTV/Assets.xcassets, from
+        # scripts/make-icons.swift).
+        ASSETCATALOG_COMPILER_APPICON_NAME: App Icon & Top Shelf Image
         INFOPLIST_KEY_CFBundleDisplayName: Aurora
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -100,12 +105,16 @@ targets:
         # Finding an Apple TV to set up (Shared/Core/Pairing.swift).
         NSLocalNetworkUsageDescription: Aurora looks for Apple TVs on this network so you can sign them in to sync from here.
         NSBonjourServices: [_aurora-pair._tcp]
+        # Windows' typefaces (Shared/Fonts, from scripts/make-fonts.swift).
+        UIAppFonts: [Manrope.ttf, BricolageGrotesque.ttf]
     platform: iOS
     sources:
       - path: AuroraMobile
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tv.aurora.mobile
+        # AuroraMobile/Assets.xcassets, from scripts/make-icons.swift.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_CFBundleDisplayName: Aurora
         GENERATE_INFOPLIST_FILE: YES

@@ -114,18 +114,18 @@ struct HeroBillboard: View {
     private func text(_ item: CatalogItem) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(item.isSeries ? "Featured series" : "Featured film")
-                .font(.caption.weight(.heavy))
+                .font(.ui(.caption).weight(.heavy))
                 .foregroundStyle(Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255))
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(.white, in: Capsule())
                 .padding(.bottom, 14)
             Text(item.title)
-                .font(.system(size: titleSize, weight: .heavy))
+                .displayFont(size: titleSize)
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .padding(.bottom, 10)
             meta(item)
-                .font(.subheadline.weight(.bold))
+                .font(.ui(.subheadline).weight(.bold))
                 .foregroundStyle(.white.opacity(0.88))
                 .padding(.bottom, 12)
             if let overview = item.overview, !overview.isEmpty {
@@ -343,7 +343,7 @@ struct HeroBillboard: View {
 private struct SolidOnArt: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline.weight(.heavy))
+            .font(.ui(.headline).weight(.heavy))
             .lineLimit(1).fixedSize()
             .foregroundStyle(Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255))
             .padding(.horizontal, 20).padding(.vertical, 12)
@@ -356,7 +356,7 @@ private struct SolidOnArt: ButtonStyle {
 private struct GlassOnArt: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline.weight(.heavy))
+            .font(.ui(.headline).weight(.heavy))
             .lineLimit(1).fixedSize()
             .foregroundStyle(.white)
             .padding(.horizontal, 18).padding(.vertical, 12)

@@ -84,7 +84,7 @@ struct SetupWizard: View {
                     .transition(.opacity)
                     if let error {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout.weight(.semibold))
+                            .font(.ui(.callout).weight(.semibold))
                             .padding(16)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
@@ -117,7 +117,7 @@ struct SetupWizard: View {
             HStack(alignment: .center, spacing: 16) {
                 HStack(spacing: 9) {
                     Circle().fill(.tint).frame(width: 14, height: 14)
-                    Text("aurora").font(.title2.weight(.heavy)).kerning(-0.5)
+                    Text("aurora").font(.display(.title2)).tracking(AuroraFont.baseSize(.title2) * -0.03)
                 }
                 .accessibilityHidden(true)
                 Spacer(minLength: 0)
@@ -131,7 +131,7 @@ struct SetupWizard: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(additional ? "Add another provider" : "Connect your provider")
-                    .font(.largeTitle.weight(.bold))
+                    .displayFont(.largeTitle)
                     .accessibilityLabel(additional ? "Add another provider" : "Welcome to Aurora TV")
                 Text(additional
                      ? "Its channels and titles join the library you already have."
@@ -145,7 +145,7 @@ struct SetupWizard: View {
         let reached = s.rawValue <= step.rawValue
         return HStack(spacing: 8) {
             Text("\(s.rawValue + 1)")
-                .font(.caption.weight(.heavy))
+                .font(.ui(.caption).weight(.heavy))
                 .frame(width: 26, height: 26)
                 // The background colour on the tint: white on blue on a phone, dark on the
                 // Apple TV's white tint, where white on it vanished.
@@ -158,12 +158,12 @@ struct SetupWizard: View {
                     }
                 }
             #if os(tvOS)
-            Text(s.label).font(.caption).fontWeight(s == step ? .heavy : .semibold)
+            Text(s.label).font(.ui(.caption)).fontWeight(s == step ? .heavy : .semibold)
                 .foregroundStyle(s == step ? .primary : .secondary)
             #else
             // Four labels do not fit beside the wordmark on a phone; the numbers do.
             if !compactWidth {
-                Text(s.label).font(.subheadline).fontWeight(s == step ? .heavy : .semibold)
+                Text(s.label).font(.ui(.subheadline)).fontWeight(s == step ? .heavy : .semibold)
                     .foregroundStyle(s == step ? .primary : .secondary)
             }
             #endif
@@ -205,7 +205,7 @@ struct SetupWizard: View {
                       ? "Recognised an Xtream address — username and password filled in below, and taken out of the address."
                       : "Looks like a panel login. Enter the username and password your provider gave you.",
                       systemImage: detected == .credentials ? "checkmark" : "info.circle")
-                    .font(.callout)
+                    .font(.ui(.callout))
                     .foregroundStyle(detected == .credentials ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
             }
 
@@ -391,7 +391,7 @@ struct SetupWizard: View {
 
     private var contentStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("What should Aurora import?").font(.title3.weight(.bold))
+            Text("What should Aurora import?").font(.ui(.title3).weight(.bold))
                 .padding(.bottom, 6)
             contentRow("Live TV", "Channels and the programme guide", isOn: $content.live)
             contentRow("Movies", "On-demand films", isOn: $content.vod)
@@ -413,7 +413,7 @@ struct SetupWizard: View {
         Toggle(isOn: isOn) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).fontWeight(.heavy)
-                Text(hint).font(.subheadline).foregroundStyle(.secondary)
+                Text(hint).font(.ui(.subheadline)).foregroundStyle(.secondary)
             }
         }
         #if os(iOS)
@@ -456,16 +456,16 @@ struct SetupWizard: View {
         return VStack(spacing: 16) {
             ProgressView().controlSize(.large)
             Text((progress?.phase ?? .fetchingPlaylist).sentence)
-                .font(.title3.weight(.semibold))
+                .font(.ui(.title3).weight(.semibold))
             if let progress, progress.total > 0 {
                 VStack(spacing: 6) {
                     ProgressView(value: Double(progress.done), total: Double(progress.total))
                     Text("\(progress.done.formatted()) of \(progress.total.formatted())")
-                        .font(.caption).foregroundStyle(.tertiary)
+                        .font(.ui(.caption)).foregroundStyle(.tertiary)
                 }
             }
             Text("A large subscription can take several minutes. You can leave this running and start watching — the progress carries on in Settings.")
-                .font(.callout).foregroundStyle(.tertiary)
+                .font(.ui(.callout)).foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
             Button("Continue in the background", systemImage: "chevron.right") {
                 left.on = true
@@ -483,7 +483,7 @@ struct SetupWizard: View {
             DoneSummary(report: report, onFinished: onFinished)
         } else {
             VStack(spacing: 16) {
-                Text("Import finished").font(.title3.weight(.bold))
+                Text("Import finished").font(.ui(.title3).weight(.bold))
                 Button("Start watching", action: onFinished).buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity)
@@ -494,7 +494,7 @@ struct SetupWizard: View {
 
     private func field<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.subheadline.weight(.heavy)).foregroundStyle(.secondary)
+            Text(label).font(.ui(.subheadline).weight(.heavy)).foregroundStyle(.secondary)
             content()
         }
     }
@@ -527,8 +527,8 @@ private struct DoneSummary: View {
         let coverage = known > 0 ? Int((Double(report.epgMatched) / Double(known) * 100).rounded()) : 0
         VStack(alignment: .leading, spacing: 20) {
             VStack(spacing: 8) {
-                Image(systemName: "checkmark").font(.largeTitle.weight(.bold)).foregroundStyle(.green)
-                Text("Your library is ready").font(.title3.weight(.bold))
+                Image(systemName: "checkmark").font(.ui(.largeTitle).weight(.bold)).foregroundStyle(.green)
+                Text("Your library is ready").font(.ui(.title3).weight(.bold))
             }
             .frame(maxWidth: .infinity)
 
@@ -542,14 +542,14 @@ private struct DoneSummary: View {
             }
 
             Text(summary(unmatched: unmatched, known: known, coverage: coverage))
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.ui(.callout)).foregroundStyle(.secondary)
 
             if !report.warnings.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(report.warnings.count) warning\(report.warnings.count == 1 ? "" : "s")")
-                        .font(.callout.weight(.semibold)).foregroundStyle(.orange)
+                        .font(.ui(.callout).weight(.semibold)).foregroundStyle(.orange)
                     ForEach(Array(report.warnings.prefix(8).enumerated()), id: \.offset) { _, w in
-                        Text("• \(w)").font(.caption).foregroundStyle(.secondary)
+                        Text("• \(w)").font(.ui(.caption)).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -577,9 +577,9 @@ private struct DoneSummary: View {
 
     private func stat(_ label: String, _ value: UInt64) -> some View {
         VStack(spacing: 2) {
-            Text(value.formatted()).font(.title2.weight(.heavy)).monospacedDigit()
+            Text(value.formatted()).displayFont(.title2).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.caption).foregroundStyle(.tertiary)
+            Text(label).font(.ui(.caption)).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)

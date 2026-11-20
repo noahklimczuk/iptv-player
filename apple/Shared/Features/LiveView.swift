@@ -218,17 +218,17 @@ struct LiveView: View {
     @ViewBuilder private var title: some View {
         let words = HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(heading)
-                .font(.system(size: Daylight.px(34), weight: .heavy))
+                .displayFont(size: Daylight.px(34))
                 .lineLimit(1)
             if loaded {
                 Text(visible.count.formatted())
-                    .font(.system(size: Daylight.px(34), weight: .heavy))
+                    .displayFont(size: Daylight.px(34))
                     .monospacedDigit()
                     .foregroundStyle(theme.textFaint.opacity(0.6))
             }
             if !sidebarBeside {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.ui(size: 17, weight: .bold))
                     .foregroundStyle(theme.textMuted)
             }
         }
@@ -533,7 +533,7 @@ struct GroupSidebar: View {
                 LazyVStack(spacing: 2) {
                     if !groups.isEmpty, shown.isEmpty {
                         Text("No group matches “\(filter.trimmingCharacters(in: .whitespaces))”.")
-                            .font(.system(size: Daylight.px(13)))
+                            .font(.ui(size: Daylight.px(13)))
                             .foregroundStyle(theme.textFaint)
                             .padding(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -561,16 +561,16 @@ struct GroupSidebar: View {
                        action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                if let icon { Image(systemName: icon).font(.system(size: Daylight.px(14), weight: .semibold)) }
+                if let icon { Image(systemName: icon).font(.ui(size: Daylight.px(14), weight: .semibold)) }
                 Text(title).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 if let count, count > 0 {
                     Text(count.formatted())
-                        .font(.system(size: Daylight.px(12), weight: .bold))
+                        .font(.ui(size: Daylight.px(12), weight: .bold))
                         .monospacedDigit()
                         .opacity(0.6)
                 }
             }
-            .font(.system(size: Daylight.px(15), weight: .bold))
+            .font(.ui(size: Daylight.px(15), weight: .bold))
             .padding(.horizontal, 14)
             .frame(height: Daylight.px(37))
             .foregroundStyle(active ? theme.background : theme.text)
@@ -632,12 +632,12 @@ struct DaylightEmpty<Action: View>: View {
     var body: some View {
         VStack(spacing: Daylight.px(12)) {
             Image(systemName: icon)
-                .font(.system(size: Daylight.px(26), weight: .semibold))
+                .font(.ui(size: Daylight.px(26), weight: .semibold))
                 .frame(width: Daylight.px(64), height: Daylight.px(64))
                 .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: Daylight.px(18), style: .continuous))
-            Text(title).font(.system(size: Daylight.px(20), weight: .heavy))
+            Text(title).displayFont(size: Daylight.px(20))
             Text(message)
-                .font(.system(size: Daylight.px(15)))
+                .font(.ui(size: Daylight.px(15)))
                 .foregroundStyle(theme.textMuted)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: Daylight.px(460))
@@ -682,23 +682,23 @@ private struct LiveChannelRow: View {
     var body: some View {
         HStack(spacing: compact ? 10 : 14) {
             Text(channel.number.map { String($0) } ?? "")
-                .font(.system(size: Daylight.px(15), weight: .heavy)).monospacedDigit()
+                .font(.ui(size: Daylight.px(15), weight: .heavy)).monospacedDigit()
                 .foregroundStyle(theme.textFaint)
                 .lineLimit(1).minimumScaleFactor(0.6)
                 .frame(width: Daylight.px(40), alignment: .trailing)
             ChannelTile(name: channel.name, number: channel.number, logo: channel.logo, size: Daylight.px(44))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(channel.name).font(.system(size: Daylight.px(17), weight: .heavy)).lineLimit(1)
+                    Text(channel.name).font(.ui(size: Daylight.px(17), weight: .heavy)).lineLimit(1)
                     if locked {
-                        Image(systemName: "lock.fill").font(.system(size: Daylight.px(12)))
+                        Image(systemName: "lock.fill").font(.ui(size: Daylight.px(12)))
                             .accessibilityLabel("Locked: needs the parental PIN")
                     }
                     if let quality = channel.quality { DaylightBadge(quality) }
                 }
                 (Text(guide?.now.map { "\(clockTime(unix: $0.start)) \($0.title)" } ?? "No guide data")
                  + Text(guide?.next.map { "  ·  Next: \($0.title)" } ?? "").foregroundStyle(theme.textFaint))
-                    .font(.system(size: Daylight.px(13)))
+                    .font(.ui(size: Daylight.px(13)))
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
                 let pct = programmeProgress(guide?.now)
@@ -710,7 +710,7 @@ private struct LiveChannelRow: View {
             HStack(spacing: 6) {
                 if channel.stale {
                     Text("Dropped")
-                        .font(.system(size: Daylight.px(12), weight: .heavy))
+                        .font(.ui(size: Daylight.px(12), weight: .heavy))
                         .foregroundStyle(Color.orange)
                         .padding(.vertical, 3).padding(.horizontal, 9)
                         .overlay(Capsule().strokeBorder(Color.orange, lineWidth: 1.5))
@@ -720,7 +720,7 @@ private struct LiveChannelRow: View {
                 if let toggleFavorite {
                     Button(action: toggleFavorite) {
                         Image(systemName: channel.favorite ? "heart.fill" : "heart")
-                            .font(.system(size: 16))
+                            .font(.ui(size: 16))
                             .foregroundStyle(channel.favorite ? theme.accent : theme.textFaint)
                             .frame(width: 30, height: 30)
                     }
@@ -733,7 +733,7 @@ private struct LiveChannelRow: View {
                 }
                 if let addToNewList {
                     Button(action: addToNewList) {
-                        Image(systemName: "plus").font(.system(size: 14))
+                        Image(systemName: "plus").font(.ui(size: 14))
                             .foregroundStyle(theme.textFaint)
                             .frame(width: 30, height: 30)
                     }
@@ -742,7 +742,7 @@ private struct LiveChannelRow: View {
                 }
                 if !compact {
                 Image(systemName: "play.fill")
-                    .font(.system(size: Daylight.px(14)))
+                    .font(.ui(size: Daylight.px(14)))
                     .frame(width: Daylight.px(36), height: Daylight.px(36))
                     .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: Daylight.px(8), style: .continuous))
                     .accessibilityHidden(true)
@@ -778,21 +778,21 @@ private struct LiveChannelCard: View {
                         Text(String(number)).fontWeight(.heavy).foregroundStyle(theme.textFaint)
                     }
                 }
-                .font(.system(size: Daylight.px(12), weight: .heavy))
+                .font(.ui(size: Daylight.px(12), weight: .heavy))
                 .padding(.top, Daylight.px(14))
             }
             .padding(.bottom, 8)
-            Text(channel.name).font(.system(size: Daylight.px(17), weight: .heavy)).lineLimit(1)
+            Text(channel.name).font(.ui(size: Daylight.px(17), weight: .heavy)).lineLimit(1)
                 .padding(.trailing, 30)
             Text(guide?.now?.title ?? "No guide data")
-                .font(.system(size: Daylight.px(13)))
+                .font(.ui(size: Daylight.px(13)))
                 .foregroundStyle(theme.textMuted)
                 .lineLimit(1)
                 .padding(.bottom, 8)
             DaylightProgress(value: programmeProgress(guide?.now), height: 6)
             HStack {
                 Text(guide?.next.map { "Next · \($0.title)" } ?? " ")
-                    .font(.system(size: Daylight.px(13), weight: .bold))
+                    .font(.ui(size: Daylight.px(13), weight: .bold))
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
                 Spacer(minLength: 4)
@@ -835,7 +835,7 @@ struct Badge: View {
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.heavy))
+            .font(.ui(.caption2).weight(.heavy))
             .lineLimit(1).fixedSize()
             .padding(.horizontal, 8).padding(.vertical, 3)
             .foregroundStyle(foreground)

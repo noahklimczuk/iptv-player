@@ -19,7 +19,7 @@ struct PinPad: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Text(heading).font(.title2.bold()).multilineTextAlignment(.center)
+            Text(heading).displayFont(.title2).multilineTextAlignment(.center)
             HStack(spacing: 16) {
                 ForEach(0..<4, id: \.self) { i in
                     Circle()
@@ -40,7 +40,7 @@ struct PinPad: View {
             }
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(keySize), spacing: 16), count: 3), spacing: 16) {
                 ForEach(["1", "2", "3", "4", "5", "6", "7", "8", "9"], id: \.self) { key($0) }
-                Button("Cancel") { cancel() }.font(.caption)
+                Button("Cancel") { cancel() }.font(.ui(.caption))
                 key("0")
                 Button { if !digits.isEmpty { digits.removeLast() } } label: {
                     Image(systemName: "delete.left")
@@ -68,7 +68,7 @@ struct PinPad: View {
         Button {
             push(digit)
         } label: {
-            Text(digit).font(.title).frame(width: keySize, height: keySize * 0.7)
+            Text(digit).font(.ui(.title)).frame(width: keySize, height: keySize * 0.7)
         }
     }
 

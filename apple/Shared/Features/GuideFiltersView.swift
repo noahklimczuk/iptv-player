@@ -57,11 +57,11 @@ struct GuideFiltersButton: View {
         Button(action: action) {
             HStack(spacing: Daylight.px(8)) {
                 Image(systemName: "line.3.horizontal.decrease")
-                    .font(.system(size: Daylight.px(15)))
+                    .font(.ui(size: Daylight.px(15)))
                 Text("Filters")
                 if count > 0 {
                     Text(verbatim: String(count))
-                        .font(.system(size: Daylight.px(11), weight: .heavy).monospacedDigit())
+                        .font(.ui(size: Daylight.px(11), weight: .heavy).monospacedDigit())
                         .foregroundStyle(theme.accentText)
                         .padding(.horizontal, Daylight.px(5))
                         .frame(minWidth: Daylight.px(18), minHeight: Daylight.px(18))
@@ -163,7 +163,7 @@ struct GuideFiltersSheet: View {
                             .foregroundStyle(chosen && filters.groupMode == .hide ? .secondary : .primary)
                             .lineLimit(1)
                         Spacer()
-                        Text("\(group.count)").font(.caption).foregroundStyle(.secondary)
+                        Text("\(group.count)").font(.ui(.caption)).foregroundStyle(.secondary)
                     }
                 }
                 .accessibilityAddTraits(chosen ? .isSelected : [])

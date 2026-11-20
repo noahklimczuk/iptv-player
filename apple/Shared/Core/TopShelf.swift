@@ -12,8 +12,9 @@ struct TopShelfSnapshot: Codable, Equatable {
         let kind: Kind
         let id: Int64
         let title: String
-        /// Landscape art first (what the shelf shows), the poster when there is none.
-        let image: String?
+        /// Landscape art, when the title has some.
+        let backdrop: String?
+        let poster: String?
         /// 0…1, the bar under the picture.
         let progress: Double?
     }

@@ -6,11 +6,15 @@ import TVServices
 final class ContentProvider: TVTopShelfContentProvider {
     override func loadTopShelfContent() async -> (any TVTopShelfContent)? {
         guard let snapshot = TopShelfSnapshot.read(), !snapshot.items.isEmpty else { return nil }
+        // One shape for the row: wide art when every title has some, else the posters,
+        // which a 16:9 frame would crop to a strip of their middle.
+        let wide = snapshot.items.allSatisfy { $0.backdrop != nil }
         let items = snapshot.items.map { entry -> TVTopShelfSectionedItem in
             let item = TVTopShelfSectionedItem(identifier: "\(entry.kind.rawValue)-\(entry.id)")
             item.title = entry.title
-            item.imageShape = .hdtv
-            if let image = entry.image.flatMap(URL.init(string:)) {
+            item.imageShape = wide ? .hdtv : .poster
+            let art = wide ? entry.backdrop : (entry.poster ?? entry.backdrop)
+            if let image = art.flatMap(URL.init(string:)) {
                 item.setImageURL(image, for: [.screenScale1x, .screenScale2x])
             }
             if let progress = entry.progress { item.playbackProgress = progress }

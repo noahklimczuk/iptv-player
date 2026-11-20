@@ -27,7 +27,7 @@ struct ProgrammeDetail: View {
         // card that cut the buttons off. Menu closes it, so there is no Done.
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text(channel.name).font(.headline).foregroundStyle(.secondary)
+                Text(channel.name).font(.ui(.headline)).foregroundStyle(.secondary)
                 details
                 actions.padding(.top, 12)
             }
@@ -65,13 +65,13 @@ struct ProgrammeDetail: View {
     /// What it is and when, above the buttons.
     @ViewBuilder private var details: some View {
         badges
-        Text(p.title).font(.title.weight(.heavy))
+        Text(p.title).displayFont(.title)
         if let sub = p.subTitle {
             Text(sub).foregroundStyle(.secondary)
         }
-        Text(timing).font(.callout).monospacedDigit().foregroundStyle(.tertiary)
+        Text(timing).font(.ui(.callout)).monospacedDigit().foregroundStyle(.tertiary)
         if let description = p.description {
-            Text(description).font(.callout).foregroundStyle(.secondary)
+            Text(description).font(.ui(.callout)).foregroundStyle(.secondary)
         }
     }
 
@@ -98,7 +98,7 @@ struct ProgrammeDetail: View {
     }
 
     private func badge(_ text: String, _ tint: Color?) -> some View {
-        Text(text).font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+        Text(text).font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
             .background(tint ?? .clear, in: Capsule())
             .overlay { if tint == nil { Capsule().strokeBorder(.secondary) } }
             .foregroundStyle(tint == nil ? Color.primary : .white)
@@ -154,7 +154,7 @@ struct ProgrammeDetail: View {
         // Windows' order: the channel's other copies, then the search, under the rest.
         if !sources.isEmpty {
             HStack(spacing: 6) {
-                Text("Also in").font(.caption).foregroundStyle(.tertiary)
+                Text("Also in").font(.ui(.caption)).foregroundStyle(.tertiary)
                 ForEach(sources, id: \.id) { source in
                     Button(source.quality ?? "Unknown") {
                         play(.channel(id: source.id, name: source.name))
@@ -175,7 +175,7 @@ struct ProgrammeDetail: View {
         }
         .buttonStyle(.borderless)
         if let failure {
-            Text(failure).font(.callout).foregroundStyle(.red)
+            Text(failure).font(.ui(.callout)).foregroundStyle(.red)
         }
     }
 

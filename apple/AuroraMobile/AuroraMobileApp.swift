@@ -6,6 +6,11 @@ import SwiftUI
 struct AuroraMobileApp: App {
     @State private var model = AppModel()
 
+    init() {
+        // Windows' typefaces in the bars UIKit draws (Typography.swift).
+        AuroraFont.installAppearance()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView().environment(model)

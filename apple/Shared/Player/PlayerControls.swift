@@ -120,7 +120,7 @@ struct DockMetrics {
 
     /// Windows' type: `--fs-xs` 12, `--fs-sm` 13, `--fs-md` 15, `--fs-lg` 17, `--fs-2xl` 26.
     func font(_ size: CGFloat, _ weight: Font.Weight = .heavy) -> Font {
-        .system(size: size * scale, weight: weight)
+        .ui(size: size * scale, weight: weight)
     }
 
     /// Windows' 28 px from the window's edge.
@@ -246,7 +246,7 @@ private struct DockButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: m.px(iconSize), weight: kind == .primary ? .bold : .semibold))
+                .font(.ui(size: m.px(iconSize), weight: kind == .primary ? .bold : .semibold))
         }
         .buttonStyle(DockButtonStyle(kind: kind, active: active, m: m))
         .focused(focus, equals: id ?? .backdrop)
@@ -504,7 +504,7 @@ struct PlayerOverlay: View {
             .overlay(alignment: .topTrailing) {
                 if !session.digits.isEmpty {
                     Text(session.digits)
-                        .font(.system(size: digitSize, weight: .bold, design: .rounded))
+                        .font(.ui(size: digitSize, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.white)
                         .padding(.horizontal, 20).padding(.vertical, 8)
@@ -595,7 +595,7 @@ private struct ErrorPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: m.px(30), weight: .semibold))
+                .font(.ui(size: m.px(30), weight: .semibold))
                 .foregroundStyle(theme == .contrast ? Color.white : Color.red)
                 .padding(.bottom, m.px(12))
             Text("Could not play \(session.shownTitle)")
@@ -746,7 +746,7 @@ private struct TopBar: View {
         let name = session.shownTitle
         return HStack(spacing: m.px(12)) {
             Text(name.prefix(1).uppercased())
-                .font(.system(size: m.px(18), weight: .heavy))
+                .font(.ui(size: m.px(18), weight: .heavy))
                 .foregroundStyle(.white)
                 .frame(width: m.px(44), height: m.px(44))
                 .background(theme == .contrast ? Color(white: 0x1F / 255) : ChannelTile.hue(name),
@@ -813,7 +813,7 @@ private struct StatsPanel: View {
                 }
             }
         }
-        .font(.system(size: m.px(12), design: .monospaced))
+        .font(.ui(size: m.px(12), design: .monospaced))
         .foregroundStyle(.white)
         .padding(.vertical, m.px(12)).padding(.horizontal, m.px(16))
         .background(DockTokens(theme).chip, in: RoundedRectangle(cornerRadius: m.px(18), style: .continuous))
@@ -981,7 +981,7 @@ private struct LiveCards: View {
                         .tracking(0.26)
                         .foregroundStyle(dock.accent)
                     Text(on.title)
-                        .font(.system(size: m.px(36), weight: .heavy))
+                        .font(.ui(size: m.px(36), weight: .heavy))
                         .lineLimit(1)
                         .padding(.top, m.px(6)).padding(.bottom, m.px(8))
                     if let text = on.description ?? on.subTitle {
@@ -1448,7 +1448,7 @@ private struct Keypad: View {
     var body: some View {
         VStack(alignment: .leading, spacing: m.px(12)) {
             Text(session.digits.isEmpty ? "–" : session.digits)
-                .font(.system(size: m.px(44), weight: .heavy, design: .rounded))
+                .font(.ui(size: m.px(44), weight: .heavy, design: .rounded))
                 .monospacedDigit()
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityLabel(session.digits.isEmpty ? "No number typed" : "Typed \(session.digits)")
@@ -1554,7 +1554,7 @@ private struct Tick: View {
     @Environment(\.auroraTheme) private var theme
     var body: some View {
         Image(systemName: "checkmark")
-            .font(.system(size: m.px(12), weight: .heavy))
+            .font(.ui(size: m.px(12), weight: .heavy))
             .foregroundStyle(theme.accentText)
             .frame(width: m.px(26), height: m.px(26))
             .background(theme.accent, in: Circle())
@@ -1671,7 +1671,7 @@ private struct SkipButton: View {
         let dock = DockTokens(theme)
         Button { session.skip(marker) } label: {
             HStack(spacing: m.px(8)) {
-                Image(systemName: "forward.end.fill").font(.system(size: m.px(16), weight: .bold))
+                Image(systemName: "forward.end.fill").font(.ui(size: m.px(16), weight: .bold))
                 Text(marker.label)
                 if marker.source == .learned {
                     Text("Learned from your skips")
@@ -1830,7 +1830,7 @@ private struct SleepWarning: View {
 
     private func button(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: m.px(14), weight: .bold))
+            Image(systemName: icon).font(.ui(size: m.px(14), weight: .bold))
         }
         .buttonStyle(PillStyle(foreground: .primary, background: Color.primary.opacity(0.08),
                                height: m.px(36), radius: m.px(12), font: m.font(14), rim: nil, padding: m.px(11)))
@@ -1879,10 +1879,10 @@ private struct SeekBubble: View {
                     .background(.black)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            Text(time).font(.subheadline.weight(.heavy)).monospacedDigit()
+            Text(time).font(.ui(.subheadline).weight(.heavy)).monospacedDigit()
             ForEach(Array(lines.compactMap { $0?.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }.enumerated()), id: \.offset) { _, line in
-                Text(line).font(.caption.bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                Text(line).font(.ui(.caption).bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
         }
         .frame(minWidth: 64, maxWidth: image == nil ? 176 : 160)
@@ -1922,25 +1922,25 @@ private struct ChannelBannerView: View {
                         size: narrow ? 44 : logoSize)
             if let number = banner.channel.number {
                 Text(String(number))
-                    .font(.system(narrow ? .title2 : numberStyle, design: .rounded).weight(.heavy))
+                    .font(.display(narrow ? .title2 : numberStyle))
                     .monospacedDigit()
                     .foregroundStyle(.tint)
                     .lineLimit(1).fixedSize()
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(banner.channel.name).font(.headline.weight(.heavy)).lineLimit(1)
+                    Text(banner.channel.name).font(.ui(.headline).weight(.heavy)).lineLimit(1)
                     // Windows' quiet tag: HD, FHD, 4K.
                     if let quality = banner.channel.quality {
                         Text(quality)
-                            .font(.caption2.weight(.heavy))
+                            .font(.ui(.caption2).weight(.heavy))
                             .padding(.horizontal, 10).frame(height: 20)
                             .background(.white.opacity(0.16), in: Capsule())
                             .fixedSize()
                     }
                 }
                 if let on = banner.guide?.now {
-                    Text(on.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(on.title).font(.ui(.subheadline).weight(.semibold)).lineLimit(1)
                     HStack(spacing: 12) {
                         Text("\(wallClock(on.start))–\(wallClock(on.stop))").monospacedDigit()
                         ProgressView(value: through(on, now: now))
@@ -1948,22 +1948,22 @@ private struct ChannelBannerView: View {
                             .frame(maxWidth: 280)
                             .accessibilityLabel("Programme progress")
                     }
-                    .font(.caption.bold())
+                    .font(.ui(.caption).bold())
                     .foregroundStyle(.white.opacity(0.7))
                     if let next = banner.guide?.next {
                         Text("Next: \(wallClock(next.start)) \(next.title)")
-                            .font(.caption.bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                            .font(.ui(.caption).bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
                     }
                 } else if banner.guide != nil {
                     Text("No guide data for this channel")
-                        .font(.caption.bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                        .font(.ui(.caption).bold()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if !narrow {
                 // `clockTime`, not the locale: the player is outside the theme's environment.
                 Text(clockTime(now))
-                    .font(.title2.weight(.heavy))
+                    .displayFont(.title2)
                     .monospacedDigit()
                     .lineLimit(1).fixedSize()
             }

@@ -110,7 +110,7 @@ struct TitleDetail: View {
             ZStack {
                 Rectangle().fill(ChannelTile.hue(item.title))
                 Text(item.title)
-                    .font(.title3.weight(.heavy))
+                    .displayFont(.title3)
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .padding()
@@ -131,7 +131,7 @@ struct TitleDetail: View {
             }
             .padding(.bottom, 14)
             Text(item.title)
-                .font(.system(size: titleSize, weight: .heavy))
+                .displayFont(size: titleSize)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 16)
                 .accessibilityAddTraits(.isHeader)
@@ -139,7 +139,7 @@ struct TitleDetail: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Meter(fraction: Double(p.positionSecs) / Double(p.durationSecs), height: 4)
                     Text("\(duration(p.positionSecs)) of \(duration(p.durationSecs))")
-                        .font(.caption.weight(.bold))
+                        .font(.ui(.caption).weight(.bold))
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: 320)
@@ -233,7 +233,7 @@ struct TitleDetail: View {
             sources
         }
         let right = VStack(alignment: .leading, spacing: 12) { credit }
-            .font(.subheadline)
+            .font(.ui(.subheadline))
         return Group {
             if wide {
                 RatioColumns(ratio: 1.6, spacing: 24) { left; right }
@@ -259,7 +259,7 @@ struct TitleDetail: View {
             }
             if let quality = item.quality { Badge(text: quality, style: quality == "4K" ? .accent : .neutral) }
         }
-        .font(.callout.weight(.bold))
+        .font(.ui(.callout).weight(.bold))
     }
 
     /// Windows' `Sources`: the other providers' copies, each playable.
@@ -268,7 +268,7 @@ struct TitleDetail: View {
         if !others.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Also available as")
-                    .font(.caption.weight(.bold))
+                    .font(.ui(.caption).weight(.bold))
                     .tracking(0.7)
                     .textCase(.uppercase)
                     .foregroundStyle(.tertiary)
@@ -413,7 +413,7 @@ struct TitleDetail: View {
                 }
             }
         }
-        .font(.subheadline)
+        .font(.ui(.subheadline))
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -620,7 +620,7 @@ private struct Chip: View {
 
     var body: some View {
         Text(text)
-            .font(.caption.weight(.heavy))
+            .font(.ui(.caption).weight(.heavy))
             .lineLimit(1)
             .padding(.horizontal, 10)
             .frame(height: 24)
@@ -658,7 +658,7 @@ struct IconSquare: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: size * 0.4, weight: .semibold))
+                .font(.ui(size: size * 0.4, weight: .semibold))
                 #if !os(tvOS)
                 .frame(width: size, height: size)
                 .foregroundStyle(active ? theme.background : Color.primary)
@@ -684,7 +684,7 @@ private struct PrimaryLargeStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline.weight(.heavy))
+            .font(.ui(.headline).weight(.heavy))
             .labelStyle(.titleAndIcon)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
@@ -737,7 +737,7 @@ private struct SeasonMenu: View {
         } label: {
             HStack(spacing: 10) {
                 Text("Season \(season)").fontWeight(.bold)
-                Image(systemName: "chevron.down").font(.caption.weight(.bold))
+                Image(systemName: "chevron.down").font(.ui(.caption).weight(.bold))
             }
             #if !os(tvOS)
             .foregroundStyle(Color.primary)
@@ -789,7 +789,7 @@ private struct SeriesPrefsChips: View {
         #else
         Button(action: action) {
             Label(label, systemImage: on ? "checkmark" : "plus")
-                .font(.subheadline.weight(.semibold))
+                .font(.ui(.subheadline).weight(.semibold))
                 .labelStyle(.titleAndIcon)
                 .padding(.horizontal, 14).padding(.vertical, 7)
                 .foregroundStyle(on ? theme.accentText : Color.secondary)
@@ -841,15 +841,15 @@ private struct EpisodeRow: View {
                     Group {
                         if watched { Image(systemName: "checkmark") } else { Text("\(episode.episode)") }
                     }
-                    .font(.title3.weight(.bold))
+                    .font(.ui(.title3).weight(.bold))
                     .foregroundStyle(.tertiary)
                     .frame(width: compact ? 26 : 38)
                     thumb.frame(width: thumbWidth)
                     VStack(alignment: .leading, spacing: 3) {
                         // On a phone the column is narrow: the length goes under the title.
-                        let title = Text(episode.title ?? "").font(.body.weight(.bold))
+                        let title = Text(episode.title ?? "").font(.ui(.body).weight(.bold))
                             .fixedSize(horizontal: false, vertical: true)
-                        let length = Text(runtime(episode.runtimeMins)).font(.subheadline).foregroundStyle(.tertiary)
+                        let length = Text(runtime(episode.runtimeMins)).font(.ui(.subheadline)).foregroundStyle(.tertiary)
                         if compact {
                             title
                             length
@@ -861,7 +861,7 @@ private struct EpisodeRow: View {
                             }
                         }
                         if let overview = episode.overview, !overview.isEmpty {
-                            Text(overview).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                            Text(overview).font(.ui(.subheadline)).foregroundStyle(.secondary).lineLimit(2)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -892,7 +892,7 @@ private struct EpisodeRow: View {
             .overlay {
                 ZStack {
                     Color.black.opacity(0.3)
-                    Image(systemName: "play.fill").font(.title3).foregroundStyle(.white)
+                    Image(systemName: "play.fill").font(.ui(.title3)).foregroundStyle(.white)
                 }
             }
             .overlay(alignment: .bottom) {
@@ -966,10 +966,10 @@ private struct SimilarCard: View {
                 .animation(.easeOut(duration: 0.15), value: focused)
                 #endif
             Text(item.title)
-                .font(.subheadline.weight(.heavy))
+                .font(.ui(.subheadline).weight(.heavy))
                 .padding(.top, 8).padding(.bottom, 2)
             Text(subtitle)
-                .font(.caption.weight(.bold))
+                .font(.ui(.caption).weight(.bold))
                 .foregroundStyle(.tertiary)
         }
         #if os(tvOS)

@@ -14,12 +14,12 @@ struct PairWithPhoneView: View {
     var body: some View {
         VStack(spacing: Daylight.px(20)) {
             Image(systemName: "iphone.and.arrow.forward")
-                .font(.system(size: Daylight.px(40), weight: .semibold))
+                .font(.ui(size: Daylight.px(40), weight: .semibold))
                 .foregroundStyle(theme.accent)
             Text("Sign in with your iPhone")
-                .font(.system(size: Daylight.px(28), weight: .heavy))
+                .displayFont(size: Daylight.px(28))
             Text("On an iPhone or iPad that already syncs, open Aurora, go to Settings → Sync, choose Set up an Apple TV, pick \(deviceName), and enter this code.")
-                .font(.system(size: Daylight.px(15)))
+                .font(.ui(size: Daylight.px(15)))
                 .foregroundStyle(theme.textMuted)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: Daylight.px(560))
@@ -50,24 +50,24 @@ struct PairWithPhoneView: View {
             ProgressView()
         case .waiting(let code):
             Text(verbatim: spaced(code))
-                .font(.system(size: Daylight.px(56), weight: .heavy).monospacedDigit())
+                .font(.ui(size: Daylight.px(56), weight: .heavy).monospacedDigit())
                 .tracking(Daylight.px(6))
                 .padding(.vertical, Daylight.px(12))
                 .padding(.horizontal, Daylight.px(28))
                 .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: Daylight.px(18), style: .continuous))
                 .accessibilityLabel("Code \(code.map(String.init).joined(separator: " "))")
             Text("Waiting for your iPhone…")
-                .font(.system(size: Daylight.px(13), weight: .bold))
+                .font(.ui(size: Daylight.px(13), weight: .bold))
                 .foregroundStyle(theme.textFaint)
         case .signingIn:
             ProgressView("Signing in…")
         case .done(let message):
             Label(message, systemImage: "checkmark.circle.fill")
-                .font(.system(size: Daylight.px(17), weight: .bold))
+                .font(.ui(size: Daylight.px(17), weight: .bold))
                 .foregroundStyle(theme.success)
         case .failed(let message):
             Text(message)
-                .font(.system(size: Daylight.px(15)))
+                .font(.ui(size: Daylight.px(15)))
                 .foregroundStyle(theme.danger)
                 .multilineTextAlignment(.center)
         }
@@ -116,7 +116,7 @@ struct SetUpAppleTVView: View {
             Form {
                 Section {
                     Text("On the Apple TV, open Aurora, go to Settings → Sync and choose Sign in with your iPhone. It shows a code and appears here.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                     if sender.found.isEmpty {
                         HStack(spacing: 10) {
                             ProgressView()

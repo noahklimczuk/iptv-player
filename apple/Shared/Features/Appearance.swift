@@ -133,6 +133,9 @@ private struct AuroraAppearance: ViewModifier {
             }
             #endif
             .background(theme.background.ignoresSafeArea())
+            // Windows' `--font-ui` for every word not given a font of its own
+            // (Typography.swift).
+            .font(.ui(.body))
             .environment(\.auroraTheme, theme)
             .environment(\.auroraSwitches, count)
             .environment(\.locale, clockLocale(use24h))
@@ -238,7 +241,7 @@ struct PageHeading: View {
     var body: some View {
         #if os(tvOS)
         Text(title)
-            .font(.largeTitle.weight(.heavy))
+            .displayFont(.largeTitle)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
             .listRowBackground(Color.clear)
