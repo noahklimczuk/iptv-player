@@ -1015,7 +1015,8 @@ mod tests {
         assert_eq!(
             offered,
             vec![film, fixture],
-            "the film has to be asked about before the fixture list, whatever order they              were imported in"
+            "the film has to be asked about before the fixture list, whatever order they \
+             were imported in"
         );
     }
 

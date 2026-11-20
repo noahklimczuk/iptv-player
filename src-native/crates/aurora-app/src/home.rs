@@ -581,7 +581,9 @@ mod tests {
             }
             let pages_ms = t.elapsed().as_millis();
             eprintln!(
-                "round {round}: stamp {stamp_ms} ms, items {items_ms} ms ({} rows),                  gather {gather_ms} ms (items included), score {build_ms} ms,                  first pages {pages_ms} ms ({} rails)",
+                "round {round}: stamp {stamp_ms} ms, items {items_ms} ms ({} rows), \
+                 gather {gather_ms} ms (items included), score {build_ms} ms, \
+                 first pages {pages_ms} ms ({} rails)",
                 items.len(),
                 built.len()
             );

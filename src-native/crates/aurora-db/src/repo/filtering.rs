@@ -911,7 +911,8 @@ mod tests {
                 assert_eq!(
                     group.first(),
                     Some(&id),
-                    "{kind:?} {id} survives the filter but is not its own group's best copy:                      {group:?}"
+                    "{kind:?} {id} survives the filter but is not its own group's best copy: \
+                     {group:?}"
                 );
             }
         }

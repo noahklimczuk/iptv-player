@@ -764,14 +764,15 @@ impl<D: Driver> Run<D> {
             }
             Event::Property { name, value } => self.property(&name, value),
             Event::Log { prefix, text } => {
+                let line = mpv_line(&prefix, &text);
                 // Into the app's log as well: a video output that fails while the sound
                 // carries on is not a playback failure, so the ring below is never shown
                 // for it, and the log is the only place it can be seen.
-                tracing::warn!(target: "mpv", "{prefix}: {}", text.trim());
+                tracing::warn!(target: "mpv", "{line}");
                 if self.log.len() == LOG_LINES {
                     self.log.pop_front();
                 }
-                self.log.push_back(format!("{prefix}: {}", text.trim()));
+                self.log.push_back(line);
             }
             Event::Shutdown => {
                 self.fail("the video engine stopped");
@@ -1165,4 +1166,15 @@ pub fn without_addresses(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// One of mpv's own log lines, with every stream address in it redacted.
+///
+/// mpv names the address it is opening -- `Failed to open http://host/live/<user>/<pass>/
+/// <id>.ts.` -- and an Xtream address carries the subscription's username and password in
+/// its path. The old player redacted these (R-62); the engine that replaced it wrote them
+/// to `aurora.log` verbatim, and Settings -> Export logs hands that file over as it is. The
+/// real log had the line's credentials in it four times over one evening.
+pub fn mpv_line(prefix: &str, text: &str) -> String {
+    aurora_core::redact::redact_in_text(&format!("{prefix}: {}", text.trim()))
 }

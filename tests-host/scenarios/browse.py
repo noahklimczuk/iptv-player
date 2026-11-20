@@ -29,6 +29,18 @@ class Skipped(Exception):
     pass
 
 
+# The copy of a film that "hide duplicates" keeps: no other visible row with the same
+# title and year outranks it (`LibraryFilter::where_sql`, which this mirrors on purpose
+# so the screen is checked against the rule rather than against itself).
+SURVIVOR = (
+    "NOT EXISTS (SELECT 1 FROM movies dup"
+    " WHERE dup.match_key = m.match_key AND dup.hidden = 0"
+    " AND COALESCE(dup.year, 0) = COALESCE(m.year, 0)"
+    " AND (dup.quality_rank > m.quality_rank"
+    " OR (dup.quality_rank = m.quality_rank AND dup.id < m.id)))"
+)
+
+
 def digits(text):
     return int("".join(c for c in text if c.isdigit()) or 0)
 
@@ -75,33 +87,52 @@ def run(d, ctx):
     ctx.assert_no_panic()
 
     # The count is the library, not the page. Checked against SQLite, because the
-    # screen agreeing with itself is what "120+" was.
-    stored = ctx.count("movies")
+    # screen agreeing with itself is what "120+" was. One per film, not per row:
+    # "hide duplicates" is on by default (`DEFAULT_HIDE_DUPLICATES`), and this panel
+    # files 2,500 of its films more than once.
+    stored = ctx.rows(
+        f"SELECT count(*) FROM movies m WHERE m.hidden = 0 AND {SURVIVOR}"
+    )[0][0]
     shown = digits(d.text(d.find('[data-testid="browse-count"]')))
     assert shown == stored, (
         f"the heading says {shown:,} and the library holds {stored:,}"
     )
     assert shown > 120, "this library is bigger than one page; the count must say so"
 
-    # The shelves the panel actually publishes.
-    chips = d.find_all('[data-testid="browse-category"]')
-    assert len(chips) > 1, "no categories offered on a library with 202 of them"
-    labels = d.js(
-        'return [...document.querySelectorAll("[data-testid=browse-category]")]'
-        '  .map((e) => e.textContent.trim());'
-    )
-    assert labels[0] == "All", f"the first chip should clear the filter: {labels[:3]}"
-    print(f"   {stored:,} films, shelves offered: {labels[1:4]}")
-
-    # And they narrow it. The second chip is the biggest shelf.
+    # The shelves the panel actually publishes, in the sidebar Browse has had since
+    # ee44ddb: one row per category, searchable, because 202 of them is not a strip of
+    # pills anybody scrolls. Counted the way the screen counts (one per film).
     biggest = ctx.rows(
-        "SELECT group_title, count(*) c FROM movies"
-        " WHERE hidden = 0 AND group_title IS NOT NULL AND group_title != ''"
+        "SELECT group_title, count(*) c FROM movies m"
+        " WHERE m.hidden = 0 AND group_title IS NOT NULL AND group_title != ''"
+        f" AND {SURVIVOR}"
         " GROUP BY group_title ORDER BY c DESC, group_title LIMIT 1"
     )[0]
-    d.click(chips[1])
-    # Poll the count itself rather than the page text: the heading is one number among
-    # a hundred thousand posters, and `body()` is not a reliable place to find it.
+    shelves = ctx.rows(
+        "SELECT count(DISTINCT group_title) FROM movies"
+        " WHERE hidden = 0 AND group_title IS NOT NULL AND group_title != ''"
+    )[0][0]
+    rows = d.find_all('[data-testid="group-list"] button')
+    assert len(rows) > 5, f"the sidebar offers {len(rows)} of {shelves} shelves"
+    print(f"   {stored:,} films, {shelves} shelves")
+
+    # Typing narrows the list, and the shelf it leaves can be picked.
+    d.send(d.find('[data-testid="group-filter"]'), biggest[0])
+    time.sleep(1)
+    labels = d.js(
+        'return [...document.querySelectorAll("[data-testid=group-list] button")]'
+        '  .map((e) => e.textContent.trim());'
+    )
+    assert labels and len(labels) < len(rows), (
+        f"typing {biggest[0]!r} did not narrow the sidebar: {len(labels)} of {len(rows)}"
+    )
+    pick = next(
+        (e for e in d.find_all('[data-testid="group-list"] button')
+         if d.text(e).strip().startswith(biggest[0])),
+        None,
+    )
+    assert pick is not None, f"{biggest[0]!r} is not in the narrowed sidebar: {labels}"
+    d.click(pick)
     narrowed = wait_for_count(d, lambda n: n != stored, timeout=30)
     ctx.assert_no_panic()
     assert narrowed == biggest[1], (
@@ -131,23 +162,6 @@ def run(d, ctx):
         "Movies offers a genre filter, but no film in this library has a genre"
     )
 
-    # The category picker holds the rest of the 202 shelves and is searchable, because
-    # two hundred options is not a list anybody scrolls.
-    d.click(d.find('[data-testid="select-category"]'))
-    rows = d.find_all('[data-testid="select-row"]')
-    assert len(rows) > 20, f"the picker offers only {len(rows)} of 202 shelves"
-    d.send(d.by_label("Filter category"), "ALBANIA")
-    time.sleep(1)
-    narrowed_rows = d.js(
-        'return [...document.querySelectorAll("[data-testid=select-row]")]'
-        '  .map((e) => e.textContent.trim());'
-    )
-    assert len(narrowed_rows) < len(rows), (
-        f"typing did not narrow the picker: {len(narrowed_rows)} of {len(rows)}"
-    )
-    assert any("ALBANIA" in r for r in narrowed_rows), narrowed_rows
-    d.shot(ctx.shot("picker"))
-    print(f"   picker: {len(rows)} shelves, 'ALBANIA' narrows to {len(narrowed_rows)}")
 
     # Series, which does have genres — and must offer its own.
     #
