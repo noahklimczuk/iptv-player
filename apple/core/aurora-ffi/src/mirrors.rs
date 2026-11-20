@@ -732,6 +732,12 @@ fn settings_are_locked_where_windows_locks_them() {
         ("sync.rs", "sync_sign_out", "sync.rs", Some("sync_sign_out")),
         (
             "sync.rs",
+            "sync_set_share_secrets",
+            "sync.rs",
+            Some("sync_set_share_secrets"),
+        ),
+        (
+            "sync.rs",
             "sync_recovery_code",
             "sync.rs",
             Some("sync_recovery_code"),
@@ -1362,10 +1368,10 @@ fn settings_sections_follow_windows_order() {
     );
     // Each Windows title, and how the Swift page spells that section.
     let marks = [
-        ("Providers", "Section(\"Providers\")"),
+        ("Providers", "SettingsHead(\"Providers\")"),
         ("Appearance", "AppearanceSection()"),
         ("Sync", "SyncSection()"),
-        ("Parental controls", "Text(\"Parental controls\")"),
+        ("Parental controls", "SettingsHead(\"Parental controls\")"),
         ("Artwork and metadata", "MetadataSection()"),
         ("Recommendations", "RecommendationsSection()"),
         ("Privacy", "PrivacySection()"),
@@ -1391,6 +1397,19 @@ fn settings_sections_follow_windows_order() {
         "Settings' sections must be Windows', in Windows' order"
     );
     // The section titles the Swift subviews give themselves.
-    assert!(swift.contains("Text(\"Filtering\")"));
-    assert!(swift.contains("Text(\"Artwork and metadata\")"));
+    assert!(swift.contains("SettingsHead(\"Filtering\")"));
+    assert!(swift.contains("SettingsHead(\"Artwork and metadata\")"));
+
+    // The index beside the page lists the same sections in the same order, after the
+    // Apple-only Profile section.
+    let chrome = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features/SettingsChrome.swift"),
+    )
+    .unwrap();
+    let order = between(&chrome, "static let order = [", "]");
+    let index: Vec<&str> = order.split('"').skip(1).step_by(2).collect();
+    assert_eq!(
+        index, windows,
+        "Settings' index must list Windows' sections, in Windows' order"
+    );
 }

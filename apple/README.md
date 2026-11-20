@@ -109,7 +109,17 @@ screens. The app can:
   drag to preview; it gets the banner only,
 - Settings in Windows' sections and order: Providers, Appearance, Sync, Parental
   controls, Artwork and metadata, Recommendations, Privacy, Filtering, Pause live TV,
-  Library (the counts and guide coverage), About, Diagnostics. Departures:
+  Library (the counts and guide coverage), About, Diagnostics. Laid out as Windows'
+  page: each section's name and one-line purpose inside its own card, Windows'
+  section index beside the page on an Apple TV and an iPad (the section being read on
+  the ink pill; a phone has no room for it), each provider as a sunk tile with its
+  kind and counts, its connections and time-left badges, and Refresh saying its phase
+  and then what it found, the library figures in sunk tiles over an accent coverage
+  bar, About as Windows' list of terms, and the theme and history choices as Windows'
+  segmented wells. Departures:
+  - A Profile section heads the page: Windows switches profile from its top bar's
+    avatar, which the Apple apps do not have.
+  - The index lists Sync, which Windows' page has and its index leaves out.
   - Appearance has Windows' theme (Dark, Oled, Light, Contrast, in its colours),
     Animations and 24-hour clock, kept on the device as Windows keeps them. Interface
     density is not offered (an Apple TV is always the 10-foot UI, a phone never is),
@@ -234,8 +244,9 @@ Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app (
 under "More", whose navigation bar stacks on the tab's own and doubles every back
 button. iPad and Apple TV keep both as tabs.
 
-Not yet: syncing provider passwords (each device keeps its own, as on
-Windows today).
+Provider passwords and the TMDB and Gemini keys sync only when the household turns on
+"Also share sign-ins and keys" in Settings → Sync (D34), as on Windows; they go from and
+to the Keychain under the same record names Windows uses.
 
 The app targets **iOS 26 and tvOS 26 only**.
 

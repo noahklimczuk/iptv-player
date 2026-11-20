@@ -10,23 +10,26 @@ struct AboutSection: View {
 
     var body: some View {
         Section {
-            LabeledContent("Version", value: Self.appVersion)
-            LabeledContent("Aurora core", value: about.coreVersion)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Licence: \(about.license)")
-                Text("Aurora is free software. You may study, change and share it.")
-                    .font(.caption).foregroundStyle(.secondary)
+            SettingsHead("About").id("About")
+            // Windows' definition list: the term faint in a column of its own.
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+                term("Version") { Text(Self.appVersion).monospacedDigit() }
+                term("Aurora core") { Text(about.coreVersion).monospacedDigit() }
+                term("Licence") {
+                    let free = Text(" — Aurora is free software. You may study, change and share it.")
+                        .foregroundStyle(.tertiary)
+                    Text("\(about.license)\(free)")
+                }
+                term("Playback") {
+                    Text("libmpv, built into the app as separate frameworks you can replace with your own build. It contains FFmpeg.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                term("Metadata") {
+                    Text("This product uses the TMDB API but is not endorsed or certified by TMDB.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Playback")
-                Text("libmpv, built into the app as separate frameworks you can replace with your own build. It contains FFmpeg.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Metadata")
-                Text("This product uses the TMDB API but is not endorsed or certified by TMDB.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            .padding(.vertical, 4)
             if let notices {
                 NavigationLink {
                     NoticesView(text: notices)
@@ -52,9 +55,28 @@ struct AboutSection: View {
                 }
             }
             #endif
-        } header: {
-            Text("About")
         }
+    }
+
+    private func term(_ name: String, @ViewBuilder _ value: () -> some View) -> some View {
+        GridRow {
+            Text(name)
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+                .frame(width: Self.termWidth, alignment: .leading)
+            value()
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Windows' 160-pixel column, a little narrower on a phone.
+    private static var termWidth: CGFloat {
+        #if os(tvOS)
+        240
+        #else
+        UIDevice.current.userInterfaceIdiom == .phone ? 96 : 160
+        #endif
     }
 
     private static var appVersion: String {
@@ -146,9 +168,24 @@ struct DiagnosticsSection: View {
     @State private var exported: URL?
     @State private var failure: String?
 
+    #if !os(tvOS)
+    private var exportButton: some View {
+        Button(exporting ? "Exporting…" : "Export logs", systemImage: "doc.text") { export() }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(exporting)
+    }
+
+    private var exportNote: some View {
+        Text("Copies this run's log, with every address's login removed, for a bug report.")
+            .font(.subheadline).foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+    #endif
+
     var body: some View {
         let diagnostics = model.core?.diagnostics()
         Section {
+            SettingsHead("Diagnostics").id("Diagnostics")
             if let replaced = diagnostics?.libraryWasReplaced {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Your library was started again", systemImage: "exclamationmark.triangle")
@@ -157,6 +194,7 @@ struct DiagnosticsSection: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            #if os(tvOS)
             Button {
                 export()
             } label: {
@@ -167,6 +205,13 @@ struct DiagnosticsSection: View {
                 }
             }
             .disabled(exporting)
+            #else
+            // Windows' small button with its note beside it, faint.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { exportButton; exportNote }
+                VStack(alignment: .leading, spacing: 8) { exportButton; exportNote }
+            }
+            #endif
             if let exported {
                 #if os(tvOS)
                 LabeledContent("Written to", value: exported.path)
@@ -180,8 +225,6 @@ struct DiagnosticsSection: View {
             if let failure {
                 Text(failure).font(.caption).foregroundStyle(.red)
             }
-        } header: {
-            Text("Diagnostics")
         } footer: {
             VStack(alignment: .leading, spacing: 2) {
                 if let diagnostics { Text("Data folder: \(diagnostics.dataDir)") }

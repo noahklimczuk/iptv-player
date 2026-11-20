@@ -1093,6 +1093,21 @@ extension ImportPhase {
         }
     }
 
+    /// Beside a provider's Refresh button (Windows' `PHASE_SHORT`).
+    var short: String {
+        switch self {
+        case .authenticating: "Signing in"
+        case .fetchingPlaylist: "Fetching list"
+        case .importingChannels: "Channels"
+        case .importingMovies: "Movies"
+        case .importingSeries: "Series"
+        case .fetchingEpg: "Guide"
+        case .matchingEpg: "Matching guide"
+        case .indexing: "Indexing"
+        case .done: "Done"
+        }
+    }
+
     /// The setup wizard's sentence for it (Windows' `PHASE_SENTENCE`): it narrates a first
     /// run, where the label above sits beside a bar.
     var sentence: String {

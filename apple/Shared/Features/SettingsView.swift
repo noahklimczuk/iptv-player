@@ -8,35 +8,35 @@ struct SettingsView: View {
     var closable = false
     @Environment(\.dismiss) private var dismiss
 
+    /// The section the index marks: the first heading on screen, or the last one chosen.
+    @State private var chosen = SettingsHead.profile
+    @State private var onScreen: Set<String> = []
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
     var body: some View {
         NavigationStack {
             ScrollViewReader { scroller in
-            List {
-                Section("Profile") {
-                    LabeledContent("Watching as", value: model.activeProfile?.name ?? "")
-                    Button("Profiles", systemImage: "person.2") { model.picking = true }
-                }
-                if locked {
-                    // The core's answer (`settingsLocked`): a kids profile is kept out as
-                    // well as everybody when the household locked Settings, and the core
-                    // refuses what is behind them while it holds, so this is a courtesy
-                    // rather than the lock. "Who's watching?" stays above it.
-                    Section {
-                        VStack(spacing: 12) {
-                            Image(systemName: "lock.fill").font(.largeTitle)
-                            Text("Settings are locked").font(.title2.bold())
-                            Text("Enter the parental PIN to change them.").foregroundStyle(.secondary)
-                            Button("Enter the PIN", systemImage: "lock.open") {
-                                Task { _ = await model.askParentalPin(.pinRequired) }
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical)
+            HStack(alignment: .top, spacing: 28) {
+                // Windows' section index beside the page, where there is room for one.
+                if wide && !locked {
+                    SettingsIndex(titles: SettingsHead.order, current: current) { title in
+                        chosen = title
+                        withAnimation { scroller.scrollTo(title, anchor: .top) }
                     }
-                } else {
-                    unlocked
+                }
+                page
+                .environment(\.settingsHeadSeen) { title, seen in
+                    if seen { onScreen.insert(title) } else { onScreen.remove(title) }
                 }
             }
+            #if os(iOS)
+            // The list keeps its own margin; the index beside it needs one to match.
+            .padding(.leading, wide ? 20 : 0)
+            #endif
+            .frame(maxWidth: wide ? Self.pageWidth : .infinity)
+            .frame(maxWidth: .infinity)
             // Built afresh by a switch between light and dark (`auroraRebuildOnSwitch`):
             // back to the picker that was just pressed, rather than the top.
             .onAppear {
@@ -68,6 +68,82 @@ struct SettingsView: View {
         }
     }
 
+    /// The page itself. A list, except on a TV: a list there scrolls by focus alone and
+    /// makes only the rows near the screen, so the index could not bring a section further
+    /// down into view. A plain scroll view has every section made and scrolls on request.
+    @ViewBuilder private var page: some View {
+        #if os(tvOS)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                sections
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 60)
+            // A TV button centres a label that wraps; Windows' hints read from the left.
+            .multilineTextAlignment(.leading)
+        }
+        // Right from the index lands in the page even where no control sits level with it.
+        .focusSection()
+        #else
+        List {
+            sections
+        }
+        #endif
+    }
+
+    @ViewBuilder private var sections: some View {
+        Section {
+            SettingsHead(SettingsHead.profile).id(SettingsHead.profile)
+            LabeledContent("Watching as", value: model.activeProfile?.name ?? "")
+            Button("Profiles", systemImage: "person.2") { model.picking = true }
+        }
+        if locked {
+            // The core's answer (`settingsLocked`): a kids profile is kept out as
+            // well as everybody when the household locked Settings, and the core
+            // refuses what is behind them while it holds, so this is a courtesy
+            // rather than the lock. "Who's watching?" stays above it.
+            Section {
+                VStack(spacing: 12) {
+                    Image(systemName: "lock.fill").font(.largeTitle)
+                    Text("Settings are locked").font(.title2.bold())
+                    Text("Enter the parental PIN to change them.").foregroundStyle(.secondary)
+                    Button("Enter the PIN", systemImage: "lock.open") {
+                        Task { _ = await model.askParentalPin(.pinRequired) }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical)
+            }
+        } else {
+            unlocked
+        }
+    }
+
+    /// Windows' `useCurrentSection`: the section being read. The one last chosen while its
+    /// heading is on screen; otherwise the first heading on screen.
+    private var current: String {
+        if onScreen.contains(chosen) { return chosen }
+        return SettingsHead.order.first { onScreen.contains($0) } ?? chosen
+    }
+
+    /// Windows' 1,180-pixel page; on a TV, the same page at ten feet.
+    private static var pageWidth: CGFloat {
+        #if os(tvOS)
+        1640
+        #else
+        1180
+        #endif
+    }
+
+    /// Room for the index: always on a TV, and on an iPad but not a phone.
+    private var wide: Bool {
+        #if os(tvOS)
+        true
+        #else
+        sizeClass == .regular
+        #endif
+    }
+
     /// Until the gate has answered, the household switch is the best guess, and the
     /// closed one.
     private var locked: Bool {
@@ -80,11 +156,16 @@ struct SettingsView: View {
     /// Pause live TV, Library, About, Diagnostics. Updates and Keyboard are not here:
     /// the App Store updates the app, and there is no keyboard (apple/README.md).
     @ViewBuilder private var unlocked: some View {
-                Section("Providers") {
+                Section {
+                    SettingsHead("Providers").id("Providers")
                     ForEach(model.providers, id: \.id) { provider in
                         ProviderRow(provider: provider)
                     }
                     Button("Add provider", systemImage: "plus") { adding = true }
+                        #if os(iOS)
+                        .buttonStyle(SecondaryButtonStyle())
+                        .listRowSeparator(.hidden)
+                        #endif
                 }
                 if let progress = model.importProgress {
                     Section("Importing") {
@@ -97,15 +178,12 @@ struct SettingsView: View {
                 AppearanceSection()
                 SyncSection()
                 Section {
+                    SettingsHead("Parental controls").id("Parental controls")
                     NavigationLink {
                         ParentalControlsView()
                     } label: {
                         Label("Parental controls", systemImage: "lock")
                     }
-                } header: {
-                    Text("Parental controls")
-                } footer: {
-                    Text("What each profile may watch, and what needs the PIN.")
                 }
                 MetadataSection()
                 RecommendationsSection()
@@ -118,51 +196,117 @@ struct SettingsView: View {
     }
 }
 
+/// One provider, as Windows' Settings shows it: a sunk tile in the Providers card with its
+/// name, kind and counts, its connections and time left, and Refresh and Edit. A refresh
+/// says what it is doing beside the button, then what it found.
 private struct ProviderRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.auroraTheme) private var theme
     let provider: Provider
     @State private var editing = false
+    @State private var busy = false
+    @State private var done: ImportReport?
+    @State private var failure: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(provider.name).font(.headline)
-            Text("\(provider.channelCount) channels · \(provider.movieCount) movies · \(provider.seriesCount) series")
-                .font(.caption).foregroundStyle(.secondary)
-            if let at = provider.lastRefreshAt {
-                Text("Refreshed \(Date(timeIntervalSince1970: TimeInterval(at)), style: .relative) ago")
-                    .font(.caption2).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(provider.name).font(.title3.weight(.heavy))
+                Text("\(provider.kind.uppercased()) · \(provider.channelCount) channels · \(provider.movieCount) movies · \(provider.seriesCount) series")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-            if let max = provider.maxConnections {
-                Text("\(max) stream\(max == 1 ? "" : "s") at once").font(.caption2).foregroundStyle(.tertiary)
-            }
-            HStack {
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    Task { await refresh() }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { badges; Spacer(minLength: 0); buttons }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) { badges }
+                    HStack(spacing: 8) { buttons }
                 }
-                // Change the address or sign-in, check it, or remove the provider
-                // (Windows' Edit opens the same editor).
-                Button("Edit", systemImage: "pencil") { editing = true }
             }
-            // Two buttons in one row: each takes its own taps (on tvOS, its own focus),
-            // not the whole row's. With the default style tvOS focuses the row as one
-            // white block that hides the provider's name.
-            #if os(iOS)
-            .buttonStyle(.borderless)
-            #else
-            .buttonStyle(.bordered)
-            #endif
-            .disabled(model.importProgress != nil)
+            .modifier(Buttons())
+            if let failure {
+                Text(failure).font(.subheadline).foregroundStyle(.red)
+            } else if let line = status {
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+            }
         }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 18)
+        .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: 16))
+        #if os(iOS)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+        #endif
         .navigationDestination(isPresented: $editing) {
             ProviderEditorView(provider: provider)
         }
     }
 
+    /// "0/2 connections" and "12 days left" (Windows' badges). Nothing is counting the
+    /// streams in use yet, on either platform, so the first figure is 0.
+    @ViewBuilder private var badges: some View {
+        if let max = provider.maxConnections {
+            Badge(text: "0/\(max) connections", style: .neutral)
+        }
+        if let days {
+            Badge(text: days < 0 ? "Expired" : "\(days) days left", style: days < 7 ? .live : .new)
+        }
+    }
+
+    @ViewBuilder private var buttons: some View {
+        Button(busy ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise") {
+            Task { await refresh() }
+        }
+        .disabled(busy || model.importProgress != nil)
+        Button("Edit", systemImage: "pencil") { editing = true }
+            .disabled(busy)
+    }
+
+    /// Windows' small secondary buttons, each taking its own taps rather than the row's.
+    private struct Buttons: ViewModifier {
+        func body(content: Content) -> some View {
+            #if os(tvOS)
+            content.buttonStyle(.bordered)
+            #else
+            content.buttonStyle(SecondaryButtonStyle())
+            #endif
+        }
+    }
+
+
+
+    private var days: Int? {
+        provider.expiresAt.map { Int((Double($0) - Date().timeIntervalSince1970) / 86_400) }
+    }
+
+    /// The phase while refreshing; after, what it found. A count of zero is the most
+    /// useful thing this can say: "0 channels" on a provider with twenty thousand films is
+    /// a panel serving no live streams to this account, not a bug in Aurora.
+    private var status: String? {
+        if busy, let p = model.importProgress {
+            return p.phase.short + (p.total > 0 ? " \(p.done)/\(p.total)" : "")
+        }
+        guard let done else { return nil }
+        var line = "\(done.channels) channels · \(done.movies) movies · \(done.series) series"
+        if done.dropped > 0 { line += " · \(done.dropped) skipped" }
+        return line
+    }
+
     private func refresh() async {
+        busy = true
+        done = nil
+        failure = nil
+        defer { busy = false }
         // Refresh what this provider already holds: films and series only if it has any,
         // so a live-only Apple TV library stays live-only.
         let content = ImportContent(live: true, vod: provider.movieCount > 0, series: provider.seriesCount > 0)
-        await model.refresh(providerId: provider.id, content: content)
+        do {
+            done = try await model.importProvider(provider.id, content: content)
+        } catch {
+            // Said here rather than in the app-wide alert, which would take Settings
+            // away with it on a phone (Windows reports "Could not refresh this provider").
+            failure = "Could not refresh this provider. \(error.viewerMessage)"
+        }
     }
 }
 
@@ -183,6 +327,7 @@ private struct LibraryFiltersSection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Filtering").id("Filtering")
             if let filters {
                 toggle("Show English content only",
                        hint: "Hides channels and titles the provider tagged as another language. Anything untagged is kept: most playlists label only some of what they carry.",
@@ -197,13 +342,11 @@ private struct LibraryFiltersSection: View {
             }
             ForEach(counts) { row in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.label)
+                    Text(row.label).fontWeight(.heavy)
                     Text("\(row.counts.total.formatted()) in all · \(row.counts.nonEnglish.formatted()) not English · \(row.counts.untagged.formatted()) untagged · \(row.counts.duplicates.formatted()) duplicates")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-        } header: {
-            Text("Filtering")
         }
         .disabled(saving)
         .task(id: model.libraryVersion) { await load() }
@@ -220,7 +363,7 @@ private struct LibraryFiltersSection: View {
             }
         )) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(title).fontWeight(.heavy)
                 Text(hint).font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -257,38 +400,28 @@ private struct TimeshiftSection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Pause live TV").id("Pause live TV")
             if let settings {
                 Toggle(isOn: Binding(get: { settings.enabled },
                                      set: { on in apply(TimeshiftChange(enabled: on, bytes: nil, secs: nil)) })) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Pause live TV")
+                        Text("Pause live TV").fontWeight(.heavy)
                         Text("Keeps the channel you are watching on disk so it can be paused and rewound.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Picker(selection: Binding(get: { settings.bytes },
-                                          set: { apply(TimeshiftChange(enabled: nil, bytes: $0, secs: nil)) })) {
-                    ForEach(choices.sizesGb, id: \.self) { gb in
-                        Text("\(gb) GB").tag(gb * Self.gib)
-                    }
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Buffer size")
-                        Text("The disk it may use.").font(.caption).foregroundStyle(.secondary)
-                    }
+                // Windows' rows of segments, the choice in its well.
+                SettingsField(label: "Buffer size", hint: "The disk it may use.") {
+                    Segments(options: choices.sizesGb.map { ($0 * Self.gib, "\($0) GB") },
+                             selection: Binding(get: { settings.bytes },
+                                                set: { apply(TimeshiftChange(enabled: nil, bytes: $0, secs: nil)) }))
                 }
                 .disabled(!settings.enabled)
-                Picker(selection: Binding(get: { settings.secs },
-                                          set: { apply(TimeshiftChange(enabled: nil, bytes: nil, secs: $0)) })) {
-                    ForEach(choices.limitsMin, id: \.self) { minutes in
-                        Text(limitLabel(minutes * 60)).tag(minutes * 60)
-                    }
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Rewind limit")
-                        Text("How far back to offer. A gigabyte is eighteen minutes of HD and seven of 4K, so the shorter of the two is what you get.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                SettingsField(label: "Rewind limit",
+                              hint: "How far back to offer. A gigabyte is eighteen minutes of HD and seven of 4K, so the shorter of the two is what you get.") {
+                    Segments(options: choices.limitsMin.map { ($0 * 60, limitLabel($0 * 60)) },
+                             selection: Binding(get: { settings.secs },
+                                                set: { apply(TimeshiftChange(enabled: nil, bytes: nil, secs: $0)) }))
                 }
                 .disabled(!settings.enabled)
                 if settings.reclaimableBytes > 0 {
@@ -296,15 +429,13 @@ private struct TimeshiftSection: View {
                         Button("Empty buffer") { empty() }
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Reclaimable: \(bytes(settings.reclaimableBytes))")
+                            Text("Reclaimable: \(bytes(settings.reclaimableBytes))").fontWeight(.heavy)
                             Text("Left behind by earlier viewing. Emptying it loses nothing you are watching.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
             }
-        } header: {
-            Text("Pause live TV")
         } footer: {
             if let settings {
                 Text((settings.enabled
@@ -354,6 +485,7 @@ private struct MetadataSection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Artwork and metadata").id("Artwork and metadata")
             Text("Posters, backdrops, descriptions and cast come from TMDB. Aurora only asks about a title once — if nothing matches confidently, it leaves the title alone rather than guessing, so a wrong poster never ends up on the wrong film.")
                 .font(.caption).foregroundStyle(.secondary)
             if let status {
@@ -376,8 +508,6 @@ private struct MetadataSection: View {
             if let message {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
-        } header: {
-            Text("Artwork and metadata")
         }
         .task(id: ReloadKey(library: model.libraryVersion, running: model.metadataProgress != nil)) {
             status = await model.metadataStatus()
@@ -440,6 +570,7 @@ private struct MetadataSection: View {
 /// playlist editor opens from here.
 private struct LibraryStatsSection: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.auroraTheme) private var theme
     @State private var stats: LibraryStats?
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -447,6 +578,7 @@ private struct LibraryStatsSection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Library").id("Library")
             if let stats {
                 // A plain grid, not a lazy one: a lazy grid inside a list row is measured
                 // before its cells exist, and tvOS laid the next rows over the numbers.
@@ -456,11 +588,16 @@ private struct LibraryStatsSection: View {
                     ForEach(Array(stride(from: 0, to: tiles.count, by: perRow)), id: \.self) { start in
                         GridRow {
                             ForEach(tiles[start..<min(start + perRow, tiles.count)], id: \.0) { label, value in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                // Windows' `settings-tile`: a sunk well, the figure large.
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(label).font(.subheadline.weight(.bold)).foregroundStyle(.secondary)
+                                        .lineLimit(1).minimumScaleFactor(0.8)
                                     Text(value.formatted()).font(.title2.weight(.heavy)).monospacedDigit()
+                                        .lineLimit(1).minimumScaleFactor(0.5)
                                 }
+                                .padding(.vertical, 16).padding(.horizontal, 18)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: 16))
                             }
                         }
                     }
@@ -468,12 +605,22 @@ private struct LibraryStatsSection: View {
                 .padding(.vertical, 4)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("Guide coverage")
+                        Text("Guide coverage").fontWeight(.heavy)
                         Spacer()
                         Text("\(stats.guideMatched.formatted()) of \(stats.channels.formatted()) channels (\(percent(stats))%)")
                             .fontWeight(.bold).foregroundStyle(.secondary)
                     }
-                    ProgressView(value: Double(percent(stats)), total: 100)
+                    // Windows' `settings-meter`: an 8-point bar in the accent.
+                    Capsule()
+                        .fill(theme.surfaceSunk)
+                        .frame(height: 8)
+                        .overlay(alignment: .leading) {
+                            GeometryReader { box in
+                                Capsule().fill(theme.accent)
+                                    .frame(width: box.size.width * CGFloat(percent(stats)) / 100)
+                            }
+                        }
+                        .padding(.top, 4)
                     if !stats.guideUnmatched.isEmpty {
                         Text("No guide for: \(stats.guideUnmatched.joined(separator: ", "))")
                             .font(.caption).foregroundStyle(.secondary)
@@ -487,16 +634,21 @@ private struct LibraryStatsSection: View {
                     Label("Playlist", systemImage: "list.bullet.rectangle")
                 }
             }
-        } header: {
-            Text("Library")
         }
         .task(id: model.libraryVersion) {
             stats = try? await model.guarded { core in try core.libraryStats() }
         }
     }
 
-    /// Windows' four tiles in a row where there is room; two by two on a phone.
-    private var perRow: Int { compact ? 2 : 4 }
+    /// Windows' tiles fill the row at 150 pixels or more each: four across on a TV, two by
+    /// two in the narrower column an iPad or a phone leaves beside the index.
+    private var perRow: Int {
+        #if os(tvOS)
+        4
+        #else
+        2
+        #endif
+    }
 
     private var compact: Bool {
         #if os(iOS)

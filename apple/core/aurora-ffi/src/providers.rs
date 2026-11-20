@@ -39,6 +39,9 @@ pub struct Provider {
     pub enabled: bool,
     /// Streams at once this line allows, once a refresh has asked.
     pub max_connections: Option<i64>,
+    /// When the line runs out, Unix seconds, where the provider has said (Windows'
+    /// `expiresAt`, shown as "N days left").
+    pub expires_at: Option<i64>,
     pub last_refresh_at: Option<i64>,
     pub channel_count: i64,
     pub movie_count: i64,
@@ -194,6 +197,7 @@ impl AuroraCore {
                 kind: p.kind,
                 enabled: p.enabled,
                 max_connections: p.max_connections,
+                expires_at: p.expires_at,
                 last_refresh_at: p.last_refresh_at,
                 channel_count: p.channel_count,
                 movie_count: p.movie_count,

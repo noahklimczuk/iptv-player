@@ -169,24 +169,19 @@ struct AppearanceSection: View {
 
     var body: some View {
         Section {
-            VStack(alignment: .leading, spacing: 8) {
-                Picker("Theme", selection: $theme) {
-                    ForEach(AuroraTheme.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Text("Applies to every screen except the player.").font(.caption).foregroundStyle(.secondary)
+            SettingsHead("Appearance").id("Appearance")
+            SettingsField(label: "Theme", hint: "Applies to every screen except the player.") {
+                Segments(options: AuroraTheme.allCases.map { ($0, $0.label) }, selection: $theme)
             }
             .id(Self.id)
             Toggle(isOn: $animations) {
-                Text("Animations")
+                Text("Animations").fontWeight(.heavy)
                 Text("Disables transitions.")
             }
             Toggle(isOn: $use24h) {
-                Text("24-hour clock")
+                Text("24-hour clock").fontWeight(.heavy)
                 Text("Off shows times as 9:30 PM rather than 21:30.")
             }
-        } header: {
-            Text("Appearance")
         }
     }
 }

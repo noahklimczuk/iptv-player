@@ -24,11 +24,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aurora_db::rusqlite::Connection;
-use aurora_ingest::credentials::CredentialStore;
+use aurora_ingest::credentials::{credential_ref, CredentialStore};
 use aurora_sync::firebase::{Body, FirebaseConfig, Http, Method, Reply, ReqwestHttp};
 use aurora_sync::household::{
     Account, Household, Joined, Pacer, Problem, Secrets, Status, Unlock, Waiting,
 };
+use aurora_sync::secrets::SharedSecrets;
 use aurora_sync::{Report, SyncError};
 use parking_lot::Mutex;
 
@@ -111,6 +112,11 @@ pub struct SyncStatus {
     /// Records from other devices this version could not read: written by a newer
     /// Aurora, or damaged. Skipped, never applied, and fetched again after an update.
     pub unreadable: u64,
+    /// Whether the household shares provider passwords and API keys (§3.4, D34). Off
+    /// unless somebody chose it; a setting that syncs, so it is the household's.
+    pub shares_secrets: bool,
+    /// Whether this device can keep sign-ins from other devices at all.
+    pub can_share_secrets: bool,
 }
 
 impl From<Status> for SyncStatus {
@@ -130,6 +136,8 @@ impl From<Status> for SyncStatus {
             writes_today: s.usage.writes,
             thrifty: s.thrifty,
             unreadable: s.unreadable as u64,
+            shares_secrets: s.shares_secrets,
+            can_share_secrets: s.can_share_secrets,
         }
     }
 }
@@ -253,6 +261,107 @@ impl Secrets for KeychainSecrets {
     }
 }
 
+/// The sign-ins and keys sync may share (§3.4, D34), where the Apple apps keep them: each
+/// provider's password under its `credential_ref`, and the TMDB and Gemini keys under
+/// their own names, all in the Keychain. Sync sends them only while the household has
+/// sharing on. `aurora-app/src/sync.rs` `WindowsSecrets`, under the same record names.
+struct KeychainShared {
+    store: Arc<dyn CredentialStore>,
+    namespace: String,
+}
+
+const SHARED_TMDB: &str = "tmdb";
+const SHARED_GEMINI: &str = "gemini";
+const SHARED_PROVIDER: &str = "provider:";
+
+impl SharedSecrets for KeychainShared {
+    fn list(&self, conn: &Connection) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let providers: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT sync_id, credential_ref FROM providers
+                  WHERE sync_id IS NOT NULL AND credential_ref IS NOT NULL",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (sync_id, key) in providers {
+            if let Ok(v) = self.store.get(&key) {
+                if !v.is_empty() {
+                    out.push((format!("{SHARED_PROVIDER}{sync_id}"), v));
+                }
+            }
+        }
+        for (name, key) in [
+            (SHARED_TMDB, aurora_ingest::tmdb::CREDENTIAL_KEY),
+            (SHARED_GEMINI, crate::gemini::CREDENTIAL_KEY),
+        ] {
+            if let Ok(v) = self.store.get(key) {
+                if !v.is_empty() {
+                    out.push((name.to_string(), v));
+                }
+            }
+        }
+        out
+    }
+
+    fn store(
+        &self,
+        conn: &Connection,
+        name: &str,
+        value: Option<&str>,
+    ) -> aurora_sync::Result<bool> {
+        let refused = |e: String| {
+            SyncError::Account(format!(
+                "The Keychain would not keep a sign-in from another device: {e}"
+            ))
+        };
+        let key = if let Some(sync_id) = name.strip_prefix(SHARED_PROVIDER) {
+            let id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM providers WHERE sync_id = ?1",
+                    [sync_id],
+                    |r| r.get(0),
+                )
+                .map(Some)
+                .or_else(|e| match e {
+                    aurora_db::rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    e => Err(e),
+                })?;
+            // The provider itself has not arrived here yet: wait for it.
+            let Some(id) = id else {
+                return Ok(false);
+            };
+            credential_ref(&self.namespace, id)
+        } else {
+            match name {
+                SHARED_TMDB => aurora_ingest::tmdb::CREDENTIAL_KEY.to_string(),
+                SHARED_GEMINI => crate::gemini::CREDENTIAL_KEY.to_string(),
+                // A kind of secret from a newer Aurora: nothing here would use it.
+                _ => return Ok(true),
+            }
+        };
+        match value {
+            Some(v) => self
+                .store
+                .set(&key, v)
+                .map_err(|e| refused(e.to_string()))?,
+            None => {
+                let _ = self.store.delete(&key);
+            }
+        }
+        if let Some(sync_id) = name.strip_prefix(SHARED_PROVIDER) {
+            conn.execute(
+                "UPDATE providers SET credential_ref = ?2 WHERE sync_id = ?1",
+                aurora_db::rusqlite::params![sync_id, value.map(|_| key)],
+            )?;
+        }
+        Ok(true)
+    }
+}
+
 /// Sync's half of the core. `aurora-app/src/sync.rs` `Sync`.
 pub(crate) struct SyncHost {
     /// `None` only when the HTTPS client could not be built, or there is no credential
@@ -293,14 +402,20 @@ impl SyncHost {
         cfg: Option<FirebaseConfig>,
     ) -> Self {
         let household = match (aurora_ingest::credentials::namespace(db), http) {
-            (Ok(ns), Some(http)) => Some(Household::new(
-                http,
-                cfg,
-                Arc::new(KeychainSecrets {
+            (Ok(ns), Some(http)) => Some(
+                Household::new(
+                    http,
+                    cfg,
+                    Arc::new(KeychainSecrets {
+                        store: credentials.clone(),
+                        prefix: format!("aurora-{ns}-sync-"),
+                    }),
+                )
+                .with_shared_secrets(Arc::new(KeychainShared {
                     store: credentials,
-                    prefix: format!("aurora-{ns}-sync-"),
-                }),
-            )),
+                    namespace: ns,
+                })),
+            ),
             (Err(e), _) => {
                 tracing::error!("sync is unavailable: no credential namespace: {e}");
                 None
@@ -592,6 +707,19 @@ impl AuroraCore {
         Ok(())
     }
 
+    /// Share provider passwords and the TMDB and Gemini keys with the household's other
+    /// devices, or stop sending them (§3.4, D34). Off stops the sending; what was sent
+    /// stays until sync is reset. `aurora-app/src/sync.rs` `sync_set_share_secrets`.
+    pub fn sync_set_share_secrets(&self, enabled: bool) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
+        self.sync.with_conn(|household, conn| {
+            household
+                .set_share_secrets(conn, enabled)
+                .map_err(sync_error)
+        })
+    }
+
     /// The recovery code again, for someone who knows the passphrase. Works offline.
     pub fn sync_recovery_code(&self, passphrase: String) -> Result<String> {
         // Behind Settings: refused while they are locked (F-38, `require_settings`).
@@ -642,6 +770,7 @@ mod tests {
 
     use super::*;
     use crate::secrets::tests::MemorySecrets;
+    use crate::secrets::SecretStore;
     use crate::testing::core_with_sync;
 
     const PASS: &str = "correct horse battery";
@@ -903,5 +1032,71 @@ mod tests {
         assert!(core
             .sync_create_account("a@b.c".into(), "hunter22".into(), PASS.into(), "x".into())
             .is_err());
+    }
+
+    #[test]
+    fn sign_ins_and_keys_reach_another_device_only_once_sharing_is_on() {
+        let fb = FakeFirebase::new();
+        let tv = device(&fb, 0);
+        let phone = device(&fb, 100);
+
+        // The TV holds its line's password and a TMDB key, where the Apple apps keep them.
+        let key = {
+            let db = tv.core.db.lock();
+            let key = credential_ref(&aurora_ingest::credentials::namespace(&db).unwrap(), 1);
+            db.execute(
+                "UPDATE providers SET credential_ref = ?1 WHERE id = 1",
+                [&key],
+            )
+            .unwrap();
+            key
+        };
+        tv.keychain.set(key, "line-password".into()).unwrap();
+        tv.keychain
+            .set(
+                aurora_ingest::tmdb::CREDENTIAL_KEY.into(),
+                "tmdb-key".into(),
+            )
+            .unwrap();
+
+        create(&tv);
+        let status = tv.core.sync_status().unwrap();
+        assert!(status.can_share_secrets, "the Keychain can keep them");
+        assert!(!status.shares_secrets, "off unless chosen");
+        join(&phone);
+        let held = |d: &Device, v: &str| d.keychain.dump().iter().any(|(_, x)| x == v);
+        assert!(!held(&phone, "line-password"), "nothing is sent while off");
+
+        tv.core.sync_set_share_secrets(true).unwrap();
+        tv.core.sync_now().unwrap();
+        phone.core.sync_now().unwrap();
+        assert!(
+            phone.core.sync_status().unwrap().shares_secrets,
+            "the choice is the household's"
+        );
+
+        // The password lands under the phone's own reference for its own copy of the line.
+        let theirs: String = phone
+            .core
+            .db
+            .lock()
+            .query_row(
+                "SELECT credential_ref FROM providers WHERE id = 101",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mine = phone
+            .keychain
+            .get(theirs)
+            .expect("the line's password reached the phone");
+        assert_eq!(mine, "line-password");
+        assert_eq!(
+            phone
+                .keychain
+                .get(aurora_ingest::tmdb::CREDENTIAL_KEY.into())
+                .unwrap(),
+            "tmdb-key"
+        );
     }
 }

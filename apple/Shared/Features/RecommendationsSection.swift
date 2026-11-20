@@ -13,6 +13,7 @@ struct RecommendationsSection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Recommendations").id("Recommendations")
             Text("Suggests films and shows from what you have watched, then keeps only the ones your provider actually carries. What leaves this device is the titles you have watched, their years and genres, how much of each you watched and whether you liked it — nothing about your provider, your sign-in or the rest of your library.")
                 .font(.caption).foregroundStyle(.secondary)
             if let status {
@@ -20,7 +21,7 @@ struct RecommendationsSection: View {
                 // cannot, because a build that ships one falls back to it.
                 Toggle(isOn: Binding(get: { status.enabled }, set: { on in Task { await setEnabled(on) } })) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Suggestions and the assistant")
+                        Text("Suggestions and the assistant").fontWeight(.heavy)
                         Text(status.enabled
                              ? "On. Your watch history is sent to Google when the home screen builds the rail."
                              : "Off. Nothing is sent to Google, including by the key built into this build.")
@@ -42,8 +43,6 @@ struct RecommendationsSection: View {
                     .font(.caption)
                     .foregroundStyle(result.ok ? .green : .red)
             }
-        } header: {
-            Text("Recommendations")
         }
         .task(id: model.profileId) {
             result = nil

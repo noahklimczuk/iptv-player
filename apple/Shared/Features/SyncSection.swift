@@ -29,6 +29,7 @@ struct SyncSection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Sync").id("Sync")
             if let status {
                 content(status)
             } else {
@@ -37,8 +38,6 @@ struct SyncSection: View {
             if let message {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
-        } header: {
-            Text("Sync")
         }
         .task { await reload() }
     }
@@ -85,6 +84,21 @@ struct SyncSection: View {
                 Text("That is past this device's share, so until the quota resets at midnight Pacific it sends watch progress and checks for changes every ten minutes. Favourites and other edits still go straight away.")
                     .font(.caption).foregroundStyle(.orange)
             }
+        }
+        // D34: a password is a different promise from a favourite, so this is a choice
+        // somebody makes, off until they do, and it says what it means both ways.
+        if status.canShareSecrets {
+            Toggle(isOn: Binding(get: { status.sharesSecrets }, set: shareSecrets)) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Also share sign-ins and keys").fontWeight(.heavy)
+                    Text(status.sharesSecrets
+                         ? "Playlist passwords and your TMDB and Gemini keys go to the household’s other devices, encrypted like everything else, so a new device needs only the sync passphrase. Turning this off stops sending them; what was sent stays in the household’s encrypted sync until you reset it."
+                         : "Off: each device keeps its own playlist passwords and TMDB and Gemini keys. On sends them to your other devices, encrypted with your sync passphrase, so nobody has to type them twice.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(busy)
+            .accessibilityLabel(status.sharesSecrets ? "Stop sharing sign-ins and keys" : "Share sign-ins and keys")
         }
         Button(busy ? "Syncing…" : "Sync now", systemImage: "arrow.triangle.2.circlepath") {
             run("Sync failed") { core in
@@ -156,14 +170,10 @@ struct SyncSection: View {
     @ViewBuilder
     private func form(_ status: SyncStatus) -> some View {
         let again = status.signedIn && status.problem == .signInAgain
-        Text("Keeps favourites, My List, watch progress, profiles, parental settings and recording rules the same on every device in the household. Everything is encrypted on this device before it is uploaded, with a passphrase only your devices know. Playlist passwords are never synced: each device keeps its own.")
+        Text("Keeps favourites, My List, watch progress, profiles, parental settings and recording rules the same on every device in the household. Everything is encrypted on this device before it is uploaded, with a passphrase only your devices know. Playlist passwords and API keys stay on each device unless you choose to share them too.")
             .font(.caption).foregroundStyle(.secondary)
         if !again {
-            Picker("", selection: $joining) {
-                Text("Set up sync").tag(false)
-                Text("Join my household").tag(true)
-            }
-            .pickerStyle(.segmented)
+            Segments(options: [(false, "Set up sync"), (true, "Join my household")], selection: $joining)
         }
         Text(again
              ? "The sync account needs its password again. Nothing on this device has been lost."
@@ -267,6 +277,16 @@ struct SyncSection: View {
     }
 
     // MARK: Plumbing
+
+    /// Windows' `sync.setShareSecrets`, with its two messages.
+    private func shareSecrets(_ on: Bool) {
+        run("Could not change that") { core in
+            try core.syncSetShareSecrets(enabled: on)
+            return on
+                ? "Sign-ins and keys will go to your other devices from the next sync."
+                : "Sign-ins and keys are no longer sent."
+        }
+    }
 
     /// Run a core call off the main actor, then show what it said and read the status
     /// again. A result starting `code:` is a recovery code to show.
