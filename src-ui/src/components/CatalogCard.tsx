@@ -185,12 +185,19 @@ export const CatalogCard = memo(function CatalogCard({
           {rank !== undefined && (
             <div
               aria-hidden
+              data-testid="card-rank"
               style={{
                 position: 'absolute', left: -14, bottom: -10,
                 fontSize: 'clamp(54px, 7vw, 92px)', lineHeight: 0.8,
                 fontFamily: 'var(--font-display)', fontWeight: 800,
                 color: 'var(--surface)', WebkitTextStroke: '3px var(--text)',
                 pointerEvents: 'none', fontVariantNumeric: 'tabular-nums',
+                // Gone while the card is open. It sits on the foot of the poster, which
+                // is where the expanded panel goes, so the panel hid most of it and the
+                // part hanging past the card's left edge showed as a stray stroke. The
+                // panel says the rank in words instead.
+                opacity: expanded ? 0 : 1,
+                transition: animations ? 'opacity 120ms' : undefined,
               }}
             >
               {rank}
@@ -329,6 +336,11 @@ export const CatalogCard = memo(function CatalogCard({
                 >
                   {/* "% match" was here, on the expanded card. Mock-only: `match` came
                       from `fixtures.ts` and from nothing on the host (R-99). */}
+                  {rank !== undefined && (
+                    <span data-testid="card-rank-text" style={{ fontWeight: 800, color: 'var(--text)' }}>
+                      #{rank} in Top 10
+                    </span>
+                  )}
                   {item.certification && (
                     <span
                       style={{
