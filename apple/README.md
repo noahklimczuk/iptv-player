@@ -476,7 +476,16 @@ XcodeGen, with the key written from a secret to a file:
           BUILD_NUMBER: ${{ github.run_number }}
           AURORA_TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
           AURORA_GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Household sync, from the secret Windows' build already uses.
+          AURORA_FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          AURORA_FIREBASE_PROJECT_ID: auroratv-1d4ce
 ```
+
+A GitHub secret can't be read back out, so a build on a Mac (simulator, or a device
+from Xcode) gets sync from a private file instead: `build-core.sh` reads
+`~/.config/aurora-tv/keys.env` (Windows' `panel.env` copied there works, or just an
+`AURORA_FIREBASE_API_KEY=…` line), and says as it starts whether sync is built in.
+Rebuild the core after adding it.
 
 The port keeps to `apple/`, so that job is not in `.github/workflows/ci.yml` yet: adding
 it is the one step outside this folder, along with the secrets and the two apps in App

@@ -137,18 +137,43 @@ struct RootView: View {
     }
 
     private var tabView: some View {
-        page
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // The bar floats over the foot of the page, which scrolls on beneath it
-            // (Windows' `--navpill-space`).
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                AuroraTabBar(items: navItems, selection: $tab)
-                    .padding(.bottom, barGap)
-            }
-            #if os(iOS)
-            // The keyboard rises over the bar rather than lifting it.
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-            #endif
+        GeometryReader { geo in
+            let edge = geo.safeAreaInsets.bottom
+            page
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // The page scrolls on beneath the bar, clear of it at the end
+                // (`--navpill-space`).
+                .safeAreaPadding(.bottom, barSpace(edge))
+                .overlay(alignment: .bottom) {
+                    AuroraTabBar(items: navItems, selection: $tab)
+                        .offset(y: barDrop(edge))
+                }
+        }
+        #if os(iOS)
+        // The keyboard rises over the bar rather than lifting it.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        #endif
+    }
+
+    /// Windows' bar floats 20 points above the foot of the window, so on a phone it sits
+    /// down in the home indicator's margin, as the system's own bar does. On a TV it stays
+    /// inside the safe area, which keeps it clear of the screen's overscan.
+    private func barDrop(_ edge: CGFloat) -> CGFloat {
+        #if os(tvOS)
+        0
+        #else
+        edge - 20
+        #endif
+    }
+
+    /// What the page keeps clear above the safe area: the bar, its gap from the edge and
+    /// 12 points more (Windows' `--navpill-space`, 104, or 132 in TV mode).
+    private func barSpace(_ edge: CGFloat) -> CGFloat {
+        #if os(tvOS)
+        AuroraTabBar<AppTab>.height + 12
+        #else
+        max(0, 104 - edge)
+        #endif
     }
 
     /// Windows' `NAV`, in its order. Not Multi-view on a phone, as the port's plan has it
@@ -186,16 +211,6 @@ struct RootView: View {
         case .settings: SettingsView()
         case .search: SearchView()
         }
-    }
-
-    /// The bar's distance from the foot of the screen: Windows' 20 points, less what the
-    /// safe area already keeps clear.
-    private var barGap: CGFloat {
-        #if os(tvOS)
-        0
-        #else
-        compact ? 0 : 8
-        #endif
     }
 
     /// No provider yet, and the wizard neither finished nor skipped this run.
