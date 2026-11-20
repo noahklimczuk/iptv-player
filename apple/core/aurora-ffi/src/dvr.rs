@@ -1029,6 +1029,7 @@ impl AuroraCore {
             kind: VodKind::Recording,
             id,
             title,
+            subtitle: None,
             url: file.to_string_lossy().into_owned(),
             mpv_options: mpv_options(&options),
         })

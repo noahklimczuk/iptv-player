@@ -315,6 +315,14 @@ final class AppModel {
     /// taken by the assistant screen once it has asked it.
     var assistantQuestion: String?
 
+    // MARK: Guide
+
+    /// Bumped by the player's TV Guide button (Windows' G): the player closes and the
+    /// Guide tab opens.
+    private(set) var guideRequests = 0
+
+    func openGuide() { guideRequests += 1 }
+
     // MARK: Search
 
     /// Text to open Search with ("Search this title" in the guide's info pane, Windows'
