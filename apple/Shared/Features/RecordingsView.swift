@@ -319,22 +319,18 @@ private struct RecordedCard: View {
                     }
                 }
             } else {
-                HStack(spacing: 6) {
-                    Text("\(Format.duration(rec.durationSecs)) · \(Format.bytes(rec.bytes))")
-                        .font(.caption.bold()).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button {
-                        let (id, keep) = (rec.id, !rec.keep)
-                        act(model, "That did not work") { try $0.dvrSetKeep(id: id, keep: keep) }
-                    } label: {
-                        Image(systemName: rec.keep ? "heart.fill" : "heart")
+                // Windows' one row where it fits; where the TV's larger buttons leave no
+                // room, the length and size go above them rather than being cut to "403…".
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        meta.fixedSize()
+                        Spacer(minLength: 4)
+                        actions
                     }
-                    .accessibilityLabel(rec.keep ? "Allow deleting to free space" : "Keep — never delete for space")
-                    Button { confirming = true } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Delete \(rec.title)")
-                    Button("Play", systemImage: "play.fill", action: play)
-                        .buttonStyle(.borderedProminent)
-                        .lineLimit(1).fixedSize()
+                    VStack(alignment: .leading, spacing: 8) {
+                        meta
+                        actions
+                    }
                 }
                 #if os(iOS)
                 .buttonStyle(.bordered)
@@ -345,6 +341,28 @@ private struct RecordedCard: View {
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
         .overlay {
             if confirming { RoundedRectangle(cornerRadius: 20).strokeBorder(.red, lineWidth: 2) }
+        }
+    }
+
+    private var meta: some View {
+        Text("\(Format.duration(rec.durationSecs)) · \(Format.bytes(rec.bytes))")
+            .font(.caption.bold()).foregroundStyle(.secondary).lineLimit(1)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 6) {
+            Button {
+                let (id, keep) = (rec.id, !rec.keep)
+                act(model, "That did not work") { try $0.dvrSetKeep(id: id, keep: keep) }
+            } label: {
+                Image(systemName: rec.keep ? "heart.fill" : "heart")
+            }
+            .accessibilityLabel(rec.keep ? "Allow deleting to free space" : "Keep — never delete for space")
+            Button { confirming = true } label: { Image(systemName: "xmark") }
+                .accessibilityLabel("Delete \(rec.title)")
+            Button("Play", systemImage: "play.fill", action: play)
+                .buttonStyle(.borderedProminent)
+                .lineLimit(1).fixedSize()
         }
     }
 
