@@ -13,6 +13,9 @@ struct RootView: View {
     @State private var showingSearch = false
     @State private var showingAssistant = false
     @State private var showingRecordings = false
+    #if DEBUG
+    @State private var debugPairing = false
+    #endif
     /// The setup wizard was finished, or its import left running. Not stored: a library
     /// with no provider asks again next launch, as on Windows.
     @State private var setupFinished = false
@@ -51,6 +54,30 @@ struct RootView: View {
         .auroraAppearance(root: true)
         .task { await model.loadProfiles() }
         .task { await model.reload() }
+        #if DEBUG
+        // `-AuroraPairing YES`: either end's pairing screen, even in a build with no sync
+        // service, to try the transport against the other end (or a script) on the network.
+        #if os(tvOS)
+        .fullScreenCover(isPresented: $debugPairing) {
+            PairWithPhoneView(deviceName: "Apple TV") {}.auroraAppearance()
+        }
+        #else
+        .sheet(isPresented: $debugPairing) {
+            SetUpAppleTVView(email: "household@example.com").auroraAppearance()
+        }
+        #endif
+        .onAppear { debugPairing = UserDefaults.standard.bool(forKey: "AuroraPairing") }
+        #endif
+        // The Top Shelf's titles: Home, with the title's page open over it.
+        .onOpenURL { url in
+            guard let link = TopShelfSnapshot.title(from: url) else { return }
+            showingSettings = false
+            showingSearch = false
+            showingAssistant = false
+            showingRecordings = false
+            tab = .home
+            model.titleToOpen = TitleLink(kind: link.kind, id: link.id)
+        }
         .task { await model.loadParental() }
         // The recordings scheduler keeps its own time while Aurora runs, as Windows'
         // does while its window is open.

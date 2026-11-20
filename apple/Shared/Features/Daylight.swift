@@ -224,34 +224,57 @@ extension AuroraTheme {
         case .contrast: Color(white: 0xE0 / 255)
         }
     }
+
+    /// `--live`, and `--live-text` on it: the red-orange of on air and recording.
+    var live: Color { self == .contrast ? .white : Color(red: 1, green: 0x5A / 255, blue: 0x36 / 255) }
+    var liveText: Color { self == .contrast ? .black : .white }
+    /// `--success`, and `--success-text`: the green of New.
+    var success: Color { self == .contrast ? .white : Color(red: 0x14 / 255, green: 0xA3 / 255, blue: 0x7F / 255) }
+    var successText: Color { self == .contrast ? .black : .white }
 }
 
 /// Windows' `Badge`: a small pill, on the sunk ground, the accent, or only outlined.
 struct DaylightBadge: View {
-    enum Tone { case neutral, accent, outline }
+    enum Tone { case neutral, accent, live, new, outline }
     let text: String
     var tone: Tone = .neutral
     @Environment(\.auroraTheme) private var theme
 
-    init(_ text: String, tone: Tone = .neutral) {
+    /// Windows' `padding: '0 4px'`, for a badge inside a guide pill.
+    var tight = false
+
+    init(_ text: String, tone: Tone = .neutral, tight: Bool = false) {
         self.text = text
         self.tone = tone
+        self.tight = tight
     }
 
     var body: some View {
-        Text(text)
+        Text(tone == .live ? text.uppercased() : text)
             .font(.system(size: Daylight.px(12), weight: .heavy))
             .lineLimit(1)
             .fixedSize()
-            .padding(.vertical, Daylight.px(3)).padding(.horizontal, Daylight.px(9))
-            .foregroundStyle(tone == .accent ? theme.accentText : tone == .outline ? theme.textMuted : theme.text)
+            .padding(.vertical, tight ? 0 : Daylight.px(3)).padding(.horizontal, Daylight.px(tight ? 4 : 9))
+            .foregroundStyle(foreground)
             .background {
                 switch tone {
                 case .neutral: Capsule().fill(theme.surfaceSunk)
                 case .accent: Capsule().fill(theme.accent)
+                case .live: Capsule().fill(theme.live)
+                case .new: Capsule().fill(theme.success)
                 case .outline: Capsule().strokeBorder(theme.borderStrong, lineWidth: 1.5)
                 }
             }
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .neutral: theme.text
+        case .accent: theme.accentText
+        case .live: theme.liveText
+        case .new: theme.successText
+        case .outline: theme.textMuted
+        }
     }
 }
 
@@ -306,6 +329,88 @@ struct DaylightCheckbox: View {
     }
 }
 
+/// One button of Windows' `dl-seg`: muted type in the sunk well, the active one raised on
+/// the surface (Contrast: the accent). Put the buttons in `.daylightSegWell()`.
+struct DaylightSegmentStyle: ButtonStyle {
+    let active: Bool
+    var height: CGFloat = 36
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @Environment(\.isFocused) private var focused
+    #else
+    private let focused = false
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        // `calc(var(--r-md) - 4px)`.
+        let radius = Daylight.px(10)
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        configuration.label
+            .font(.system(size: Daylight.px(13), weight: .bold))
+            .lineLimit(1)
+            .padding(.horizontal, Daylight.px(14))
+            .frame(height: Daylight.px(height))
+            .foregroundStyle(active ? (theme == .contrast ? theme.accentText : theme.text) : theme.textMuted)
+            .background {
+                if active {
+                    shape.fill(theme == .contrast ? theme.accent : theme.surface)
+                        .shadow(color: Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255).opacity(0.08), radius: 1, y: 1)
+                }
+            }
+            .contentShape(shape)
+            .daylightFocusRing(focused, radius: radius, theme: theme)
+            .opacity(configuration.isPressed ? 0.8 : 1)
+    }
+}
+
+extension View {
+    /// Windows' `dl-seg` well: the sunk ground, 4 points round its buttons.
+    func daylightSegWell() -> some View {
+        modifier(SegWell())
+    }
+}
+
+private struct SegWell: ViewModifier {
+    @Environment(\.auroraTheme) private var theme
+    func body(content: Content) -> some View {
+        content
+            .padding(Daylight.px(4))
+            .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous))
+            .fixedSize()
+    }
+}
+
+/// Windows' `dl-filter`: a raised white chip, the accent when it is the one chosen.
+struct DaylightFilterStyle: ButtonStyle {
+    let selected: Bool
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @Environment(\.isFocused) private var focused
+    #else
+    private let focused = false
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        let radius = Daylight.px(14)
+        configuration.label
+            .font(.system(size: Daylight.px(13), weight: .bold))
+            .lineLimit(1)
+            .foregroundStyle(selected ? theme.accentText : theme.text)
+            .padding(.horizontal, Daylight.px(16))
+            .frame(height: Daylight.px(40))
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: radius).fill(theme.accent)
+                } else {
+                    Color.clear.daylightRaised(theme, radius: radius)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: radius))
+            .daylightFocusRing(focused, radius: radius, theme: theme)
+            .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
 /// A bare button that shows nothing but Windows' focus ring when the remote is on it.
 struct FocusRingStyle: ButtonStyle {
     var radius: CGFloat = Daylight.px(8)
@@ -321,5 +426,79 @@ struct FocusRingStyle: ButtonStyle {
             .contentShape(Rectangle())
             .daylightFocusRing(focused, radius: radius, theme: theme)
             .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
+/// Windows' `TextField` as a search box: the raised surface, an optional magnifier and
+/// clear button, the accent's edge while typing. A TV draws its own pill behind a text
+/// field, so there it is the same surface as a button that brings up the keyboard.
+struct DaylightSearchField: View {
+    @Binding var text: String
+    let placeholder: String
+    var width: CGFloat = 220
+    var icon = true
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @State private var draft = ""
+    @State private var editing = false
+    #else
+    @FocusState private var focused: Bool
+    #endif
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous)
+        #if os(tvOS)
+        Button {
+            draft = text
+            editing = true
+        } label: {
+            HStack(spacing: 8) {
+                if icon { Image(systemName: "magnifyingglass") }
+                Text(text.isEmpty ? placeholder : text).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: Daylight.px(15), weight: .medium))
+            .foregroundStyle(text.isEmpty ? theme.textFaint : theme.text)
+            .padding(.vertical, Daylight.px(10)).padding(.horizontal, Daylight.px(14))
+            .frame(width: Daylight.px(width), alignment: .leading)
+            .background(theme.surface, in: shape)
+        }
+        .buttonStyle(FocusRingStyle(radius: Daylight.px(14)))
+        .accessibilityLabel(placeholder)
+        .accessibilityValue(text)
+        .alert(placeholder, isPresented: $editing) {
+            TextField(placeholder, text: $draft)
+            Button("Search") { text = draft }
+            if !text.isEmpty { Button("Clear", role: .destructive) { text = "" } }
+            Button("Cancel", role: .cancel) {}
+        }
+        #else
+        HStack(spacing: 8) {
+            if icon {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.textFaint)
+            }
+            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(theme.textFaint))
+                .textFieldStyle(.plain)
+                .font(.system(size: 15, weight: .medium))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+                .focused($focused)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(theme.textFaint)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.vertical, 10).padding(.horizontal, 14)
+        .frame(width: width)
+        .background(theme.surface, in: shape)
+        .overlay(shape.strokeBorder(focused ? theme.accent : .clear, lineWidth: 1.5))
+        .accessibilityElement(children: .contain)
+        #endif
     }
 }

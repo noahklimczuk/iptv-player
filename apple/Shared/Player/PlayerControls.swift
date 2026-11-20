@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import AVKit
+#endif
 
 /// Where the remote's focus can be in the player (tvOS).
 enum PlayerFocus: Hashable {
@@ -191,6 +194,42 @@ private struct DockButtonStyle: ButtonStyle {
         }
     }
 }
+
+#if os(iOS)
+/// The system's AirPlay picker, drawn as one of the top bar's glass buttons.
+private struct AirPlayButton: View {
+    let m: DockMetrics
+    @Environment(\.auroraTheme) private var theme
+
+    var body: some View {
+        let dock = DockTokens(theme)
+        let shape = RoundedRectangle(cornerRadius: m.px(14), style: .continuous)
+        RoutePicker(tint: UIColor(dock.text), active: UIColor(dock.accent))
+            .frame(width: m.px(34), height: m.px(34))
+            .background {
+                shape.fill(dock.chip)
+                shape.strokeBorder(dock.rim, lineWidth: dock.rimWidth)
+            }
+            .accessibilityLabel("AirPlay")
+    }
+}
+
+private struct RoutePicker: UIViewRepresentable {
+    let tint: UIColor
+    let active: UIColor
+
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.prioritizesVideoDevices = true
+        return picker
+    }
+
+    func updateUIView(_ picker: AVRoutePickerView, context: Context) {
+        picker.tintColor = tint
+        picker.activeTintColor = active
+    }
+}
+#endif
 
 /// One of the dock's or the top bar's buttons: an icon, named for VoiceOver and the
 /// pointer.
@@ -680,6 +719,11 @@ private struct TopBar: View {
                             .fixedSize()
                     }
                 }
+                #if os(iOS)
+                // AirPlay: the sound to a speaker or a TV (the picture goes with the
+                // screen when it is mirrored). An Apple control Windows has no need of.
+                AirPlayButton(m: m)
+                #endif
                 DockButton(label: "Playback stats", icon: "info", kind: .glass, active: session.statsOpen,
                            id: .stats, focus: focus, m: m) {
                     session.statsOpen.toggle()

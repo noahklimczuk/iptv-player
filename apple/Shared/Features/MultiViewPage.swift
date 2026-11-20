@@ -200,7 +200,7 @@ struct MultiViewPage: View {
                         Text(l.label)
                     }
                 }
-                .buttonStyle(SegmentStyle(active: layout == l.id))
+                .buttonStyle(DaylightSegmentStyle(active: layout == l.id, height: 44))
                 .accessibilityLabel(l.label)
                 .accessibilityHint("\(l.hint) · \(l.tiles) tiles")
                 .accessibilityAddTraits(layout == l.id ? .isSelected : [])
@@ -516,36 +516,6 @@ private struct TileCardStyle: ButtonStyle {
 
 /// One choice in Windows' `dl-seg`: muted and bare, or raised on the surface when it is
 /// the one chosen (on the accent in Contrast).
-private struct SegmentStyle: ButtonStyle {
-    let active: Bool
-    @Environment(\.auroraTheme) private var theme
-    #if os(tvOS)
-    @Environment(\.isFocused) private var focused
-    #else
-    private let focused = false
-    #endif
-
-    func makeBody(configuration: Configuration) -> some View {
-        let radius = Daylight.px(10)
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        configuration.label
-            .font(.system(size: Daylight.px(13), weight: .bold))
-            .lineLimit(1)
-            .padding(.horizontal, Daylight.px(16))
-            .frame(height: Daylight.px(44))
-            .foregroundStyle(active ? (theme == .contrast ? theme.accentText : theme.text) : theme.textMuted)
-            .background {
-                if active {
-                    shape.fill(theme == .contrast ? theme.accent : theme.surface)
-                        .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
-                }
-            }
-            .contentShape(shape)
-            .daylightFocusRing(focused, radius: radius, theme: theme)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-    }
-}
-
 /// A miniature of an arrangement, from the core's own geometry.
 struct LayoutThumb: View {
     @Environment(AppModel.self) private var model

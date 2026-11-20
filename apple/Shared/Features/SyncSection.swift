@@ -26,6 +26,8 @@ struct SyncSection: View {
     @State private var showCodeFor = ""
 
     private enum Confirm { case signOut, reset }
+    /// Pairing (`Pairing.swift`): the TV showing its code, the phone setting a TV up.
+    @State private var pairing = false
 
     var body: some View {
         Section {
@@ -40,6 +42,16 @@ struct SyncSection: View {
             }
         }
         .task { await reload() }
+        #if os(tvOS)
+        .fullScreenCover(isPresented: $pairing) {
+            PairWithPhoneView(deviceName: deviceName) { Task { await reload() } }
+                .auroraAppearance()
+        }
+        #else
+        .sheet(isPresented: $pairing) {
+            SetUpAppleTVView(email: status?.email ?? email).auroraAppearance()
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -100,6 +112,11 @@ struct SyncSection: View {
             .disabled(busy)
             .accessibilityLabel(status.sharesSecrets ? "Stop sharing sign-ins and keys" : "Share sign-ins and keys")
         }
+        #if os(iOS)
+        // An Apple TV joins from here, so nothing is typed with its remote.
+        Button("Set up an Apple TV", systemImage: "appletv") { pairing = true }
+            .disabled(busy)
+        #endif
         Button(busy ? "Syncing…" : "Sync now", systemImage: "arrow.triangle.2.circlepath") {
             run("Sync failed") { core in
                 let r = try core.syncNow()
@@ -181,6 +198,14 @@ struct SyncSection: View {
                 ? "For a device joining a household that already set sync up on another one."
                 : "For the first device in the household. Every other device then joins with the same email, password and passphrase.")
             .font(.caption).foregroundStyle(.secondary)
+        let joiningNow = joining || again
+        #if os(tvOS)
+        // Joining from a remote is a lot of typing: a phone that already syncs can do it.
+        if joiningNow {
+            Button("Sign in with your iPhone", systemImage: "iphone") { pairing = true }
+                .disabled(busy)
+        }
+        #endif
         TextField("Email", text: $email)
             .textContentType(.emailAddress)
             .autocorrectionDisabled()
@@ -190,7 +215,6 @@ struct SyncSection: View {
             #endif
         SecureField("Account password", text: $password)
             .textContentType(.password)
-        let joiningNow = joining || again
         if joiningNow && useCode {
             TextField("Recovery code", text: $code)
                 .autocorrectionDisabled()

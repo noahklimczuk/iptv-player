@@ -30,7 +30,6 @@ struct PlaylistEditorView: View {
     @State private var copiesOf: PlaylistEntry?
     @State private var typo: String?
     @State private var width: CGFloat = 0
-    @FocusState private var searching: Bool
 
     /// Windows reads 300 at a time, and Show more adds 300.
     private static let page: UInt32 = 300
@@ -180,33 +179,9 @@ struct PlaylistEditorView: View {
         }
     }
 
-    /// Windows' `aurora-field`: the raised surface, the accent's edge while typing. A TV
-    /// draws its own pill behind a text field, so there it is the same surface as a
-    /// button that brings up the keyboard.
-    @ViewBuilder private var searchField: some View {
-        #if os(tvOS)
-        TVSearchField(text: $text)
-        #else
-        phoneSearchField
-        #endif
-    }
-
-    private var phoneSearchField: some View {
-        let shape = RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous)
-        return TextField("Search this list", text: $text, prompt: Text("Search this list").foregroundStyle(theme.textFaint))
-            .textFieldStyle(.plain)
-            .font(.system(size: Daylight.px(15), weight: .medium))
-            .autocorrectionDisabled()
-            #if os(iOS)
-            .textInputAutocapitalization(.never)
-            .submitLabel(.search)
-            #endif
-            .focused($searching)
-            .padding(.vertical, Daylight.px(10)).padding(.horizontal, Daylight.px(14))
-            .frame(width: Daylight.px(wide ? 280 : 240))
-            .background(theme.surface, in: shape)
-            .overlay(shape.strokeBorder(searching ? theme.accent : .clear, lineWidth: 1.5))
-            .accessibilityLabel("Search this list")
+    /// Windows' `aurora-field`, without the magnifier the Live TV search has.
+    private var searchField: some View {
+        DaylightSearchField(text: $text, placeholder: "Search this list", width: wide ? 280 : 240, icon: false)
     }
 
     /// Windows' `Select`: a small button, the accent once something is chosen, opening
@@ -657,41 +632,6 @@ private struct EditableCell: View {
     }
 }
 
-#if os(tvOS)
-private struct TVSearchField: View {
-    @Binding var text: String
-    @Environment(\.auroraTheme) private var theme
-    @State private var draft = ""
-    @State private var editing = false
-
-    var body: some View {
-        Button {
-            draft = text
-            editing = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                Text(text.isEmpty ? "Search this list" : text).lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: Daylight.px(15), weight: .medium))
-            .foregroundStyle(text.isEmpty ? theme.textFaint : theme.text)
-            .padding(.vertical, Daylight.px(10)).padding(.horizontal, Daylight.px(14))
-            .frame(width: Daylight.px(280), alignment: .leading)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous))
-        }
-        .buttonStyle(FocusRingStyle(radius: Daylight.px(14)))
-        .accessibilityLabel("Search this list")
-        .accessibilityValue(text)
-        .alert("Search this list", isPresented: $editing) {
-            TextField("Search this list", text: $draft)
-            Button("Search") { text = draft }
-            if !text.isEmpty { Button("Clear", role: .destructive) { text = "" } }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-}
-#endif
 
 /// "fr" → "French", from the system rather than a table of our own (as on Windows).
 func languageName(_ code: String) -> String? {

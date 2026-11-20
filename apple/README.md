@@ -24,10 +24,27 @@ screens. The app can:
 - channel rows as Windows' `LivePage` draws them: number, logo, name with padlock and
   quality, the programme on now with its start time (or "No guide data") and what is
   next, its progress, and the Dropped and Catch-up badges; Windows' empty-list wording,
+- the Live TV page laid out as Windows' `LivePage`: the group sidebar (Pinned, then the
+  groups, with a filter once there are more than 12), the heading with its count,
+  Daylight's search field, Number/A–Z and Cards/List, the letter bar, and Windows' empty
+  states ("No favourite channels yet", "No channel matches" with Clear search). On an
+  iPhone, which has no room for the sidebar beside the list, the heading opens it as a
+  sheet, and a row drops its play square and keeps the name whole,
 - show the guide grid (channels down, time across), fetching only the rows on screen
   as Windows does since R-130; choosing what's on plays the channel, choosing what
   already aired replays it where the archive allows. Over it, Windows' header: the day
   (Today, Tomorrow, Yesterday, or the date), −24h −1h Now +1h +24h, and Tonight 8pm,
+- the guide grid drawn as Windows draws it: one raised panel, CHANNEL over the channel
+  column, each channel's number, logo, name and catch-up mark, programmes as sunk pills
+  (what is on now tinted and ringed in the accent with its progress along the foot, the
+  past dimmed, New and Live badges, the times once a pill is wide enough), the now line
+  in the live colour, and the group chips and "With listings" switch as Daylight's. A
+  channel with no listings is described from its name in Windows' dashed strip ("from
+  channel name", "All day" for a 24/7 loop, an event's time), by the rules of
+  `nameGuide.ts` (`NameGuide.swift`). Where it differs: the chosen programme is the
+  focused one on a TV and opens its details in a sheet, and there is no preview pane
+  beside the grid, because a phone and a TV have no room for one; choosing a channel
+  plays it full screen. A phone's channel column keeps the logo and name only,
 - filter the guide as Windows does: group chips to tap in or out, and a Filters sheet
   with every group searchable, shown only or hidden, plus with listings, favourites,
   catch-up, radio and quality. The rules are Windows' `guideFilters.ts` in the core
@@ -278,6 +295,29 @@ screens. The app can:
     is, because a remote cannot type into a dropdown. The help says "tap"/"select" and
     "double-tap"/"hold" where Windows says "click" and "double-click", and the `1`–`9`
     keys are not there: a remote has no number keys.
+- the Apple TV's Top Shelf (plan §2.4): Continue Watching, with each title's art and
+  progress. The app writes a small snapshot to the app group `group.tv.aurora.shared`
+  whenever Home reads its rails, and tells the shelf to reload only when it changed;
+  the `AuroraTopShelf` extension reads that and nothing else. Choosing a title opens
+  the app on Home with its page up (`aurora://title/movie/12`). Windows has no shelf.
+- pairing an Apple TV from a phone (plan §2.4 and §3.6), so nothing is typed with the
+  remote: on the TV, Settings → Sync → Sign in with your iPhone shows a six-digit code;
+  on an iPhone or iPad that syncs, Settings → Sync → Set up an Apple TV lists the TVs
+  showing one, and takes the code, the account password and the sync passphrase. The
+  TV then signs in exactly as its own form would. Where it differs from the plan, and
+  why: the plan pairs through a `pairing/{id}` document on the server, which needs a
+  rule `firebase/firestore.rules` doesn't have, and the port keeps to `apple/`. So the
+  two talk over the home network instead (Bonjour, `_aurora-pair._tcp`): the TV
+  advertises a fresh X25519 key and shows a code made from it, the phone refuses a key
+  whose code is not the one typed, and the sign-in goes sealed with ChaCha20-Poly1305
+  under the shared secret (`Shared/Core/Pairing.swift`). The phone sends the password
+  and passphrase rather than its own session, because joining from a session would
+  need a change to the shared `aurora_sync::household`.
+- AirPlay on iPhone and iPad: the system's picker in the player's top bar, as one of
+  its glass buttons. It sends the sound to a speaker or TV; mpv draws its own picture,
+  so the picture goes with the screen only when it is mirrored. Windows has no AirPlay.
+- Windows' Home error state: when the rails cannot be read at all, "Couldn't load your
+  library" and why, in their place.
 
 On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Movies, Series), and
 Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app (multi-view is not offered there, and the playlist editor opens from Settings → Library). A sixth tab would go
@@ -390,6 +430,42 @@ set in Xcode. A free account's builds expire after 7 days (plan §2.6).
 On an **Intel Mac** the tvOS simulator is x86_64, and `x86_64-apple-tvos` is still a
 Tier 3 Rust target. `build-core.sh` builds it with nightly and `-Zbuild-std`, installing
 nightly the first time. Apple-silicon Macs only need stable.
+
+### Releasing to TestFlight
+
+`apple/scripts/testflight.sh` builds every device slice of the core, archives the
+iPhone/iPad and Apple TV apps (the Top Shelf goes inside the TV app), and uploads both
+to TestFlight, signing with an App Store Connect API key so nobody has to be signed in
+to Xcode. It needs `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH` and `DEVELOPMENT_TEAM`
+(the top of the script says what each is), plus `BUILD_NUMBER` when it should be the CI
+run number. `--tv`, `--mobile` and `--no-upload` narrow it.
+
+From CI, a job on `macos-latest` runs it after installing Rust's Apple targets and
+XcodeGen, with the key written from a secret to a file:
+
+```yaml
+  apple-testflight:
+    runs-on: macos-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: echo "$ASC_KEY" > "$RUNNER_TEMP/asc.p8"
+        env: { ASC_KEY: "${{ secrets.ASC_KEY_P8 }}" }
+      - run: apple/scripts/testflight.sh
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/asc.p8
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          AURORA_TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
+          AURORA_GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+```
+
+The port keeps to `apple/`, so that job is not in `.github/workflows/ci.yml` yet: adding
+it is the one step outside this folder, along with the secrets and the two apps in App
+Store Connect. Read plan §2.6 on licensing before inviting testers beyond the household.
 
 ### Trying it without tapping (debug builds)
 

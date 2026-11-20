@@ -354,44 +354,17 @@ struct ShelfPicker: View {
 struct Segments<Value: Hashable>: View {
     let options: [(Value, String)]
     @Binding var selection: Value
-    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
-        #if os(tvOS)
-        HStack(spacing: 8) {
-            ForEach(options, id: \.0) { value, label in
-                FilterChip(title: label, selected: value == selection) { selection = value }
-            }
-        }
-        .buttonStyle(.bordered)
-        #else
         HStack(spacing: 2) {
             ForEach(options, id: \.0) { value, label in
                 let active = value == selection
-                Button { selection = value } label: {
-                    Text(label)
-                        .font(.subheadline.weight(.bold))
-                        .lineLimit(1)
-                        .foregroundStyle(active ? (theme == .contrast ? Color.black : Color.primary) : Color.secondary)
-                        .padding(.horizontal, 14)
-                        .frame(height: 32)
-                        .background {
-                            if active {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(theme == .contrast ? theme.accent : theme.surface)
-                                    .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(active ? .isSelected : [])
+                Button { selection = value } label: { Text(label) }
+                    .buttonStyle(DaylightSegmentStyle(active: active))
+                    .accessibilityAddTraits(active ? .isSelected : [])
             }
         }
-        .padding(4)
-        .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: 12))
-        .fixedSize()
-        #endif
+        .daylightSegWell()
     }
 }
 
@@ -406,41 +379,15 @@ struct ActionSegments: View {
     }
 
     let items: [Item]
-    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
-        #if os(tvOS)
-        HStack(spacing: 8) {
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                Button(action: item.action) { label(item) }
-            }
-        }
-        .buttonStyle(.bordered)
-        #else
         HStack(spacing: 2) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                Button(action: item.action) {
-                    label(item)
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(item.active ? (theme == .contrast ? Color.black : Color.primary) : Color.secondary)
-                        .padding(.horizontal, 12)
-                        .frame(height: 32)
-                        .background {
-                            if item.active {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(theme == .contrast ? theme.accent : theme.surface)
-                                    .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                Button(action: item.action) { label(item) }
+                    .buttonStyle(DaylightSegmentStyle(active: item.active))
             }
         }
-        .padding(4)
-        .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: 12))
-        .fixedSize()
-        #endif
+        .daylightSegWell()
     }
 
     @ViewBuilder private func label(_ item: Item) -> some View {
@@ -461,21 +408,19 @@ struct FilterChip: View {
     let action: () -> Void
 
     var body: some View {
-        // tvOS draws a bordered button the same whatever its tint, so the choice shows in
-        // the label's weight too. One button either way: swapping styles on selection would
-        // replace the focused view and throw the focus off it.
+        // Windows' `dl-filter`. One button whatever the choice: swapping styles on
+        // selection would replace the focused view and throw the focus off it.
         Button(action: action) {
-            // Weight, not colour: a colour set here would also stay on the white focus
-            // background, where tvOS otherwise turns the label dark.
-            HStack(spacing: 6) {
-                Text(title).fontWeight(selected ? .heavy : .regular).strikethrough(selected && struck)
+            HStack(spacing: Daylight.px(8)) {
+                Text(title).strikethrough(selected && struck)
                 if let count {
-                    Text("\(count)").font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: count.formatted())
+                        .font(.system(size: Daylight.px(12), weight: .bold).monospacedDigit())
+                        .opacity(0.6)
                 }
             }
         }
-        .buttonStyle(.bordered)
-        .tint(selected ? .accentColor : .secondary)
+        .buttonStyle(DaylightFilterStyle(selected: selected))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
