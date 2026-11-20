@@ -50,6 +50,32 @@ for arg in "$@"; do
   esac
 done
 
+# The keys above, from a private file on this Mac when they aren't already set: Windows'
+# panel.env copied here, or a file with just the lines wanted, e.g.
+#   AURORA_FIREBASE_API_KEY=…
+# Kept outside the repository (it's public) and read by every build, so a simulator or
+# device build from this Mac has sync as the CI builds do.
+KEYS_FILE="${AURORA_KEYS_FILE:-$HOME/.config/aurora-tv/keys.env}"
+if [ -f "$KEYS_FILE" ]; then
+  while IFS='=' read -r name value; do
+    case "$name" in
+      AURORA_FIREBASE_API_KEY|AURORA_FIREBASE_PROJECT_ID|AURORA_TMDB_KEY|AURORA_GEMINI_KEY)
+        # The environment wins over the file; quotes around the value are dropped.
+        if [ -z "${!name:-}" ]; then
+          value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
+          export "$name=$value"
+        fi ;;
+    esac
+  done < <(grep -E '^(export )?AURORA_[A-Z_]+=' "$KEYS_FILE" | sed 's/^export //')
+fi
+# Aurora's Firebase project (public; the key is what stays private).
+if [ -n "${AURORA_FIREBASE_API_KEY:-}" ]; then
+  export AURORA_FIREBASE_PROJECT_ID="${AURORA_FIREBASE_PROJECT_ID:-auroratv-1d4ce}"
+  echo "Household sync: built in (Firebase project $AURORA_FIREBASE_PROJECT_ID)"
+else
+  echo "Household sync: not built in (no AURORA_FIREBASE_API_KEY; see $KEYS_FILE)"
+fi
+
 export PATH="$HOME/.cargo/bin:$PATH"
 # The app's minimum OS (project.yml). rustc and the C code in dependencies (ring,
 # SQLite) read these, so the core doesn't silently require a newer OS than the app.
