@@ -80,6 +80,14 @@ impl<T> TimedMutex<T> {
     }
 }
 
+/// The import takes the write lock a step at a time through this.
+impl aurora_ingest::sync::Writer for TimedMutex<aurora_db::rusqlite::Connection> {
+    type Guard<'a> = TimedGuard<'a, aurora_db::rusqlite::Connection>;
+    fn write(&self) -> Self::Guard<'_> {
+        self.lock()
+    }
+}
+
 pub struct TimedGuard<'a, T> {
     guard: MutexGuard<'a, T>,
     at: &'static Location<'static>,
