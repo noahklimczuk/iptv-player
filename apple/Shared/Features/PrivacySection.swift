@@ -25,25 +25,17 @@ struct PrivacySection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Privacy").id("Privacy")
             if let history {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Keep watch history")
-                    Text("Anything not watched for longer than this is forgotten, on every device you sync with.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Picker("Keep watch history", selection: Binding(
-                        get: { history.days },
-                        set: { days in choose(days) })) {
-                        ForEach(Self.windows, id: \.label) { w in
-                            Text(w.label).tag(w.days)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .disabled(busy)
+                SettingsField(label: "Keep watch history",
+                              hint: "Anything not watched for longer than this is forgotten, on every device you sync with.") {
+                    Segments(options: Self.windows.map { ($0.days, $0.label) },
+                             selection: Binding(get: { history.days }, set: { choose($0) }))
+                        .disabled(busy)
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("Clear watch history")
+                        Text("Clear watch history").fontWeight(.heavy)
                         Spacer()
                         Text(Self.entries(history.items))
                             .font(.caption.bold())
@@ -69,7 +61,7 @@ struct PrivacySection: View {
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("Usage data")
+                        Text("Usage data").fontWeight(.heavy)
                         Spacer()
                         Text("None sent")
                             .font(.caption.bold())
@@ -87,8 +79,6 @@ struct PrivacySection: View {
             } else {
                 ProgressView()
             }
-        } header: {
-            Text("Privacy")
         }
         .task(id: model.profileId) { await load() }
     }

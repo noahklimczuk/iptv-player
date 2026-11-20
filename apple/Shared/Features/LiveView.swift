@@ -371,7 +371,7 @@ private struct ChannelRow: View {
 
 /// Windows' `Badge`, in the tones the channel row uses.
 struct Badge: View {
-    enum Style { case neutral, new, warning }
+    enum Style { case neutral, new, warning, live, outline }
     let text: String
     let style: Style
 
@@ -382,14 +382,19 @@ struct Badge: View {
             .padding(.horizontal, 8).padding(.vertical, 3)
             .foregroundStyle(foreground)
             .background(background, in: Capsule())
-            .overlay { if style == .warning { Capsule().strokeBorder(.orange) } }
+            .textCase(style == .live ? .uppercase : nil)
+            .overlay {
+                if style == .warning { Capsule().strokeBorder(.orange) }
+                if style == .outline { Capsule().strokeBorder(.secondary, lineWidth: 1.5) }
+            }
     }
 
     private var foreground: Color {
         switch style {
         case .neutral: .primary
-        case .new: .white
+        case .new, .live: .white
         case .warning: .orange
+        case .outline: .secondary
         }
     }
 
@@ -397,7 +402,8 @@ struct Badge: View {
         switch style {
         case .neutral: Color.secondary.opacity(0.18)
         case .new: .green
-        case .warning: .clear
+        case .live: .red
+        case .warning, .outline: .clear
         }
     }
 }

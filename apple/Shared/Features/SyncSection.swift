@@ -29,6 +29,7 @@ struct SyncSection: View {
 
     var body: some View {
         Section {
+            SettingsHead("Sync").id("Sync")
             if let status {
                 content(status)
             } else {
@@ -37,8 +38,6 @@ struct SyncSection: View {
             if let message {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
-        } header: {
-            Text("Sync")
         }
         .task { await reload() }
     }
@@ -159,11 +158,7 @@ struct SyncSection: View {
         Text("Keeps favourites, My List, watch progress, profiles, parental settings and recording rules the same on every device in the household. Everything is encrypted on this device before it is uploaded, with a passphrase only your devices know. Playlist passwords are never synced: each device keeps its own.")
             .font(.caption).foregroundStyle(.secondary)
         if !again {
-            Picker("", selection: $joining) {
-                Text("Set up sync").tag(false)
-                Text("Join my household").tag(true)
-            }
-            .pickerStyle(.segmented)
+            Segments(options: [(false, "Set up sync"), (true, "Join my household")], selection: $joining)
         }
         Text(again
              ? "The sync account needs its password again. Nothing on this device has been lost."
