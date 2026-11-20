@@ -30,38 +30,16 @@ struct HomeView: View {
     #if !os(tvOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.openSearch) private var openSearch
     @Environment(\.openAssistant) private var openAssistant
-    @Environment(\.openRecordings) private var openRecordings
 
     var body: some View {
         NavigationStack {
             content
                 .auroraTitle("Home")
-                .toolbar {
-                    if let openSearch {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Search", systemImage: "magnifyingglass", action: openSearch)
-                        }
-                    }
-                    // Where Settings is in the toolbar (an iPhone), so is the assistant.
-                    if openSettings != nil {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Ask Aurora", systemImage: "sparkles") { openAssistant(nil) }
-                        }
-                    }
-                    if let openRecordings {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Recordings", systemImage: "record.circle", action: openRecordings)
-                        }
-                    }
-                    if let openSettings {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Settings", systemImage: "gear", action: openSettings)
-                        }
-                    }
-                }
+                #if os(iOS)
+                // Windows' Home has no heading of its own: the top bar names it.
+                .toolbarVisibility(.hidden, for: .navigationBar)
+                #endif
                 .task(id: ReloadKey(library: model.libraryVersion, profile: model.profileId,
                                     showing: movie == nil && series == nil)) {
                     // Rebuilt when a title's page closes: Continue Watching and My List

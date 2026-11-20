@@ -45,6 +45,10 @@ struct RootView: View {
                     .id(model.profileId)
             }
         }
+        // The whole screen, so the theme's background below fills it behind a screen
+        // that hugs its content ("Who's watching?") rather than leaving the window's own
+        // colour in bands above and below.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         // The parental PIN dialog, wherever the core asks for it (`ParentalPinHost`).
         .parentalPinHost()
         // Settings → Appearance: the theme, the clock and motion, for every screen.
@@ -89,10 +93,13 @@ struct RootView: View {
     }
 
     private var tabs: some View {
-        // Windows' `ConnectionBudget` heads the page while recordings use every stream
-        // there is. Above the tabs, not inset into them: a navigation bar's large title
-        // ignores an inset from outside its stack and would sit under the strip.
+        // Windows' top bar heads every tab, with its `ConnectionBudget` under it while
+        // recordings use every stream there is. Above the page, not inset into it: a
+        // navigation bar's title ignores an inset from outside its stack and would sit
+        // under the bar. So the page stops at the bar's foot rather than scrolling on
+        // beneath it as Windows' does: a navigation stack clips its pages to its frame.
         VStack(spacing: 0) {
+            AuroraTopBar(title: pageTitle)
             ConnectionBudget()
             tabView.auroraRebuildOnSwitch()
         }
@@ -194,6 +201,11 @@ struct RootView: View {
         ]
         if compact { items.removeAll { $0.value == .multiview } }
         return items
+    }
+
+    /// The top bar's name for the page (Windows' `titleFor`): its tab's label.
+    private var pageTitle: String {
+        navItems.first { $0.value == tab }?.label ?? (tab == .search ? "Search" : "Aurora TV")
     }
 
     /// The page the bar has chosen.
