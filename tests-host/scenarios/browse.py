@@ -29,6 +29,18 @@ class Skipped(Exception):
     pass
 
 
+# The copy of a film that "hide duplicates" keeps: no other visible row with the same
+# title and year outranks it (`LibraryFilter::where_sql`, which this mirrors on purpose
+# so the screen is checked against the rule rather than against itself).
+SURVIVOR = (
+    "NOT EXISTS (SELECT 1 FROM movies dup"
+    " WHERE dup.match_key = m.match_key AND dup.hidden = 0"
+    " AND COALESCE(dup.year, 0) = COALESCE(m.year, 0)"
+    " AND (dup.quality_rank > m.quality_rank"
+    " OR (dup.quality_rank = m.quality_rank AND dup.id < m.id)))"
+)
+
+
 def digits(text):
     return int("".join(c for c in text if c.isdigit()) or 0)
 
@@ -75,8 +87,12 @@ def run(d, ctx):
     ctx.assert_no_panic()
 
     # The count is the library, not the page. Checked against SQLite, because the
-    # screen agreeing with itself is what "120+" was.
-    stored = ctx.count("movies")
+    # screen agreeing with itself is what "120+" was. One per film, not per row:
+    # "hide duplicates" is on by default (`DEFAULT_HIDE_DUPLICATES`), and this panel
+    # files 2,500 of its films more than once.
+    stored = ctx.rows(
+        f"SELECT count(*) FROM movies m WHERE m.hidden = 0 AND {SURVIVOR}"
+    )[0][0]
     shown = digits(d.text(d.find('[data-testid="browse-count"]')))
     assert shown == stored, (
         f"the heading says {shown:,} and the library holds {stored:,}"
@@ -94,9 +110,11 @@ def run(d, ctx):
     print(f"   {stored:,} films, shelves offered: {labels[1:4]}")
 
     # And they narrow it. The second chip is the biggest shelf.
+    # A film is on a shelf when the shelf holds the copy that survives the collapse.
     biggest = ctx.rows(
-        "SELECT group_title, count(*) c FROM movies"
-        " WHERE hidden = 0 AND group_title IS NOT NULL AND group_title != ''"
+        "SELECT group_title, count(*) c FROM movies m"
+        " WHERE m.hidden = 0 AND group_title IS NOT NULL AND group_title != ''"
+        f" AND {SURVIVOR}"
         " GROUP BY group_title ORDER BY c DESC, group_title LIMIT 1"
     )[0]
     d.click(chips[1])

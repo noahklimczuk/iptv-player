@@ -49,16 +49,27 @@ def run(d, ctx):
 
     shows = ctx.count("series")
     assert shows > 0, "the panel serves series and the library holds none"
-    # Lazily, by design — so this is the state the fix is about, not a failure.
-    assert ctx.count("episodes") == 0, (
-        "episodes arrived at import time; this scenario is about the lazy fetch and "
-        "needs rewriting if that changed"
+    # The import still writes no episodes, but the background sweep after it now lists
+    # shows on its own (`series::sweep_in_background`), so "none anywhere" stopped being
+    # true. What this is about is one show nobody has listed yet: pick one with nothing
+    # stored, and only one copy, so the card opened is the row checked.
+    target = ctx.rows(
+        "SELECT s.id, s.title FROM series s WHERE s.hidden = 0"
+        " AND NOT EXISTS (SELECT 1 FROM episodes e WHERE e.series_id = s.id)"
+        " AND (SELECT count(*) FROM series c"
+        "      WHERE c.match_key = s.match_key AND c.hidden = 0) = 1"
+        " AND length(s.title) > 6"
+        " ORDER BY s.id LIMIT 1"
     )
+    assert target, "every show already has episodes; nothing left to open lazily"
+    series_id, title = target[0]
 
     d.click(d.by_text("nav a", "Series", timeout=30))
     assert d.wait_body(lambda b: "Series" in b, timeout=60)
     time.sleep(4)
 
+    d.send(d.find('[data-testid="browse-search"]', timeout=30), title)
+    time.sleep(3)
     d.click(d.find('[data-testid="catalog-card"]', timeout=30))
     # The listing is a round trip to the panel, so give it room. "S01E" is the episode
     # rows themselves rather than any summary above them.
@@ -82,9 +93,11 @@ def run(d, ctx):
         "the header says '0 seasons' over a list of episodes"
     )
 
-    stored = ctx.count("episodes")
+    stored = ctx.rows(
+        "SELECT count(*) FROM episodes WHERE series_id = ?", (series_id,)
+    )[0][0]
     assert stored > 0, (
-        f"the show drew its seasons but the library stored no episodes ({stored}) — "
+        f"{title!r} drew its seasons but the library stored no episodes for it — "
         "they would be fetched again every time, and nothing offline would work"
     )
-    print(f"   {shows} shows, {stored} episodes after opening one")
+    print(f"   {shows} shows; {title!r} had none stored and has {stored} after opening")

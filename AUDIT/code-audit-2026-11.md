@@ -40,6 +40,10 @@ Severity is what a viewer loses, on the scale in `AUDIT/findings.md`.
 | A-10 | Low | home / perf | Rebuilding Home after watching something holds a read connection 0.3–1.3 s, mostly one point query per card (`hydrate`). | Fixed (batch 3): one query per kind per page, 20–40% faster; the rest is each card's cast list |
 | A-11 | Info | deps | `pnpm audit`: one moderate advisory, `minimatch` under `eslint` (dev only, not shipped). `cargo audit`: no vulnerabilities; seven "unmaintained" notices, all transitive through Tauri. | No action |
 | A-12 | Low | AI / perf | The Gemini rail and status read the library through the writer, so a refresh or a recording write held them up for no reason. | Fixed (batch 3): reader pool |
+| A-13 | High | privacy | mpv's own log lines name the stream address being opened, and an Xtream address carries the account's username and password in its path. The player rebuild (#173) dropped the redaction the old player applied, so `aurora.log` held them (four times in one evening of the real log) and Settings → Export logs copied the file as it was. | Fixed (batch 4): lines redacted when written, and again on export |
+| A-14 | Medium | series | Opening a show asked the provider for its episode listing three times at once (three UI callers, no single-flight on the host) and wrote its episodes three times: `get_series_info` for one show three times within 3 ms in the real log. | Fixed (batch 4): one request per show at a time |
+| A-15 | Low | text | Eleven more strings had the A-08 bug, a line continuation without its backslash, including the parental-lock error a viewer reads ("…without one nothing              locked could be watched"). | Fixed (batch 4), with a test that scans every crate for it |
+| A-16 | Low | home / perf | Home's cards carried each title's cast list, about 90% of a card's query (35–44 ms vs 3–4 ms for 200 films), and no card shows it. | Fixed (#225) |
 
 ## What was checked and found sound
 
@@ -65,3 +69,4 @@ Fixed five at a time, one PR each, merged on green CI.
 1. Search and import statistics: A-03, A-04, A-05, A-06, A-07, A-08.
 2. Write-lock holds: A-01, A-02, and channel-to-guide matching saved in one transaction instead of one per channel.
 3. Startup and Home: A-09, A-10, A-12.
+4. From the real app and its log: A-13, A-14, A-15; A-16 on its own (#225).

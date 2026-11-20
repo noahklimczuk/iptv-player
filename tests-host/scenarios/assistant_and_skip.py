@@ -75,8 +75,9 @@ def _an_episode_without_chapters(d):
     """
     A real series episode, with the episode list its siblings come from.
 
-    Walks series until one answers with at least two episodes: a show with one episode
-    cannot demonstrate the learning half, and a real catalogue has plenty of both.
+    Walks series until one answers with at least three episodes: learning needs two
+    agreeing skips (`aurora_core::markers::MIN_AGREEING_SAMPLES`) and a third episode to
+    show it, and a real catalogue has plenty of shows that long.
     """
     rows = d.invoke(
         "library_series", {"sort": "title", "limit": 60, "offset": 0}
@@ -84,9 +85,9 @@ def _an_episode_without_chapters(d):
     assert rows, "the real library returned no series at all"
     for row in rows:
         eps = d.invoke("library_episodes", {"seriesId": row["id"]})
-        if len(eps) >= 2:
+        if len(eps) >= 3:
             return row, eps
-    raise AssertionError("no series on this line has two episodes to learn across")
+    raise AssertionError("no series on this line has three episodes to learn across")
 
 
 def run(d, ctx):
@@ -98,7 +99,7 @@ def run(d, ctx):
 
     # ---- Skip Intro ----------------------------------------------------------------
     series, episodes = _an_episode_without_chapters(d)
-    first, sibling = episodes[0]["id"], episodes[1]["id"]
+    first, second, sibling = (e["id"] for e in episodes[:3])
     print(f"   learning across {series['title']!r} ({len(episodes)} episodes)")
 
     def intro_of(episode_id):
@@ -132,9 +133,19 @@ def run(d, ctx):
     assert marker["startSecs"] == 12.0 and marker["endSecs"] == 102.0, marker
     print(f"   the drag became an intro marker: {marker['startSecs']}-{marker['endSecs']}s")
 
+    # One drag is the viewer's word about this episode, not the show: an accident does
+    # not repeat, so the show learns only from two that agree (67baca9).
+    assert intro_of(sibling) is None, "one drag taught the whole show"
+
+    # The same drag on another episode is the second sample.
+    assert d.invoke(
+        "library_observe_seek",
+        {"episodeId": second, "fromSecs": 12.0, "toSecs": 102.0, "durationSecs": 0.0},
+    ) is True, "the second drag past the titles was not taken as evidence"
+
     # The point of tier 3, on real rows: the next episode gets it without being asked.
     inherited = intro_of(sibling)
-    assert inherited is not None, "a sibling episode learned nothing from it"
+    assert inherited is not None, "two agreeing drags and a sibling learned nothing"
     print(
         f"   its sibling inherited {inherited['startSecs']}-{inherited['endSecs']}s "
         f"from source {inherited['source']!r}"

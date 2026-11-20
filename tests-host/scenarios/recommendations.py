@@ -150,10 +150,21 @@ def run(d, ctx):
     time.sleep(3)
     d.click(d.by_text("nav a", "Home", timeout=30))
     time.sleep(8)
-    body = d.body()
-    assert warm["title"] in body, (
-        f"the rail heading {warm['title']!r} is not on the home screen; it says "
-        f"{body[:400]!r}"
+    # Home is built by the feed now (`aurora_core::feed`), not by `library.recommended`:
+    # the same taste shows up as "Top Picks For You" and a "Because You Watched" row per
+    # anchor, rather than as the recommender's own heading. Read from the DOM, because
+    # rails below the fold are missing from WebDriver's text of the page.
+    headings = d.js(
+        "return [...document.querySelectorAll('h2, h3')].map((e) => e.textContent.trim());"
+    )
+    assert "Top Picks For You" in headings, (
+        f"three films watched and Home has no personal row; its headings are {headings}"
+    )
+    anchors = [h[len("Because You Watched "):] for h in headings
+               if h.startswith("Because You Watched ")]
+    assert anchors, f"no row names a film that was watched; headings are {headings}"
+    assert set(anchors) <= {t for _, t in watched}, (
+        f"a row names a film that was never watched: {set(anchors)}"
     )
 
     # Bring the rail into view before photographing it — it sits below Continue
@@ -162,7 +173,7 @@ def run(d, ctx):
         "const h = [...document.querySelectorAll('h2, h3, section')]"
         "  .find((e) => e.textContent.trim().startsWith(arguments[0]));"
         " if (h) h.scrollIntoView({block: 'center'});",
-        warm["title"],
+        "Top Picks For You",
     )
     time.sleep(2)
     d.shot(ctx.shot("home"))

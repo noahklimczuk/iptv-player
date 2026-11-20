@@ -1902,7 +1902,8 @@ mod tests {
         let bbc = rows.iter().find(|r| r.name == "BBC One").unwrap();
         assert_eq!(
             bbc.epg_channel_id, None,
-            "a channel with no programmes is worse than no match: the guide draws an              empty row and the diagnostics say it is fine"
+            "a channel with no programmes is worse than no match: the guide draws an \
+             empty row and the diagnostics say it is fine"
         );
     }
 

@@ -68,6 +68,44 @@ pub fn listing_is_fresh(series_id: i64) -> bool {
         .is_some_and(|at| at.elapsed() < LISTING_FRESH_FOR)
 }
 
+/// One listing request per show at a time.
+///
+/// Opening a show asks `library.episodes` from three places at once (the detail panel's
+/// list, its season picker and the app's own episode lookup), and each saw the same
+/// missing or stale listing and went to the provider for it: the real log has
+/// `get_series_info` for one show three times within 3 ms, and its 138 episodes written
+/// three times. Now the first caller fetches and the others wait for its turn to end,
+/// then find the listing fresh and use what it stored.
+fn one_at_a_time<T>(
+    series_id: i64,
+    nothing_to_do: T,
+    fetch: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    static TURNS: std::sync::OnceLock<
+        Mutex<std::collections::HashMap<i64, std::sync::Arc<Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    let turns = TURNS.get_or_init(Default::default);
+    let turn = std::sync::Arc::clone(turns.lock().entry(series_id).or_default());
+
+    let result = {
+        let _mine = turn.lock();
+        // A caller that waited finds the listing the one before it stored. A failed
+        // fetch stores nothing and leaves it stale, so the next caller tries again.
+        if listing_is_fresh(series_id) {
+            Ok(nothing_to_do)
+        } else {
+            fetch()
+        }
+    };
+
+    // The map would otherwise keep an entry for every show a sweep ever touched.
+    let mut map = turns.lock();
+    if std::sync::Arc::strong_count(&turn) == 2 {
+        map.remove(&series_id);
+    }
+    result
+}
+
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SweepReport {
@@ -198,6 +236,10 @@ struct Show {
 /// Returns the number written. Doing nothing is a success: a show really can have no
 /// episodes listed yet, and that is not a failure to report to the viewer.
 pub fn fetch_episodes(services: &Services, series_id: i64) -> Result<usize> {
+    one_at_a_time(series_id, 0, || fetch_now(services, series_id))
+}
+
+fn fetch_now(services: &Services, series_id: i64) -> Result<usize> {
     let show = match look_up(services, series_id)? {
         Some(s) => s,
         // An M3U library builds its episodes from the playlist during the import, so
@@ -387,6 +429,47 @@ mod tests {
     ///
     /// MobLand: the first listing had four episodes of season 2, the provider went on to
     /// nine, and opening the show never asked again because something was stored.
+    /// Three callers asking for the same show at once make one request, and the two
+    /// that waited are answered from what it stored.
+    #[test]
+    fn callers_at_once_share_one_listing_request() {
+        let show = -4242;
+        let asked = AtomicUsize::new(0);
+        let start = std::sync::Barrier::new(3);
+        std::thread::scope(|s| {
+            for _ in 0..3 {
+                s.spawn(|| {
+                    start.wait();
+                    one_at_a_time(show, 0, || {
+                        asked.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        listed_at().lock().insert(show, std::time::Instant::now());
+                        Ok(138)
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    /// A request that failed stored nothing, so the next caller asks again rather than
+    /// being told the listing is fresh.
+    #[test]
+    fn a_failed_listing_request_is_tried_again_by_the_next_caller() {
+        let show = -4243;
+        let asked = AtomicUsize::new(0);
+        let attempt = || {
+            one_at_a_time(show, 0, || {
+                asked.fetch_add(1, Ordering::SeqCst);
+                Err(AppError::Other("the panel would not answer".into()))
+            })
+        };
+        assert!(attempt().is_err());
+        assert!(attempt().is_err());
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+    }
+
     #[test]
     fn a_stored_listing_goes_stale() {
         let id = -4853;

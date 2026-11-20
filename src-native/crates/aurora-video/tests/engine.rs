@@ -644,3 +644,20 @@ fn addresses_are_kept_out_of_the_log() {
     let s = aurora_video::engine::without_addresses("failed http://host/live/user/pass/1.ts (403)");
     assert_eq!(s, "failed <address> (403)");
 }
+
+/// mpv's own lines name the address being opened, and an Xtream address carries the
+/// account in its path. They go to `aurora.log`, which Settings exports as it is.
+#[test]
+fn mpv_log_lines_are_redacted() {
+    let line = aurora_video::engine::mpv_line(
+        "stream",
+        "Failed to open http://panel.example/live/alice/hunter2/1048115.ts.\n",
+    );
+    assert!(!line.contains("alice"), "{line}");
+    assert!(!line.contains("hunter2"), "{line}");
+    assert!(
+        line.starts_with("stream: Failed to open http://panel.example/"),
+        "{line}"
+    );
+    assert!(line.contains("1048115"), "{line}");
+}

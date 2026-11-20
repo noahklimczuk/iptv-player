@@ -175,7 +175,8 @@ fn shelf_spellings(conn: &Connection, table: &str, wanted: &[String]) -> Result<
         return Ok(Vec::new());
     }
     let sql = format!(
-        "SELECT DISTINCT group_title FROM {table}          WHERE group_title IS NOT NULL AND group_title <> ''"
+        "SELECT DISTINCT group_title FROM {table} \
+         WHERE group_title IS NOT NULL AND group_title <> ''"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;

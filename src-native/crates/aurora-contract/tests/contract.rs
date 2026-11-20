@@ -535,7 +535,8 @@ fn the_background_passes_are_started_at_launch() {
             .expect("main.rs");
     assert!(
         main.contains("catch_up_in_background("),
-        "nothing starts the metadata and episode-listing passes at launch, so they run          only when somebody presses Refresh"
+        "nothing starts the metadata and episode-listing passes at launch, so they run \
+         only when somebody presses Refresh"
     );
 
     let lib = std::fs::read_to_string(repo_root().join("src-native/crates/aurora-app/src/lib.rs"))
@@ -543,7 +544,8 @@ fn the_background_passes_are_started_at_launch() {
     for called in ["enrich_in_background(", "sweep_in_background("] {
         assert!(
             lib.contains(called),
-            "catch_up_in_background does not call {called} — one of the two passes is              still refresh-only"
+            "catch_up_in_background does not call {called} — one of the two passes is \
+             still refresh-only"
         );
     }
 }
@@ -599,7 +601,8 @@ fn the_refresh_sweep_runs_more_often_than_the_staleness_it_looks_for() {
 
     assert!(
         sweep < after,
-        "the sweep runs every {sweep}s but looks for libraries older than {after}s — a          provider coming due just after a check would wait up to {}s",
+        "the sweep runs every {sweep}s but looks for libraries older than {after}s — a \
+         provider coming due just after a check would wait up to {}s",
         after + sweep
     );
 }
