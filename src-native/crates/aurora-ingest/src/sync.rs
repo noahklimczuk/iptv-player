@@ -731,7 +731,7 @@ pub fn apply(
     // about a table that no longer exists. Re-measured here because this is the only
     // moment the row counts change by six figures — and because a stale estimate costs
     // the browse queries a factor of two thousand (`aurora_db::analyze`).
-    aurora_db::analyze(db).map_err(db_failure)?;
+    aurora_db::analyze_after_import(db).map_err(db_failure)?;
 
     on_progress(Progress {
         phase: Phase::Done,
