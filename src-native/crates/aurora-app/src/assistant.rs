@@ -921,38 +921,8 @@ fn turn_with_retries(
     Err(last.expect("a failure to report after every attempt failed"))
 }
 
-/// Where `send` takes the library from, a statement at a time.
-///
-/// `assistant_send` used to lock the library once and hand `send` the connection, so the
-/// lock was held for the whole turn -- Gemini's round trips included, each allowed 90
-/// seconds, several to a turn. It was the *write* lock, so for that long nothing else
-/// could write: not the DVR starting a recording that was due, not the player saving a
-/// position. The real log has a 4.1 s hold from here. Now each read or write takes the
-/// lock for itself and lets it go, and the network waits hold nothing.
-pub trait Library {
-    type Guard<'a>: std::ops::Deref<Target = Connection>
-    where
-        Self: 'a;
-    fn open(&self) -> Self::Guard<'_>;
-}
-
-/// A bare connection, for tests and for callers that already own one.
-impl Library for Connection {
-    type Guard<'a> = &'a Connection;
-    fn open(&self) -> &Connection {
-        self
-    }
-}
-
-impl Library for crate::dblock::TimedMutex<Connection> {
-    type Guard<'a> = crate::dblock::TimedGuard<'a, Connection>;
-    fn open(&self) -> Self::Guard<'_> {
-        self.lock()
-    }
-}
-
 pub fn send(
-    db: &impl Library,
+    db: &Connection,
     chatter: &dyn Chatter,
     profile_id: i64,
     text: &str,
@@ -964,7 +934,7 @@ pub fn send(
         return Err(AppError::Other("Ask me something first.".into()));
     }
 
-    let mut stored = load(&db.open(), profile_id);
+    let mut stored = load(db, profile_id);
     stored.messages.push(ChatMessage {
         role: "user".into(),
         text: text.to_string(),
@@ -972,7 +942,7 @@ pub fn send(
         at: now,
     });
 
-    let system = system_prompt(&digest_line(&db.open()));
+    let system = system_prompt(&digest_line(db));
     let tools = declarations();
     let mut working = turns_of(recent(&stored.messages));
 
@@ -1065,7 +1035,7 @@ pub fn send(
                 thought_signature: call.thought_signature.clone(),
             });
 
-            match run_tool(&db.open(), profile_id, call, now, &offered) {
+            match run_tool(db, profile_id, call, now, &offered) {
                 Ok(ran) => {
                     on_step(&ran.step);
                     steps.push(ran.step);
@@ -1128,7 +1098,7 @@ pub fn send(
         let drop = stored.messages.len() - KEEP_TURNS;
         stored.messages.drain(0..drop);
     }
-    save(&db.open(), profile_id, &stored);
+    save(db, profile_id, &stored);
 
     Ok(SendResult { message, steps })
 }
@@ -1203,12 +1173,17 @@ pub fn assistant_clear(services: State<'_, Services>, args: ProfileArgs) -> Resu
 
 /// Ask the assistant something.
 ///
-/// The database lock is held for the whole call, which is the one thing here worth
-/// questioning: a turn can take seconds. It is held because every tool reads through it
-/// and a model is allowed to ask for six rounds of lookups — taking and dropping the lock
-/// fourteen times would let a refresh land in the middle and answer half the questions
-/// from a different library. A conversation is also something one person is waiting on, so
-/// the contention is with themselves.
+/// On a connection of its own (`aurora_db::open_secondary`), not the app's writer. A turn
+/// is mostly waiting on Gemini -- each round allowed 90 seconds, several to a turn -- and
+/// it used to wait holding the writer's lock, so for that long nothing else could write:
+/// not the DVR starting a recording that was due, not the player saving a position. The
+/// real log has a 4.1 s hold from here. SQLite serialises the two writers per statement,
+/// and none of `send`'s statements spans a network wait. A refresh can now land between
+/// two lookups in one turn; the answer may then mix the library before and after it, which
+/// is what the person would see by asking twice.
+///
+/// If the second connection cannot be opened the turn falls back to the writer, as before:
+/// slower for everyone else, but an answer.
 #[tauri::command(async)]
 pub fn assistant_send(
     app: tauri::AppHandle,
@@ -1228,8 +1203,17 @@ pub fn assistant_send(
     .map_err(|e| AppError::Other(e.message))?;
     let chatter = ChatClient::new(&http, &key);
 
+    let own = turn_connection(&services.data_dir.join("library.db"));
+    let shared;
+    let db: &Connection = match &own {
+        Some(conn) => conn,
+        None => {
+            shared = services.db.lock();
+            &shared
+        }
+    };
     send(
-        &*services.db,
+        db,
         &chatter,
         args.profile_id,
         &args.text,
@@ -1240,6 +1224,13 @@ pub fn assistant_send(
             crate::emit(&app, "assistant.step", &json!({ "step": step }));
         },
     )
+}
+
+/// The connection a turn runs on, or `None` to use the app's writer.
+fn turn_connection(library: &std::path::Path) -> Option<Connection> {
+    aurora_db::open_secondary(library)
+        .map_err(|e| tracing::warn!("assistant: no connection of its own, sharing the writer: {e}"))
+        .ok()
 }
 
 #[cfg(test)]
@@ -1401,41 +1392,6 @@ mod tests {
         }
     }
 
-    /// Free while the model thinks.
-    ///
-    /// A chatter that tries the library's lock from another thread mid-turn, the way the
-    /// DVR's scheduler would. It used to find the lock held for the whole turn, network
-    /// wait included, so a recording due during a question to the assistant waited for
-    /// the answer.
-    #[test]
-    fn the_library_is_not_locked_while_waiting_on_the_model() {
-        struct Probe<'m> {
-            lock: &'m crate::dblock::TimedMutex<Connection>,
-            free: RefCell<Vec<bool>>,
-        }
-        impl Chatter for Probe<'_> {
-            fn turn(
-                &self,
-                _system: &str,
-                _history: &[Turn],
-                _tools: &[ToolDecl],
-            ) -> std::result::Result<ChatReply, aurora_core::neterr::NetFailure> {
-                let free = std::thread::scope(|s| {
-                    s.spawn(|| self.lock.try_lock().is_some()).join().unwrap()
-                });
-                self.free.borrow_mut().push(free);
-                Ok(Script::text("Here."))
-            }
-        }
-        let lock = crate::dblock::TimedMutex::new(db());
-        let probe = Probe {
-            lock: &lock,
-            free: RefCell::new(Vec::new()),
-        };
-        send(&lock, &probe, 1, "anything", NOW, |_| {}).unwrap();
-        assert_eq!(*probe.free.borrow(), [true]);
-    }
-
     /// A retryable failure is a hiccup, not an answer. The HTTP client cannot see these
     /// -- a 200 carrying an `error` envelope, or a reply with no candidate, is a
     /// *successful* request by the time it gets there -- so the retry has to be here.
@@ -1507,6 +1463,65 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("busy") || err.contains("try again"), "{err}");
+    }
+
+    /// The library can be written while the model thinks.
+    ///
+    /// A chatter that writes through the app's own writer mid-turn, the way the DVR's
+    /// scheduler would. A turn used to run on that writer, holding its lock across every
+    /// network wait, so a recording due during a question waited for the answer.
+    #[test]
+    fn the_library_can_be_written_while_waiting_on_the_model() {
+        struct Probe<'m> {
+            writer: &'m crate::dblock::TimedMutex<Connection>,
+            wrote: RefCell<Vec<bool>>,
+        }
+        impl Chatter for Probe<'_> {
+            fn turn(
+                &self,
+                _system: &str,
+                _history: &[Turn],
+                _tools: &[ToolDecl],
+            ) -> std::result::Result<ChatReply, aurora_core::neterr::NetFailure> {
+                let wrote = std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let Some(db) = self.writer.try_lock() else {
+                            return false;
+                        };
+                        db.execute("UPDATE providers SET name = 'Q' WHERE id = 1", [])
+                            .is_ok()
+                    })
+                    .join()
+                    .unwrap()
+                });
+                self.wrote.borrow_mut().push(wrote);
+                Ok(Script::text("Here."))
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("aurora-assistant-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db");
+        let writer = aurora_db::open(&path).unwrap();
+        writer
+            .execute(
+                "INSERT INTO providers (id,name,kind,base_url,created_at)
+                 VALUES (1,'P','xtream','https://example.com',0)",
+                [],
+            )
+            .unwrap();
+        let writer = crate::dblock::TimedMutex::new(writer);
+        let probe = Probe {
+            writer: &writer,
+            wrote: RefCell::new(Vec::new()),
+        };
+        let own = turn_connection(&path).expect("a second connection");
+        send(&own, &probe, 1, "anything", NOW, |_| {}).unwrap();
+        assert_eq!(*probe.wrote.borrow(), [true]);
+        // And the turn's own write -- the saved conversation -- landed beside it.
+        assert_eq!(history(&writer.lock(), 1).len(), 2);
+        drop((own, writer));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn db() -> Connection {
