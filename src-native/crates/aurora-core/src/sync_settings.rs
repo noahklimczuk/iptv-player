@@ -35,6 +35,9 @@ pub const SETTINGS: &[(&str, SettingSync)] = &[
     // How long watch history is kept. The history syncs, and so do the deletions this
     // causes, so a window that differed by device would only be the shortest one anyway.
     ("privacy.history_days", Personal),
+    // Whether sign-ins and API keys sync (aurora_sync::secrets). One decision for the
+    // household: what one device sends, every device receives.
+    ("sync.secrets", Personal),
     // Per-device by nature.
     //
     // The assistant's history is per profile but can run to many kilobytes, and a

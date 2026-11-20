@@ -36,7 +36,7 @@ use crate::now_unix;
 use crate::services::Services;
 
 /// Where the viewer's own key is kept.
-const CREDENTIAL_KEY: &str = "gemini-api-key";
+pub(crate) const CREDENTIAL_KEY: &str = "gemini-api-key";
 
 /// A key baked in at build time, as TMDB has. Absent in an ordinary build.
 pub const BUILT_IN_KEY: Option<&str> = option_env!("AURORA_GEMINI_KEY");

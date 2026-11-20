@@ -27,6 +27,7 @@ pub mod firebase;
 pub mod household;
 pub mod local;
 pub mod record;
+pub mod secrets;
 pub mod transport;
 pub mod vault;
 

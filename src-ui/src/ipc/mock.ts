@@ -417,6 +417,7 @@ const SETTINGS_GUARDED: ReadonlySet<CommandName> = new Set<CommandName>([
   'providers.save', 'providers.credentials', 'providers.update', 'providers.delete',
   'metadata.setKey', 'metadata.setConcurrency', 'artwork.clear',
   'sync.createAccount', 'sync.signIn', 'sync.reset', 'sync.signOut', 'sync.recoveryCode',
+  'sync.setShareSecrets',
   'gemini.setEnabled', 'gemini.setKey', 'updates.setAutomatic',
   'timeshift.setSettings', 'timeshift.clear',
   'playlist.update', 'playlist.setHidden', 'playlist.hideMatching', 'playlist.reset',
@@ -1871,6 +1872,8 @@ const SYNC_AVAILABLE =
 const SYNC_OFFLINE =
   typeof window !== 'undefined'
   && new URLSearchParams(window.location.search).has('syncOffline');
+/** Whether the mock household shares sign-ins and keys. Off, as a real one starts. */
+let mockShareSecrets = false;
 /** `?syncUnreadable` — the household holds two records only a newer Aurora can read. */
 const SYNC_UNREADABLE =
   typeof window !== 'undefined'
@@ -1915,6 +1918,8 @@ function mockSyncStatus(): SyncStatus {
     usage: mockSync ? { reads: 46, writes: 43 } : { reads: 0, writes: 0 },
     thrifty: false,
     unreadable: mockSync && SYNC_UNREADABLE ? 2 : 0,
+    sharesSecrets: mockShareSecrets,
+    canShareSecrets: true,
   };
 }
 
@@ -3319,6 +3324,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     return mockSyncReport(42);
   },
   'sync.signOut': () => { mockSync = null; },
+  'sync.setShareSecrets': ({ enabled }) => { mockShareSecrets = enabled; },
   'sync.recoveryCode': ({ passphrase }) => {
     const account = mockSync && mockSyncAccounts.get(mockSync.email.toLowerCase());
     if (!account) throw new Error('This device is not signed in to sync.');

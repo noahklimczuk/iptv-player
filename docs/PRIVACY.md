@@ -146,13 +146,20 @@ parental PIN when Settings are locked, so a kids profile can't clear its own his
 
 ## Sync between your devices
 
-If you turn on sync, your providers and their sign-ins, profiles, parental settings,
+If you turn on sync, your providers (name, address and username), profiles, parental settings,
 favourites, lists, watch progress, recording rules, reminders and settings go to Google
 Firebase so that your other devices can fetch them. They are **encrypted on your device first**,
 with a key only your devices hold, unlocked by your sync passphrase. Firebase stores
 ciphertext and can't tell a film's progress from a favourite. Clearing your history or
 choosing a window removes those entries on your other devices too. Sync is off until you
 set it up in **Settings → Sync**.
+
+**Playlist passwords and API keys are not synced unless you choose to.** Settings → Sync has
+a switch, *Also share sign-ins and keys*, which is off. Turned on, your playlist passwords
+and your TMDB and Gemini keys go to your other devices the same way: encrypted on this
+device with your sync passphrase, so Firebase never sees them. They are kept in each
+device's credential store, never in the library file. Turning it off stops sending them;
+what was already sent stays in the household's encrypted sync until you reset sync.
 
 ## Where your data lives
 

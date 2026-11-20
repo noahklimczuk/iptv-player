@@ -647,6 +647,13 @@ export interface SyncStatus {
    * or damaged. Skipped, never applied, and fetched again after Aurora updates.
    */
   unreadable: number;
+  /**
+   * Whether the household shares provider passwords and API keys between its devices.
+   * Off unless somebody chose it; a setting that syncs, so it is the household's.
+   */
+  sharesSecrets: boolean;
+  /** Whether this device can keep sign-ins from other devices at all. */
+  canShareSecrets: boolean;
 }
 
 /** What one sync round did. */
@@ -2084,6 +2091,12 @@ export interface Commands {
   'sync.reset': () => SyncRound;
   /** Stop syncing here. The library is untouched; only what sync knew is forgotten. */
   'sync.signOut': () => void;
+  /**
+   * Share provider passwords and the TMDB and Gemini keys with the household's other
+   * devices, end-to-end encrypted like everything else, or stop sending them. Off stops
+   * the sending; what was sent stays until sync is reset. Behind the Settings lock.
+   */
+  'sync.setShareSecrets': (args: { enabled: boolean }) => void;
   /** The recovery code again, for someone who knows the passphrase. Works offline. */
   'sync.recoveryCode': (args: { passphrase: string }) => string;
 }

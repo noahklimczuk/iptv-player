@@ -825,3 +825,30 @@ neither existed (`AUDIT/findings.md` F-40).
   limit (D30), and clearing it would reset that limit.
 - **Clearing drops the cached Gemini suggestions.** They are a reading of the history,
   and keeping them would keep the history in another form.
+
+## D34 — Sign-ins and API keys sync only when the household turns it on, and never touch SQLite in the clear
+
+**Context.** `docs/APPLE_PORT_AND_SYNC.md` §3.4 planned provider passwords and the TMDB
+and Gemini keys as encrypted vault records, and marked the row "Not built" because the
+Sync panel and `PRIVACY.md` promised the opposite: that passwords stay on the device that
+entered them. Without it, every new device has to be given every password by hand.
+
+**Decision.**
+
+- **Opt-in, for the household.** A switch in Settings → Sync, off by default, stored as
+  the synced setting `sync.secrets`. One device's choice applies everywhere, because the
+  passwords it sends reach every device anyway.
+- **Off stops the sending, and deletes nothing.** Tombstoning what was sent would delete
+  those passwords from every device that received them. They stay in the encrypted
+  records until sync is reset.
+- **Plaintext never reaches SQLite.** The shadow and `sync_state` hold a fingerprint, an
+  HMAC under the vault, which is enough to merge on (only clocks decide) and is no use
+  to anyone holding just the library file. A record that has to wait for its provider is
+  parked sealed with the vault codec.
+- **Change is noticed by fingerprint, not trigger.** Credentials aren't in a table, so
+  each round compares the store with the fingerprints it last sent or applied, and
+  queues what differs. A removal is sent once.
+- **Hosts opt in by providing a store.** `Household::with_shared_secrets`. A host
+  without one doesn't understand the kind, so it notes these records as unreadable and
+  fetches them once it has a store (F-41's mechanism). Windows provides one. The Apple
+  host is the Apple side's to wire.
