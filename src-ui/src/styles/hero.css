@@ -29,3 +29,7 @@
   will-change: transform;
 }
 :root[data-motion='off'] .hero-drift { animation: none; }
+/* Held while the page scrolls (`lib/scrolling.ts`): a running compositor animation
+   damages its layer every frame, and here that layer is a poster under a 28px blur
+   with glass over it. Paused rather than stopped, so it resumes where it was. */
+:root[data-scrolling] .hero-drift { animation-play-state: paused; }

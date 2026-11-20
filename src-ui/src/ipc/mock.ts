@@ -2460,8 +2460,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       timeshift: windowFor(liveEdgeSecs),
     });
   },
-  // The host's limit (`player_set_volume`: `volume.min(100)`).
-  'player.setVolume': ({ volume }) => setPlayer({ volume: Math.max(0, Math.min(100, volume)) }),
+  // The host's limit (`player_set_volume`: `volume.min(200)`).
+  'player.setVolume': ({ volume }) => setPlayer({ volume: Math.max(0, Math.min(200, volume)) }),
   'player.setMuted': ({ muted }) => setPlayer({ muted }),
   'player.setSpeed': ({ speed }) => setPlayer({ speed }),
   'player.setAudioTrack': ({ trackId }) => setPlayer({ activeAudioTrack: trackId }),

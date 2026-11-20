@@ -140,7 +140,8 @@ pub struct VolumeArgs {
 
 #[tauri::command(async)]
 pub fn player_set_volume(services: State<'_, Services>, args: VolumeArgs) -> Result<PlayerState> {
-    let v = args.volume.min(100);
+    // mpv's own ceiling (`volume-max`), and the slider's (`MAX_VOLUME`): past 100 is gain.
+    let v = args.volume.min(200);
     services.player.session.apply(|e| e.set_volume(v))
 }
 

@@ -193,7 +193,8 @@ are kept, so that nothing outside the player has to change. Everything behind th
 - **C11** Next episode button on an episode that has one.
 
 ### Audio and picture
-- **C12** Volume slider 0–100 % (wheel and ↑ ↓ in steps of 5), mute (button, M).
+- **C12** Volume slider 0–200 %, past 100 boosting a quiet stream (wheel and ↑ ↓ in
+  steps of 5), mute (button, M).
   Volume and mute persist between titles.
 - **C13** Audio track, subtitle track (including Off), speed (0.25–4×) and aspect menus,
   each showing the current choice.
