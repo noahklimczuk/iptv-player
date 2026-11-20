@@ -14,6 +14,7 @@
 //! row gets whichever field values win -- but the shadow takes only the remote side, so
 //! the next push still sees the local change as a change and sends it.
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aurora_core::sync_settings;
@@ -24,7 +25,8 @@ use serde_json::Value;
 use crate::codec::Codec;
 use crate::error::Result;
 use crate::local::{self, Applied};
-use crate::record::Record;
+use crate::record::{Fields, Record};
+use crate::secrets::{self, SharedSecrets};
 use crate::transport::{Envelope, SyncTransport};
 
 /// Firestore's commit limit, and a sensible page.
@@ -39,6 +41,7 @@ pub const CURSOR: &str = "cursor";
 pub const REREAD_PER_ROUND: usize = 50;
 
 /// What this build can read: the record format and every kind of record it knows.
+/// An engine with somewhere to keep secrets reads one kind more ([`Engine::reader`]).
 ///
 /// A record that would not decode is noted under this (`aurora_db::repo::sync::
 /// note_unreadable`). An update that reads more -- a new record version, a new kind --
@@ -73,6 +76,9 @@ pub struct Engine<T: SyncTransport, C: Codec> {
     transport: T,
     codec: C,
     device: String,
+    /// Where provider passwords and API keys live on this device, when the host has
+    /// somewhere to put them (`secrets`). Without one, those records are unreadable here.
+    secrets: Option<Arc<dyn SharedSecrets>>,
 }
 
 fn now() -> i64 {
@@ -120,7 +126,53 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
             transport,
             codec,
             device: device.into(),
+            secrets: None,
         }
+    }
+
+    /// Give the engine the host's credential store, so it can sync sign-ins and keys
+    /// (§3.4) -- still only while the household has [`secrets::SHARE_KEY`] on.
+    pub fn with_secrets(mut self, secrets: Option<Arc<dyn SharedSecrets>>) -> Self {
+        self.secrets = secrets;
+        self
+    }
+
+    /// What this engine can read: [`reader`], and secrets when it has a store for them.
+    /// Gaining a store changes the answer, which is what fetches the secrets it skipped.
+    pub fn reader(&self) -> String {
+        match self.secrets {
+            Some(_) => format!("{},{}", reader(), secrets::KIND),
+            None => reader(),
+        }
+    }
+
+    /// Whether records of this kind can be applied here.
+    fn understands(&self, kind: &str) -> bool {
+        local::KINDS.contains(&kind) || (kind == secrets::KIND && self.secrets.is_some())
+    }
+
+    /// Queue the sign-ins and keys that changed since the last round, when the household
+    /// shares them.
+    fn capture_secrets(&self, conn: &Connection) -> Result<()> {
+        if let Some(store) = &self.secrets {
+            if db::is_enabled(conn)? && secrets::sharing(conn)? {
+                secrets::capture(conn, store.as_ref(), &self.codec)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A secret's current value, as record fields, or `None` when this device has none.
+    fn secret_fields(&self, conn: &Connection, ident: &Value) -> Result<Option<Fields>> {
+        let Some(store) = &self.secrets else {
+            return Ok(None);
+        };
+        let name = secrets::name_of(ident)?;
+        Ok(store
+            .list(conn)
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| Fields::from([("value".to_string(), Value::String(v))])))
     }
 
     pub fn device(&self) -> &str {
@@ -145,6 +197,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
         self.pull(conn, &mut report)?;
         db::enable(conn)?;
         db::set_state(conn, DEVICE, &self.device)?;
+        self.capture_secrets(conn)?;
         self.push(conn, &mut report)?;
         Ok(report)
     }
@@ -153,6 +206,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
     /// skipped.
     pub fn sync(&self, conn: &mut Connection) -> Result<Report> {
         let mut report = Report::default();
+        self.capture_secrets(conn)?;
         self.push(conn, &mut report)?;
         self.pull(conn, &mut report)?;
         report.applied += self.retry_pending(conn)?;
@@ -170,12 +224,20 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
             let mut done: Vec<(String, i64, Option<Record>)> = Vec::new();
             for row in &rows {
                 let ident: Value = serde_json::from_str(&row.ident)?;
-                if device_local(&row.kind, &ident) {
+                // A secret queued before sharing was turned off goes nowhere.
+                let secret = row.kind == secrets::KIND;
+                if device_local(&row.kind, &ident)
+                    || (secret && (self.secrets.is_none() || !secrets::sharing(conn)?))
+                {
                     done.push((row.sync_key.clone(), row.hlc, None));
                     continue;
                 }
                 let shadow = load(conn, "sync_shadow", &row.sync_key)?;
-                let fields = local::read(conn, &row.kind, &ident)?;
+                let fields = if secret {
+                    self.secret_fields(conn, &ident)?
+                } else {
+                    local::read(conn, &row.kind, &ident)?
+                };
                 let record = Record::capture(
                     shadow.as_ref(),
                     &row.sync_key,
@@ -215,7 +277,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
             let mut acknowledged = 0;
             for (key, hlc, record) in &done {
                 if let Some(record) = record {
-                    save_shadow(&tx, record)?;
+                    save_shadow(&tx, &secrets::storable(&self.codec, record))?;
                 }
                 if db::acknowledge(&tx, key, *hlc)? {
                     acknowledged += 1;
@@ -235,7 +297,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
     pub fn pull(&self, conn: &mut Connection, report: &mut Report) -> Result<()> {
         let mut cursor = db::get_state(conn, CURSOR)?;
         let mut adopted_ids = Vec::new();
-        let reader = reader();
+        let reader = self.reader();
         loop {
             let page = self.transport.pull(cursor.as_deref(), BATCH)?;
             let tx = conn.transaction()?;
@@ -253,7 +315,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
                     tracing::warn!(doc = %env.doc_id, "skipping a sync record that will not decode");
                     continue;
                 };
-                if !local::KINDS.contains(&remote.kind.as_str()) {
+                if !self.understands(&remote.kind) {
                     report.undecodable += 1;
                     db::note_unreadable(&tx, &env.doc_id, &reader, now())?;
                     continue;
@@ -295,6 +357,9 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
 
     /// Merge one remote record into this device and write the result.
     fn apply_remote(&self, tx: &Connection, remote: &Record) -> Result<Applied> {
+        if remote.kind == secrets::KIND {
+            return self.apply_secret(tx, remote);
+        }
         let shadow = load(tx, "sync_shadow", &remote.key)?;
         let pending = load(tx, "sync_pending", &remote.key)?;
         let known = match (shadow.as_ref(), pending.as_ref()) {
@@ -361,6 +426,76 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
         }
     }
 
+    /// A sign-in or key from another device: merged on the clocks like any record, kept in
+    /// the credential store rather than a table, and never written to SQLite in the clear.
+    fn apply_secret(&self, tx: &Connection, remote: &Record) -> Result<Applied> {
+        let Some(store) = &self.secrets else {
+            return Ok(Applied::Done);
+        };
+        let name = secrets::name_of(&remote.ident)?.to_string();
+        let shadow = load(tx, "sync_shadow", &remote.key)?;
+        let pending = load(tx, "sync_pending", &remote.key)?
+            .map(|p| secrets::unseal(&self.codec, p))
+            .transpose()?;
+        let known = match (shadow.as_ref(), pending.as_ref()) {
+            (Some(s), Some(p)) => Some(s.merge(p)),
+            (Some(s), None) => Some(s.clone()),
+            (None, Some(p)) => Some(p.clone()),
+            (None, None) => None,
+        };
+        let merged = known.map_or_else(|| remote.clone(), |k| k.merge(remote));
+
+        // What this device holds already is a fingerprint in the shadow, and a change made
+        // here and not sent yet is in the outbox: either way there is nothing to store.
+        let unsent_here: Option<i64> = tx
+            .query_row(
+                "SELECT hlc FROM sync_outbox WHERE sync_key = ?1",
+                [&remote.key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let newest = merged.max_clock();
+        let mine_is_newer = unsent_here.is_some_and(|hlc| hlc > newest);
+        let value = if merged.alive.value {
+            secrets::plain_value(&merged)
+        } else {
+            None
+        };
+        let arrived = !merged.alive.value || value.is_some();
+        if mine_is_newer || !arrived {
+            save_shadow(tx, &secrets::storable(&self.codec, &merged))?;
+            tx.execute(
+                "DELETE FROM sync_pending WHERE sync_key = ?1",
+                [&remote.key],
+            )?;
+            return Ok(Applied::Done);
+        }
+
+        db::set_state(tx, APPLYING, "1")?;
+        let stored = store.store(tx, &name, value);
+        db::clear_state(tx, APPLYING)?;
+        if !stored? {
+            tx.execute(
+                "INSERT INTO sync_pending (sync_key, record, parked_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (sync_key) DO UPDATE SET record = excluded.record",
+                params![
+                    merged.key,
+                    serde_json::to_string(&secrets::seal(&self.codec, &merged)?)?,
+                    now()
+                ],
+            )?;
+            return Ok(Applied::Parked);
+        }
+        let fp = value.map(|v| secrets::fingerprint(&self.codec, &name, v));
+        secrets::note_seen(tx, &name, fp.as_deref())?;
+        save_shadow(tx, &secrets::storable(&self.codec, &merged))?;
+        tx.execute(
+            "DELETE FROM sync_pending WHERE sync_key = ?1",
+            [&remote.key],
+        )?;
+        Ok(Applied::Done)
+    }
+
     /// Try every parked record again. Call after an import; returns how many applied.
     pub fn retry_pending(&self, conn: &mut Connection) -> Result<usize> {
         let parked: Vec<String> = conn
@@ -373,7 +508,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
         let tx = conn.transaction()?;
         let mut applied = 0;
         for raw in parked {
-            let record: Record = serde_json::from_str(&raw)?;
+            let record: Record = secrets::unseal(&self.codec, serde_json::from_str(&raw)?)?;
             if self.apply_remote(&tx, &record)? == Applied::Done {
                 applied += 1;
             }
@@ -389,7 +524,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
     /// again would cost a read each round for nothing. A record this build cannot read
     /// either becomes its note, and one gone from the server is forgotten.
     pub fn reread_unreadable(&self, conn: &mut Connection) -> Result<usize> {
-        let reader = reader();
+        let reader = self.reader();
         let ids = db::unreadable_by_others(conn, &reader, REREAD_PER_ROUND)?;
         let mut applied = 0;
         for doc_id in ids {
@@ -400,7 +535,7 @@ impl<T: SyncTransport, C: Codec> Engine<T, C> {
                     continue;
                 }
                 match self.codec.decode(&env.doc_id, &env.payload) {
-                    Ok(copy) if local::KINDS.contains(&copy.kind.as_str()) => {
+                    Ok(copy) if self.understands(&copy.kind) => {
                         merged = Some(match merged {
                             Some(m) => m.merge(&copy),
                             None => copy,
