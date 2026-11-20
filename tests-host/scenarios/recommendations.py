@@ -162,10 +162,21 @@ def run(d, ctx):
     )
     anchors = [h[len("Because You Watched "):] for h in headings
                if h.startswith("Because You Watched ")]
-    assert anchors, f"no row names a film that was watched; headings are {headings}"
     assert set(anchors) <= {t for _, t in watched}, (
         f"a row names a film that was never watched: {set(anchors)}"
     )
+    # A "Because You Watched" row needs something to be similar *by*: shared genres,
+    # cast, a TMDB link or a franchise (`feed::because_you_watched`). A library nothing
+    # has enriched has none of those, so the row is rightly absent there.
+    ids = ",".join(str(i) for i, _ in watched)
+    enriched = ctx.rows(
+        f"SELECT count(*) FROM movies WHERE id IN ({ids})"
+        " AND genres IS NOT NULL AND genres NOT IN ('', '[]')"
+    )[0][0]
+    if enriched:
+        assert anchors, f"no row names a film that was watched; headings are {headings}"
+    else:
+        print("   no metadata on the watched films, so no 'Because You Watched' row: expected")
 
     # Bring the rail into view before photographing it — it sits below Continue
     # Watching, so the top of the page is not evidence about it either way.
@@ -190,9 +201,12 @@ def run(d, ctx):
         "  .map((e) => e.textContent.trim());"
     )
     assert labels, "no card on the home screen says why it is there"
-    assert any(r.startswith("Because you watched") for r in labels), (
-        f"nothing named the film it came from; the cards say {sorted(set(labels))}"
-    )
+    # The feed credits a watched film through what they share (`anchor_sharing`), so
+    # an unenriched library's shelf matches rightly fall back to "Just added".
+    if enriched:
+        assert any(r.startswith("Because you watched") for r in labels), (
+            f"nothing named the film it came from; the cards say {sorted(set(labels))}"
+        )
     print(f"   {len(labels)} cards carry a reason, e.g. {labels[0]!r}")
 
     print(f"   {matching}/{len(shelves)} from the watched shelf, {len(because)} named "
