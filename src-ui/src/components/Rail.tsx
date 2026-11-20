@@ -9,6 +9,42 @@ import { CARD_LIFT, CARD_SCALE, CatalogCard } from './CatalogCard';
 import { Icon } from './Icon';
 
 const CARD_W = 168;
+
+/**
+ * Which rails say how many titles they hold.
+ *
+ * A count means something on a shelf with edges -- every documentary, everything on My
+ * List, everything a person is in -- because it says how much is there to scroll
+ * through. On a ranked or recommended rail it is the size of a pool nobody can see:
+ * "Top 10 This Week 10" says nothing, and "Because You Watched MobLand 4,073" reads as a
+ * claim about MobLand when it is how many titles the ranking scored. Those rails show no
+ * number.
+ *
+ * Keyed on every kind, so a new kind does not compile until somebody decides.
+ */
+const COUNTED: Record<RailData['kind'], boolean> = {
+  continueWatching: true,
+  myList: true,
+  recentlyAdded: true,
+  genre: true,
+  fourK: true,
+  newReleases: true,
+  providerCategory: true,
+  shortAndSweet: true,
+  collections: true,
+  person: true,
+  decade: true,
+  top10: false,
+  trending: false,
+  becauseYouWatched: false,
+  watchAgain: false,
+  acclaimed: false,
+  hiddenGems: false,
+  upNext: false,
+  aiPicks: false,
+  forYou: false,
+  seriesForYou: false,
+};
 const GAP = 16;
 /**
  * The rail's side gutter: where the first card starts, level with the heading, and where
@@ -224,12 +260,14 @@ export function Rail({
         >
           {rail.title}
         </h2>
-        <span
-          data-testid="rail-count"
-          style={{ fontSize: 'var(--fs-sm)', fontWeight: 700, color: 'var(--text-faint)' }}
-        >
-          {total.toLocaleString()}
-        </span>
+        {COUNTED[rail.kind] && (
+          <span
+            data-testid="rail-count"
+            style={{ fontSize: 'var(--fs-sm)', fontWeight: 700, color: 'var(--text-faint)' }}
+          >
+            {total.toLocaleString()}
+          </span>
+        )}
         {action}
       </div>
 

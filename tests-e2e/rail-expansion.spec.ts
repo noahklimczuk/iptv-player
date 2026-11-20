@@ -227,3 +227,31 @@ test('paging a rail lands a whole card at the gutter', async ({ page }) => {
   // Ended mid-card before: `clientWidth - CARD_W` is not a whole number of cards.
   expect(Math.abs(offset)).toBeLessThan(2);
 });
+
+test('an open Top 10 card says its rank instead of hiding the numeral under its panel', async ({ page }) => {
+  // The numeral sits on the foot of the poster, which is where the expanded panel goes:
+  // the panel hid most of it and the part past the card's left edge was a stray stroke.
+  await homeWithRails(page);
+  const rail = page.getByRole('region', { name: 'Top 10 This Week' });
+  await rail.scrollIntoViewIfNeeded();
+  const card = rail.getByTestId('catalog-card').nth(3);
+  await expect(card.getByTestId('card-rank')).toHaveCSS('opacity', '1');
+
+  await card.hover();
+  await expect(card.getByTestId('card-rank-text')).toHaveText('#4 in Top 10');
+  await expect(card.getByTestId('card-rank')).toHaveCSS('opacity', '0');
+  // Only the open card: its neighbours keep their numerals.
+  await expect(rail.getByTestId('catalog-card').nth(4).getByTestId('card-rank')).toHaveCSS('opacity', '1');
+});
+
+test('a ranked or recommended rail shows no count, and a shelf does', async ({ page }) => {
+  // "Top 10 This Week 10" said nothing, and "Because You Watched MobLand 4,073" was the
+  // size of the pool the ranking scored, read as a claim about MobLand.
+  await homeWithRails(page);
+  for (const name of ['Top 10 This Week', 'Top Picks For You']) {
+    await expect(page.getByRole('region', { name }).getByTestId('rail-count')).toHaveCount(0);
+  }
+  for (const name of ['Recently Added', 'My List']) {
+    await expect(page.getByRole('region', { name }).getByTestId('rail-count')).toHaveCount(1);
+  }
+});
