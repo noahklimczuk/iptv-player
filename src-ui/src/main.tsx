@@ -4,11 +4,7 @@ import { HashRouter } from 'react-router-dom';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { installGlobalErrorHandlers } from './lib/errors';
-import {
-  clearMockCalls, failNextMock, hangMock, invoke, mockCalls, setNoPictureMock, setPlayerErrorMock,
-  setPlayerStatusMock,
-  setSilentDurationMock, setWatchedTodayMock, slowMock,
-} from './ipc';
+import { invoke, isNativeHost, loadMock } from './ipc';
 import { ICON_PATHS } from './components/Icon';
 import './styles/app.css';
 import './styles/guide.css';
@@ -21,72 +17,92 @@ installGlobalErrorHandlers();
 // Test hook: lets end-to-end tests arrange state through the same command surface
 // the UI uses, rather than reaching into internals.
 (window as unknown as { __auroraInvoke?: unknown }).__auroraInvoke = invoke;
-// …and lets them make one refuse, so "the failure reaches the viewer" is testable.
-(window as unknown as { __auroraFailNext?: unknown }).__auroraFailNext = failNextMock;
-// What was asked for and how big the answer was, for the journeys that assert on the
-// cost of a screen rather than on its contents.
-(window as unknown as { __auroraCalls?: unknown }).__auroraCalls = mockCalls;
-(window as unknown as { __auroraClearCalls?: unknown }).__auroraClearCalls = clearMockCalls;
-// …and lets them play something whose duration the stream never reports, which is the
-// ordinary case on provider VOD and the one in which Skip Credits and autoplay used to
-// be dead.
-(window as unknown as { __auroraSilentDuration?: unknown }).__auroraSilentDuration =
-  setSilentDurationMock;
-// …and lets them make one go quiet rather than refuse, which is the failure the boot
-// screen exists to survive and the one nothing could express before.
-(window as unknown as { __auroraHang?: unknown }).__auroraHang = hangMock;
-// …and lets them make one answer *late* rather than not at all, which is the third
-// thing a real host does and the one the batching guide hooks used to lose rows to.
-(window as unknown as { __auroraSlow?: unknown }).__auroraSlow = slowMock;
-// …and lets them put the player into the state the error panel is for, which a refusing
-// command cannot: `player.error` comes from the host's `NetFailure`, so until this
-// existed no journey could press the panel's buttons.
-(window as unknown as { __auroraPlayerError?: unknown }).__auroraPlayerError =
-  setPlayerErrorMock;
-// …and hold it opening or refilling, which is when the spinner is meant to show (C24).
-(window as unknown as { __auroraPlayerStatus?: unknown }).__auroraPlayerStatus = setPlayerStatusMock;
-// How long the profile watching has watched today, as the host's heartbeat counts it (F-37).
-(window as unknown as { __auroraWatched?: unknown }).__auroraWatched = setWatchedTodayMock;
-// …and hold back the first frame, which is when the window used to turn see-through.
-(window as unknown as { __auroraNoPicture?: unknown }).__auroraNoPicture = setNoPictureMock;
 // …and the icon set, so a test can measure every glyph's geometry rather than only the
 // handful that happen to be on one screen. `getBBox` needs a real SVG engine, so this is
 // the only place the measurement can be made from.
 (window as unknown as { __auroraIconPaths?: unknown }).__auroraIconPaths = ICON_PATHS;
-
-// …and on the query string as well as on `window`, because the commands that decide the
-// first screen are already in flight by the time a test can evaluate anything. Same
-// mechanism as `?video`. `?hang=providers.list,profiles.list` silences those; `?bootStuck`
-// shortens the boot screen's own patience so asserting on it does not cost 20 seconds.
+// `?bootStuck` shortens the boot screen's own patience so asserting on it does not cost
+// 20 seconds.
 {
-  const params = new URLSearchParams(window.location.search);
-  for (const name of params.get('hang')?.split(',') ?? []) {
-    if (name.trim()) hangMock(name.trim());
-  }
-  // `?slow=epg.nowNextMany:600` — answers, 600ms after the screen asked. The hooks that
-  // batch guide lookups mark their ids as asked before the reply lands, so what the UI
-  // does with a *late but valid* answer decides whether those rows ever fill in, and
-  // the first of those requests goes out before a test can evaluate anything.
-  for (const spec of params.get('slow')?.split(',') ?? []) {
-    const [name, ms] = spec.split(':');
-    const delay = Number(ms);
-    if (name?.trim() && Number.isFinite(delay) && delay > 0) slowMock(name.trim(), delay);
-  }
-  const stuck = Number(params.get('bootStuck'));
+  const stuck = Number(new URLSearchParams(window.location.search).get('bootStuck'));
   if (Number.isFinite(stuck) && stuck > 0) {
     (window as unknown as { __auroraBootStuckMs?: number }).__auroraBootStuckMs = stuck;
   }
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <HashRouter>
-        <App />
-      </HashRouter>
-    </ErrorBoundary>
-  </React.StrictMode>,
-);
+/**
+ * The mock transport's test hooks, for the browser build the journeys run against.
+ * Never installed under a real host, where the mock is never loaded (`loadMock`).
+ */
+function installMockHooks(m: Awaited<ReturnType<typeof loadMock>>): void {
+  // Lets them make one refuse, so "the failure reaches the viewer" is testable.
+  (window as unknown as { __auroraFailNext?: unknown }).__auroraFailNext = m.failNextMock;
+  // What was asked for and how big the answer was, for the journeys that assert on the
+  // cost of a screen rather than on its contents.
+  (window as unknown as { __auroraCalls?: unknown }).__auroraCalls = m.mockCalls;
+  (window as unknown as { __auroraClearCalls?: unknown }).__auroraClearCalls = m.clearMockCalls;
+  // …and lets them play something whose duration the stream never reports, which is the
+  // ordinary case on provider VOD and the one in which Skip Credits and autoplay used to
+  // be dead.
+  (window as unknown as { __auroraSilentDuration?: unknown }).__auroraSilentDuration =
+    m.setSilentDurationMock;
+  // …and lets them make one go quiet rather than refuse, which is the failure the boot
+  // screen exists to survive and the one nothing could express before.
+  (window as unknown as { __auroraHang?: unknown }).__auroraHang = m.hangMock;
+  // …and lets them make one answer *late* rather than not at all, which is the third
+  // thing a real host does and the one the batching guide hooks used to lose rows to.
+  (window as unknown as { __auroraSlow?: unknown }).__auroraSlow = m.slowMock;
+  // …and lets them put the player into the state the error panel is for, which a refusing
+  // command cannot: `player.error` comes from the host's `NetFailure`, so until this
+  // existed no journey could press the panel's buttons.
+  (window as unknown as { __auroraPlayerError?: unknown }).__auroraPlayerError =
+    m.setPlayerErrorMock;
+  // …and hold it opening or refilling, which is when the spinner is meant to show (C24).
+  (window as unknown as { __auroraPlayerStatus?: unknown }).__auroraPlayerStatus = m.setPlayerStatusMock;
+  // How long the profile watching has watched today, as the host's heartbeat counts it (F-37).
+  (window as unknown as { __auroraWatched?: unknown }).__auroraWatched = m.setWatchedTodayMock;
+  // …and hold back the first frame, which is when the window used to turn see-through.
+  (window as unknown as { __auroraNoPicture?: unknown }).__auroraNoPicture = m.setNoPictureMock;
+
+  // …and on the query string as well as on `window`, because the commands that decide the
+  // first screen are already in flight by the time a test can evaluate anything. Same
+  // mechanism as `?video`. `?hang=providers.list,profiles.list` silences those.
+  {
+    const params = new URLSearchParams(window.location.search);
+    for (const name of params.get('hang')?.split(',') ?? []) {
+      if (name.trim()) m.hangMock(name.trim());
+    }
+    // `?slow=epg.nowNextMany:600` — answers, 600ms after the screen asked. The hooks that
+    // batch guide lookups mark their ids as asked before the reply lands, so what the UI
+    // does with a *late but valid* answer decides whether those rows ever fill in, and
+    // the first of those requests goes out before a test can evaluate anything.
+    for (const spec of params.get('slow')?.split(',') ?? []) {
+      const [name, ms] = spec.split(':');
+      const delay = Number(ms);
+      if (name?.trim() && Number.isFinite(delay) && delay > 0) m.slowMock(name.trim(), delay);
+    }
+  }
+}
+
+function render(): void {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <HashRouter>
+          <App />
+        </HashRouter>
+      </ErrorBoundary>
+    </React.StrictMode>,
+  );
+}
+
+// In a browser the mock has to be in place, hooks and all, before the first command
+// goes out. Under the host it is never loaded and nothing waits.
+if (isNativeHost()) {
+  render();
+} else {
+  void loadMock().then(installMockHooks).finally(render);
+}
 
 /**
  * Tell the host there is something on screen worth showing.

@@ -125,7 +125,11 @@ fn offenders(source: &str, is_gemini: bool) -> Vec<String> {
         // A binding, not a temporary: `let _ = db.lock()` or a bare `db.lock()` in an
         // expression statement does not keep a guard past the statement. `let db = ...`
         // does, and so does `let mut db = ...`.
-        let binds = line.contains("db.lock()")
+        //
+        // A reader guard counts too. `enabled` reads through `services.read()`, and a
+        // caller already holding one of the three readers can be handed the same one
+        // again when the other two are busy -- the same hang, only rarer.
+        let binds = (line.contains("db.lock()") || line.contains("services.read()"))
             && line.contains("let ")
             && !line.contains("let _ =")
             && !line.contains("let _db");

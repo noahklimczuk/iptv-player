@@ -8,20 +8,47 @@ import type {
 } from '@shared/ipc';
 import { LOCKED_MESSAGE, PIN_REQUIRED_MESSAGE, TIME_UP_MESSAGE } from './parentalMessages';
 import { subscribe } from './subscribe';
-import {
-  invokeMock,
-  onUpdateDownload as onMockUpdateDownload,
-  onDvrTick as onMockDvrTick,
-  onArtworkProgress as onMockArtworkProgress,
-  onMetadataProgress as onMockMetadataProgress,
-  onIngestProgress as onMockIngestProgress,
-  onMosaicState as onMockMosaicState,
-  onSleepState as onMockSleepState,
-  onSleepFired as onMockSleepFired,
-  onParentalClock as onMockParentalClock,
-  onAssistantStep as onMockAssistantStep,
-  onPlayerState as onMockPlayerState,
-} from './mock';
+
+/** The in-memory transport (`./mock`) and everything it seeds. */
+type Mock = typeof import('./mock');
+
+let mockModule: Mock | null = null;
+let mockLoading: Promise<Mock> | null = null;
+
+/**
+ * Load the mock transport, once.
+ *
+ * Dynamically, so a release build never evaluates it. It used to be imported statically
+ * (and re-exported wholesale), which put the fixtures in the startup bundle and ran the
+ * mock's seeding at module evaluation in every build -- on Windows, where the real host
+ * answers every command and nothing reads them. The browser build, which the end-to-end
+ * journeys run against, still gets it: `main.tsx` waits for it before rendering there,
+ * so the test hooks and `?hang=`/`?slow=` are in place before the first command.
+ */
+export function loadMock(): Promise<Mock> {
+  mockLoading ??= import('./mock').then((m) => (mockModule = m));
+  return mockLoading;
+}
+
+/**
+ * Subscribe through the mock. Synchronous once it has loaded, which `main.tsx` ensures
+ * before anything renders; the deferred path only covers a caller that runs earlier.
+ */
+function viaMock<F>(pick: (m: Mock) => (fn: F) => () => unknown, fn: F): () => void {
+  if (mockModule) {
+    const off = pick(mockModule)(fn);
+    return () => { off(); };
+  }
+  let off: (() => unknown) | undefined;
+  let cancelled = false;
+  void loadMock().then((m) => {
+    if (!cancelled) off = pick(m)(fn);
+  });
+  return () => {
+    cancelled = true;
+    off?.();
+  };
+}
 
 interface TauriInternals {
   invoke: (cmd: string, args: unknown) => Promise<unknown>;
@@ -122,7 +149,7 @@ async function send<K extends CommandName>(
   args: CommandArgs<K>,
 ): Promise<CommandResult<K>> {
   const host = tauri();
-  if (!host) return invokeMock(name, args);
+  if (!host) return (await loadMock()).invokeMock(name, args);
   // Command names cross the bridge as snake_case module_action pairs.
   const cmd = name.replace(/\./g, '_').replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
   // Arguments go *under* `args`, not spread across the payload. Every host command
@@ -141,7 +168,7 @@ async function send<K extends CommandName>(
  * the host notices and the UI cannot ask about often enough.
  */
 export function onMosaicState(fn: (v: Events['mosaic.state']) => void): () => void {
-  if (!isNativeHost()) return onMockMosaicState(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onMosaicState, fn);
   return subscribe<Events['mosaic.state']>('mosaic.state', fn);
 }
 
@@ -152,12 +179,12 @@ export function onMosaicState(fn: (v: Events['mosaic.state']) => void): () => vo
  * the turn is still in flight — the reply carries the same list, for history.
  */
 export function onAssistantStep(fn: (p: Events['assistant.step']) => void): () => void {
-  if (!isNativeHost()) return onMockAssistantStep(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onAssistantStep, fn);
   return subscribe<Events['assistant.step']>('assistant.step', fn);
 }
 
 export function onPlayerState(fn: (s: PlayerState) => void): () => void {
-  if (!isNativeHost()) return onMockPlayerState(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onPlayerState, fn);
   return subscribe<PlayerState>('player.state', fn);
 }
 
@@ -170,7 +197,7 @@ export function onPlayerState(fn: (s: PlayerState) => void): () => void {
  * deadline and stop entirely once the tab was throttled.
  */
 export function onSleepState(fn: (s: Events['sleep.state']) => void): () => void {
-  if (!isNativeHost()) return onMockSleepState(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onSleepState, fn);
   return subscribe<Events['sleep.state']>('sleep.state', fn);
 }
 
@@ -179,7 +206,7 @@ export function onSleepState(fn: (s: Events['sleep.state']) => void): () => void
  * closes the player when that was stopping playback (C15).
  */
 export function onSleepFired(fn: (d: Events['sleep.fired']) => void): () => void {
-  if (!isNativeHost()) return onMockSleepFired(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onSleepFired, fn);
   return subscribe<Events['sleep.fired']>('sleep.fired', fn);
 }
 
@@ -188,39 +215,38 @@ export function onSleepFired(fn: (d: Events['sleep.fired']) => void): () => void
  * `timeUp`; the page closes the player and says why.
  */
 export function onParentalClock(fn: (e: Events['parental.clock']) => void): () => void {
-  if (!isNativeHost()) return onMockParentalClock(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onParentalClock, fn);
   return subscribe<Events['parental.clock']>('parental.clock', fn);
 }
 
 /** How far the update installer has got (docs/DECISIONS.md D17). */
 export function onUpdateDownload(fn: (d: Events['update.download']) => void): () => void {
-  if (!isNativeHost()) return onMockUpdateDownload(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onUpdateDownload, fn);
   return subscribe<Events['update.download']>('update.download', fn);
 }
 
 /** Refresh progress, so a long import is never a frozen spinner (README C8). */
 export function onIngestProgress(fn: (p: IngestProgress) => void): () => void {
-  if (!isNativeHost()) return onMockIngestProgress(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onIngestProgress, fn);
   return subscribe<IngestProgress>('ingest.progress', fn);
 }
 
 /** What one DVR tick changed, so the recordings page stays live without polling. */
 export function onDvrTick(fn: (t: Events['dvr.tick']) => void): () => void {
-  if (!isNativeHost()) return onMockDvrTick(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onDvrTick, fn);
   return subscribe<Events['dvr.tick']>('dvr.tick', fn);
 }
 
 /** Enrichment progress, so a long metadata pass is never a frozen spinner. */
 export function onMetadataProgress(fn: (p: Events['metadata.progress']) => void): () => void {
-  if (!isNativeHost()) return onMockMetadataProgress(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onMetadataProgress, fn);
   return subscribe<Events['metadata.progress']>('metadata.progress', fn);
 }
 
 /** Artwork download progress, for the cache panel in settings. */
 export function onArtworkProgress(fn: (p: Events['artwork.progress']) => void): () => void {
-  if (!isNativeHost()) return onMockArtworkProgress(fn);
+  if (!isNativeHost()) return viaMock((m) => m.onArtworkProgress, fn);
   return subscribe<Events['artwork.progress']>('artwork.progress', fn);
 }
 
-export * from './mock';
 export { subscribe } from './subscribe';

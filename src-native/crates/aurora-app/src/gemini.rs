@@ -148,7 +148,7 @@ fn built_in() -> Option<&'static str> {
 
 /// Whether the viewer has left these features switched on.
 pub fn enabled(services: &Services) -> bool {
-    let db = services.db.lock();
+    let db = services.read();
     aurora_db::repo::settings::get_or(&db, ENABLED_KEY, DEFAULT_ENABLED).unwrap_or(DEFAULT_ENABLED)
 }
 
@@ -316,7 +316,7 @@ pub fn gemini_recommendations(services: State<'_, Services>, args: AiArgs) -> Re
     })?;
 
     let (watched, history_len, cached) = {
-        let db = services.db.lock();
+        let db = services.read();
         let watched = watched_for_prompt(&db, args.profile_id);
         // The real length, not the prompt's: the truncation is what made the old key
         // stop changing.
@@ -368,7 +368,7 @@ pub fn gemini_recommendations(services: State<'_, Services>, args: AiArgs) -> Re
         }
     };
 
-    let db = services.db.lock();
+    let db = services.read();
     let (items, reasons) = resolve(&db, &suggestions, RAIL_SIZE as usize)?;
     Ok(AiPicks {
         not_in_library: suggestions.len().saturating_sub(items.len()),
@@ -400,7 +400,7 @@ pub struct StatusArgs {
 #[tauri::command(async)]
 pub fn gemini_status(services: State<'_, Services>, args: StatusArgs) -> Result<GeminiStatus> {
     let has_history = {
-        let db = services.db.lock();
+        let db = services.read();
         !progress::continue_watching(&db, args.profile_id, 1)
             .unwrap_or_default()
             .is_empty()

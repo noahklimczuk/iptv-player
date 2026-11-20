@@ -178,17 +178,24 @@ fn gather(
     Ok((inputs, progress_map))
 }
 
+/// A page of keys as cards, in the rail's order: one query per kind, not one per card.
 fn hydrate(db: &Connection, keys: &[Key]) -> Result<Vec<CatalogItem>> {
-    let mut out = Vec::with_capacity(keys.len());
-    for (kind, id) in keys {
-        // A row a refresh removed since the build is skipped rather than faked.
-        let item = match kind {
-            Kind::Movie => library::movie(db, *id)?.map(CatalogItem::Movie),
-            Kind::Series => library::series(db, *id)?.map(CatalogItem::Series),
-        };
-        out.extend(item);
-    }
-    Ok(out)
+    let ids = |want: Kind| -> Vec<i64> {
+        keys.iter()
+            .filter(|(kind, _)| *kind == want)
+            .map(|(_, id)| *id)
+            .collect()
+    };
+    let movies = library::movies_by_id(db, &ids(Kind::Movie))?;
+    let series = library::series_by_id(db, &ids(Kind::Series))?;
+    // A row a refresh removed since the build is skipped rather than faked.
+    Ok(keys
+        .iter()
+        .filter_map(|(kind, id)| match kind {
+            Kind::Movie => movies.get(id).cloned().map(CatalogItem::Movie),
+            Kind::Series => series.get(id).cloned().map(CatalogItem::Series),
+        })
+        .collect())
 }
 
 fn page_of(
