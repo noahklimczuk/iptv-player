@@ -388,9 +388,47 @@ pub fn missing_sign_in(username: &str, password: &str) -> Result<(), NetFailure>
     })
 }
 
-/// through would show a library missing its search index.
+/// Where `apply` takes the library's write connection from, one step at a time.
+///
+/// `apply` used to be handed the connection, so the provider's whole import -- channels,
+/// films, series, every guide programme, matching, the search index -- ran under one
+/// hold of the app's write lock: 42 s and 52 s in a real log. The DVR's scheduler takes
+/// the same lock every ten seconds to start what is due, and waited 38 s and 48 s behind
+/// it, so a recording due during a refresh lost its first minute. Each step now takes
+/// the lock for itself, and a guide's programmes are written a batch at a time, so the
+/// longest anything waits is one step.
+pub trait Writer {
+    type Guard<'a>: std::ops::DerefMut<Target = Connection>
+    where
+        Self: 'a;
+    fn write(&self) -> Self::Guard<'_>;
+}
+
+/// A connection the caller already holds exclusively: every step is the same borrow.
+impl Writer for std::cell::RefCell<&mut Connection> {
+    type Guard<'a>
+        = std::cell::RefMut<'a, Connection>
+    where
+        Self: 'a;
+    fn write(&self) -> Self::Guard<'_> {
+        std::cell::RefMut::map(self.borrow_mut(), |c| &mut **c)
+    }
+}
+
+/// Write what `fetch` brought back: channels, films, series, the guide, its matches
+/// to channels, and the search index, reporting progress a phase at a time.
 pub fn apply(
     db: &mut Connection,
+    fetched: Fetched,
+    options: &SyncOptions,
+    on_progress: impl FnMut(Progress),
+) -> Result<SyncReport, NetFailure> {
+    apply_in_steps(&std::cell::RefCell::new(db), fetched, options, on_progress)
+}
+
+/// `apply`, taking the write lock a step at a time (see `Writer`).
+pub fn apply_in_steps<W: Writer>(
+    db: &W,
     fetched: Fetched,
     options: &SyncOptions,
     mut on_progress: impl FnMut(Progress),
@@ -410,14 +448,19 @@ pub fn apply(
     });
     let keyed: Vec<(String, &PlaylistEntry)> =
         fetched.live.iter().map(|e| (provider_key(e), e)).collect();
-    report.channels = channels::upsert_batch(db, options.provider_id, &keyed, options.now_unix)
-        .map_err(db_failure)?;
-    report.channels_missing = channels::stale(db, options.provider_id, options.now_unix)
+    report.channels = channels::upsert_batch(
+        &mut db.write(),
+        options.provider_id,
+        &keyed,
+        options.now_unix,
+    )
+    .map_err(db_failure)?;
+    report.channels_missing = channels::stale(&db.write(), options.provider_id, options.now_unix)
         .map_err(db_failure)?
         .len();
 
     // Channel sources, so playback can resolve a URL and fail over (README §7.14).
-    write_channel_sources(db, options.provider_id, &keyed).map_err(db_failure)?;
+    write_channel_sources(&mut db.write(), options.provider_id, &keyed).map_err(db_failure)?;
     on_progress(Progress {
         phase: Phase::ImportingChannels,
         done: fetched.live.len(),
@@ -449,8 +492,13 @@ pub fn apply(
             }
         })
         .collect();
-    report.movies = library::upsert_movies(db, options.provider_id, &new_movies, options.now_unix)
-        .map_err(db_failure)?;
+    report.movies = library::upsert_movies(
+        &mut db.write(),
+        options.provider_id,
+        &new_movies,
+        options.now_unix,
+    )
+    .map_err(db_failure)?;
 
     // ── Series ──────────────────────────────────────────────────────────────────
     on_progress(Progress {
@@ -467,7 +515,7 @@ pub fn apply(
     for show in &fetched.series {
         let match_key = title::match_key(&show.title);
         library::upsert_series(
-            db,
+            &mut db.write(),
             options.provider_id,
             &library::NewSeries {
                 provider_key: &show.provider_key,
@@ -499,7 +547,7 @@ pub fn apply(
     for group in &groups {
         let match_key = title::match_key(&group.title);
         let series_id = library::upsert_series(
-            db,
+            &mut db.write(),
             options.provider_id,
             &library::NewSeries {
                 provider_key: &format!("series:{match_key}"),
@@ -539,7 +587,8 @@ pub fn apply(
             })
             .collect();
         report.episodes +=
-            library::upsert_episodes(db, series_id, &eps, options.now_unix).map_err(db_failure)?;
+            library::upsert_episodes(&mut db.write(), series_id, &eps, options.now_unix)
+                .map_err(db_failure)?;
     }
     report.series += groups.len();
 
@@ -555,7 +604,7 @@ pub fn apply(
                     .or_insert_with(|| scope.clone());
             }
         }
-        epg_repo::upsert_channels(db, &source.channels).map_err(db_failure)?;
+        epg_repo::upsert_channels(&mut db.write(), &source.channels).map_err(db_failure)?;
 
         // Everything this source is about to write, removed first.
         //
@@ -582,11 +631,11 @@ pub fn apply(
         touched.extend(source.touched.iter().cloned());
         touched.sort_unstable();
         touched.dedup();
-        epg_repo::clear_channels(db, &touched).map_err(db_failure)?;
+        epg_repo::clear_channels(&mut db.write(), &touched).map_err(db_failure)?;
 
         source
             .programmes
-            .for_each(|batch| epg_repo::insert_batch(db, batch).map(|_| ()))
+            .for_each(|batch| epg_repo::insert_batch(&mut db.write(), batch).map(|_| ()))
             .map_err(|e| match e {
                 // A guide that cannot be read back is a failed import, not a quietly
                 // empty one: the rows were parsed, so saying nothing came back would be
@@ -603,7 +652,7 @@ pub fn apply(
     // has finished airing. README §4.4. The window is generous because a provider that
     // advertises catch-up expects yesterday to still be addressable.
     if !epg_channels.is_empty() {
-        match epg_repo::prune_before(db, options.now_unix - EPG_RETENTION_SECS) {
+        match epg_repo::prune_before(&db.write(), options.now_unix - EPG_RETENTION_SECS) {
             Ok(0) => {}
             Ok(n) => tracing::info!(pruned = n, "programmes that had already finished"),
             // A refresh that imported a guide must not fail because tidying up did not.
@@ -630,7 +679,7 @@ pub fn apply(
         // Pruned here rather than in `EpgIndex::build`, which cannot know: whether a
         // channel has programmes is only settled once the whole document has been read,
         // and by this point they are all in the table (R-21).
-        let scheduled = epg_repo::channels_with_programmes(db).map_err(db_failure)?;
+        let scheduled = epg_repo::channels_with_programmes(&db.write()).map_err(db_failure)?;
         let declared = epg_channels.len();
         epg_channels.retain(|c| scheduled.contains(&c.id));
         let dropped = declared - epg_channels.len();
@@ -645,8 +694,11 @@ pub fn apply(
     }
     if !epg_channels.is_empty() {
         let index = EpgIndex::build(&epg_channels);
+        // One step, in one transaction: 6,700 mappings were 6,700 separate commits.
+        let mut guard = db.write();
+        let tx = guard.transaction().map_err(|e| db_failure(e.into()))?;
         let rows = channels::list(
-            db,
+            &tx,
             &channels::ChannelFilter {
                 include_hidden: true,
                 ..Default::default()
@@ -654,7 +706,7 @@ pub fn apply(
         )
         .map_err(db_failure)?;
 
-        let manual = manual_mappings(db).map_err(db_failure)?;
+        let manual = manual_mappings(&tx).map_err(db_failure)?;
         for row in &rows {
             let manual_id = manual.get(&row.id).map(String::as_str);
             let hit = index
@@ -674,7 +726,7 @@ pub fn apply(
             match hit {
                 Some(m) => {
                     channels::set_epg_mapping(
-                        db,
+                        &tx,
                         row.id,
                         Some(&m.epg_channel_id),
                         Some(&format!("{:?}", m.method).to_lowercase()),
@@ -690,7 +742,7 @@ pub fn apply(
                     // schedule, ESPN+ 201-205 on ESPN+ 20) -- the wrong programmes, which
                     // is worse than none. Today's matcher refuses every one of them.
                     if row.epg_channel_id.is_some() {
-                        channels::set_epg_mapping(db, row.id, None, None).map_err(db_failure)?;
+                        channels::set_epg_mapping(&tx, row.id, None, None).map_err(db_failure)?;
                     }
                     report.epg_unmatched_total += 1;
                     if report.epg_unmatched.len() < 200 {
@@ -714,6 +766,7 @@ pub fn apply(
             rows.len(),
             "every channel is either matched or counted as unmatched"
         );
+        tx.commit().map_err(|e| db_failure(e.into()))?;
     }
 
     // ── Search index ────────────────────────────────────────────────────────────
@@ -722,16 +775,16 @@ pub fn apply(
         done: 0,
         total: 0,
     });
-    reindex(db, options.provider_id).map_err(db_failure)?;
+    reindex(&mut db.write(), options.provider_id).map_err(db_failure)?;
     // Language and quality are columns the list queries filter on, so they are derived
     // once here rather than per paint (README §7.3). Doing it after everything is
     // written, rather than per upsert, means one pass and one definition of the answer.
-    aurora_db::repo::filtering::reclassify(db).map_err(db_failure)?;
+    aurora_db::repo::filtering::reclassify(&mut db.write()).map_err(db_failure)?;
     // An import rewrites the library wholesale, so the planner's statistics are now
     // about a table that no longer exists. Re-measured here because this is the only
     // moment the row counts change by six figures — and because a stale estimate costs
     // the browse queries a factor of two thousand (`aurora_db::analyze`).
-    aurora_db::analyze_after_import(db).map_err(db_failure)?;
+    aurora_db::analyze_after_import(&db.write()).map_err(db_failure)?;
 
     on_progress(Progress {
         phase: Phase::Done,
@@ -1562,6 +1615,43 @@ mod tests {
             "the DVR would have been locked out: only {} acquisitions",
             acquired.load(Ordering::Relaxed)
         );
+    }
+
+    /// And while it writes, between steps.
+    ///
+    /// Every progress report is a point between two steps of the import, so a scheduler
+    /// asking for the lock there must get it. The host used to hold one guard across the
+    /// whole of `apply`, and in a real log the DVR waited 48 s behind it.
+    #[test]
+    fn the_lock_is_free_between_the_steps_of_an_import() {
+        struct Shared(std::sync::Mutex<Connection>);
+        impl Writer for Shared {
+            type Guard<'a> = std::sync::MutexGuard<'a, Connection>;
+            fn write(&self) -> Self::Guard<'_> {
+                self.0.lock().expect("lock")
+            }
+        }
+
+        let server = TestServer::start(|_, req| {
+            if req.path.starts_with("/epg") {
+                Reply::ok(EPG)
+            } else {
+                Reply::ok(PLAYLIST)
+            }
+        });
+        let mut opts = options(&server);
+        opts.extra_epg_urls = vec![server.url("/epg.xml")];
+        let fetched = fetch(&http(), &opts, &no_rules(), |_| {}).expect("fetch");
+
+        let shared = Shared(std::sync::Mutex::new(db()));
+        let mut free = Vec::new();
+        let report = apply_in_steps(&shared, fetched, &opts, |_| {
+            free.push(shared.0.try_lock().is_ok());
+        })
+        .expect("apply");
+        assert!(report.epg_programmes > 0, "the guide was written");
+        assert!(free.len() > 3, "{free:?}");
+        assert!(free.iter().all(|f| *f), "{free:?}");
     }
 
     #[test]

@@ -28,17 +28,18 @@ Severity is what a viewer loses, on the scale in `AUDIT/findings.md`.
 
 | ID | Sev | Area | Finding | Status |
 |---|---|---|---|---|
-| A-01 | High | assistant | `assistant_send` holds the library's **write** lock for the whole conversation turn, Gemini's network round trips included (read timeout 90 s, several rounds). Every write in the app waits behind it: the DVR starting a recording, saving a watch position, a refresh. The real log shows a 4.1 s hold. | Open |
-| A-02 | High | import / DVR | A refresh holds the write lock for the whole of `sync::apply` — 42 s and 52 s in the real log. The DVR's ten-second tick waits behind it (38 s and 48 s logged), so a recording due during a refresh starts up to a minute late and loses its opening. | Open |
+| A-01 | High | assistant | `assistant_send` holds the library's **write** lock for the whole conversation turn, Gemini's network round trips included (read timeout 90 s, several rounds). Every write in the app waits behind it: the DVR starting a recording, saving a watch position, a refresh. The real log shows a 4.1 s hold. | Fixed (batch 2): a connection of its own |
+| A-02 | High | import / DVR | A refresh holds the write lock for the whole of `sync::apply` — 42 s and 52 s in the real log. The DVR's ten-second tick waits behind it (38 s and 48 s logged), so a recording due during a refresh starts up to a minute late and loses its opening. | Fixed (batch 2): the lock is taken step by step |
 | A-03 | Medium | search | The palette took its 40 results **before** removing what the library filters hide. With "English only" or duplicate hiding on, hidden titles used up the limit and a search could return a handful of films, or none, while visible ones matched further down. Same for guide listings on filtered channels. | Fixed (batch 1) |
 | A-04 | Medium | search / perf | The guide half of search took **3.5–7 s per keystroke**: SQLite followed `idx_prog_time` through every programme in start order, past ones included, fetching each row at random to test its title. Typing four letters occupied all three read connections, so browsing stalled too. | Fixed (batch 1): 0.45 s, same rows |
 | A-05 | Low | search / perf | The people half read all 583,341 people and sorted them on every keystroke (250–490 ms). | Fixed (batch 1): index, < 10 ms |
 | A-06 | Low | search / perf | Every keystroke read every visible id of all three kinds into hash sets (40,000 ids, ~160 ms) to test 40 hits against them. | Fixed (batch 1): one key lookup per hit |
 | A-07 | Low | import / perf | A full `ANALYZE` at the end of every refresh took 1.8 s inside the write lock, 1.1 s of it on `credits`, which a refresh never writes. | Fixed (batch 1): 0.2 s |
 | A-08 | Low | logging | The "could not be compacted" error carried 18 spaces mid-sentence: a string continuation missing its backslash. | Fixed (batch 1) |
-| A-09 | Low | UI / perf | The development mock and its generated library ship in the release bundle and are built on every launch — 160 films and their SVG artwork, channels, guide — though the real app never calls them. | Open |
-| A-10 | Low | home / perf | Rebuilding Home after watching something holds a read connection 0.3–1.3 s, mostly one point query per card (`hydrate`). | Open |
+| A-09 | Low | UI / perf | The development mock and its generated library ship in the release bundle and are built on every launch — 160 films and their SVG artwork, channels, guide — though the real app never calls them. | Fixed (batch 3): loaded only without a host; startup bundle 554.6 kB → 484.6 kB |
+| A-10 | Low | home / perf | Rebuilding Home after watching something holds a read connection 0.3–1.3 s, mostly one point query per card (`hydrate`). | Fixed (batch 3): one query per kind per page, 20–40% faster; the rest is each card's cast list |
 | A-11 | Info | deps | `pnpm audit`: one moderate advisory, `minimatch` under `eslint` (dev only, not shipped). `cargo audit`: no vulnerabilities; seven "unmaintained" notices, all transitive through Tauri. | No action |
+| A-12 | Low | AI / perf | The Gemini rail and status read the library through the writer, so a refresh or a recording write held them up for no reason. | Fixed (batch 3): reader pool |
 
 ## What was checked and found sound
 
@@ -62,3 +63,5 @@ Severity is what a viewer loses, on the scale in `AUDIT/findings.md`.
 Fixed five at a time, one PR each, merged on green CI.
 
 1. Search and import statistics: A-03, A-04, A-05, A-06, A-07, A-08.
+2. Write-lock holds: A-01, A-02, and channel-to-guide matching saved in one transaction instead of one per channel.
+3. Startup and Home: A-09, A-10, A-12.

@@ -90,8 +90,28 @@ fn the_refresh_timestamp_is_the_one_the_rows_were_stamped_with() {
 #[test]
 fn the_report_and_the_badge_ask_the_same_question() {
     let sync = without_comments(&source("../../aurora-ingest/src/sync.rs"));
+    // The connection argument is whatever the import is holding at that step (a guard
+    // since it stopped holding the write lock throughout), so only the rest is pinned.
+    let rest = &sync[sync
+        .find("channels::stale(")
+        .expect("sync.rs no longer counts stale channels; this test needs rewriting")..];
+    // To the parenthesis that closes the call, past any the arguments open themselves.
+    let mut depth = 0;
+    let end = rest
+        .char_indices()
+        .find(|&(_, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => return false,
+            }
+            depth == 0
+        })
+        .map(|(i, _)| i)
+        .expect("the call's closing parenthesis");
+    let call = &rest[..=end];
     assert!(
-        sync.contains("channels::stale(db, options.provider_id, options.now_unix)"),
+        call.ends_with(", options.provider_id, options.now_unix)"),
         "the refresh report's own staleness count no longer uses `options.now_unix`, so \
          it and the Dropped badge can now disagree"
     );

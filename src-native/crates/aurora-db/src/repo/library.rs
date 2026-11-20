@@ -2,6 +2,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::error::Result;
 
@@ -552,6 +553,49 @@ pub fn categories(
 pub fn movie(conn: &Connection, id: i64) -> Result<Option<MovieRow>> {
     let sql = format!("{MOVIE_SELECT} WHERE movies.id = ?1");
     Ok(conn.query_row(&sql, params![id], map_movie).optional()?)
+}
+
+/// Many titles by id, keyed by id -- [`movie`] for a page of cards at once.
+///
+/// Same rows and the same deliberate absence of a `hidden` filter; an id with no row is
+/// simply missing from the map. Home's rails asked for their cards one `movie` at a time,
+/// a statement prepared and run per card, and that was most of the 0.3-1.3 s a rebuild
+/// took on a real library.
+pub fn movies_by_id(conn: &Connection, ids: &[i64]) -> Result<HashMap<i64, MovieRow>> {
+    rows_by_id(conn, MOVIE_SELECT, "movies", ids, map_movie, |m| m.id)
+}
+
+/// [`series`] for many ids at once, as [`movies_by_id`] is for films.
+pub fn series_by_id(conn: &Connection, ids: &[i64]) -> Result<HashMap<i64, SeriesRow>> {
+    let select = series_select(OWN_SEASONS);
+    rows_by_id(conn, &select, "series", ids, map_series, |s| s.id)
+}
+
+/// Ids per statement: well under SQLite's bound-parameter limit, and more than a page.
+const IDS_PER_QUERY: usize = 500;
+
+fn rows_by_id<T>(
+    conn: &Connection,
+    select: &str,
+    table: &str,
+    ids: &[i64],
+    map: fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    id_of: fn(&T) -> i64,
+) -> Result<HashMap<i64, T>> {
+    let mut out = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(IDS_PER_QUERY) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("{select} WHERE {table}.id IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk), map)?;
+        for row in rows {
+            let row = row?;
+            out.insert(id_of(&row), row);
+        }
+    }
+    Ok(out)
 }
 
 /// Shows with no episodes stored, worth asking the provider about, best first.
@@ -2046,6 +2090,68 @@ mod tests {
             .query_row("SELECT rating FROM movies", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rating, Some(7.1_f32 as f64));
+    }
+
+    /// A page of cards at once is the same rows as asking card by card -- hidden ones
+    /// included, as `movie` and `series` include them, and a missing id simply absent.
+    #[test]
+    fn titles_by_id_are_the_rows_one_at_a_time_would_give() {
+        let mut conn = crate::open_memory().unwrap();
+        let p = provider(&conn);
+        upsert_movies(
+            &mut conn,
+            p,
+            &[
+                movie("m1", "One", Some(2001)),
+                movie("m2", "Two", Some(2002)),
+                movie("m3", "Three", None),
+            ],
+            0,
+        )
+        .unwrap();
+        conn.execute("UPDATE movies SET hidden = 1 WHERE title = 'Two'", [])
+            .unwrap();
+        let show = upsert_series(
+            &mut conn,
+            p,
+            &NewSeries {
+                provider_key: "s1",
+                title: "A Show",
+                match_key: "ashow",
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO episodes (series_id, season, episode, url) VALUES (?1, 2, 1, 'u')",
+            params![show],
+        )
+        .unwrap();
+
+        let ids: Vec<i64> = conn
+            .prepare("SELECT id FROM movies ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        let mut asked = ids.clone();
+        asked.push(9_999);
+        let many = movies_by_id(&conn, &asked).unwrap();
+        assert_eq!(many.len(), 3);
+        for id in &ids {
+            assert_eq!(many.get(id), movie_row(&conn, *id).as_ref());
+        }
+
+        let shows = series_by_id(&conn, &[show, 9_999]).unwrap();
+        assert_eq!(shows.len(), 1);
+        assert_eq!(shows.get(&show), series(&conn, show).unwrap().as_ref());
+        assert!(movies_by_id(&conn, &[]).unwrap().is_empty());
+    }
+
+    fn movie_row(conn: &Connection, id: i64) -> Option<MovieRow> {
+        super::movie(conn, id).unwrap()
     }
 
     /// Genres are the recommender's heaviest signal and came only from TMDB, so a

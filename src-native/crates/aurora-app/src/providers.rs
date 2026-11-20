@@ -1012,10 +1012,11 @@ pub fn refresh_provider(
         .and_then(|a| a.max_connections)
         .map(|n| n as i64);
 
-    // Only the writes hold it, and they are local and bounded.
-    let mut db = services.db.lock();
-    let report = sync::apply(&mut db, fetched, &options, emit)
+    // Only the writes hold it, a step at a time (`sync::Writer`): the DVR and every
+    // other writer get the lock between steps, not after the whole import.
+    let report = sync::apply_in_steps(&*services.db, fetched, &options, emit)
         .map_err(|e| AppError::Other(format!("{}: {}", e.message, e.cause)))?;
+    let db = services.db.lock();
 
     // `options.now_unix`, **not** `now_unix()`.
     //

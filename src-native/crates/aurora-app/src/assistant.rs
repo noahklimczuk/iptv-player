@@ -1173,12 +1173,17 @@ pub fn assistant_clear(services: State<'_, Services>, args: ProfileArgs) -> Resu
 
 /// Ask the assistant something.
 ///
-/// The database lock is held for the whole call, which is the one thing here worth
-/// questioning: a turn can take seconds. It is held because every tool reads through it
-/// and a model is allowed to ask for six rounds of lookups — taking and dropping the lock
-/// fourteen times would let a refresh land in the middle and answer half the questions
-/// from a different library. A conversation is also something one person is waiting on, so
-/// the contention is with themselves.
+/// On a connection of its own (`aurora_db::open_secondary`), not the app's writer. A turn
+/// is mostly waiting on Gemini -- each round allowed 90 seconds, several to a turn -- and
+/// it used to wait holding the writer's lock, so for that long nothing else could write:
+/// not the DVR starting a recording that was due, not the player saving a position. The
+/// real log has a 4.1 s hold from here. SQLite serialises the two writers per statement,
+/// and none of `send`'s statements spans a network wait. A refresh can now land between
+/// two lookups in one turn; the answer may then mix the library before and after it, which
+/// is what the person would see by asking twice.
+///
+/// If the second connection cannot be opened the turn falls back to the writer, as before:
+/// slower for everyone else, but an answer.
 #[tauri::command(async)]
 pub fn assistant_send(
     app: tauri::AppHandle,
@@ -1198,9 +1203,17 @@ pub fn assistant_send(
     .map_err(|e| AppError::Other(e.message))?;
     let chatter = ChatClient::new(&http, &key);
 
-    let db = services.db.lock();
+    let own = turn_connection(&services.data_dir.join("library.db"));
+    let shared;
+    let db: &Connection = match &own {
+        Some(conn) => conn,
+        None => {
+            shared = services.db.lock();
+            &shared
+        }
+    };
     send(
-        &db,
+        db,
         &chatter,
         args.profile_id,
         &args.text,
@@ -1211,6 +1224,13 @@ pub fn assistant_send(
             crate::emit(&app, "assistant.step", &json!({ "step": step }));
         },
     )
+}
+
+/// The connection a turn runs on, or `None` to use the app's writer.
+fn turn_connection(library: &std::path::Path) -> Option<Connection> {
+    aurora_db::open_secondary(library)
+        .map_err(|e| tracing::warn!("assistant: no connection of its own, sharing the writer: {e}"))
+        .ok()
 }
 
 #[cfg(test)]
@@ -1443,6 +1463,65 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("busy") || err.contains("try again"), "{err}");
+    }
+
+    /// The library can be written while the model thinks.
+    ///
+    /// A chatter that writes through the app's own writer mid-turn, the way the DVR's
+    /// scheduler would. A turn used to run on that writer, holding its lock across every
+    /// network wait, so a recording due during a question waited for the answer.
+    #[test]
+    fn the_library_can_be_written_while_waiting_on_the_model() {
+        struct Probe<'m> {
+            writer: &'m crate::dblock::TimedMutex<Connection>,
+            wrote: RefCell<Vec<bool>>,
+        }
+        impl Chatter for Probe<'_> {
+            fn turn(
+                &self,
+                _system: &str,
+                _history: &[Turn],
+                _tools: &[ToolDecl],
+            ) -> std::result::Result<ChatReply, aurora_core::neterr::NetFailure> {
+                let wrote = std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let Some(db) = self.writer.try_lock() else {
+                            return false;
+                        };
+                        db.execute("UPDATE providers SET name = 'Q' WHERE id = 1", [])
+                            .is_ok()
+                    })
+                    .join()
+                    .unwrap()
+                });
+                self.wrote.borrow_mut().push(wrote);
+                Ok(Script::text("Here."))
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("aurora-assistant-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db");
+        let writer = aurora_db::open(&path).unwrap();
+        writer
+            .execute(
+                "INSERT INTO providers (id,name,kind,base_url,created_at)
+                 VALUES (1,'P','xtream','https://example.com',0)",
+                [],
+            )
+            .unwrap();
+        let writer = crate::dblock::TimedMutex::new(writer);
+        let probe = Probe {
+            writer: &writer,
+            wrote: RefCell::new(Vec::new()),
+        };
+        let own = turn_connection(&path).expect("a second connection");
+        send(&own, &probe, 1, "anything", NOW, |_| {}).unwrap();
+        assert_eq!(*probe.wrote.borrow(), [true]);
+        // And the turn's own write -- the saved conversation -- landed beside it.
+        assert_eq!(history(&writer.lock(), 1).len(), 2);
+        drop((own, writer));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn db() -> Connection {
