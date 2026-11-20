@@ -244,8 +244,9 @@ Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app (
 under "More", whose navigation bar stacks on the tab's own and doubles every back
 button. iPad and Apple TV keep both as tabs.
 
-Not yet: syncing provider passwords (each device keeps its own, as on
-Windows today).
+Provider passwords and the TMDB and Gemini keys sync only when the household turns on
+"Also share sign-ins and keys" in Settings → Sync (D34), as on Windows; they go from and
+to the Keychain under the same record names Windows uses.
 
 The app targets **iOS 26 and tvOS 26 only**.
 

@@ -732,6 +732,12 @@ fn settings_are_locked_where_windows_locks_them() {
         ("sync.rs", "sync_sign_out", "sync.rs", Some("sync_sign_out")),
         (
             "sync.rs",
+            "sync_set_share_secrets",
+            "sync.rs",
+            Some("sync_set_share_secrets"),
+        ),
+        (
+            "sync.rs",
             "sync_recovery_code",
             "sync.rs",
             Some("sync_recovery_code"),
