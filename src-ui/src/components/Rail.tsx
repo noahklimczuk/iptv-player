@@ -10,6 +10,17 @@ import { Icon } from './Icon';
 
 const CARD_W = 168;
 const GAP = 16;
+/**
+ * The rail's side gutter: where the first card starts, level with the heading, and where
+ * a card lands after paging.
+ *
+ * It is both the scroller's padding *and* its scroll padding, and the second is the half
+ * that was missing. Cards snap to `start`, and without scroll padding "start" is the
+ * scroller's own edge -- so the browser snapped every rail 24px in as soon as it laid
+ * out. Every rail opened with its first card cut against the panel's edge and a left
+ * arrow over it, though nobody had scrolled anything.
+ */
+const GUTTER = 24;
 
 /**
  * How far an expanded card reaches past its own box, and therefore how much room the
@@ -160,7 +171,12 @@ export function Rail({
   const page = (dir: 1 | -1) => {
     const el = scroller.current;
     if (!el) return;
-    el.scrollBy({ left: dir * (el.clientWidth - CARD_W), behavior: 'smooth' });
+    // Whole cards, so a page ends on a card boundary and snapping leaves that card at the
+    // gutter. `clientWidth - CARD_W` ended mid-card, and a rail paged once sat with half a
+    // title cut against its left edge.
+    const step = CARD_W + GAP;
+    const fit = Math.max(1, Math.floor((el.clientWidth - 2 * GUTTER + GAP) / step));
+    el.scrollBy({ left: dir * fit * step, behavior: 'smooth' });
   };
 
   const showRank = rail.kind === 'top10';
@@ -192,7 +208,7 @@ export function Rail({
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-          padding: '0 24px', marginBottom: 'var(--sp-4)',
+          padding: `0 ${GUTTER}px`, marginBottom: 'var(--sp-4)',
           // Above the scroller below it, which is not as redundant as it looks: that
           // scroller carries a large top padding to make room for an expanded card
           // (`RAIL_EXPANSION_PAD`), and the padding overhangs *upward* across this row.
@@ -243,7 +259,8 @@ export function Rail({
             // So the padding is the whole mechanism, and it is derived rather than
             // guessed: see `RAIL_EXPANSION_PAD`. The negative margin cancels it, so the
             // rail still occupies the height it looks like it occupies.
-            padding: `${RAIL_EXPANSION_PAD}px 24px`,
+            padding: `${RAIL_EXPANSION_PAD}px ${GUTTER}px`,
+            scrollPaddingInline: GUTTER,
             margin: `-${RAIL_EXPANSION_PAD}px 0`,
             overflowX: 'auto', overflowY: 'auto',
             scrollSnapType: 'x proximity',
@@ -300,14 +317,17 @@ function RailArrow({ dir, onClick }: { dir: 'left' | 'right'; onClick: () => voi
       aria-label={dir === 'left' ? 'Scroll left' : 'Scroll right'}
       onClick={onClick}
       style={{
-        position: 'absolute', top: 28, bottom: 28, [dir]: 0, width: 56, zIndex: 20,
+        // As wide as the gutter plus a little: it shades the gutter and the edge of the
+        // card beside it, not the card's title. At 56px, fading out from 35%, the first
+        // card of a paged rail had its title washed out under the arrow.
+        position: 'absolute', top: 28, bottom: 28, [dir]: 0, width: GUTTER + 20, zIndex: 20,
         display: 'grid', placeItems: 'center', border: 'none', cursor: 'pointer',
         color: 'var(--text)',
         borderRadius: dir === 'left' ? 'var(--r-xl) 0 0 var(--r-xl)' : '0 var(--r-xl) var(--r-xl) 0',
         background:
           dir === 'left'
-            ? 'linear-gradient(to right, var(--surface) 35%, transparent)'
-            : 'linear-gradient(to left, var(--surface) 35%, transparent)',
+            ? `linear-gradient(to right, var(--surface) ${GUTTER}px, transparent)`
+            : `linear-gradient(to left, var(--surface) ${GUTTER}px, transparent)`,
       }}
     >
       <Icon name={dir === 'left' ? 'chevronLeft' : 'chevronRight'} size={28} strokeWidth={2.4} />

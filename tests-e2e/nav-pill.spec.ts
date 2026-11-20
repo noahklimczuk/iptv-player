@@ -71,6 +71,27 @@ test('the content pane keeps room so nothing hides under the pill', async ({ pag
   // scroll position is not.
 });
 
+test('the end of a page taller than the window is above the pill', async ({ page }) => {
+  // Home rather than Movies: its rails are all there is, so the last one is the end of
+  // the page. The test above passed while this was broken -- `main` had its padding,
+  // but the page wrapper is `height: 100%`, a long page overflows it, and padding goes
+  // after the wrapper rather than after what overflows it. Home's last rail ended 60px
+  // under the pill with nothing below it to scroll to.
+  await page.goto('/#/');
+  await expect(page.getByRole('region', { name: 'Featured' })).toBeVisible();
+  await page.waitForTimeout(900);
+
+  const lastBottom = await page.evaluate(async () => {
+    const main = document.querySelector('[data-scroll-root]') as HTMLElement;
+    main.scrollTop = main.scrollHeight;
+    await new Promise((r) => setTimeout(r, 300));
+    const sections = [...main.querySelectorAll('.aurora-page section')];
+    return sections[sections.length - 1]!.getBoundingClientRect().bottom;
+  });
+  const box = (await pill(page).boundingBox())!;
+  expect(lastBottom, 'the last rail ends under the pill').toBeLessThanOrEqual(box.y);
+});
+
 test('the pill gets out of the way of video', async ({ page }) => {
   // `?video` composes as though libmpv were rendering behind the page, which is the only
   // way a browser can reach this state: `showingPicture` requires a real video surface,
