@@ -44,6 +44,8 @@ test('an empty channel list explains itself instead of blaming the setup', async
   // With channels present the empty state is unreachable, so this drives the case the
   // screenshot showed: the host answers with none.
   await page.goto('/#/');
+  // The mock's test hooks are imported on demand and can land after the load event.
+  await page.waitForFunction(() => '__auroraFailNext' in window);
   await page.evaluate(() => {
     const w = window as unknown as {
       __auroraFailNext?: (name: string, msg: string) => void;

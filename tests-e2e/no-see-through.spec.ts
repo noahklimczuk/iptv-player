@@ -18,8 +18,12 @@ import { expect, test, type Page } from '@playwright/test';
 const seeThrough = (c: string) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
 const shellColour = (page: Page) =>
   page.getByTestId('app-shell').evaluate((el) => getComputedStyle(el).backgroundColor);
-const noPicture = (page: Page, on: boolean) =>
-  page.evaluate((v) => (window as unknown as { __auroraNoPicture: (on: boolean) => void }).__auroraNoPicture(v), on);
+const noPicture = async (page: Page, on: boolean) => {
+  // The browser build's test hooks arrive with the mock, which is imported on demand
+  // (`loadMock`) and can land after the page's load event.
+  await page.waitForFunction(() => '__auroraNoPicture' in window);
+  await page.evaluate((v) => (window as unknown as { __auroraNoPicture: (on: boolean) => void }).__auroraNoPicture(v), on);
+};
 
 test('the window stays opaque until there is a picture to show through it', async ({ page }) => {
   await page.goto('/?video#/live');

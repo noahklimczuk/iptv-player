@@ -236,6 +236,8 @@ test('a daily limit warns, stops playback at the limit, and the PIN gives more t
     (await invoke<{ dailyLimitMin: number | null }[]>(page, 'profiles.list'))[0]!.dailyLimitMin).toBe(60);
   await invoke(page, 'parental.relock');
   await page.goto('/#/');
+  // The mock's test hooks are imported on demand and can land after the load event.
+  await page.waitForFunction(() => '__auroraWatched' in window);
 
   const watched = (secs: number) => page.evaluate(
     (s) => (window as unknown as { __auroraWatched: (s: number) => void }).__auroraWatched(s),
