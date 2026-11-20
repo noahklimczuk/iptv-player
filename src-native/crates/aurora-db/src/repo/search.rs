@@ -108,27 +108,35 @@ fn to_like(input: &str) -> Option<String> {
     Some(format!("%{escaped}%"))
 }
 
-/// Ids the library filters leave visible for one kind, for filtering the FTS results.
+/// Whether one row passes the library's filters: not hidden, and not removed by the
+/// language, duplicate or parental rules the browse pages apply.
 ///
-/// FTS5 cannot be joined onto the filter predicates in one statement without losing its
-/// ranking, so the surviving ids are fetched separately and the hits are sifted through
-/// them. Search is a small result set by construction, so this costs one extra query.
-fn visible_ids(
-    conn: &Connection,
+/// Asked of each hit rather than built up front. `grouped` used to read every visible
+/// id of all three kinds into sets on every keystroke -- 25,257 films, 8,504 series and
+/// 6,700 channels on a real library, about 160 ms -- to test forty hits against them.
+/// A primary-key lookup per hit is the same answer for a few microseconds each.
+fn visibility<'c>(
+    conn: &'c Connection,
     kind: crate::repo::filtering::Kind,
     filter: &crate::repo::filtering::LibraryFilter,
-) -> Result<std::collections::HashSet<i64>> {
+) -> Result<rusqlite::Statement<'c>> {
     let t = kind.table();
     let sql = format!(
-        "SELECT {t}.id FROM {t} WHERE {t}.hidden = 0{}",
+        "SELECT 1 FROM {t} WHERE {t}.id = ?1 AND {t}.hidden = 0{}",
         filter.where_sql(kind)
     );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map([], |r| r.get::<_, i64>(0))?
-        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
-    Ok(rows)
+    Ok(conn.prepare(&sql)?)
 }
+
+/// How many candidates a search reads for every result it may show.
+///
+/// The limit used to be applied *before* the filters, so the forty best-ranked hits
+/// were read and then the hidden ones thrown away. With "English only" or duplicate
+/// hiding on, most of a library can be filtered out, and a search could come back with
+/// two results -- or none -- while dozens of visible titles matched further down. Now
+/// the reading goes on past filtered rows until the limit is met, up to this many per
+/// result so a query that matches nothing visible still ends.
+const CANDIDATES_PER_RESULT: u32 = 25;
 
 pub fn grouped(conn: &Connection, text: &str, now: i64, limit: u32) -> Result<SearchResults> {
     use crate::repo::filtering::{Kind, LibraryFilter};
@@ -137,16 +145,36 @@ pub fn grouped(conn: &Connection, text: &str, now: i64, limit: u32) -> Result<Se
     // A viewer who hid something, or asked for one language and one copy, meant it here
     // too: search is a way into the library, not a way around it.
     let filter = LibraryFilter::load(conn)?;
-    let channels = visible_ids(conn, Kind::Live, &filter)?;
-    let movies = visible_ids(conn, Kind::Movies, &filter)?;
-    let series = visible_ids(conn, Kind::Series, &filter)?;
+    let mut channels = visibility(conn, Kind::Live, &filter)?;
+    let mut movies = visibility(conn, Kind::Movies, &filter)?;
+    let mut series = visibility(conn, Kind::Series, &filter)?;
+    let window = limit.saturating_mul(CANDIDATES_PER_RESULT);
 
-    for hit in query(conn, text, limit)? {
-        match hit.kind.as_str() {
-            "channel" if channels.contains(&hit.ref_id) => out.channels.push(hit),
-            "movie" if movies.contains(&hit.ref_id) => out.movies.push(hit),
-            "series" if series.contains(&hit.ref_id) => out.series.push(hit),
-            _ => {}
+    if let Some(q) = to_fts_query(text) {
+        let mut stmt = conn.prepare(
+            "SELECT kind, ref_id, title, subtitle FROM search_index
+             WHERE search_index MATCH ?1 ORDER BY rank LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![q, window])?;
+        let mut shown = 0u32;
+        while shown < limit {
+            let Some(r) = rows.next()? else { break };
+            let hit = SearchHit {
+                kind: r.get(0)?,
+                ref_id: r.get(1)?,
+                title: r.get(2)?,
+                subtitle: r.get(3)?,
+            };
+            let (group, check) = match hit.kind.as_str() {
+                "channel" => (&mut out.channels, &mut channels),
+                "movie" => (&mut out.movies, &mut movies),
+                "series" => (&mut out.series, &mut series),
+                _ => continue,
+            };
+            if check.exists([hit.ref_id])? {
+                group.push(hit);
+                shown += 1;
+            }
         }
     }
 
@@ -157,42 +185,49 @@ pub fn grouped(conn: &Connection, text: &str, now: i64, limit: u32) -> Result<Se
     // Programmes still in the guide, on the channels this install actually carries.
     // `ref_id` is the channel, not the programme: what a viewer wants from a search
     // hit is to watch the thing, and that needs the channel.
-    let mut stmt = conn.prepare(
-        "SELECT c.id, COALESCE(c.custom_name, c.name), p.title, p.start, p.stop
-         FROM epg_programmes p
-         JOIN channels c ON c.epg_channel_id = p.channel_id
-         WHERE p.title LIKE ?1 ESCAPE '\\' AND p.stop > ?2 AND c.hidden = 0
-         ORDER BY p.start LIMIT ?3",
-    )?;
-    let rows = stmt
-        .query_map(params![like, now, limit], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, i64>(4)?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for (channel_id, channel_name, title, start, _stop) in rows {
-        if !channels.contains(&channel_id) {
-            continue;
-        }
-        let hit = SearchHit {
-            kind: "programme".into(),
-            ref_id: channel_id,
-            title,
-            subtitle: Some(channel_name),
-        };
-        if start <= now {
-            out.on_now.push(hit);
-        } else {
-            out.upcoming.push(hit);
+    //
+    // `+p.start`, so the order is not taken from `idx_prog_time`. With it, SQLite walks
+    // every programme in start order -- 254,310 of them on a real guide, past ones too --
+    // fetching each row from the table at random to test its title, and a search for
+    // "ma" took 4.6 s. Ignoring the index reads the table straight through and sorts the
+    // few matches instead: 0.45 s, the same rows in the same order.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, COALESCE(c.custom_name, c.name), p.title, p.start, p.stop
+             FROM epg_programmes p
+             JOIN channels c ON c.epg_channel_id = p.channel_id
+             WHERE p.title LIKE ?1 ESCAPE '\\' AND p.stop > ?2 AND c.hidden = 0
+             ORDER BY +p.start LIMIT ?3",
+        )?;
+        let mut rows = stmt.query(params![like, now, window])?;
+        let mut shown = 0u32;
+        while shown < limit {
+            let Some(r) = rows.next()? else { break };
+            let channel_id: i64 = r.get(0)?;
+            if !channels.exists([channel_id])? {
+                continue;
+            }
+            let start: i64 = r.get(3)?;
+            let hit = SearchHit {
+                kind: "programme".into(),
+                ref_id: channel_id,
+                title: r.get(2)?,
+                subtitle: Some(r.get(1)?),
+            };
+            if start <= now {
+                out.on_now.push(hit);
+            } else {
+                out.upcoming.push(hit);
+            }
+            shown += 1;
         }
     }
 
     // Cast and crew, but only those attached to something in the library.
+    //
+    // `idx_people_name` lets this walk names in order and stop at the limit. Without it
+    // every one of the 583,341 people TMDB has named was read and sorted per keystroke,
+    // 250-490 ms; with it a common fragment answers in under 10 ms.
     let mut stmt = conn.prepare(
         "SELECT pe.tmdb_id, pe.name FROM people pe
          WHERE pe.name LIKE ?1 ESCAPE '\\'
@@ -408,6 +443,33 @@ mod tests {
             .unwrap()
             .people
             .is_empty());
+    }
+
+    /// The limit counts what is shown, not what was read.
+    ///
+    /// Thirty hidden films called exactly "Matrix" outrank "The Matrix" and "Matrix
+    /// Reloaded" (a shorter title is a closer match). The limit used to be taken first and
+    /// the hidden ones removed after, so a search for "matrix" with a limit of ten came
+    /// back with no films at all.
+    #[test]
+    fn hidden_titles_do_not_crowd_visible_ones_out_of_the_results() {
+        let mut conn = seeded_grouped();
+        let rows: Vec<(String, i64, String, Option<String>)> = (100..130)
+            .map(|id| ("movie".to_string(), id, "Matrix".to_string(), None))
+            .collect();
+        index(&mut conn, &rows).unwrap();
+        for id in 100..130_i64 {
+            conn.execute(
+                "INSERT INTO movies (id, provider_id, provider_key, title, match_key, url,
+                                     last_seen_at, hidden)
+                 VALUES (?1, 1, ?2, 'Matrix', 'matrix', 'http://x', 0, 1)",
+                params![id, format!("h{id}")],
+            )
+            .unwrap();
+        }
+        let r = grouped(&conn, "matrix", NOW, 10).unwrap();
+        let ids: Vec<i64> = r.movies.iter().map(|h| h.ref_id).collect();
+        assert!(ids.contains(&1) && ids.contains(&2), "{ids:?}");
     }
 
     #[test]

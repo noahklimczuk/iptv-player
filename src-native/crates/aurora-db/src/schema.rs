@@ -873,9 +873,19 @@ CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
         name: "sync_unreadable",
         sql: SYNC_UNREADABLE,
     },
+    // The search palette's people section asks `name LIKE '%…%' ORDER BY name LIMIT n`.
+    // With nothing on `name`, SQLite read all of `people` -- 583,341 rows on a real
+    // library -- and sorted the matches, 250-490 ms on every keystroke. Walking this
+    // index in name order stops at the limit: under 10 ms for a common fragment, and no
+    // worse than before for one that matches nothing.
+    Migration {
+        version: 23,
+        name: "people_name_index",
+        sql: "CREATE INDEX idx_people_name ON people(name);",
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 22;
+pub const LATEST_VERSION: u32 = 23;
 
 /// Migration 21: adult categories show only while there is a parental PIN (README §11:
 /// "requires explicit opt-in plus the master PIN to reveal"; `AUDIT/findings.md` F-39).

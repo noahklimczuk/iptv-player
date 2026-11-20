@@ -45,7 +45,8 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
         match conn.execute_batch("VACUUM") {
             Ok(()) => tracing::info!("library compacted, so the old rows are gone from the file"),
             Err(e) => tracing::error!(
-                "the library could not be compacted, so the previous stream URLs may                  still be recoverable from unused pages of the file: {e}"
+                "the library could not be compacted, so the previous stream URLs may \
+                 still be recoverable from unused pages of the file: {e}"
             ),
         }
     }
@@ -252,6 +253,39 @@ fn register_functions(conn: &Connection) -> Result<()> {
 /// the difference between the indexes being used and being ignored.
 pub fn analyze(conn: &Connection) -> Result<()> {
     conn.execute_batch("ANALYZE")?;
+    Ok(())
+}
+
+/// The tables a provider refresh rewrites, whose statistics go stale with it.
+const IMPORTED_TABLES: &[&str] = &[
+    "channels",
+    "channel_sources",
+    "movies",
+    "series",
+    "episodes",
+    "epg_channels",
+    "epg_programmes",
+];
+
+/// `analyze`, for the end of an import: exact statistics for what the import wrote, and
+/// a sample of the rest.
+///
+/// A full `ANALYZE` was 0.1 s when it was added here. TMDB's cast and crew have since
+/// grown to 1.75 million `credits` rows on a real library, and it reached 1.8 s -- 1.1 s
+/// of that on `credits`, which no refresh touches -- inside the import's write lock.
+/// Those tables still get statistics, from a sample (`analysis_limit`), so the planner
+/// keeps knowing what their indexes are worth. A library that has never been analysed
+/// gets the whole thing, as it always did.
+pub fn analyze_after_import(conn: &Connection) -> Result<()> {
+    if !has_statistics(conn)? {
+        return analyze(conn);
+    }
+    for table in IMPORTED_TABLES {
+        conn.execute_batch(&format!("ANALYZE {table}"))?;
+    }
+    conn.execute_batch(
+        "PRAGMA analysis_limit = 1000; ANALYZE credits; ANALYZE people; PRAGMA analysis_limit = 0;",
+    )?;
     Ok(())
 }
 
