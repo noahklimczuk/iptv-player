@@ -371,9 +371,10 @@ private struct ChannelRow: View {
 
 /// Windows' `Badge`, in the tones the channel row uses.
 struct Badge: View {
-    enum Style { case neutral, new, warning, live, outline }
+    enum Style { case neutral, new, warning, live, outline, accent }
     let text: String
     let style: Style
+    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
         Text(text)
@@ -395,6 +396,7 @@ struct Badge: View {
         case .new, .live: .white
         case .warning: .orange
         case .outline: .secondary
+        case .accent: theme.accentText
         }
     }
 
@@ -403,6 +405,7 @@ struct Badge: View {
         case .neutral: Color.secondary.opacity(0.18)
         case .new: .green
         case .live: .red
+        case .accent: theme.accent
         case .warning, .outline: .clear
         }
     }
