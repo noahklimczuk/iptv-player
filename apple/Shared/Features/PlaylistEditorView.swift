@@ -67,7 +67,20 @@ struct PlaylistEditorView: View {
             .padding(.horizontal, pagePadding)
             .padding(.bottom, Daylight.px(16))
             .foregroundStyle(theme.text)
+            #if os(iOS)
+            // Clicking away commits a cell, on Windows: here a tap on the page or a
+            // scroll ends the editing, and the cell commits as its focus leaves.
+            .background {
+                Color.clear.contentShape(Rectangle()).onTapGesture {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                    to: nil, from: nil, for: nil)
+                }
+            }
+            #endif
         }
+        #if os(iOS)
+        .scrollDismissesKeyboard(.immediately)
+        #endif
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .auroraTitle("Playlist")
         .sheet(item: $copiesOf) { row in
