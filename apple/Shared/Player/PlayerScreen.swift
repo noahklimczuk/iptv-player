@@ -76,7 +76,7 @@ private struct PlayerContent: View {
             )
             .ignoresSafeArea()
             backdrop
-            PlayerOverlay(session: session, focus: $focus, close: { dismiss() })
+            PlayerOverlay(session: session, focus: $focus, close: { dismiss() }, retry: retry)
                 #if os(tvOS)
                 .onExitCommand(perform: menu)
                 #endif
@@ -195,6 +195,18 @@ private struct PlayerContent: View {
         }
     }
 
+    /// The error panel's Retry: the same tune again, or the same item asked for afresh
+    /// when it never resolved.
+    private func retry() {
+        session.status = nil
+        startedItem = nil
+        if resolved?.item == session.item {
+            playIfReady()
+        } else {
+            Task { await resolve(session.item) }
+        }
+    }
+
     private func playIfReady() {
         guard let resolved, resolved.item != startedItem, let controller else { return }
         startedItem = resolved.item
@@ -202,7 +214,9 @@ private struct PlayerContent: View {
         let core = session.core
         switch resolved.tune {
         case .live(let tune): controller.play(tune, core: core)
-        case .vod(let tune): controller.play(tune, core: core, profileId: model.profileId)
+        case .vod(let tune):
+            session.named(tune.title, subtitle: tune.subtitle)
+            controller.play(tune, core: core, profileId: model.profileId)
         case .replay(let tune): controller.play(tune, core: core)
         }
         // The picture's shape is the viewer's, not the file's: it carries to the next one.

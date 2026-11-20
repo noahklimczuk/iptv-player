@@ -19,7 +19,10 @@ final class PlayerSession {
 
     let menus = playerMenus()
 
-    private(set) var item: PlayerItem
+    private(set) var item: PlayerItem {
+        // The next file names itself when it is tuned.
+        didSet { if item != oldValue { heading = nil } }
+    }
     private(set) var state = MPVPlayerController.PlaybackState()
     var status: MPVPlayerController.PlayerStatus?
 
@@ -30,7 +33,19 @@ final class PlayerSession {
         didSet { poke() }
     }
     private(set) var aspect: PictureAspect = .auto
+    /// Windows' mute (M). The volume itself is the device's.
+    private(set) var muted = false
     private var lastActivity = Date()
+    /// Windows' stats panel (I), and what it shows: read while the controls are up, as
+    /// the top bar's resolution tag needs them too.
+    var statsOpen = false
+    private(set) var stats: MPVPlayerController.PlaybackStats?
+    /// The line under the title (an episode's "S2 E5 · Name"), and the title over it when
+    /// the tune names it better than the item did (an episode's show).
+    private(set) var heading: (title: String, subtitle: String?)?
+
+    /// The title pill's name: the show for an episode, else what was opened.
+    var shownTitle: String { heading?.title ?? item.title }
 
     // MARK: Episode aids (`useEpisodeAids`)
 
@@ -124,6 +139,22 @@ final class PlayerSession {
     func backToLive() {
         controller?.backToLive()
         poke()
+    }
+
+    /// What the tune called it (`resolve.rs`'s `Label`).
+    func named(_ title: String, subtitle: String?) {
+        heading = (title, subtitle)
+    }
+
+    func toggleMute() {
+        muted.toggle()
+        controller?.setMuted(muted)
+        poke()
+    }
+
+    /// Reads the stats now.
+    func refreshStats() {
+        controller?.stats { [weak self] in self?.stats = $0 }
     }
 
     var episodeId: Int64? {

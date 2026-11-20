@@ -225,7 +225,11 @@ pub struct WatchProgress {
 pub struct VodTune {
     pub kind: VodKind,
     pub id: i64,
+    /// What the player's title pill says: a film's name, or an episode's show
+    /// (`resolve.rs`'s `Label`).
     pub title: String,
+    /// The line under it: "S2 E5 · The Fifth" for an episode, none for a film.
+    pub subtitle: Option<String>,
     /// Can carry the provider's credentials: hand it to the player, never log it.
     pub url: String,
     /// Set on mpv before `loadfile`. Includes the start position, when one was asked for.
@@ -464,20 +468,22 @@ impl AuroraCore {
         let (sql, noun, media) = match kind {
             VodKind::Movie => (
                 "SELECT url, shown_title(COALESCE(custom_title, tmdb_title, title)),
-                        stream_id, container, provider_id
+                        stream_id, container, provider_id, NULL, NULL, NULL
                  FROM movies WHERE id = ?1",
                 "film",
                 MediaKind::Movie,
             ),
             VodKind::Episode | VodKind::Recording => (
-                "SELECT e.url, shown_title(e.title), e.stream_id, e.container, s.provider_id
+                "SELECT e.url, shown_title(e.title), e.stream_id, e.container, s.provider_id,
+                        shown_title(COALESCE(s.custom_title, s.tmdb_title, s.title)),
+                        e.season, e.episode
                  FROM episodes e JOIN series s ON s.id = e.series_id
                  WHERE e.id = ?1",
                 "episode",
                 MediaKind::Episode,
             ),
         };
-        let (stream, title) = db
+        let (stream, title, show, numbered) = db
             .query_row(sql, [id], |r| {
                 Ok((
                     StreamRef {
@@ -487,6 +493,11 @@ impl AuroraCore {
                         provider_id: r.get(4)?,
                     },
                     r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(5)?,
+                    match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<i64>>(7)?) {
+                        (Some(season), Some(number)) => Some(format!("S{season} E{number}")),
+                        _ => None,
+                    },
                 ))
             })
             .optional()?
@@ -509,7 +520,17 @@ impl AuroraCore {
                  nothing to open. A library refresh may fill it in."
             )));
         }
-        let title = title.unwrap_or_else(|| noun.to_string());
+        // Windows' label: an episode is named by its show, with the number and its own
+        // name under it.
+        let name = title.filter(|n| !n.trim().is_empty());
+        let subtitle = numbered.map(|numbered| match &name {
+            Some(n) => format!("{numbered} · {n}"),
+            None => numbered,
+        });
+        let title = show
+            .filter(|s| !s.trim().is_empty())
+            .or(name)
+            .unwrap_or_else(|| noun.to_string());
 
         let options = Request {
             live: false,
@@ -521,6 +542,7 @@ impl AuroraCore {
             kind,
             id,
             title,
+            subtitle,
             url,
             mpv_options: mpv_options(&options),
         })
@@ -670,6 +692,52 @@ mod tests {
         assert_eq!(core.movie_detail(id).unwrap().title, "Heat");
         let e = core.movie_detail(id + 1000).unwrap_err();
         assert!(e.to_string().contains("no longer in your library"), "{e}");
+    }
+
+    /// Windows' player label: an episode under its show's name, the number and its own
+    /// name on the line below; a film by its name alone.
+    #[test]
+    fn an_episode_is_titled_by_its_show_with_its_number_below() {
+        use aurora_db::repo::library::{upsert_episodes, upsert_series, NewEpisode, NewSeries};
+        let (core, _dir) = core();
+        films(&core, &[("Heat", "Crime", r#"["Crime"]"#)]);
+        let ids: Vec<i64> = {
+            let mut db = core.db.lock();
+            let sid = upsert_series(
+                &mut db,
+                1,
+                &NewSeries {
+                    provider_key: "s",
+                    title: "Show",
+                    match_key: "show",
+                    ..Default::default()
+                },
+                0,
+            )
+            .unwrap();
+            let eps = [Some("The Fifth".to_string()), None].map(|title| NewEpisode {
+                season: 2,
+                episode: if title.is_some() { 5 } else { 6 },
+                title,
+                url: "http://p/e.mkv".into(),
+                ..Default::default()
+            });
+            upsert_episodes(&mut db, sid, &eps, 0).unwrap();
+            library::episodes_for(&db, sid, None)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.id)
+                .collect()
+        };
+        let named = core.tune_episode(ids[0], None).unwrap();
+        assert_eq!(named.title, "Show");
+        assert_eq!(named.subtitle.as_deref(), Some("S2 E5 · The Fifth"));
+        let bare = core.tune_episode(ids[1], None).unwrap();
+        assert_eq!(bare.subtitle.as_deref(), Some("S2 E6"));
+        let film = core
+            .tune_movie(core.movies(browse()).unwrap()[0].id, None)
+            .unwrap();
+        assert_eq!((film.title.as_str(), film.subtitle), ("Heat", None));
     }
 
     #[test]

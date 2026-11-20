@@ -93,6 +93,13 @@ struct RootView: View {
             model.assistantQuestion = question
             if compact { showingAssistant = true } else { tab = .assistant }
         })
+        // The player's TV Guide button: whatever sheet the player was opened from goes
+        // with it.
+        .onChange(of: model.guideRequests) {
+            showingSearch = false
+            showingRecordings = false
+            tab = .guide
+        }
         // Each sheet is its own presentation and keeps the system's appearance unless
         // given the theme itself.
         .sheet(isPresented: $showingAssistant) { AssistantView(closable: true).auroraAppearance() }
