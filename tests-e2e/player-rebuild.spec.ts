@@ -220,17 +220,17 @@ test('C9: a film shows time elapsed and its length', async ({ page }) => {
   expect(s.positionSecs).toBeLessThan(total);
 });
 
-test('C12: the volume goes no higher than 100, and ↑ ↓ step by five', async ({ page }) => {
+test('C12: the volume boosts past 100 up to 200, and ↑ ↓ step by five', async ({ page }) => {
   await playFilm(page);
   await wake(page);
-  await expect(volume(page)).toHaveAttribute('max', '100');
+  await expect(volume(page)).toHaveAttribute('max', '200');
   const before = (await state(page)).volume;
   await page.keyboard.press('ArrowUp');
-  await expect.poll(async () => (await state(page)).volume).toBe(Math.min(100, before + 5));
-  for (let i = 0; i < 25; i += 1) await page.keyboard.press('ArrowUp');
-  await expect.poll(async () => (await state(page)).volume).toBe(100);
+  await expect.poll(async () => (await state(page)).volume).toBe(Math.min(200, before + 5));
+  for (let i = 0; i < 45; i += 1) await page.keyboard.press('ArrowUp');
+  await expect.poll(async () => (await state(page)).volume).toBe(200);
   await page.keyboard.press('ArrowDown');
-  await expect.poll(async () => (await state(page)).volume).toBe(95);
+  await expect.poll(async () => (await state(page)).volume).toBe(195);
 });
 
 test('C13: the menus mark the current choice, and switching tabs keeps the menu open', async ({ page }) => {

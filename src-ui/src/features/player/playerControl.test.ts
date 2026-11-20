@@ -109,16 +109,16 @@ describe('volume (C12)', () => {
     expect(sent).toEqual([['player.setVolume', { volume: 50 }]]);
   });
 
-  it('never asks for more than 100 or less than 0', async () => {
+  it('never asks for more than 200 or less than 0', async () => {
     invoke.mockReturnValue(never());
     control.changeVolume(500);
-    expect(player().volume).toBe(100);
+    expect(player().volume).toBe(200);
     await flush();
     control.changeVolume(-500);
     expect(player().volume).toBe(0);
     await flush();
     const sent = invoke.mock.calls.filter(([n]) => n === 'player.setVolume').map(([, a]) => a.volume);
-    expect(sent).toEqual([100, 0]);
+    expect(sent).toEqual([200, 0]);
   });
 
   it('turning it up while muted unmutes; turning it down does not', () => {

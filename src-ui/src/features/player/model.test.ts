@@ -41,7 +41,8 @@ describe('when the controls may hide (C1, C2, C5)', () => {
 describe('volume (C12)', () => {
   it('stays between 0 and 100, in whole steps', () => {
     expect(m.clampVolume(-5)).toBe(0);
-    expect(m.clampVolume(150)).toBe(100);
+    expect(m.clampVolume(150)).toBe(150);
+    expect(m.clampVolume(250)).toBe(200);
     expect(m.clampVolume(42.6)).toBe(43);
     expect(m.clampVolume(Number.NaN)).toBe(0);
   });
@@ -52,7 +53,8 @@ describe('volume (C12)', () => {
     let state = { carried: 0, volume: 50 };
     for (let i = 0; i < 10; i += 1) state = m.wheelVolume(state.carried, 10, state.volume);
     expect(state.volume).toBe(40);
-    expect(m.wheelVolume(0, -500, 98).volume).toBe(100);
+    expect(m.wheelVolume(0, -500, 98).volume).toBe(148);
+    expect(m.wheelVolume(0, -500, 198).volume).toBe(200);
   });
 
   it('reads lines and pages as pixels', () => {

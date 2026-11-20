@@ -57,6 +57,7 @@ import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
 import { invoke, onMosaicState, onParentalClock, onSleepFired } from '@/ipc';
 import { notify, report } from '@/lib/errors';
+import { installScrollingFlag } from '@/lib/scrolling';
 import { useMarks } from '@/state/marks';
 import { useProfile } from '@/state/profile';
 import { bindPlayerState, useUi } from '@/state/ui';
@@ -211,6 +212,8 @@ export default function App() {
   // Picture-in-picture (README §6.2). The same player in a corner, so unlike a mosaic
   // tile it opens no stream and cannot be refused by the provider.
   const [pip, setPip] = useState<PipView | null>(null);
+  // The glass stands down while anything scrolls (`lib/scrolling.ts`).
+  useEffect(() => installScrollingFlag(), []);
   const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
   useEffect(() => {
     invoke('pip.state').then(setPip).catch(() => {});

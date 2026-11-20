@@ -189,6 +189,26 @@
   mask-image: linear-gradient(180deg, #000 55%, transparent);
 }
 
+/* While anything scrolls (`lib/scrolling.ts`), the glass is a tint rather than a
+   filter: a backdrop filter over moving content is re-blurred every frame, and that
+   was most of what made scrolling Home stutter. A touch more tint stands in for the
+   frost; the filter comes back once the scroll settles. `:where` keeps these at the
+   weight of the rules they stand in for, so contrast, reduced transparency and the
+   no-blur fallback below still win. */
+:where(:root[data-scrolling]) .glass,
+:where(:root[data-scrolling]) .glass-strong,
+:where(:root[data-scrolling]) .glass-clear,
+:where(:root[data-scrolling]) .glass-bar::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:where(:root[data-scrolling]) .glass {
+  background-color: color-mix(in srgb, var(--glass-tint) 70%, var(--glass-edge-bg));
+}
+:where(:root[data-scrolling]) .glass-strong {
+  background-color: color-mix(in srgb, var(--glass-tint-strong) 70%, var(--glass-edge-bg));
+}
+
 /* Solid where glass would cost legibility. */
 :root[data-theme='contrast'] .glass,
 :root[data-theme='contrast'] .glass-strong,

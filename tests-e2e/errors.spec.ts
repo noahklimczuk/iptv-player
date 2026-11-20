@@ -13,6 +13,9 @@ const SHOTS = 'screenshots';
 
 /** Make the next call to `command` refuse, the way the host refuses. */
 async function failNext(page: Page, command: string, message: string) {
+  // The browser build's test hooks arrive with the mock, which is imported on demand
+  // (`loadMock`) and can land after the page's load event.
+  await page.waitForFunction(() => '__auroraFailNext' in window);
   await page.evaluate(
     ([c, m]) => {
       const w = window as unknown as {

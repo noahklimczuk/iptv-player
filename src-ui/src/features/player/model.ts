@@ -48,9 +48,13 @@ export const DOUBLE_CLICK_MS = 260;
 
 /* ── Volume ─────────────────────────────────────────────────────────────── */
 
-/** C12: what the host accepts. */
+/**
+ * C12: what the host accepts. Past 100 is mpv's software gain (`volume-max` 200), for
+ * a stream mastered quietly -- the old player went that far, and the rebuild's 100 was
+ * missed ("add back the volume more than 100% in the player").
+ */
 export const MIN_VOLUME = 0;
-export const MAX_VOLUME = 100;
+export const MAX_VOLUME = 200;
 /** C12: one wheel notch, one arrow press. */
 export const VOLUME_STEP = 5;
 

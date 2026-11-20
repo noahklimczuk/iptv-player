@@ -289,6 +289,9 @@ test('Up Next appears on an episode nobody has taught anything', async ({ page }
  */
 test('the aids work on a stream that never reports a duration', async ({ page }) => {
   await page.goto('/#/');
+  // The browser build's test hooks arrive with the mock, which is imported on demand
+  // (`loadMock`) and can land after the page's load event.
+  await page.waitForFunction(() => '__auroraSilentDuration' in window);
   await page.evaluate(() => {
     (window as unknown as { __auroraSilentDuration: (on: boolean) => void })
       .__auroraSilentDuration(true);
