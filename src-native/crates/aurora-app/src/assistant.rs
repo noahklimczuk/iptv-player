@@ -921,8 +921,38 @@ fn turn_with_retries(
     Err(last.expect("a failure to report after every attempt failed"))
 }
 
+/// Where `send` takes the library from, a statement at a time.
+///
+/// `assistant_send` used to lock the library once and hand `send` the connection, so the
+/// lock was held for the whole turn -- Gemini's round trips included, each allowed 90
+/// seconds, several to a turn. It was the *write* lock, so for that long nothing else
+/// could write: not the DVR starting a recording that was due, not the player saving a
+/// position. The real log has a 4.1 s hold from here. Now each read or write takes the
+/// lock for itself and lets it go, and the network waits hold nothing.
+pub trait Library {
+    type Guard<'a>: std::ops::Deref<Target = Connection>
+    where
+        Self: 'a;
+    fn open(&self) -> Self::Guard<'_>;
+}
+
+/// A bare connection, for tests and for callers that already own one.
+impl Library for Connection {
+    type Guard<'a> = &'a Connection;
+    fn open(&self) -> &Connection {
+        self
+    }
+}
+
+impl Library for crate::dblock::TimedMutex<Connection> {
+    type Guard<'a> = crate::dblock::TimedGuard<'a, Connection>;
+    fn open(&self) -> Self::Guard<'_> {
+        self.lock()
+    }
+}
+
 pub fn send(
-    db: &Connection,
+    db: &impl Library,
     chatter: &dyn Chatter,
     profile_id: i64,
     text: &str,
@@ -934,7 +964,7 @@ pub fn send(
         return Err(AppError::Other("Ask me something first.".into()));
     }
 
-    let mut stored = load(db, profile_id);
+    let mut stored = load(&db.open(), profile_id);
     stored.messages.push(ChatMessage {
         role: "user".into(),
         text: text.to_string(),
@@ -942,7 +972,7 @@ pub fn send(
         at: now,
     });
 
-    let system = system_prompt(&digest_line(db));
+    let system = system_prompt(&digest_line(&db.open()));
     let tools = declarations();
     let mut working = turns_of(recent(&stored.messages));
 
@@ -1035,7 +1065,7 @@ pub fn send(
                 thought_signature: call.thought_signature.clone(),
             });
 
-            match run_tool(db, profile_id, call, now, &offered) {
+            match run_tool(&db.open(), profile_id, call, now, &offered) {
                 Ok(ran) => {
                     on_step(&ran.step);
                     steps.push(ran.step);
@@ -1098,7 +1128,7 @@ pub fn send(
         let drop = stored.messages.len() - KEEP_TURNS;
         stored.messages.drain(0..drop);
     }
-    save(db, profile_id, &stored);
+    save(&db.open(), profile_id, &stored);
 
     Ok(SendResult { message, steps })
 }
@@ -1198,9 +1228,8 @@ pub fn assistant_send(
     .map_err(|e| AppError::Other(e.message))?;
     let chatter = ChatClient::new(&http, &key);
 
-    let db = services.db.lock();
     send(
-        &db,
+        &*services.db,
         &chatter,
         args.profile_id,
         &args.text,
@@ -1370,6 +1399,41 @@ mod tests {
             }
             Ok(then.remove(0))
         }
+    }
+
+    /// Free while the model thinks.
+    ///
+    /// A chatter that tries the library's lock from another thread mid-turn, the way the
+    /// DVR's scheduler would. It used to find the lock held for the whole turn, network
+    /// wait included, so a recording due during a question to the assistant waited for
+    /// the answer.
+    #[test]
+    fn the_library_is_not_locked_while_waiting_on_the_model() {
+        struct Probe<'m> {
+            lock: &'m crate::dblock::TimedMutex<Connection>,
+            free: RefCell<Vec<bool>>,
+        }
+        impl Chatter for Probe<'_> {
+            fn turn(
+                &self,
+                _system: &str,
+                _history: &[Turn],
+                _tools: &[ToolDecl],
+            ) -> std::result::Result<ChatReply, aurora_core::neterr::NetFailure> {
+                let free = std::thread::scope(|s| {
+                    s.spawn(|| self.lock.try_lock().is_some()).join().unwrap()
+                });
+                self.free.borrow_mut().push(free);
+                Ok(Script::text("Here."))
+            }
+        }
+        let lock = crate::dblock::TimedMutex::new(db());
+        let probe = Probe {
+            lock: &lock,
+            free: RefCell::new(Vec::new()),
+        };
+        send(&lock, &probe, 1, "anything", NOW, |_| {}).unwrap();
+        assert_eq!(*probe.free.borrow(), [true]);
     }
 
     /// A retryable failure is a hiccup, not an answer. The HTTP client cannot see these
