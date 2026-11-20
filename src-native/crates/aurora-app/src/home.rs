@@ -178,7 +178,8 @@ fn gather(
     Ok((inputs, progress_map))
 }
 
-/// A page of keys as cards, in the rail's order: one query per kind, not one per card.
+/// A page of keys as cards, in the rail's order: one query per kind, not one per card,
+/// and without the cast list, which a card never shows (`library::Cast`).
 fn hydrate(db: &Connection, keys: &[Key]) -> Result<Vec<CatalogItem>> {
     let ids = |want: Kind| -> Vec<i64> {
         keys.iter()
@@ -186,8 +187,8 @@ fn hydrate(db: &Connection, keys: &[Key]) -> Result<Vec<CatalogItem>> {
             .map(|(_, id)| *id)
             .collect()
     };
-    let movies = library::movies_by_id(db, &ids(Kind::Movie))?;
-    let series = library::series_by_id(db, &ids(Kind::Series))?;
+    let movies = library::movies_by_id(db, &ids(Kind::Movie), library::Cast::Left)?;
+    let series = library::series_by_id(db, &ids(Kind::Series), library::Cast::Left)?;
     // A row a refresh removed since the build is skipped rather than faked.
     Ok(keys
         .iter()

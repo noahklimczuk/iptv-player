@@ -107,19 +107,45 @@ pub fn upsert_movies(
 /// The stream URL is deliberately absent. It carries the provider's username and
 /// password in the path, and the renderer has no use for it: playback is resolved on
 /// the host (README C10).
-const MOVIE_SELECT: &str = "SELECT movies.id,
+fn movie_select(cast: Cast) -> String {
+    format!(
+        "SELECT movies.id,
        -- What the viewer called it, then what it is actually called, then what the
        -- provider filed it under. See migration 9.
        COALESCE(custom_title, tmdb_title, title), year, quality,
                                    poster, backdrop, overview, runtime_mins, rating,
                                    genres, certification, added_at, logo_art, lang_code,
-                                   (SELECT group_concat(p.name, char(31))
-                                      FROM credits c JOIN people p ON p.tmdb_id = c.person_id
-                                     WHERE c.item_kind = 'movie' AND c.item_id = movies.id
-                                       AND c.is_cast = 1
-                                     ORDER BY c.ord),
+                                   {},
                                    trailer_key
-                            FROM movies";
+                            FROM movies",
+        cast_sql(cast, "movie", "movies")
+    )
+}
+
+/// Whether a row carries its cast list.
+///
+/// The list is a correlated subquery into `credits` (1.7 million rows on a real
+/// library), and it is most of what a row costs: 200 films take 35-44 ms with it and
+/// 3-4 ms without. Home's cards never show it -- the detail panel asks
+/// `metadata.credits` for itself -- so they leave it out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cast {
+    Included,
+    Left,
+}
+
+fn cast_sql(cast: Cast, kind: &str, table: &str) -> String {
+    match cast {
+        Cast::Left => "NULL".to_string(),
+        Cast::Included => format!(
+            "(SELECT group_concat(p.name, char(31))
+                FROM credits c JOIN people p ON p.tmdb_id = c.person_id
+               WHERE c.item_kind = '{kind}' AND c.item_id = {table}.id
+                 AND c.is_cast = 1
+               ORDER BY c.ord)"
+        ),
+    }
+}
 
 /// `group_concat` cannot be ordered portably, and a comma would split names that
 /// contain one, so the separator is a unit separator no name has.
@@ -360,8 +386,9 @@ pub fn list_movies(conn: &Connection, q: &BrowseQuery) -> Result<Vec<MovieRow>> 
     };
     let (filters, mut params) = browse_filters("movies", q);
     let sql = format!(
-        "{MOVIE_SELECT} WHERE movies.hidden = 0{}{filters} ORDER BY {order} \
+        "{} WHERE movies.hidden = 0{}{filters} ORDER BY {order} \
          LIMIT :limit OFFSET :offset",
+        movie_select(Cast::Included),
         q.library.where_sql(crate::repo::filtering::Kind::Movies),
     );
     params.push((":limit", &q.limit));
@@ -415,20 +442,17 @@ pub struct SeriesRow {
 /// what it can offer is the union of their seasons -- so the count on a card has to
 /// be asked the same way the episode list is, or a card reads "1 season" and opens
 /// on two.
-fn series_select(seasons: &str) -> String {
+fn series_select(seasons: &str, cast: Cast) -> String {
     format!(
         "SELECT series.id,
        COALESCE(custom_title, tmdb_title, title), year, quality,
                                     poster, backdrop, logo_art, overview, rating,
                                     certification, genres, added_at, lang_code,
-                                    (SELECT group_concat(p.name, char(31))
-                                       FROM credits c JOIN people p ON p.tmdb_id = c.person_id
-                                      WHERE c.item_kind = 'series' AND c.item_id = series.id
-                                        AND c.is_cast = 1
-                                      ORDER BY c.ord),
+                                    {},
                                     {seasons},
                                     trailer_key
-                             FROM series"
+                             FROM series",
+        cast_sql(cast, "series", "series")
     )
 }
 
@@ -476,7 +500,7 @@ pub fn list_series(conn: &Connection, q: &BrowseQuery) -> Result<Vec<SeriesRow>>
     let sql = format!(
         "{} WHERE series.hidden = 0{}{filters} ORDER BY {order} \
          LIMIT :limit OFFSET :offset",
-        series_select(&q.library.merged_seasons_sql()),
+        series_select(&q.library.merged_seasons_sql(), Cast::Included),
         q.library.where_sql(crate::repo::filtering::Kind::Series),
     );
     params.push((":limit", &q.limit));
@@ -551,7 +575,7 @@ pub fn categories(
 /// Deliberately not filtered by `hidden`: My List holds what a person put there, and
 /// a title vanishing from it because a bulk edit hid it would look like data loss.
 pub fn movie(conn: &Connection, id: i64) -> Result<Option<MovieRow>> {
-    let sql = format!("{MOVIE_SELECT} WHERE movies.id = ?1");
+    let sql = format!("{} WHERE movies.id = ?1", movie_select(Cast::Included));
     Ok(conn.query_row(&sql, params![id], map_movie).optional()?)
 }
 
@@ -561,13 +585,15 @@ pub fn movie(conn: &Connection, id: i64) -> Result<Option<MovieRow>> {
 /// simply missing from the map. Home's rails asked for their cards one `movie` at a time,
 /// a statement prepared and run per card, and that was most of the 0.3-1.3 s a rebuild
 /// took on a real library.
-pub fn movies_by_id(conn: &Connection, ids: &[i64]) -> Result<HashMap<i64, MovieRow>> {
-    rows_by_id(conn, MOVIE_SELECT, "movies", ids, map_movie, |m| m.id)
+pub fn movies_by_id(conn: &Connection, ids: &[i64], cast: Cast) -> Result<HashMap<i64, MovieRow>> {
+    rows_by_id(conn, &movie_select(cast), "movies", ids, map_movie, |m| {
+        m.id
+    })
 }
 
 /// [`series`] for many ids at once, as [`movies_by_id`] is for films.
-pub fn series_by_id(conn: &Connection, ids: &[i64]) -> Result<HashMap<i64, SeriesRow>> {
-    let select = series_select(OWN_SEASONS);
+pub fn series_by_id(conn: &Connection, ids: &[i64], cast: Cast) -> Result<HashMap<i64, SeriesRow>> {
+    let select = series_select(OWN_SEASONS, cast);
     rows_by_id(conn, &select, "series", ids, map_series, |s| s.id)
 }
 
@@ -701,7 +727,10 @@ pub fn clear_listing_attempt(conn: &Connection, series_id: i64) -> Result<()> {
 /// The grid's cards come from `list_series`, which has the filter and asks the
 /// merged question.
 pub fn series(conn: &Connection, id: i64) -> Result<Option<SeriesRow>> {
-    let sql = format!("{} WHERE series.id = ?1", series_select(OWN_SEASONS));
+    let sql = format!(
+        "{} WHERE series.id = ?1",
+        series_select(OWN_SEASONS, Cast::Included)
+    );
     Ok(conn.query_row(&sql, params![id], map_series).optional()?)
 }
 
@@ -2138,16 +2167,37 @@ mod tests {
             .unwrap();
         let mut asked = ids.clone();
         asked.push(9_999);
-        let many = movies_by_id(&conn, &asked).unwrap();
+        let many = movies_by_id(&conn, &asked, Cast::Included).unwrap();
         assert_eq!(many.len(), 3);
         for id in &ids {
             assert_eq!(many.get(id), movie_row(&conn, *id).as_ref());
         }
 
-        let shows = series_by_id(&conn, &[show, 9_999]).unwrap();
+        let shows = series_by_id(&conn, &[show, 9_999], Cast::Included).unwrap();
         assert_eq!(shows.len(), 1);
         assert_eq!(shows.get(&show), series(&conn, show).unwrap().as_ref());
-        assert!(movies_by_id(&conn, &[]).unwrap().is_empty());
+        assert!(movies_by_id(&conn, &[], Cast::Included).unwrap().is_empty());
+
+        // Left out, the cast is the only difference.
+        conn.execute(
+            "INSERT INTO people (tmdb_id, name) VALUES (7, 'An Actor')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credits (item_kind, item_id, person_id, is_cast, ord)
+             VALUES ('movie', ?1, 7, 1, 0)",
+            params![ids[0]],
+        )
+        .unwrap();
+        let with = movies_by_id(&conn, &ids, Cast::Included).unwrap();
+        let without = movies_by_id(&conn, &ids, Cast::Left).unwrap();
+        assert_eq!(with[&ids[0]].cast, ["An Actor"]);
+        for id in &ids {
+            let mut expected = with[id].clone();
+            expected.cast.clear();
+            assert_eq!(without[id], expected);
+        }
     }
 
     fn movie_row(conn: &Connection, id: i64) -> Option<MovieRow> {
