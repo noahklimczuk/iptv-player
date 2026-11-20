@@ -25,7 +25,7 @@ struct ProfilePicker: View {
 
     var body: some View {
         VStack(spacing: 40) {
-            Text(managing ? "Manage profiles" : "Who's watching?").font(.largeTitle.bold())
+            Text(managing ? "Manage profiles" : "Who's watching?").displayFont(.largeTitle)
             ScrollView(.horizontal) {
                 HStack(spacing: 32) {
                     ForEach(model.profiles, id: \.id) { profile in
@@ -188,11 +188,11 @@ private struct AddTile: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "plus")
-                .font(.system(size: 48, weight: .bold))
+                .font(.ui(size: 48, weight: .bold))
                 .frame(width: 140, height: 140)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 40))
-            Text("Add profile").font(.headline)
-            Text(" ").font(.caption)
+            Text("Add profile").font(.ui(.headline))
+            Text(" ").font(.ui(.caption))
         }
     }
 }
@@ -206,21 +206,21 @@ private struct ProfileTile: View {
     var body: some View {
         VStack(spacing: 12) {
             Text(profile.name.prefix(1).uppercased())
-                .font(.system(size: 56, weight: .heavy, design: .rounded))
+                .font(.display(size: 56))
                 .frame(width: 140, height: 140)
                 .background(Self.colour(profile), in: RoundedRectangle(cornerRadius: 40))
                 .foregroundStyle(.white)
                 .overlay(alignment: .bottomTrailing) {
                     if editing {
-                        Image(systemName: "pencil.circle.fill").font(.title).padding(6)
+                        Image(systemName: "pencil.circle.fill").font(.ui(.title)).padding(6)
                     }
                 }
-            Text(profile.name).font(.headline)
+            Text(profile.name).font(.ui(.headline))
             HStack(spacing: 6) {
                 if profile.hasPin { Label("PIN", systemImage: "lock.fill") }
                 if profile.isKids { Text("KIDS").foregroundStyle(.green) }
             }
-            .font(.caption)
+            .font(.ui(.caption))
         }
     }
 

@@ -29,14 +29,20 @@ struct GuideView: View {
     @State private var loaded = false
     @State private var filtering = false
 
+    @Environment(\.auroraTheme) private var theme
     #if os(tvOS)
     private let span: TimeInterval = 3 * 3600
-    private let nameWidth: CGFloat = 320
-    private let rowHeight: CGFloat = 96
+    /// Windows' TV-density `--guide-channel-w` and `--guide-row-h`.
+    private let nameWidth: CGFloat = 300
+    private let rowHeight: CGFloat = 80
+    private let narrow = false
     #else
+    @Environment(\.horizontalSizeClass) private var sizeClass
     private let span: TimeInterval = 2 * 3600
-    private let nameWidth: CGFloat = 110
-    private let rowHeight: CGFloat = 64
+    /// Windows' `CHANNEL_W` and `ROW_H`; a phone keeps the logo and name only.
+    private var narrow: Bool { sizeClass == .compact }
+    private var nameWidth: CGFloat { narrow ? 150 : 264 }
+    private let rowHeight: CGFloat = 56
     #endif
 
     private var window: GuideLoader.Window {
@@ -49,27 +55,48 @@ struct GuideView: View {
             VStack(alignment: .leading, spacing: 8) {
                 controls
                 filterBar
-                TimeAxis(start: start, span: span, leading: nameWidth)
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(channels, id: \.id) { channel in
-                            GuideRowView(channel: channel, cells: loader.cells[channel.id],
-                                         window: window, now: now, nameWidth: nameWidth,
-                                         height: rowHeight, marks: model.dvrMarks) { item in
-                                playing = item
-                            } choose: { chosen = $0 }
-                            .onAppear {
-                                loader.appeared(channel.id)
-                                if channel.id == channels.last?.id { Task { await loadMoreChannels() } }
+                // Windows puts the grid in one white rounded panel (`dl-panel`).
+                VStack(spacing: 0) {
+                    TimeAxis(start: start, span: span, leading: nameWidth)
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(channels, id: \.id) { channel in
+                                GuideRowView(channel: channel, cells: loader.cells[channel.id],
+                                             window: window, now: now, nameWidth: nameWidth,
+                                             height: rowHeight, narrow: narrow, marks: model.dvrMarks) { item in
+                                    playing = item
+                                } choose: { chosen = $0 }
+                                .onAppear {
+                                    loader.appeared(channel.id)
+                                    if channel.id == channels.last?.id { Task { await loadMoreChannels() } }
+                                }
+                                .onDisappear { loader.disappeared(channel.id) }
                             }
-                            .onDisappear { loader.disappeared(channel.id) }
                         }
+                        #if os(tvOS)
+                        .padding(.vertical, 12)
+                        #endif
                     }
+                    #if os(tvOS)
+                    .scrollClipDisabled()
+                    #endif
                 }
+                .padding(.vertical, 8)
+                .daylightRaised(theme, radius: Daylight.px(24))
+                .clipShape(RoundedRectangle(cornerRadius: Daylight.px(24), style: .continuous))
+                .padding(.horizontal)
                 .overlay {
                     if channels.isEmpty {
                         if !loaded {
-                            ProgressView()
+                            VStack(spacing: 8) {
+                                ForEach(0..<10, id: \.self) { _ in
+                                    RoundedRectangle(cornerRadius: Daylight.px(14)).fill(theme.surfaceSunk)
+                                        .frame(height: rowHeight - 8)
+                                }
+                            }
+                            .padding(Daylight.px(24))
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .padding(.horizontal)
                         } else if let progress = model.importProgress {
                             ProgressView("Importing: \(progress.phase.label)")
                         } else if filters.activeCount > 0 {
@@ -143,9 +170,18 @@ struct GuideView: View {
                         filterBinding.wrappedValue = filters.toggling(group.name)
                     }
                 }
-                Toggle("With listings", isOn: filterBinding.withListings)
-                    .fixedSize()
-                    .padding(.leading, 8)
+                // Windows' `guide-listings`: the switch, then its words.
+                HStack(spacing: 10) {
+                    DaylightSwitch(isOn: filters.withListings, label: "Only channels with listings") {
+                        filterBinding.wrappedValue.withListings.toggle()
+                    }
+                    Text("With listings")
+                        .font(.ui(size: Daylight.px(13), weight: .bold))
+                        .foregroundStyle(theme.textMuted)
+                        .accessibilityHidden(true)
+                }
+                .fixedSize()
+                .padding(.leading, 8)
             }
             .padding(.horizontal)
             #if os(tvOS)
@@ -194,7 +230,7 @@ struct GuideView: View {
 
     private var dayHeading: some View {
         Text(Self.dayLabel(start))
-            .font(.title2.weight(.heavy))
+            .displayFont(.title2)
             .lineLimit(1)
     }
 
@@ -325,23 +361,33 @@ final class GuideLoader {
     }
 }
 
+/// Windows' `TimeHeader`: CHANNEL over the channel column, then the half hours.
 private struct TimeAxis: View {
     let start: Date
     let span: TimeInterval
     let leading: CGFloat
+    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
-        GeometryReader { geo in
-            let width = geo.size.width - leading
-            ForEach(0..<Int(span / 1800), id: \.self) { i in
-                Text(start.addingTimeInterval(Double(i) * 1800), format: .dateTime.hour().minute())
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .offset(x: leading + width * CGFloat(Double(i) * 1800 / span))
+        HStack(spacing: 0) {
+            Text("CHANNEL")
+                .font(.ui(size: Daylight.px(12), weight: .heavy))
+                .tracking(Daylight.px(12) * 0.06)
+                .foregroundStyle(theme.textFaint)
+                .padding(.horizontal, 16)
+                .frame(width: leading, alignment: .leading)
+            GeometryReader { geo in
+                ForEach(0..<Int(span / 1800), id: \.self) { i in
+                    Text(start.addingTimeInterval(Double(i) * 1800), format: .dateTime.hour().minute())
+                        .font(.ui(size: Daylight.px(15), weight: .semibold).monospacedDigit())
+                        .foregroundStyle(theme.textMuted)
+                        .padding(.horizontal, 8)
+                        .frame(maxHeight: .infinity)
+                        .offset(x: geo.size.width * CGFloat(Double(i) * 1800 / span))
+                }
             }
         }
-        .frame(height: 24)
-        .padding(.horizontal)
+        .frame(height: Daylight.px(36))
     }
 }
 
@@ -352,37 +398,71 @@ private struct GuideRowView: View {
     let now: Date
     let nameWidth: CGFloat
     let height: CGFloat
+    /// A phone: the channel column keeps the logo and name, not the number.
+    let narrow: Bool
     let marks: DvrMarks
     let play: (PlayerItem) -> Void
     /// Open a programme's details (Windows: a click selects, the info pane shows it).
     let choose: (ChosenProgramme) -> Void
+    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
         HStack(spacing: 0) {
-            Button { play(.channel(id: channel.id, name: channel.name)) } label: {
-                Text(channel.name).lineLimit(2).frame(width: nameWidth - 12, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 12)
+            Button { play(.channel(id: channel.id, name: channel.name)) } label: { channelCell }
+                .buttonStyle(GuideChannelStyle())
+                .frame(width: nameWidth)
+                .accessibilityLabel("Watch \(channel.name)")
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
                     if let cells {
+                        if cells.isEmpty {
+                            FromTheName(channel: channel)
+                                .padding(EdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 4))
+                        }
                         ForEach(cells, id: \.programme.id) { cell in
                             cellView(cell, width: geo.size.width)
                         }
-                        if cells.isEmpty {
-                            Text("No guide").font(.caption).foregroundStyle(.tertiary)
-                                .frame(maxHeight: .infinity)
-                        }
                     } else {
-                        RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4))
+                        RoundedRectangle(cornerRadius: Daylight.px(14)).fill(theme.surfaceSunk.opacity(0.6))
+                            .padding(4)
                     }
                     nowLine(width: geo.size.width)
                 }
             }
         }
         .frame(height: height)
-        .padding(.horizontal)
+    }
+
+    /// Windows' `ChannelCell`: number, logo, the name on two lines, and the catch-up mark.
+    private var channelCell: some View {
+        HStack(spacing: 10) {
+            if !narrow {
+                // Windows' 30-pixel column, which a five-digit number runs past rather
+                // than wrapping.
+                Text(verbatim: channel.number.map { String($0) } ?? "")
+                    .font(.ui(size: Daylight.px(12), weight: .bold).monospacedDigit())
+                    .foregroundStyle(theme.textFaint)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(minWidth: Daylight.px(30), alignment: .trailing)
+            }
+            ChannelTile(name: channel.name, number: channel.number, logo: channel.logo,
+                        size: narrow ? 32 : Daylight.px(40))
+            Text(channel.name)
+                .font(.ui(size: Daylight.px(13), weight: .heavy))
+                .foregroundStyle(theme.text)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if channel.hasCatchup {
+                Image(systemName: "gobackward.10")
+                    .font(.ui(size: Daylight.px(13)))
+                    .foregroundStyle(theme.textFaint)
+                    .accessibilityLabel("Catch-up available")
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 12)
     }
 
     private func cellView(_ cell: GuideCell, width: CGFloat) -> some View {
@@ -391,40 +471,241 @@ private struct GuideRowView: View {
         let from = CGFloat(max(p.start, window.from) - window.from)
         let to = CGFloat(min(p.stop, window.to) - window.from)
         let nowSecs = Int64(now.timeIntervalSince1970)
-        let onNow = p.start <= nowSecs && nowSecs < p.stop
+        let airing = p.start <= nowSecs && nowSecs < p.stop
         let recording = marks.recording(channelId: channel.id, p) != nil
+        let cellWidth = max(width * (to - from) / span, 2)
+        let progress = airing ? Double(nowSecs - p.start) / Double(max(p.stop - p.start, 1)) : 0
         return Button {
             choose(ChosenProgramme(channel: channel, programme: p, replayable: cell.replayable))
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    if recording {
-                        Circle().fill(.red).frame(width: 7, height: 7)
-                            .accessibilityLabel("Recording scheduled")
-                    }
-                    if cell.replayable { Image(systemName: "gobackward").font(.caption2) }
-                    Text(p.title).font(.callout).lineLimit(1)
-                }
-                Text(Date(timeIntervalSince1970: TimeInterval(p.start)), format: .dateTime.hour().minute())
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(onNow ? AnyShapeStyle(.tint.opacity(0.25)) : AnyShapeStyle(.quaternary.opacity(0.5)),
-                        in: RoundedRectangle(cornerRadius: 8))
+            ProgrammeLabel(programme: p, recording: recording, replayable: cell.replayable,
+                           showsTimes: cellWidth > Daylight.px(110))
         }
-        .buttonStyle(.plain)
-        .frame(width: max(width * (to - from) / span - 3, 1))
-        .offset(x: width * from / span)
-        .accessibilityLabel("\(p.title), \(onNow ? "on now" : cell.replayable ? "can be replayed" : "")\(recording ? ", recording scheduled" : "")")
+        .buttonStyle(GuideProgrammeStyle(airing: airing, past: p.stop < nowSecs, progress: progress))
+        .frame(width: max(cellWidth - 4, 1), height: height - 8)
+        .offset(x: width * from / span + 2, y: 4)
+        .accessibilityLabel("\(p.title), \(airing ? "on now" : cell.replayable ? "can be replayed" : "")\(recording ? ", recording scheduled" : "")")
     }
 
     private func nowLine(width: CGFloat) -> some View {
         let nowSecs = now.timeIntervalSince1970
         let x = CGFloat((nowSecs - Double(window.from)) / Double(window.to - window.from))
-        return Rectangle().fill(.red).frame(width: 2)
+        return Rectangle().fill(theme.live).frame(width: 2)
             .offset(x: width * x)
             .opacity((0...1).contains(x) ? 1 : 0)
             .allowsHitTesting(false)
+    }
+}
+
+/// What a programme's pill says: the title with its marks, then its times when it is wide
+/// enough to hold them (Windows: over 110 pixels).
+private struct ProgrammeLabel: View {
+    let programme: Programme
+    let recording: Bool
+    let replayable: Bool
+    let showsTimes: Bool
+    @Environment(\.auroraTheme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 5) {
+                if recording {
+                    Circle().fill(theme.live).frame(width: 7, height: 7)
+                        .accessibilityLabel("Recording scheduled")
+                }
+                if programme.isNew { DaylightBadge("New", tone: .new, tight: true) }
+                if programme.isLive { DaylightBadge("Live", tone: .live, tight: true) }
+                Text(programme.title)
+                    .font(.ui(size: Daylight.px(13), weight: .heavy))
+                    .lineLimit(1)
+            }
+            if showsTimes {
+                Text(verbatim: times)
+                    .font(.ui(size: Daylight.px(12), weight: .bold))
+                    .lineLimit(1)
+                    .modifier(FaintUnlessChosen())
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    private var times: String {
+        var s = "\(clockTime(unix: programme.start))–\(clockTime(unix: programme.stop))"
+        if let season = programme.season, let episode = programme.episode { s += " · S\(season)E\(episode)" }
+        return s
+    }
+}
+
+/// Whether the pill holding this is the chosen one, so its small print can follow it.
+private struct ChosenKey: EnvironmentKey { static let defaultValue = false }
+private extension EnvironmentValues {
+    var guideChosen: Bool {
+        get { self[ChosenKey.self] }
+        set { self[ChosenKey.self] = newValue }
+    }
+}
+
+private struct FaintUnlessChosen: ViewModifier {
+    @Environment(\.guideChosen) private var chosen
+    @Environment(\.auroraTheme) private var theme
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(chosen ? theme.accentText : theme.textFaint)
+            .opacity(chosen ? 0.85 : 1)
+    }
+}
+
+/// Windows' programme pill: sunk, the one on now tinted and ringed in the accent with its
+/// progress along the foot, the past dimmed. The chosen one (on a TV, the focused one) is
+/// the accent itself, ringed off the panel and glowing, so it is findable at a glance.
+private struct GuideProgrammeStyle: ButtonStyle {
+    let airing: Bool
+    let past: Bool
+    let progress: Double
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @Environment(\.isFocused) private var chosen
+    #else
+    private let chosen = false
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        let radius = Daylight.px(14)
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        configuration.label
+            .foregroundStyle(chosen ? theme.accentText : theme.text)
+            .environment(\.guideChosen, chosen)
+            .background {
+                shape.fill(chosen ? theme.accent : airing ? theme.accent.opacity(0.16) : .clear)
+                    .background(chosen ? Color.clear : theme.surfaceSunk, in: shape)
+            }
+            .overlay(alignment: .bottomLeading) {
+                if airing {
+                    GeometryReader { geo in
+                        Rectangle().fill(chosen ? theme.accentText : theme.accent)
+                            .frame(width: geo.size.width * min(max(progress, 0), 1), height: 3)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                }
+            }
+            .clipShape(shape)
+            .overlay {
+                if chosen {
+                    // `0 0 0 2px var(--surface), 0 0 0 4px var(--accent)`.
+                    RoundedRectangle(cornerRadius: radius + 4, style: .continuous)
+                        .strokeBorder(theme.accent, lineWidth: 2).padding(-4)
+                    RoundedRectangle(cornerRadius: radius + 2, style: .continuous)
+                        .strokeBorder(theme.surface, lineWidth: 2).padding(-2)
+                } else if airing {
+                    shape.strokeBorder(theme.accent.opacity(0.45), lineWidth: 1.5)
+                }
+            }
+            .shadow(color: theme.accent.opacity(chosen ? 0.45 : 0), radius: 10, y: 6)
+            .opacity(past && !chosen ? 0.45 : 1)
+            .opacity(configuration.isPressed ? 0.8 : 1)
+            .zIndex(chosen ? 2 : 0)
+            .contentShape(shape)
+    }
+}
+
+/// Windows' `ChannelCell` ground: the panel's surface, and for the row you are on (on a
+/// TV, the focused one) the accent tint with a bar down its edge.
+private struct GuideChannelStyle: ButtonStyle {
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @Environment(\.isFocused) private var active
+    #else
+    private let active = false
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = UnevenRoundedRectangle(bottomTrailingRadius: Daylight.px(14),
+                                           topTrailingRadius: Daylight.px(14), style: .continuous)
+        configuration.label
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .background(active ? theme.accent.opacity(0.22) : .clear, in: shape)
+            .overlay(alignment: .leading) {
+                if active { Rectangle().fill(theme.accent).frame(width: 4) }
+            }
+            .contentShape(shape)
+            .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
+/// Windows' `FromTheName`: a channel the guide knows nothing about, described from its
+/// name in a dashed strip, so "nothing is known" never reads as "nothing is on".
+private struct FromTheName: View {
+    let channel: Channel
+    @Environment(\.auroraTheme) private var theme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous)
+        // A phone's strip is too narrow for the tag as well: the title comes first.
+        ViewThatFits(in: .horizontal) {
+            strip(tagged: true)
+            strip(tagged: false)
+        }
+        .font(.ui(size: Daylight.px(13)))
+        .foregroundStyle(theme.textMuted)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: Daylight.px(640), maxHeight: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay { shape.strokeBorder(theme.borderStrong, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])) }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func strip(tagged: Bool) -> some View {
+        let g = NameGuide(channel.name)
+        return HStack(spacing: 10) {
+            Image(systemName: icon(g))
+                .font(.ui(size: Daylight.px(14)))
+                .opacity(0.7)
+            Text(g.title)
+                .font(.ui(size: Daylight.px(13), weight: plain(g) ? .bold : .heavy))
+                .foregroundStyle(plain(g) ? theme.textMuted : theme.text)
+                .lineLimit(1)
+                // Whole beside the tag, or the tag gives way (see `body`).
+                .fixedSize(horizontal: tagged, vertical: false)
+            if let when = when(g) {
+                Text(verbatim: when)
+                    .font(.ui(size: Daylight.px(13), weight: .bold).monospacedDigit())
+                    .fixedSize()
+            }
+            if tagged {
+                Text("from channel name")
+                    .font(.ui(size: Daylight.px(12), weight: .bold))
+                    .foregroundStyle(theme.textFaint)
+                    .padding(.vertical, 2).padding(.horizontal, 8)
+                    .background(theme.surfaceSunk, in: Capsule())
+                    .fixedSize()
+            }
+        }
+    }
+
+    private func plain(_ g: NameGuide) -> Bool {
+        switch g {
+        case .idle, .name: true
+        default: false
+        }
+    }
+
+    private func icon(_ g: NameGuide) -> String {
+        switch g {
+        case .event: "star"
+        case .loop: "arrow.clockwise"
+        default: "tv"
+        }
+    }
+
+    private func when(_ g: NameGuide) -> String? {
+        switch g {
+        case .event(_, let at?, _):
+            let date = Date(timeIntervalSince1970: TimeInterval(at))
+            return "\(GuideView.dayLabel(date)) \(clockTime(date))"
+        case .event(_, nil, let detail): return detail
+        case .loop: return "All day"
+        default: return nil
+        }
     }
 }

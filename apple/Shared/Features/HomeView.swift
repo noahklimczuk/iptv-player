@@ -17,6 +17,8 @@ import SwiftUI
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var rails: [Rail]?
+    /// Why the rails could not be read, shown in their place.
+    @State private var loadError: String?
     /// Taken off by the viewer this visit, kept off while the core catches up.
     @State private var hidden: Set<String> = []
     @State private var askedForSignals = false
@@ -73,11 +75,25 @@ struct HomeView: View {
                 }
                 .sheet(item: $movie) { MovieDetail(movie: $0).auroraAppearance() }
                 .navigationDestination(item: $series) { SeriesDetail(seriesId: $0) }
+                .task(id: model.titleToOpen) { await openLinked() }
+        }
+    }
+
+    /// A title the Top Shelf opened the app on.
+    private func openLinked() async {
+        guard let link = model.titleToOpen else { return }
+        model.titleToOpen = nil
+        switch link.kind {
+        case .movie: movie = await model.movieDetail(id: link.id)
+        case .series: series = link.id
         }
     }
 
     @ViewBuilder private var content: some View {
-        if let rails {
+        if let loadError {
+            DaylightEmpty(icon: "info.circle", title: "Couldn't load your library", message: loadError)
+                .frame(maxHeight: .infinity)
+        } else if let rails {
             let shown = visible(rails, ai: ai)
             if shown.isEmpty {
                 ContentUnavailableView("Nothing here yet", systemImage: "house",
@@ -148,8 +164,22 @@ struct HomeView: View {
     }
 
     private func load() async {
-        let built = await model.homeRails()
+        let built: [Rail]
+        do {
+            built = try await model.homeRailsOrFailure()
+        } catch is CancellationError {
+            return
+        } catch {
+            // In place before there is anything to show; a failed rebuild keeps the
+            // screen it has and says so as every other failure does.
+            if rails == nil { loadError = error.viewerMessage } else { model.error = error.viewerMessage }
+            return
+        }
+        loadError = nil
         rails = built
+        #if os(tvOS)
+        TopShelf.publish(built)
+        #endif
         // Chosen once, when the screen first has rails: adding a title to My List from
         // the billboard rebuilds the rails, and must not swap the title being looked at.
         if hero == nil, !built.isEmpty { hero = HeroBillboard.pick(from: built) }
@@ -249,11 +279,11 @@ struct RailRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(rail.title).font(.title3.bold())
+                Text(rail.title).displayFont(.title3)
                 Spacer()
                 if let ask {
                     Button("Ask about these", systemImage: "sparkles", action: ask)
-                        .font(.caption.weight(.semibold))
+                        .font(.ui(.caption).weight(.semibold))
                         #if os(iOS)
                         .buttonStyle(.borderless)
                         #endif
@@ -321,7 +351,7 @@ struct RailCard: View {
             } placeholder: {
                 ZStack {
                     Rectangle().fill(.quaternary)
-                    Text(entry.item.title).font(.caption).multilineTextAlignment(.center).padding(6)
+                    Text(entry.item.title).font(.ui(.caption)).multilineTextAlignment(.center).padding(6)
                 }
             }
             .frame(width: width, height: width * 3 / 2)
@@ -333,9 +363,9 @@ struct RailCard: View {
                         .padding(6)
                 }
             }
-            Text(entry.item.title).font(.caption).lineLimit(1)
+            Text(entry.item.title).font(.ui(.caption)).lineLimit(1)
             if let reason = entry.reason {
-                Text(reason).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(reason).font(.ui(.caption2)).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .frame(width: width)

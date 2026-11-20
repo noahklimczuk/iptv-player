@@ -21,6 +21,8 @@ final class AppModel {
     /// Screens that load once key their loading on it, so a finished import shows up
     /// without leaving the screen.
     private(set) var libraryVersion = 0
+    /// A title the Top Shelf asked to open (`aurora://title/…`), for Home to show.
+    var titleToOpen: TitleLink?
     /// The last thing that failed, for the app-wide alert (`RootView`). Also logged:
     /// the core redacts credentials before building these messages (`error.rs`), so the
     /// log is a safe place for them, and a scripted run can see a failure without a
@@ -785,6 +787,13 @@ final class AppModel {
         return await call([]) { try $0.homeRails(profileId: profile, seed: seed) }
     }
 
+    /// The same, for Home's first read: a failure is said on the screen itself (Windows'
+    /// "Couldn't load your library"), not in an alert over an empty page.
+    func homeRailsOrFailure() async throws -> [Rail] {
+        let profile = profileId, seed = homeSeed
+        return try await guarded { try $0.homeRails(profileId: profile, seed: seed) }
+    }
+
     func railPage(_ railId: String, offset: Int) async -> RailPage? {
         let profile = profileId, seed = homeSeed
         return await call(nil) {
@@ -1154,4 +1163,10 @@ private final class AssistantSteps: AssistantListener, @unchecked Sendable {
     func step(text: String) {
         Task { @MainActor in onStep(text) }
     }
+}
+
+/// A title named by a deep link: which kind, and its id.
+struct TitleLink: Equatable {
+    let kind: TopShelfSnapshot.Item.Kind
+    let id: Int64
 }

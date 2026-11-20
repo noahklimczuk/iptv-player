@@ -3,16 +3,16 @@ import SwiftUI
 /// The app's top level: Home, Live TV, Guide, Movies, Series, Recordings, Multi-view, the
 /// assistant, the playlist, Settings, and Search.
 ///
-/// A `TabView` of `Tab`s: on tvOS the top bar the Siri Remote expects, on iPhone and
-/// iPad the floating tab bar. Search has the search role, so iOS 26 gives it its own
-/// button beside the bar. The app targets iOS 26 and tvOS 26 only.
+/// Windows' tab bar (`AuroraTabBar`) at the foot of every screen, over the page it has
+/// chosen, which is built afresh each time as Windows' routes are. Search is not a tab
+/// on Windows either: it opens from Home. The app targets iOS 26 and tvOS 26 only.
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var tab: AppTab = .home
-    @State private var showingSettings = false
     @State private var showingSearch = false
-    @State private var showingAssistant = false
-    @State private var showingRecordings = false
+    #if DEBUG
+    @State private var debugPairing = false
+    #endif
     /// The setup wizard was finished, or its import left running. Not stored: a library
     /// with no provider asks again next launch, as on Windows.
     @State private var setupFinished = false
@@ -51,6 +51,27 @@ struct RootView: View {
         .auroraAppearance(root: true)
         .task { await model.loadProfiles() }
         .task { await model.reload() }
+        #if DEBUG
+        // `-AuroraPairing YES`: either end's pairing screen, even in a build with no sync
+        // service, to try the transport against the other end (or a script) on the network.
+        #if os(tvOS)
+        .fullScreenCover(isPresented: $debugPairing) {
+            PairWithPhoneView(deviceName: "Apple TV") {}.auroraAppearance()
+        }
+        #else
+        .sheet(isPresented: $debugPairing) {
+            SetUpAppleTVView(email: "household@example.com").auroraAppearance()
+        }
+        #endif
+        .onAppear { debugPairing = UserDefaults.standard.bool(forKey: "AuroraPairing") }
+        #endif
+        // The Top Shelf's titles: Home, with the title's page open over it.
+        .onOpenURL { url in
+            guard let link = TopShelfSnapshot.title(from: url) else { return }
+            showingSearch = false
+            tab = .home
+            model.titleToOpen = TitleLink(kind: link.kind, id: link.id)
+        }
         .task { await model.loadParental() }
         // The recordings scheduler keeps its own time while Aurora runs, as Windows'
         // does while its window is open.
@@ -75,46 +96,33 @@ struct RootView: View {
             ConnectionBudget()
             tabView.auroraRebuildOnSwitch()
         }
-        // An iPhone's bar holds five, the search tab included; past that the rest go
-        // under "More", whose own navigation bar stacks on top of the tab's and doubles
-        // every back button. So there, as in Apple's TV app, Search and Settings open
-        // from Home's toolbar.
-        .environment(\.openSettings, compact ? { showingSettings = true } : nil)
-        .environment(\.openSearch, compact ? { showingSearch = true } : nil)
-        .environment(\.openRecordings, compact ? { showingRecordings = true } : nil)
-        // Its own tab where there is room (Windows' nav has one); a sheet from Home's
-        // toolbar on an iPhone. `question` is asked as soon as it opens.
+        // Search opens over the page from Home's toolbar, as Windows' opens from its top
+        // bar; every other destination is a tab, on a phone as well.
+        .environment(\.openSearch, { showingSearch = true })
         // "Search this title": Search, with the title already typed.
         .environment(\.searchFor, { query in
             model.searchQuery = query
-            if compact { showingSearch = true } else { tab = .search }
+            showingSearch = true
         })
+        // `question` is asked as soon as the assistant opens.
         .environment(\.openAssistant, { question in
             model.assistantQuestion = question
-            if compact { showingAssistant = true } else { tab = .assistant }
+            tab = .assistant
         })
         // The player's TV Guide button: whatever sheet the player was opened from goes
         // with it.
         .onChange(of: model.guideRequests) {
             showingSearch = false
-            showingRecordings = false
             tab = .guide
         }
-        // Each sheet is its own presentation and keeps the system's appearance unless
-        // given the theme itself.
-        .sheet(isPresented: $showingAssistant) { AssistantView(closable: true).auroraAppearance() }
-        .sheet(isPresented: $showingSettings) { SettingsView(closable: true).auroraAppearance() }
+        // Its own presentation, which keeps the system's appearance unless given the
+        // theme itself.
         .sheet(isPresented: $showingSearch) { SearchView(closable: true).auroraAppearance() }
-        .sheet(isPresented: $showingRecordings) { RecordingsView(closable: true).auroraAppearance() }
         #if DEBUG
         // `-AuroraTab guide` at launch opens that tab (see DemoLaunch).
         .onAppear {
             if let name = UserDefaults.standard.string(forKey: "AuroraTab"), let start = AppTab(rawValue: name) {
-                if compact && start == .settings { showingSettings = true }
-                else if compact && start == .assistant { showingAssistant = true }
-                else if compact && start == .search { showingSearch = true }
-                else if compact && start == .recordings { showingRecordings = true }
-                else { tab = start }
+                if start == .search { showingSearch = true } else { tab = start }
             }
         }
         #endif
@@ -129,27 +137,65 @@ struct RootView: View {
     }
 
     private var tabView: some View {
-        TabView(selection: $tab) {
-            Tab("Home", systemImage: "house", value: .home) { HomeView() }
-            Tab("Live TV", systemImage: "tv", value: .live) { LiveView() }
-            Tab("Guide", systemImage: "calendar", value: .guide) { GuideView() }
-            Tab("Movies", systemImage: "film", value: .films) { MoviesView() }
-            Tab("Series", systemImage: "rectangle.stack", value: .series) { SeriesView() }
-            if !compact {
-                Tab("Recordings", systemImage: "record.circle", value: .recordings) { RecordingsView() }
-                // iPad and Apple TV, as the port's plan has it (docs/APPLE_PORT_AND_SYNC.md
-                // §2): a phone has neither the screen for four channels nor the heat
-                // budget for four decoders.
-                Tab("Multi-view", systemImage: "square.grid.2x2", value: .multiview) { MultiViewPage() }
-                Tab("Assistant", systemImage: "sparkles", value: .assistant) { AssistantView() }
-                // Windows' nav item; on an iPhone it opens from Settings → Library.
-                Tab("Playlist", systemImage: "list.bullet.rectangle", value: .playlist) {
-                    NavigationStack { PlaylistEditorView() }
-                }
-                Tab("Settings", systemImage: "gear", value: .settings) { SettingsView() }
-                Tab(value: AppTab.search, role: .search) { SearchView() }
+        page
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The bar floats over the foot of the page, which scrolls on beneath it
+            // (Windows' `--navpill-space`).
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                AuroraTabBar(items: navItems, selection: $tab)
+                    .padding(.bottom, barGap)
             }
+            #if os(iOS)
+            // The keyboard rises over the bar rather than lifting it.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            #endif
+    }
+
+    /// Windows' `NAV`, in its order. Not Multi-view on a phone, as the port's plan has it
+    /// (docs/APPLE_PORT_AND_SYNC.md §2): a phone has neither the screen for four channels
+    /// nor the heat budget for four decoders.
+    private var navItems: [AuroraTabBar<AppTab>.Item] {
+        var items: [AuroraTabBar<AppTab>.Item] = [
+            .init(value: .home, label: "Home", icon: .home),
+            .init(value: .live, label: "Live TV", icon: .tv),
+            .init(value: .guide, label: "Guide", icon: .grid),
+            .init(value: .films, label: "Movies", icon: .film),
+            .init(value: .series, label: "Series", icon: .stack),
+            .init(value: .recordings, label: "Recordings", icon: .record),
+            .init(value: .multiview, label: "Multi-view", icon: .pip),
+            .init(value: .assistant, label: "Assistant", icon: .sparkle),
+            .init(value: .playlist, label: "Playlist", icon: .layers),
+            .init(value: .settings, label: "Settings", icon: .settings),
+        ]
+        if compact { items.removeAll { $0.value == .multiview } }
+        return items
+    }
+
+    /// The page the bar has chosen.
+    @ViewBuilder private var page: some View {
+        switch tab {
+        case .home: HomeView()
+        case .live: LiveView()
+        case .guide: GuideView()
+        case .films: MoviesView()
+        case .series: SeriesView()
+        case .recordings: RecordingsView()
+        case .multiview: if compact { HomeView() } else { MultiViewPage() }
+        case .assistant: AssistantView()
+        case .playlist: NavigationStack { PlaylistEditorView() }
+        case .settings: SettingsView()
+        case .search: SearchView()
         }
+    }
+
+    /// The bar's distance from the foot of the screen: Windows' 20 points, less what the
+    /// safe area already keeps clear.
+    private var barGap: CGFloat {
+        #if os(tvOS)
+        0
+        #else
+        compact ? 0 : 8
+        #endif
     }
 
     /// No provider yet, and the wizard neither finished nor skipped this run.
@@ -205,7 +251,7 @@ private struct ConnectionBudget: View {
                 let names = inFlight.map(\.title)
                 let what = names.count == 1 ? names[0] : "\(names.count) recordings"
                 HStack(spacing: 8) {
-                    Image(systemName: "record.circle.fill").font(.caption)
+                    Image(systemName: "record.circle.fill").font(.ui(.caption))
                     (Text(what).bold().foregroundStyle(.primary)
                      + Text(" ")
                      + Text(allowed == 1
@@ -213,7 +259,7 @@ private struct ConnectionBudget: View {
                             : "are using all \(allowed) streams this subscription allows")
                      + Text(". Starting something now may stop \(names.count == 1 ? "it" : "one of them")."))
                 }
-                .font(.callout)
+                .font(.ui(.callout))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -16,10 +16,10 @@ struct OnNowTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: rowSpacing) {
             HStack {
-                Text("On now").font(.title2.weight(.heavy))
+                Text("On now").displayFont(.title2)
                 Spacer()
                 Label {
-                    Text("LIVE").font(.caption.weight(.heavy))
+                    Text("LIVE").font(.ui(.caption).weight(.heavy))
                 } icon: {
                     Circle().frame(width: 7, height: 7)
                 }
@@ -30,7 +30,7 @@ struct OnNowTile: View {
             }
             if let channels, channels.isEmpty {
                 Text("Heart a channel in Live TV and it will show up here with what it is airing.")
-                    .font(.subheadline)
+                    .font(.ui(.subheadline))
                     .foregroundStyle(.secondary)
             }
             // Progress is about the clock, so it has to move on its own (every 30 s).
@@ -59,13 +59,13 @@ struct OnNowTile: View {
             HStack(spacing: 14) {
                 ChannelTile(name: channel.name, number: channel.number, logo: channel.logo, size: tileSize)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(channel.name).font(.headline.weight(.heavy)).lineLimit(1)
-                    Text(on?.title ?? "No guide").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    Text(channel.name).font(.ui(.headline).weight(.heavy)).lineLimit(1)
+                    Text(on?.title ?? "No guide").font(.ui(.subheadline)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 VStack(alignment: .trailing, spacing: 8) {
                     Text(on.map { "\(time($0.start))–\(time($0.stop))" } ?? " ")
-                        .font(.caption.weight(.bold)).monospacedDigit().foregroundStyle(.secondary)
+                        .font(.ui(.caption).weight(.bold)).monospacedDigit().foregroundStyle(.secondary)
                     ProgressView(value: on.map { through($0, now) } ?? 0)
                 }
                 .frame(maxWidth: .infinity)

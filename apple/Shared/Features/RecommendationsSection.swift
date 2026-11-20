@@ -15,7 +15,7 @@ struct RecommendationsSection: View {
         Section {
             SettingsHead("Recommendations").id("Recommendations")
             Text("Suggests films and shows from what you have watched, then keeps only the ones your provider actually carries. What leaves this device is the titles you have watched, their years and genres, how much of each you watched and whether you liked it — nothing about your provider, your sign-in or the rest of your library.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
             if let status {
                 // The switch that actually stops anything being sent: clearing the key
                 // cannot, because a build that ships one falls back to it.
@@ -25,7 +25,7 @@ struct RecommendationsSection: View {
                         Text(status.enabled
                              ? "On. Your watch history is sent to Google when the home screen builds the rail."
                              : "Off. Nothing is sent to Google, including by the key built into this build.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.ui(.caption)).foregroundStyle(.secondary)
                     }
                 }
                 .disabled(busy)
@@ -40,7 +40,7 @@ struct RecommendationsSection: View {
             }
             if let result {
                 Label(result.text, systemImage: result.ok ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(.caption)
+                    .font(.ui(.caption))
                     .foregroundStyle(result.ok ? .green : .red)
             }
         }
@@ -54,15 +54,15 @@ struct RecommendationsSection: View {
     private func notes(_ status: GeminiStatus) -> some View {
         if status.enabled && !status.hasKey {
             Text("No key yet. One is free from aistudio.google.com/apikey.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
         }
         if status.hasKey && status.keyIsBuiltIn {
             Text("Using the key built into this build. Entering your own replaces it, and carries your own rate limit rather than sharing one. Removing a key you entered falls back to this one — the switch above is what stops anything being sent.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
         }
         if status.hasKey && !status.hasHistory {
             Text("Nothing watched yet. These are built from your history, so the rail appears once there is one.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
         }
     }
 

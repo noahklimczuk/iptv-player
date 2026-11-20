@@ -116,7 +116,7 @@ struct RecordingsView: View {
                     }
                 }
                 if !problems.isEmpty {
-                    Text("Didn’t record").font(.title2.weight(.heavy)).padding(.top, 24)
+                    Text("Didn’t record").displayFont(.title2).padding(.top, 24)
                     VStack(spacing: 10) {
                         ForEach(problems, id: \.id) { ProblemRow(rec: $0) }
                     }
@@ -183,13 +183,13 @@ private struct StorageMeter: View {
                      : Format.bytes(storage.usedBytes))
                     .fontWeight(.bold)
             }
-            .font(.callout.weight(.semibold))
+            .font(.ui(.callout).weight(.semibold))
             if storage.quotaBytes > 0 {
                 ProgressView(value: min(1, Double(storage.usedBytes) / Double(storage.quotaBytes)))
                     .accessibilityLabel("Recording storage used")
             }
             Text(storage.folder)
-                .font(.caption).foregroundStyle(.tertiary)
+                .font(.ui(.caption)).foregroundStyle(.tertiary)
                 .lineLimit(1).truncationMode(.middle)
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
@@ -218,7 +218,7 @@ private struct ConflictNotice: View {
                 }
             }
         }
-        .font(.callout.weight(.semibold))
+        .font(.ui(.callout).weight(.semibold))
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
@@ -273,7 +273,7 @@ private struct TitleBlock: View {
                 (Text(rec.title).fontWeight(.heavy)
                  + Text(episode.map { " · \($0)" } ?? "").foregroundStyle(.tertiary))
                     .lineLimit(1)
-                Text(whenAired(rec)).font(.callout).foregroundStyle(.secondary)
+                Text(whenAired(rec)).font(.ui(.callout)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -302,13 +302,13 @@ private struct RecordedCard: View {
         VStack(alignment: .leading, spacing: 10) {
             art
             VStack(alignment: .leading, spacing: 2) {
-                Text(rec.title).font(.headline.weight(.heavy)).lineLimit(1)
-                Text(whenAired(rec)).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                Text(rec.title).font(.ui(.headline).weight(.heavy)).lineLimit(1)
+                Text(whenAired(rec)).font(.ui(.callout)).foregroundStyle(.secondary).lineLimit(1)
             }
             if confirming {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Delete permanently, freeing \(Format.bytes(rec.bytes))?")
-                        .font(.callout.bold()).foregroundStyle(.red)
+                        .font(.ui(.callout).bold()).foregroundStyle(.red)
                     HStack {
                         Button("Delete", role: .destructive) {
                             let id = rec.id
@@ -346,7 +346,7 @@ private struct RecordedCard: View {
 
     private var meta: some View {
         Text("\(Format.duration(rec.durationSecs)) · \(Format.bytes(rec.bytes))")
-            .font(.caption.bold()).foregroundStyle(.secondary).lineLimit(1)
+            .font(.ui(.caption).bold()).foregroundStyle(.secondary).lineLimit(1)
     }
 
     private var actions: some View {
@@ -380,7 +380,7 @@ private struct RecordedCard: View {
                 // A completed-but-short recording still plays: say so before it ends early.
                 if rec.reason != nil { chip("Cut short") }
                 if !rec.watched {
-                    Text("New").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+                    Text("New").font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
                         .background(.green, in: Capsule()).foregroundStyle(.white)
                 }
                 if rec.keep { chip("Kept") }
@@ -392,7 +392,7 @@ private struct RecordedCard: View {
     }
 
     private func chip(_ text: String) -> some View {
-        Text(text).font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+        Text(text).font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
             .background(.white, in: Capsule()).foregroundStyle(.black)
     }
 }
@@ -406,7 +406,7 @@ private struct ComingUp: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Coming up").font(.title2.weight(.heavy))
+                Text("Coming up").displayFont(.title2)
                 Spacer()
                 Button("Series rules", action: showRules).buttonStyle(.bordered)
             }
@@ -443,12 +443,12 @@ private struct ComingUp: View {
     }
 
     private var recChip: some View {
-        Text("REC").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+        Text("REC").font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
             .background(.red, in: Capsule()).foregroundStyle(.white)
     }
 
     private func kindChip(_ r: Recording) -> some View {
-        Text(r.ruleId != nil ? "Series rule" : "Once").font(.caption.bold())
+        Text(r.ruleId != nil ? "Series rule" : "Once").font(.ui(.caption).bold())
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(.quaternary, in: Capsule())
     }
@@ -471,17 +471,17 @@ private struct ScheduledRow: View {
                 HStack(spacing: 8) {
                     if live {
                         Label("Recording", systemImage: "record.circle.fill")
-                            .font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+                            .font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
                             .background(.red, in: Capsule()).foregroundStyle(.white)
                         let elapsed = max(0, context.date.timeIntervalSince1970 - Double(rec.start))
                         ProgressView(value: min(1, elapsed / Double(max(1, rec.stop - rec.start))))
                             .frame(width: 120)
                             .accessibilityLabel("Recording \(rec.title)")
                         Text(Format.bytes(Int64(clamping: rec.liveBytes ?? UInt64(max(0, rec.bytes)))))
-                            .font(.callout).foregroundStyle(.tertiary)
+                            .font(.ui(.callout)).foregroundStyle(.tertiary)
                     } else {
                         Text(Format.until(rec.start, now: context.date))
-                            .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                            .font(.ui(.callout)).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
             }
@@ -503,11 +503,11 @@ private struct ProblemRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 TitleBlock(rec: rec)
                 if let reason = rec.reason {
-                    Text(reason).font(.callout).foregroundStyle(.red)
+                    Text(reason).font(.ui(.callout)).foregroundStyle(.red)
                 }
             }
             Text(rec.state == .skipped ? "Skipped" : "Failed")
-                .font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+                .font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
                 .overlay(Capsule().strokeBorder(.secondary))
             Button {
                 let id = rec.id
@@ -531,13 +531,13 @@ private struct RuleRow: View {
         RowShell(accent: confirming ? .red : nil) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(rule.title).fontWeight(.bold)
-                Text(summary).font(.callout).foregroundStyle(.secondary)
+                Text(summary).font(.ui(.callout)).foregroundStyle(.secondary)
             }
             .opacity(rule.enabled ? 1 : 0.55)
             Spacer(minLength: 0)
             if confirming {
                 Text("Stop recording \(rule.title) and forget this rule?")
-                    .font(.callout).foregroundStyle(.red)
+                    .font(.ui(.callout)).foregroundStyle(.red)
                 Button("Delete rule", role: .destructive) {
                     let id = rule.id
                     act(model, "Could not delete that rule") { _ = try $0.dvrDeleteRule(id: id) }
@@ -546,7 +546,7 @@ private struct RuleRow: View {
                 Button("Keep") { confirming = false }.buttonStyle(.bordered)
             } else {
                 // "tracked", not "recorded": the count is rows in any state (R-119).
-                Text("\(rule.scheduled) tracked").font(.callout).foregroundStyle(.tertiary)
+                Text("\(rule.scheduled) tracked").font(.ui(.callout)).foregroundStyle(.tertiary)
                 Button(rule.enabled ? "Pause" : "Resume") {
                     let (id, enabled) = (rule.id, !rule.enabled)
                     act(model, rule.enabled ? "Could not pause that rule" : "Could not resume it") {

@@ -63,10 +63,10 @@ struct SettingsHead: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.title2.weight(.heavy))
+                .displayFont(.title2)
             if let blurb = Self.blurbs[title] {
                 Text(blurb)
-                    .font(.subheadline)
+                    .font(.ui(.subheadline))
                     .foregroundStyle(.secondary)
             }
         }
@@ -133,7 +133,7 @@ struct SettingsIndex: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 #if !os(tvOS)
-                .font(.callout)
+                .font(.ui(.callout))
                 .minimumScaleFactor(0.85)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .foregroundStyle(active ? theme.background : Color.secondary)
@@ -178,7 +178,7 @@ private struct IndexEntryStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.callout)
+            .font(.ui(.callout))
             .padding(.horizontal, 22).padding(.vertical, 14)
             .foregroundStyle(focused ? Color.black : active ? Color.primary : Color.secondary)
             .background {
@@ -215,7 +215,7 @@ struct SettingsField<Control: View>: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).fontWeight(.heavy)
             if let hint {
-                Text(hint).font(.subheadline).foregroundStyle(.secondary)
+                Text(hint).font(.ui(.subheadline)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -231,7 +231,7 @@ struct SecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.subheadline.weight(.bold))
+            .font(.ui(.subheadline).weight(.bold))
             .labelStyle(.titleAndIcon)
             .lineLimit(1)
             .fixedSize()

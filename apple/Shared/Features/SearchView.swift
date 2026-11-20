@@ -29,7 +29,7 @@ struct SearchView: View {
                     if total > 0 {
                         Section {} footer: {
                             Text("\(total) results")
-                                .font(.caption.weight(.semibold))
+                                .font(.ui(.caption).weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
@@ -104,7 +104,7 @@ struct SearchView: View {
                 }
                 if folded > 0 {
                     Button("Show \(folded) more \(group.label.lowercased())") { expanded.insert(group.key) }
-                        .font(.subheadline.weight(.bold))
+                        .font(.ui(.subheadline).weight(.bold))
                         #if !os(tvOS)
                         .foregroundStyle(.tint)
                         #endif
@@ -115,7 +115,7 @@ struct SearchView: View {
                     Text(group.label)
                     Text("\(group.hits.count)").opacity(0.6)
                 }
-                .font(.subheadline.weight(.heavy))
+                .font(.ui(.subheadline).weight(.heavy))
                 .accessibilityElement(children: .combine)
             }
         }
@@ -128,7 +128,7 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let subtitle = hit.subtitle {
                 Text(subtitle)
-                    .font(.caption.weight(.semibold))
+                    .font(.ui(.caption).weight(.semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -155,7 +155,7 @@ struct SearchView: View {
     /// Windows' faint centred line, for nothing typed and for nothing found.
     private func note(_ words: String) -> some View {
         Text(words)
-            .font(.subheadline)
+            .font(.ui(.subheadline))
             .foregroundStyle(.tertiary)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 32)

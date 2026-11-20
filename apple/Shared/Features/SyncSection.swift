@@ -26,6 +26,8 @@ struct SyncSection: View {
     @State private var showCodeFor = ""
 
     private enum Confirm { case signOut, reset }
+    /// Pairing (`Pairing.swift`): the TV showing its code, the phone setting a TV up.
+    @State private var pairing = false
 
     var body: some View {
         Section {
@@ -36,17 +38,27 @@ struct SyncSection: View {
                 ProgressView()
             }
             if let message {
-                Text(message).font(.caption).foregroundStyle(.secondary)
+                Text(message).font(.ui(.caption)).foregroundStyle(.secondary)
             }
         }
         .task { await reload() }
+        #if os(tvOS)
+        .fullScreenCover(isPresented: $pairing) {
+            PairWithPhoneView(deviceName: deviceName) { Task { await reload() } }
+                .auroraAppearance()
+        }
+        #else
+        .sheet(isPresented: $pairing) {
+            SetUpAppleTVView(email: status?.email ?? email).auroraAppearance()
+        }
+        #endif
     }
 
     @ViewBuilder
     private func content(_ status: SyncStatus) -> some View {
         if !status.available {
             Text("This build of Aurora was made without a sync service, so there is nothing to sign in to. Official releases include it.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
         } else if let recoveryCode {
             recovery(recoveryCode)
         } else if !status.signedIn || status.problem == .signInAgain {
@@ -63,26 +75,26 @@ struct SyncSection: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(status.email ?? "")
             if let name = status.deviceName {
-                Text("on \(name)").font(.caption).foregroundStyle(.secondary)
+                Text("on \(name)").font(.ui(.caption)).foregroundStyle(.secondary)
             }
             let state = Self.describe(status)
-            Text(state.text).font(.caption).foregroundStyle(state.color)
+            Text(state.text).font(.ui(.caption)).foregroundStyle(state.color)
             if status.parked > 0 {
                 Text("\(status.parked) \(status.parked == 1 ? "change refers" : "changes refer") to channels or titles this device has not imported. They apply once it has.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.ui(.caption)).foregroundStyle(.secondary)
             }
             // Skipped, never applied, and asked for again by the update that can read
             // them, which is the one thing the viewer can do about it (Windows' §3.8).
             if status.unreadable > 0 {
                 let one = status.unreadable == 1
                 Text("\(status.unreadable) \(one ? "change" : "changes") from your other devices \(one ? "needs" : "need") a newer version of Aurora. \(one ? "It is" : "They are") kept on the server and will be read once this device updates.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.ui(.caption)).foregroundStyle(.secondary)
             }
             Text("Today this device has read \(status.readsToday.formatted()) and written \(status.writesToday.formatted()) of the free plan's 50,000 reads and 20,000 writes.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
             if status.thrifty {
                 Text("That is past this device's share, so until the quota resets at midnight Pacific it sends watch progress and checks for changes every ten minutes. Favourites and other edits still go straight away.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.ui(.caption)).foregroundStyle(.orange)
             }
         }
         // D34: a password is a different promise from a favourite, so this is a choice
@@ -94,12 +106,17 @@ struct SyncSection: View {
                     Text(status.sharesSecrets
                          ? "Playlist passwords and your TMDB and Gemini keys go to the household’s other devices, encrypted like everything else, so a new device needs only the sync passphrase. Turning this off stops sending them; what was sent stays in the household’s encrypted sync until you reset it."
                          : "Off: each device keeps its own playlist passwords and TMDB and Gemini keys. On sends them to your other devices, encrypted with your sync passphrase, so nobody has to type them twice.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                 }
             }
             .disabled(busy)
             .accessibilityLabel(status.sharesSecrets ? "Stop sharing sign-ins and keys" : "Share sign-ins and keys")
         }
+        #if os(iOS)
+        // An Apple TV joins from here, so nothing is typed with its remote.
+        Button("Set up an Apple TV", systemImage: "appletv") { pairing = true }
+            .disabled(busy)
+        #endif
         Button(busy ? "Syncing…" : "Sync now", systemImage: "arrow.triangle.2.circlepath") {
             run("Sync failed") { core in
                 let r = try core.syncNow()
@@ -118,7 +135,7 @@ struct SyncSection: View {
         switch confirming {
         case .some(.signOut):
             Text("Stop syncing on this device? Its library stays as it is.")
-                .font(.caption).foregroundStyle(.red)
+                .font(.ui(.caption)).foregroundStyle(.red)
             Button("Yes, sign out", role: .destructive) {
                 run("Could not sign out") { core in
                     try core.syncSignOut()
@@ -128,7 +145,7 @@ struct SyncSection: View {
             Button("Keep") { confirming = nil }
         case .some(.reset):
             Text("Replace everything the household has synced with this device's library? Changes other devices have not sent yet are lost.")
-                .font(.caption).foregroundStyle(.red)
+                .font(.ui(.caption)).foregroundStyle(.red)
             Button("Yes, reset", role: .destructive) {
                 run("Could not reset sync") { core in
                     let r = try core.syncReset()
@@ -171,7 +188,7 @@ struct SyncSection: View {
     private func form(_ status: SyncStatus) -> some View {
         let again = status.signedIn && status.problem == .signInAgain
         Text("Keeps favourites, My List, watch progress, profiles, parental settings and recording rules the same on every device in the household. Everything is encrypted on this device before it is uploaded, with a passphrase only your devices know. Playlist passwords and API keys stay on each device unless you choose to share them too.")
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.ui(.caption)).foregroundStyle(.secondary)
         if !again {
             Segments(options: [(false, "Set up sync"), (true, "Join my household")], selection: $joining)
         }
@@ -180,7 +197,15 @@ struct SyncSection: View {
              : joining
                 ? "For a device joining a household that already set sync up on another one."
                 : "For the first device in the household. Every other device then joins with the same email, password and passphrase.")
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.ui(.caption)).foregroundStyle(.secondary)
+        let joiningNow = joining || again
+        #if os(tvOS)
+        // Joining from a remote is a lot of typing: a phone that already syncs can do it.
+        if joiningNow {
+            Button("Sign in with your iPhone", systemImage: "iphone") { pairing = true }
+                .disabled(busy)
+        }
+        #endif
         TextField("Email", text: $email)
             .textContentType(.emailAddress)
             .autocorrectionDisabled()
@@ -190,7 +215,6 @@ struct SyncSection: View {
             #endif
         SecureField("Account password", text: $password)
             .textContentType(.password)
-        let joiningNow = joining || again
         if joiningNow && useCode {
             TextField("Recovery code", text: $code)
                 .autocorrectionDisabled()
@@ -199,7 +223,7 @@ struct SyncSection: View {
             if !joiningNow {
                 SecureField("Passphrase again", text: $confirm)
                 if !confirm.isEmpty && confirm != passphrase {
-                    Text("The passphrases differ.").font(.caption).foregroundStyle(.red)
+                    Text("The passphrases differ.").font(.ui(.caption)).foregroundStyle(.red)
                 }
             }
         }
@@ -246,13 +270,13 @@ struct SyncSection: View {
 
     @ViewBuilder
     private func recovery(_ code: String) -> some View {
-        Text("Your recovery code").font(.headline)
+        Text("Your recovery code").font(.ui(.headline))
         Text("Write this down and keep it somewhere safe. If the sync passphrase is ever forgotten, this is the only way back in: nobody, Aurora included, can recover it for you.")
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.ui(.caption)).foregroundStyle(.secondary)
         #if os(iOS)
-        Text(code).font(.body.monospaced()).textSelection(.enabled)
+        Text(code).font(.ui(.body).monospaced()).textSelection(.enabled)
         #else
-        Text(code).font(.body.monospaced())
+        Text(code).font(.ui(.body).monospaced())
         #endif
         Button("I have written it down") {
             recoveryCode = nil

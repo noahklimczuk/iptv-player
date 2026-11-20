@@ -22,11 +22,11 @@ struct AboutSection: View {
                 }
                 term("Playback") {
                     Text("libmpv, built into the app as separate frameworks you can replace with your own build. It contains FFmpeg.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.ui(.subheadline)).foregroundStyle(.secondary)
                 }
                 term("Metadata") {
                     Text("This product uses the TMDB API but is not endorsed or certified by TMDB.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.ui(.subheadline)).foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 4)
@@ -43,7 +43,7 @@ struct AboutSection: View {
                     Label("The licence notices are missing", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.red)
                     Text("This build should carry THIRD-PARTY-NOTICES.md and does not. That is a packaging fault — please report it.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                 }
             }
             #if os(tvOS)
@@ -61,7 +61,7 @@ struct AboutSection: View {
     private func term(_ name: String, @ViewBuilder _ value: () -> some View) -> some View {
         GridRow {
             Text(name)
-                .font(.subheadline)
+                .font(.ui(.subheadline))
                 .foregroundStyle(.tertiary)
                 .frame(width: Self.termWidth, alignment: .leading)
             value()
@@ -106,7 +106,7 @@ private struct NoticesView: View {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                     Text(block.text)
-                        .font(block.heading ? .headline : .footnote)
+                        .font(.ui(block.heading ? .headline : .footnote))
                         .padding(.top, block.heading ? 8 : 0)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         #if os(tvOS)
@@ -177,7 +177,7 @@ struct DiagnosticsSection: View {
 
     private var exportNote: some View {
         Text("Copies this run's log, with every address's login removed, for a bug report.")
-            .font(.subheadline).foregroundStyle(.tertiary)
+            .font(.ui(.subheadline)).foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
     }
     #endif
@@ -191,7 +191,7 @@ struct DiagnosticsSection: View {
                     Label("Your library was started again", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.red)
                     Text("The database could not be read at launch, so Aurora began a new one. Favourites, watch history and recording metadata went with it — refresh your provider to rebuild the library. The old file was kept at \(replaced).")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                 }
             }
             #if os(tvOS)
@@ -201,7 +201,7 @@ struct DiagnosticsSection: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Label(exporting ? "Exporting…" : "Export logs", systemImage: "doc.text")
                     Text("Copies this run's log, with every address's login removed, for a bug report.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                 }
             }
             .disabled(exporting)
@@ -215,7 +215,7 @@ struct DiagnosticsSection: View {
             if let exported {
                 #if os(tvOS)
                 LabeledContent("Written to", value: exported.path)
-                    .font(.caption)
+                    .font(.ui(.caption))
                 #else
                 ShareLink(item: exported) {
                     Label("Share \(exported.lastPathComponent)", systemImage: "square.and.arrow.up")
@@ -223,7 +223,7 @@ struct DiagnosticsSection: View {
                 #endif
             }
             if let failure {
-                Text(failure).font(.caption).foregroundStyle(.red)
+                Text(failure).font(.ui(.caption)).foregroundStyle(.red)
             }
         } footer: {
             VStack(alignment: .leading, spacing: 2) {

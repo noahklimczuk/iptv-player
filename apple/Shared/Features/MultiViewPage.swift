@@ -127,7 +127,7 @@ struct MultiViewPage: View {
             if let check { budget(check) }
 
             Text("Channels — leave a tile empty to open fewer streams")
-                .font(.system(size: Daylight.px(13), weight: .bold))
+                .font(.ui(size: Daylight.px(13), weight: .bold))
                 .foregroundStyle(theme.textMuted)
             wall
 
@@ -137,12 +137,12 @@ struct MultiViewPage: View {
                     .buttonStyle(.daylight(.primary))
                     .disabled(filled == 0 || selectionBlocked || opening)
                 if filled == 0 {
-                    Text("Pick at least one channel.").font(.system(size: Daylight.px(13)))
+                    Text("Pick at least one channel.").font(.ui(size: Daylight.px(13)))
                         .foregroundStyle(theme.textMuted)
                 }
                 if selectionBlocked, let check {
                     Text("\(filled + Int(check.recordings)) streams is more than your provider allows.")
-                        .font(.system(size: Daylight.px(13))).foregroundStyle(theme.danger)
+                        .font(.ui(size: Daylight.px(13))).foregroundStyle(theme.danger)
                 }
             }
 
@@ -151,9 +151,9 @@ struct MultiViewPage: View {
             if selectionBlocked, check?.rotationOffered == true, filled > 1 {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Show them one at a time instead", systemImage: "square.stack.3d.up")
-                        .font(.system(size: Daylight.px(14), weight: .bold))
+                        .font(.ui(size: Daylight.px(14), weight: .bold))
                     Text("Your line allows one stream, so Aurora can move it around the wall — each channel for \(dwell) seconds, with the rest showing what is on now. \(stayHint)")
-                        .font(.system(size: Daylight.px(13))).foregroundStyle(theme.textMuted)
+                        .font(.ui(size: Daylight.px(13))).foregroundStyle(theme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
                     Button(opening ? "Opening…" : "Rotate \(filled) channel\(filled == 1 ? "" : "s")",
                            systemImage: "square.stack.3d.up") { open(rotating: true) }
@@ -200,7 +200,7 @@ struct MultiViewPage: View {
                         Text(l.label)
                     }
                 }
-                .buttonStyle(SegmentStyle(active: layout == l.id))
+                .buttonStyle(DaylightSegmentStyle(active: layout == l.id, height: 44))
                 .accessibilityLabel(l.label)
                 .accessibilityHint("\(l.hint) · \(l.tiles) tiles")
                 .accessibilityAddTraits(layout == l.id ? .isSelected : [])
@@ -232,7 +232,7 @@ struct MultiViewPage: View {
             Text(Self.budgetLine(check) + (blocked ? " " + Self.fitting(check) : ""))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.system(size: Daylight.px(13), weight: .semibold))
+        .font(.ui(size: Daylight.px(13), weight: .semibold))
         .foregroundStyle(blocked ? theme.danger : theme.textMuted)
         .padding(.horizontal, Daylight.px(14)).padding(.vertical, Daylight.px(10))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -299,7 +299,7 @@ struct MultiViewPage: View {
     private var savedLayouts: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Saved layouts")
-                .font(.system(size: Daylight.px(26), weight: .heavy))
+                .displayFont(size: Daylight.px(26))
                 .accessibilityAddTraits(.isHeader)
             ForEach(saved, id: \.id) { row in
                 HStack(spacing: 12) {
@@ -307,7 +307,7 @@ struct MultiViewPage: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.name).fontWeight(.semibold)
                         Text("\(row.channels.compactMap { $0 }.count) channels")
-                            .font(.system(size: Daylight.px(12))).foregroundStyle(theme.textMuted)
+                            .font(.ui(size: Daylight.px(12))).foregroundStyle(theme.textMuted)
                     }
                     Spacer()
                     Button("Open", systemImage: "play.fill") { openSaved(row) }
@@ -315,7 +315,7 @@ struct MultiViewPage: View {
                     // Asks first: a saved layout exists nowhere else, and there is no undo.
                     if confirming == row.id {
                         Text("Delete this layout?")
-                            .font(.system(size: Daylight.px(13)))
+                            .font(.ui(size: Daylight.px(13)))
                             .foregroundStyle(theme.danger)
                             .lineLimit(1)
                         Button("Delete") {
@@ -444,20 +444,20 @@ private struct TileCard: View {
                     Text("\(index + 1)").opacity(0.8)
                     Text(name).lineLimit(1)
                     Spacer(minLength: 0)
-                    if index == 0 { Image(systemName: "speaker.wave.2.fill").font(.system(size: Daylight.px(14))) }
+                    if index == 0 { Image(systemName: "speaker.wave.2.fill").font(.ui(size: Daylight.px(14))) }
                 } else {
                     Label("Add a channel", systemImage: "plus").foregroundStyle(theme.textMuted)
                     Spacer(minLength: 0)
                 }
             }
-            .font(.system(size: Daylight.px(15), weight: .heavy))
+            .font(.ui(size: Daylight.px(15), weight: .heavy))
             Spacer(minLength: 0)
             // The Select's trigger: accent once chosen, the raised surface while empty.
             HStack(spacing: 6) {
-                Image(systemName: "chevron.down").font(.system(size: Daylight.px(13), weight: .bold))
+                Image(systemName: "chevron.down").font(.ui(size: Daylight.px(13), weight: .bold))
                 Text(name ?? "Empty").lineLimit(1)
             }
-            .font(.system(size: Daylight.px(13), weight: .heavy))
+            .font(.ui(size: Daylight.px(13), weight: .heavy))
             .padding(.horizontal, Daylight.px(14))
             .frame(height: Daylight.px(36))
             .frame(maxWidth: Daylight.px(260), alignment: .leading)
@@ -516,36 +516,6 @@ private struct TileCardStyle: ButtonStyle {
 
 /// One choice in Windows' `dl-seg`: muted and bare, or raised on the surface when it is
 /// the one chosen (on the accent in Contrast).
-private struct SegmentStyle: ButtonStyle {
-    let active: Bool
-    @Environment(\.auroraTheme) private var theme
-    #if os(tvOS)
-    @Environment(\.isFocused) private var focused
-    #else
-    private let focused = false
-    #endif
-
-    func makeBody(configuration: Configuration) -> some View {
-        let radius = Daylight.px(10)
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        configuration.label
-            .font(.system(size: Daylight.px(13), weight: .bold))
-            .lineLimit(1)
-            .padding(.horizontal, Daylight.px(16))
-            .frame(height: Daylight.px(44))
-            .foregroundStyle(active ? (theme == .contrast ? theme.accentText : theme.text) : theme.textMuted)
-            .background {
-                if active {
-                    shape.fill(theme == .contrast ? theme.accent : theme.surface)
-                        .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
-                }
-            }
-            .contentShape(shape)
-            .daylightFocusRing(focused, radius: radius, theme: theme)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-    }
-}
-
 /// A miniature of an arrangement, from the core's own geometry.
 struct LayoutThumb: View {
     @Environment(AppModel.self) private var model

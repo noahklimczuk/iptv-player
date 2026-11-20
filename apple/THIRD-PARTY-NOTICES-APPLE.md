@@ -39,6 +39,14 @@ of their source is in this repository.
 - MPVKit's build scripts, which record how every framework above was configured:
   https://github.com/mpvkit/MPVKit
 
+## Fonts
+
+The apps carry the two typefaces Aurora for Windows uses, as TrueType files rebuilt from
+the same fontsource packages (`Shared/Fonts`): **Manrope** (Copyright 2019 The Manrope
+Project Authors) and **Bricolage Grotesque** (Copyright 2022 The Bricolage Grotesque
+Project Authors). Both are licensed under the **SIL Open Font License, version 1.1**,
+whose text travels with them in `Shared/Fonts/*-OFL.txt`.
+
 ## Distribution
 
 These builds are for installing on your own devices from source. The GPL and the App

@@ -110,10 +110,10 @@ private struct ProgrammeLabel: View {
                     Text(programme.title).fontWeight(onNow ? .semibold : .regular)
                 }
                 if let sub = programme.subTitle {
-                    Text(sub).font(.caption).foregroundStyle(.secondary)
+                    Text(sub).font(.ui(.caption)).foregroundStyle(.secondary)
                 }
                 if let description = programme.description {
-                    Text(description).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                    Text(description).font(.ui(.caption2)).foregroundStyle(.tertiary).lineLimit(2)
                 }
             }
             Spacer(minLength: 0)

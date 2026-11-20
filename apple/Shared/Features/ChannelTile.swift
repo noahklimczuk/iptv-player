@@ -20,7 +20,7 @@ struct ChannelTile: View {
                     .background(.quaternary)
             } else {
                 Text(number.map(String.init) ?? String(name.prefix(1)).uppercased())
-                    .font(.system(size: size * 0.32, weight: .heavy))
+                    .font(.ui(size: size * 0.32, weight: .heavy))
                     .monospacedDigit()
                     .foregroundStyle(.white)
                     .frame(width: size, height: size)

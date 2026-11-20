@@ -286,14 +286,14 @@ struct MosaicScreen: View {
             if empty {
                 theme.surfaceSunk
                 Text("Empty")
-                    .font(.system(size: Daylight.px(13), weight: .bold))
+                    .font(.ui(size: Daylight.px(13), weight: .bold))
                     .foregroundStyle(theme.textMuted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = tile.error {
                 theme.surfaceSunk
                 VStack(spacing: Daylight.px(8)) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: Daylight.px(20)))
-                    Text(error).font(.system(size: Daylight.px(12))).multilineTextAlignment(.center).opacity(0.85)
+                    Image(systemName: "exclamationmark.triangle").font(.ui(size: Daylight.px(20)))
+                    Text(error).font(.ui(size: Daylight.px(12))).multilineTextAlignment(.center).opacity(0.85)
                 }
                 .padding(Daylight.px(12)).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if waiting {
@@ -302,12 +302,12 @@ struct MosaicScreen: View {
                 // so the wall reads as cards and one picture rather than as failures.
                 Color(white: 0.06)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(tile.name ?? "").font(.system(size: Daylight.px(13), weight: .semibold)).lineLimit(1)
+                    Text(tile.name ?? "").font(.ui(size: Daylight.px(13), weight: .semibold)).lineLimit(1)
                     if let id = tile.channelId, let now = guide[id]?.now {
-                        Text(now.title).font(.system(size: Daylight.px(12))).opacity(0.85).lineLimit(1)
+                        Text(now.title).font(.ui(size: Daylight.px(12))).opacity(0.85).lineLimit(1)
                     }
                     if let id = tile.channelId, let next = guide[id]?.next {
-                        Text("Next: \(next.title)").font(.system(size: Daylight.px(11))).opacity(0.55).lineLimit(1)
+                        Text("Next: \(next.title)").font(.ui(size: Daylight.px(11))).opacity(0.55).lineLimit(1)
                     }
                 }
                 .padding(Daylight.px(12)).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -323,10 +323,10 @@ struct MosaicScreen: View {
                 Text(tile.name ?? "—").lineLimit(1)
                 Spacer(minLength: 0)
                 if tile.index == session.focused && !empty {
-                    Image(systemName: "speaker.wave.2.fill").font(.caption)
+                    Image(systemName: "speaker.wave.2.fill").font(.ui(.caption))
                 }
             }
-            .font(.system(size: Daylight.px(13), weight: .semibold))
+            .font(.ui(size: Daylight.px(13), weight: .semibold))
             .foregroundStyle(empty ? theme.text : .white)
             .padding(.horizontal, Daylight.px(14)).padding(.top, Daylight.px(18)).padding(.bottom, Daylight.px(10))
             .background {
@@ -418,11 +418,11 @@ struct MosaicScreen: View {
         let dock = DockTokens(theme)
         return HStack(spacing: Daylight.px(8)) {
             Text("Multi-view")
-                .font(.system(size: Daylight.px(20), weight: .heavy))
+                .displayFont(size: Daylight.px(20))
                 .padding(.leading, Daylight.px(8)).padding(.trailing, Daylight.px(10))
             if session.rotating {
                 HStack(spacing: Daylight.px(8)) {
-                    Image(systemName: "square.stack.3d.up").font(.system(size: Daylight.px(14)))
+                    Image(systemName: "square.stack.3d.up").font(.ui(size: Daylight.px(14)))
                     if let left = session.nextInSecs {
                         Text("Next tile in \(left)s").monospacedDigit()
                     } else {
@@ -433,7 +433,7 @@ struct MosaicScreen: View {
                             .modifier(BackToTiles(action: backToTiles))
                     }
                 }
-                .font(.system(size: Daylight.px(12), weight: .bold))
+                .font(.ui(size: Daylight.px(12), weight: .bold))
                 .padding(.horizontal, Daylight.px(12))
                 .frame(minHeight: Daylight.px(36))
                 .background(dock.button, in: RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous))

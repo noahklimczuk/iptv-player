@@ -24,10 +24,27 @@ screens. The app can:
 - channel rows as Windows' `LivePage` draws them: number, logo, name with padlock and
   quality, the programme on now with its start time (or "No guide data") and what is
   next, its progress, and the Dropped and Catch-up badges; Windows' empty-list wording,
+- the Live TV page laid out as Windows' `LivePage`: the group sidebar (Pinned, then the
+  groups, with a filter once there are more than 12), the heading with its count,
+  Daylight's search field, Number/A–Z and Cards/List, the letter bar, and Windows' empty
+  states ("No favourite channels yet", "No channel matches" with Clear search). On an
+  iPhone, which has no room for the sidebar beside the list, the heading opens it as a
+  sheet, and a row drops its play square and keeps the name whole,
 - show the guide grid (channels down, time across), fetching only the rows on screen
   as Windows does since R-130; choosing what's on plays the channel, choosing what
   already aired replays it where the archive allows. Over it, Windows' header: the day
   (Today, Tomorrow, Yesterday, or the date), −24h −1h Now +1h +24h, and Tonight 8pm,
+- the guide grid drawn as Windows draws it: one raised panel, CHANNEL over the channel
+  column, each channel's number, logo, name and catch-up mark, programmes as sunk pills
+  (what is on now tinted and ringed in the accent with its progress along the foot, the
+  past dimmed, New and Live badges, the times once a pill is wide enough), the now line
+  in the live colour, and the group chips and "With listings" switch as Daylight's. A
+  channel with no listings is described from its name in Windows' dashed strip ("from
+  channel name", "All day" for a 24/7 loop, an event's time), by the rules of
+  `nameGuide.ts` (`NameGuide.swift`). Where it differs: the chosen programme is the
+  focused one on a TV and opens its details in a sheet, and there is no preview pane
+  beside the grid, because a phone and a TV have no room for one; choosing a channel
+  plays it full screen. A phone's channel column keeps the logo and name only,
 - filter the guide as Windows does: group chips to tap in or out, and a Filters sheet
   with every group searchable, shown only or hidden, plus with listings, favourites,
   catch-up, radio and quality. The rules are Windows' `guideFilters.ts` in the core
@@ -278,11 +295,49 @@ screens. The app can:
     is, because a remote cannot type into a dropdown. The help says "tap"/"select" and
     "double-tap"/"hold" where Windows says "click" and "double-click", and the `1`–`9`
     keys are not there: a remote has no number keys.
+- the Apple TV's Top Shelf (plan §2.4): Continue Watching, with each title's art and
+  progress. The app writes a small snapshot to the app group `group.tv.aurora.shared`
+  whenever Home reads its rails, and tells the shelf to reload only when it changed;
+  the `AuroraTopShelf` extension reads that and nothing else. Choosing a title opens
+  the app on Home with its page up (`aurora://title/movie/12`). Windows has no shelf.
+- pairing an Apple TV from a phone (plan §2.4 and §3.6), so nothing is typed with the
+  remote: on the TV, Settings → Sync → Sign in with your iPhone shows a six-digit code;
+  on an iPhone or iPad that syncs, Settings → Sync → Set up an Apple TV lists the TVs
+  showing one, and takes the code, the account password and the sync passphrase. The
+  TV then signs in exactly as its own form would. Where it differs from the plan, and
+  why: the plan pairs through a `pairing/{id}` document on the server, which needs a
+  rule `firebase/firestore.rules` doesn't have, and the port keeps to `apple/`. So the
+  two talk over the home network instead (Bonjour, `_aurora-pair._tcp`): the TV
+  advertises a fresh X25519 key and shows a code made from it, the phone refuses a key
+  whose code is not the one typed, and the sign-in goes sealed with ChaCha20-Poly1305
+  under the shared secret (`Shared/Core/Pairing.swift`). The phone sends the password
+  and passphrase rather than its own session, because joining from a session would
+  need a change to the shared `aurora_sync::household`.
+- AirPlay on iPhone and iPad: the system's picker in the player's top bar, as one of
+  its glass buttons. It sends the sound to a speaker or TV; mpv draws its own picture,
+  so the picture goes with the screen only when it is mirrored. Windows has no AirPlay.
+- Windows' icon on both apps: the white "A" on the violet-to-teal diagonal, redrawn as
+  vectors by `scripts/make-icons.swift` at every size Apple asks for. On the Apple TV
+  it is a two-layer icon, so the A lifts off the gradient when focused, with the
+  static shelf images the TV shows before Aurora has written its own.
+- Windows' Home error state: when the rails cannot be read at all, "Couldn't load your
+  library" and why, in their place.
 
-On an iPhone the tab bar holds five tabs (Home, Live TV, Guide, Movies, Series), and
-Search, Recordings and Settings open from Home's toolbar, as in Apple's TV app (multi-view is not offered there, and the playlist editor opens from Settings → Library). A sixth tab would go
-under "More", whose navigation bar stacks on the tab's own and doubles every back
-button. iPad and Apple TV keep both as tabs.
+- Windows' typefaces everywhere: Manrope for the interface (at Windows' body weight,
+  500) and Bricolage Grotesque at 800, tracked in, for headings (`dl-display`,
+  `dl-page-title`): page and rail titles, the hero and title pages, profile names.
+  They are Windows' own fontsource files, rebuilt as TrueType by
+  `scripts/make-fonts.swift` (iOS and tvOS can't load WOFF2) and committed in
+  `Shared/Fonts`; `Typography.swift` has `.ui(...)`, `.display(...)` and
+  `displayFont(...)`, and sets the navigation bars' titles.
+- Windows' tab bar on every device (`AuroraTabBar`, from `TabBar.tsx`): the floating
+  glass bar at the foot of the screen with Windows' ten destinations in its order, its
+  own icons (`AuroraIcon`, drawn from `Icon.tsx`'s SVG paths), 84-point tabs and the
+  platter that slides to the current one. It scrolls sideways where the screen is too
+  narrow, as Windows' does in a narrow window; a phone leaves out Multi-view. Search
+  opens from Home's toolbar, as Windows' opens from its top bar. Not yet: dragging the
+  platter from tab to tab, and on Apple TV the Menu button does not jump back to the
+  bar (down does).
 
 Provider passwords and the TMDB and Gemini keys sync only when the household turns on
 "Also share sign-ins and keys" in Settings → Sync (D34), as on Windows; they go from and
@@ -304,7 +359,7 @@ Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 | mpv's **picture** | ⏳ not on the simulator on an Intel Mac. There MoltenVK used to fail cleanly (`VK_ERROR_INCOMPATIBLE_DRIVER`); as of 2026-11-17 the simulator's Metal driver crashes the app while MoltenVK probes it, so Intel simulator builds don't start the picture at all (`vid=no`) and the app says "only the sound is playing". Needs a real Apple TV/iPhone, or an Apple-silicon Mac |
 | Guide grid against the real Xtream panel (6,699 channels): rows fetched as they scroll in, "No guide" rows, Earlier/Later, the now line, replay marked only where the channel keeps an archive | ✅ tvOS 26.5 simulator, driven with the remote |
 | Live and catch-up playback from the guide, left running | ✅ sound plays, no crash. A panel that has no archive for a programme gets "archive would not play" (MS NOW's 404s on the test panel) |
-| iPhone tab bar on the iOS 26 simulator | ⚠️ draws as an empty glass shape on this Intel Mac; the same `TabView` draws correctly on tvOS. To check on a device |
+| Windows' tab bar and typefaces | ✅ iOS 26.5 (scrolls to Settings, switches pages) and tvOS 26.5 (reached with the remote, selects Live TV) simulators |
 | Playback on a real Apple TV, import time for a big panel, zap time | ⏳ needs hardware: the remaining Phase 2 exit criteria |
 
 ## The separation rule
@@ -390,6 +445,42 @@ set in Xcode. A free account's builds expire after 7 days (plan §2.6).
 On an **Intel Mac** the tvOS simulator is x86_64, and `x86_64-apple-tvos` is still a
 Tier 3 Rust target. `build-core.sh` builds it with nightly and `-Zbuild-std`, installing
 nightly the first time. Apple-silicon Macs only need stable.
+
+### Releasing to TestFlight
+
+`apple/scripts/testflight.sh` builds every device slice of the core, archives the
+iPhone/iPad and Apple TV apps (the Top Shelf goes inside the TV app), and uploads both
+to TestFlight, signing with an App Store Connect API key so nobody has to be signed in
+to Xcode. It needs `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH` and `DEVELOPMENT_TEAM`
+(the top of the script says what each is), plus `BUILD_NUMBER` when it should be the CI
+run number. `--tv`, `--mobile` and `--no-upload` narrow it.
+
+From CI, a job on `macos-latest` runs it after installing Rust's Apple targets and
+XcodeGen, with the key written from a secret to a file:
+
+```yaml
+  apple-testflight:
+    runs-on: macos-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: echo "$ASC_KEY" > "$RUNNER_TEMP/asc.p8"
+        env: { ASC_KEY: "${{ secrets.ASC_KEY_P8 }}" }
+      - run: apple/scripts/testflight.sh
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/asc.p8
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          AURORA_TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
+          AURORA_GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+```
+
+The port keeps to `apple/`, so that job is not in `.github/workflows/ci.yml` yet: adding
+it is the one step outside this folder, along with the secrets and the two apps in App
+Store Connect. Read plan §2.6 on licensing before inviting testers beyond the household.
 
 ### Trying it without tapping (debug builds)
 

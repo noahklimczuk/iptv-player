@@ -104,8 +104,8 @@ struct SettingsView: View {
             // rather than the lock. "Who's watching?" stays above it.
             Section {
                 VStack(spacing: 12) {
-                    Image(systemName: "lock.fill").font(.largeTitle)
-                    Text("Settings are locked").font(.title2.bold())
+                    Image(systemName: "lock.fill").font(.ui(.largeTitle))
+                    Text("Settings are locked").displayFont(.title2)
                     Text("Enter the parental PIN to change them.").foregroundStyle(.secondary)
                     Button("Enter the PIN", systemImage: "lock.open") {
                         Task { _ = await model.askParentalPin(.pinRequired) }
@@ -211,9 +211,9 @@ private struct ProviderRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(provider.name).font(.title3.weight(.heavy))
+                Text(provider.name).displayFont(.title3)
                 Text("\(provider.kind.uppercased()) · \(provider.channelCount) channels · \(provider.movieCount) movies · \(provider.seriesCount) series")
-                    .font(.subheadline)
+                    .font(.ui(.subheadline))
                     .foregroundStyle(.secondary)
             }
             ViewThatFits(in: .horizontal) {
@@ -225,9 +225,9 @@ private struct ProviderRow: View {
             }
             .modifier(Buttons())
             if let failure {
-                Text(failure).font(.subheadline).foregroundStyle(.red)
+                Text(failure).font(.ui(.subheadline)).foregroundStyle(.red)
             } else if let line = status {
-                Text(line).font(.subheadline).foregroundStyle(.secondary)
+                Text(line).font(.ui(.subheadline)).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 12)
@@ -344,7 +344,7 @@ private struct LibraryFiltersSection: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.label).fontWeight(.heavy)
                     Text("\(row.counts.total.formatted()) in all · \(row.counts.nonEnglish.formatted()) not English · \(row.counts.untagged.formatted()) untagged · \(row.counts.duplicates.formatted()) duplicates")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.ui(.caption)).foregroundStyle(.secondary)
                 }
             }
         }
@@ -364,7 +364,7 @@ private struct LibraryFiltersSection: View {
         )) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).fontWeight(.heavy)
-                Text(hint).font(.caption).foregroundStyle(.secondary)
+                Text(hint).font(.ui(.caption)).foregroundStyle(.secondary)
             }
         }
     }
@@ -407,7 +407,7 @@ private struct TimeshiftSection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Pause live TV").fontWeight(.heavy)
                         Text("Keeps the channel you are watching on disk so it can be paused and rewound.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.ui(.caption)).foregroundStyle(.secondary)
                     }
                 }
                 // Windows' rows of segments, the choice in its well.
@@ -431,7 +431,7 @@ private struct TimeshiftSection: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Reclaimable: \(bytes(settings.reclaimableBytes))").fontWeight(.heavy)
                             Text("Left behind by earlier viewing. Emptying it loses nothing you are watching.")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.ui(.caption)).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -487,7 +487,7 @@ private struct MetadataSection: View {
         Section {
             SettingsHead("Artwork and metadata").id("Artwork and metadata")
             Text("Posters, backdrops, descriptions and cast come from TMDB. Aurora only asks about a title once — if nothing matches confidently, it leaves the title alone rather than guessing, so a wrong poster never ends up on the wrong film.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
             if let status {
                 coverage("Movies", status.movies)
                 coverage("Series", status.series)
@@ -506,7 +506,7 @@ private struct MetadataSection: View {
                 keyRows(status)
             }
             if let message {
-                Text(message).font(.caption).foregroundStyle(.secondary)
+                Text(message).font(.ui(.caption)).foregroundStyle(.secondary)
             }
         }
         .task(id: ReloadKey(library: model.libraryVersion, running: model.metadataProgress != nil)) {
@@ -530,7 +530,7 @@ private struct MetadataSection: View {
             let extra = [c.noMatch > 0 ? "\(c.noMatch.formatted()) not found" : nil,
                          c.failed > 0 ? "\(c.failed.formatted()) to retry" : nil].compactMap { $0 }
             if !extra.isEmpty {
-                Text(extra.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                Text(extra.joined(separator: " · ")).font(.ui(.caption)).foregroundStyle(.secondary)
             }
             ProgressView(value: Double(c.matched), total: Double(max(c.total, 1)))
         }
@@ -552,7 +552,7 @@ private struct MetadataSection: View {
         }
         if status.keyIsBuiltIn {
             Text("This build ships with a metadata key, so artwork and cast work without any setup. Entering your own replaces it — worth doing only if you would rather the requests counted against your own rate limit than one shared with every copy of this build.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.ui(.caption)).foregroundStyle(.secondary)
         }
     }
 
@@ -590,9 +590,9 @@ private struct LibraryStatsSection: View {
                             ForEach(tiles[start..<min(start + perRow, tiles.count)], id: \.0) { label, value in
                                 // Windows' `settings-tile`: a sunk well, the figure large.
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text(label).font(.subheadline.weight(.bold)).foregroundStyle(.secondary)
+                                    Text(label).font(.ui(.subheadline).weight(.bold)).foregroundStyle(.secondary)
                                         .lineLimit(1).minimumScaleFactor(0.8)
-                                    Text(value.formatted()).font(.title2.weight(.heavy)).monospacedDigit()
+                                    Text(value.formatted()).displayFont(.title2).monospacedDigit()
                                         .lineLimit(1).minimumScaleFactor(0.5)
                                 }
                                 .padding(.vertical, 16).padding(.horizontal, 18)
@@ -623,7 +623,7 @@ private struct LibraryStatsSection: View {
                         .padding(.top, 4)
                     if !stats.guideUnmatched.isEmpty {
                         Text("No guide for: \(stats.guideUnmatched.joined(separator: ", "))")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.ui(.caption)).foregroundStyle(.secondary)
                     }
                 }
             }

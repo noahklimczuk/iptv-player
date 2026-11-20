@@ -61,7 +61,7 @@ struct AssistantView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
                     Text("Ask for something to watch. It can look through your library and hand you titles to play.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.ui(.callout)).foregroundStyle(.secondary)
                     if messages.isEmpty && !thinking {
                         Text("Try one of these:").foregroundStyle(.secondary)
                         ForEach(Self.suggestions, id: \.self) { s in
@@ -76,7 +76,7 @@ struct AssistantView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Label("Thinking…", systemImage: "sparkles").foregroundStyle(.secondary)
                             ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                                Text(step).font(.caption).foregroundStyle(.tertiary)
+                                Text(step).font(.ui(.caption)).foregroundStyle(.tertiary)
                             }
                         }
                         #if os(tvOS)
@@ -216,19 +216,19 @@ private struct Card: View {
                 } placeholder: {
                     ZStack {
                         Rectangle().fill(.quaternary)
-                        Text(item.title).font(.caption).multilineTextAlignment(.center).padding(6)
+                        Text(item.title).font(.ui(.caption)).multilineTextAlignment(.center).padding(6)
                     }
                 }
                 .frame(width: width, height: item.kind == "live" ? width * 9 / 16 : width * 3 / 2)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: "play.circle.fill").font(.title2)
+                    Image(systemName: "play.circle.fill").font(.ui(.title2))
                         .foregroundStyle(.white).shadow(radius: 3).padding(6)
                 }
-                Text(item.title).font(.caption).lineLimit(1)
+                Text(item.title).font(.ui(.caption)).lineLimit(1)
                 let line = [item.year.map(String.init), item.note].compactMap { $0 }.joined(separator: " · ")
                 if !line.isEmpty {
-                    Text(line).font(.caption2).foregroundStyle(.secondary).lineLimit(3)
+                    Text(line).font(.ui(.caption2)).foregroundStyle(.secondary).lineLimit(3)
                 }
             }
             .frame(width: width)

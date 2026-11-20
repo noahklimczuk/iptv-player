@@ -85,7 +85,7 @@ struct ParentalControlsView: View {
         Toggle(isOn: Binding(get: { isOn }, set: set)) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Text(hint).font(.caption).foregroundStyle(.secondary)
+                Text(hint).font(.ui(.caption)).foregroundStyle(.secondary)
             }
         }
     }
@@ -142,7 +142,7 @@ private struct MasterPinSection: View {
                 Text(settings.hasMasterPin
                      ? "Set. It opens locked channels, and guards these settings and adding or removing profiles."
                      : "Not set, so anybody can change these settings and add an unrestricted profile. Set one before relying on an age limit.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.ui(.caption)).foregroundStyle(.secondary)
             }
             if open {
                 field("New parental PIN", text: $pin)
@@ -196,7 +196,7 @@ private struct ProfileLimits: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(profile.name).font(.headline)
+            Text(profile.name).font(.ui(.headline))
             Picker("Age limit", selection: Binding(get: { profile.maxAge }, set: { age in
                 // No limit lets everything through, unrated titles included.
                 set(maxAge: age, allowUnrated: age == nil ? true : profile.allowUnrated)
@@ -209,7 +209,7 @@ private struct ProfileLimits: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Allow titles with no rating")
                         Text("Provider listings often leave it out, so these are usually missing data rather than suitable.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.ui(.caption)).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -223,7 +223,7 @@ private struct ProfileLimits: View {
             .disabled(!pinSet)
             if !pinSet {
                 Text("Set a parental PIN first: it is what gives more time.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.ui(.caption)).foregroundStyle(.secondary)
             }
         }
     }
@@ -264,7 +264,7 @@ private struct LocksSection: View {
                         Image(systemName: "lock.fill")
                         Text(lock.label)
                         Text(lock.kind == .channel ? "Channel" : "Category")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.ui(.caption)).foregroundStyle(.secondary)
                         Spacer()
                         Button("Unlock") { setLock(lock.kind, lock.value, false) }
                             .accessibilityLabel("Unlock \(lock.label)")
@@ -285,7 +285,7 @@ private struct LocksSection: View {
                         VStack(alignment: .leading) {
                             Text(channel.name)
                             if let group = channel.group {
-                                Text(group).font(.caption).foregroundStyle(.secondary)
+                                Text(group).font(.ui(.caption)).foregroundStyle(.secondary)
                             }
                         }
                         Spacer()

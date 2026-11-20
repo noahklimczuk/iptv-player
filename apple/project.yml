@@ -64,12 +64,30 @@ targets:
         # mpv open their own sockets and are not subject to App Transport Security.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # `aurora://title/movie/12`: the Top Shelf's way into a title's page.
+        CFBundleURLTypes:
+          - CFBundleURLName: tv.aurora.title
+            CFBundleURLSchemes: [aurora]
+        # Pairing with a phone over the home network (Shared/Core/Pairing.swift).
+        NSLocalNetworkUsageDescription: Aurora looks for your iPhone on this network so it can sign this Apple TV in to sync.
+        NSBonjourServices: [_aurora-pair._tcp]
+        # Windows' typefaces (Shared/Fonts, from scripts/make-fonts.swift).
+        UIAppFonts: [Manrope.ttf, BricolageGrotesque.ttf]
     platform: tvOS
     sources:
       - path: AuroraTV
+    dependencies:
+      - target: AuroraTopShelf
+    entitlements:
+      path: AuroraTV/AuroraTV.entitlements
+      properties:
+        com.apple.security.application-groups: [group.tv.aurora.shared]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tv.aurora.tv
+        # The layered icon and shelf images (AuroraTV/Assets.xcassets, from
+        # scripts/make-icons.swift).
+        ASSETCATALOG_COMPILER_APPICON_NAME: App Icon & Top Shelf Image
         INFOPLIST_KEY_CFBundleDisplayName: Aurora
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -84,12 +102,19 @@ targets:
         # mpv open their own sockets and are not subject to App Transport Security.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # Finding an Apple TV to set up (Shared/Core/Pairing.swift).
+        NSLocalNetworkUsageDescription: Aurora looks for Apple TVs on this network so you can sign them in to sync from here.
+        NSBonjourServices: [_aurora-pair._tcp]
+        # Windows' typefaces (Shared/Fonts, from scripts/make-fonts.swift).
+        UIAppFonts: [Manrope.ttf, BricolageGrotesque.ttf]
     platform: iOS
     sources:
       - path: AuroraMobile
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tv.aurora.mobile
+        # AuroraMobile/Assets.xcassets, from scripts/make-icons.swift.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_CFBundleDisplayName: Aurora
         GENERATE_INFOPLIST_FILE: YES
@@ -97,3 +122,29 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         # iPad turns every way, which Split View and Slide Over also need.
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+
+  # The Apple TV's Top Shelf: Continue Watching, from a snapshot the app writes to the
+  # app group (Shared/Core/TopShelf.swift). Not on iOS, which has no Top Shelf.
+  AuroraTopShelf:
+    type: app-extension
+    platform: tvOS
+    sources:
+      - path: AuroraTopShelf
+      - path: Shared/Core/TopShelf.swift
+    entitlements:
+      path: AuroraTopShelf/AuroraTopShelf.entitlements
+      properties:
+        com.apple.security.application-groups: [group.tv.aurora.shared]
+    info:
+      path: AuroraTopShelf/Info.plist
+      properties:
+        CFBundleDisplayName: Aurora
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.tv-top-shelf
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ContentProvider
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tv.aurora.tv.topshelf
+        GENERATE_INFOPLIST_FILE: YES

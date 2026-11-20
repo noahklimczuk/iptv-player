@@ -49,24 +49,27 @@ enum GuideFilterStore {
 struct GuideFiltersButton: View {
     let count: Int
     let action: () -> Void
+    @Environment(\.auroraTheme) private var theme
 
+    /// Windows' Filters button: a `dl-filter`, lit while any filter is on, with the
+    /// count in `guide-filter-badge`.
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: Daylight.px(8)) {
                 Image(systemName: "line.3.horizontal.decrease")
+                    .font(.ui(size: Daylight.px(15)))
                 Text("Filters")
                 if count > 0 {
-                    Text("\(count)")
-                        .font(.caption.weight(.heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .background(Color.accentColor, in: Capsule())
+                    Text(verbatim: String(count))
+                        .font(.ui(size: Daylight.px(11), weight: .heavy).monospacedDigit())
+                        .foregroundStyle(theme.accentText)
+                        .padding(.horizontal, Daylight.px(5))
+                        .frame(minWidth: Daylight.px(18), minHeight: Daylight.px(18))
+                        .background(theme.accent, in: Capsule())
                 }
             }
-            .fontWeight(count > 0 ? .heavy : .regular)
         }
-        .buttonStyle(.bordered)
-        .tint(count > 0 ? .accentColor : .secondary)
+        .buttonStyle(DaylightFilterStyle(selected: count > 0))
         .accessibilityLabel(count > 0 ? "Filters, \(count) on" : "Filters")
     }
 }
@@ -160,7 +163,7 @@ struct GuideFiltersSheet: View {
                             .foregroundStyle(chosen && filters.groupMode == .hide ? .secondary : .primary)
                             .lineLimit(1)
                         Spacer()
-                        Text("\(group.count)").font(.caption).foregroundStyle(.secondary)
+                        Text("\(group.count)").font(.ui(.caption)).foregroundStyle(.secondary)
                     }
                 }
                 .accessibilityAddTraits(chosen ? .isSelected : [])
