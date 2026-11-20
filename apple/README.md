@@ -168,8 +168,8 @@ screens. The app can:
   and then what it found, the library figures in sunk tiles over an accent coverage
   bar, About as Windows' list of terms, and the theme and history choices as Windows'
   segmented wells. Departures:
-  - A Profile section heads the page: Windows switches profile from its top bar's
-    avatar, which the Apple apps do not have.
+  - A Profile section heads the page as well as the top bar's profile button, which is
+    where Windows switches profile.
   - The index lists Sync, which Windows' page has and its index leaves out.
   - Appearance has Windows' theme (Dark, Oled, Light, Contrast, in its colours),
     Animations and 24-hour clock, kept on the device as Windows keeps them. Interface
@@ -334,10 +334,19 @@ screens. The app can:
   glass bar at the foot of the screen with Windows' ten destinations in its order, its
   own icons (`AuroraIcon`, drawn from `Icon.tsx`'s SVG paths), 84-point tabs and the
   platter that slides to the current one. It scrolls sideways where the screen is too
-  narrow, as Windows' does in a narrow window; a phone leaves out Multi-view. Search
-  opens from Home's toolbar, as Windows' opens from its top bar. Not yet: dragging the
-  platter from tab to tab, and on Apple TV the Menu button does not jump back to the
-  bar (down does).
+  narrow, as Windows' does in a narrow window; a phone leaves out Multi-view. Pressing
+  the bar swells the platter and dragging along it moves the platter, as on Windows
+  (where every tab fits). Not yet: on Apple TV the Menu button does not jump back to
+  the bar (down does).
+- Windows' top bar over every page (`AuroraTopBar`, from App.tsx's `TopBar`): the
+  "aurora" wordmark with its accent dot, the page's name in faint display type, and on
+  their own glass (`WindowsGlass.swift`, shared with the tab bar) the search field
+  (⌘K on an iPad keyboard), the light/dark switch, the clock and the profile button,
+  which opens "Who's watching?". Not yet: Windows' page scrolls on beneath the bar's
+  fade, but here it stops at the bar's foot, since a navigation stack clips its pages
+  to its own frame. Where the screen is narrow the search field becomes a
+  round button, then the page's name goes, then the clock (an iPhone keeps the
+  wordmark, search, the switch and the profile).
 
 Provider passwords and the TMDB and Gemini keys sync only when the household turns on
 "Also share sign-ins and keys" in Settings → Sync (D34), as on Windows; they go from and
@@ -360,6 +369,7 @@ Verified on an Intel Mac with Xcode 26.5 and Rust 1.100:
 | Guide grid against the real Xtream panel (6,699 channels): rows fetched as they scroll in, "No guide" rows, Earlier/Later, the now line, replay marked only where the channel keeps an archive | ✅ tvOS 26.5 simulator, driven with the remote |
 | Live and catch-up playback from the guide, left running | ✅ sound plays, no crash. A panel that has no archive for a programme gets "archive would not play" (MS NOW's 404s on the test panel) |
 | Windows' tab bar and typefaces | ✅ iOS 26.5 (scrolls to Settings, switches pages) and tvOS 26.5 (reached with the remote, selects Live TV) simulators |
+| Windows' top bar | ✅ iOS 26.5 (search opens, light/dark switches, the profile button opens "Who's watching?") and tvOS 26.5 (reached with the remote, moves along its controls) simulators |
 | Playback on a real Apple TV, import time for a big panel, zap time | ⏳ needs hardware: the remaining Phase 2 exit criteria |
 
 ## The separation rule

@@ -206,7 +206,7 @@ private struct ProfileTile: View {
     var body: some View {
         VStack(spacing: 12) {
             Text(profile.name.prefix(1).uppercased())
-                .font(.display(size: 56))
+                .font(.display(size: 64))
                 .frame(width: 140, height: 140)
                 .background(Self.colour(profile), in: RoundedRectangle(cornerRadius: 40))
                 .foregroundStyle(.white)
@@ -226,7 +226,7 @@ private struct ProfileTile: View {
 
     /// A steady colour per profile, so the same person is the same colour every time.
     private static func colour(_ p: Profile) -> Color {
-        let hues: [Color] = [.indigo, .teal, .orange, .pink, .purple, .blue, .green]
-        return hues[Int(p.id.magnitude % UInt64(hues.count))]
+        // Windows' `avatarColor`: `artHue` of the name, as the top bar's button has it.
+        ChannelTile.hue(p.name)
     }
 }
