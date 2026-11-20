@@ -109,6 +109,22 @@ screens. The app can:
   far through, what is next (or "No guide data for this channel"), and the time, for 5
   seconds. On an upright iPhone the time is left to the status bar and the logo and
   number are a size smaller, so the name has room (Windows never draws it that narrow),
+- the player's controls as Windows' `glass.css` dock: the top bar (back, the title pill
+  with the channel's tile, a show's episode line under its name and the Live or "behind
+  live" badge, the subtitle, audio and resolution tags, Stats for nerds and Record), the
+  bottom dock (play, back and forward 10, Back to live, Next episode, the timeline with
+  its buffered readout, channel down and up, last channel, number pad, mute, TV Guide,
+  Subtitles, Audio track, Playback settings), On now and Next cards over it on live TV,
+  and Watch settings as Windows' bottom-right sheet with its Subtitles, Audio and
+  Picture tabs. All of it in Windows' tokens, the Contrast theme included, scaled by
+  1.33 on an Apple TV and set on two rows under 760 points wide (an upright iPhone), as
+  Windows wraps its dock. Departures:
+  - No volume slider and no fullscreen button: the device's own buttons set the volume,
+    and the player is always fullscreen.
+  - On an Apple TV the dock steps aside while a sheet is open, so the remote's focus
+    cannot fall from the sheet into the dock; the focused button also glows, since the
+    play button and lit toggles are ink already.
+  - Channel down and up sit in the dock, as there is no keyboard to change channel from.
 - the seek preview on iPhone and iPad (Windows' `Scrub.tsx` and `play/preview.rs`):
   dragging the bar shows a bubble with the time, the chapter or skip marker there, and on
   live TV the wall-clock moment and what was on. The picture in it comes from frames mpv

@@ -86,6 +86,19 @@ final class MPVPlayerController: UIViewController {
         var rewind: RewindWindow?
     }
 
+    /// What the stats panel shows (Windows' `Stats`, read as `Engine::read_stats` reads it).
+    struct PlaybackStats: Equatable {
+        var resolution: String?
+        var videoCodec: String?
+        var audioCodec: String?
+        var fps: Double?
+        var bitrateKbps: Int?
+        var droppedFrames = 0
+        var bufferSecs = 0.0
+        var cacheBytes = 0
+        var hwDecoder: String?
+    }
+
     /// An audio or subtitle track, as Windows' menu lists it (`model.ts` `Track`).
     struct Track: Identifiable, Equatable {
         let id: Int64
@@ -219,6 +232,42 @@ final class MPVPlayerController: UIViewController {
             var value = clampSpeed(speed: speed)
             mpv_set_property(mpv, "speed", MPV_FORMAT_DOUBLE, &value)
         }
+    }
+
+    /// The playback stats now, read on mpv's queue and handed back on the main thread.
+    func stats(_ done: @escaping (PlaybackStats) -> Void) {
+        queue.async { [self] in
+            let stats = readStats()
+            DispatchQueue.main.async { done(stats) }
+        }
+    }
+
+    /// Windows' `Engine::read_stats`, property for property. On `queue`.
+    private func readStats() -> PlaybackStats {
+        guard let mpv else { return PlaybackStats() }
+        func double(_ name: String) -> Double? {
+            var value = 0.0
+            return mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &value) >= 0 && value.isFinite ? value : nil
+        }
+        func int(_ name: String) -> Int? {
+            var value: Int64 = 0
+            return mpv_get_property(mpv, name, MPV_FORMAT_INT64, &value) >= 0 ? Int(value) : nil
+        }
+        var stats = PlaybackStats()
+        if let w = int("video-params/w"), let h = int("video-params/h") {
+            stats.resolution = "\(w)x\(h)"
+        }
+        stats.videoCodec = string("video-format")
+        stats.audioCodec = string("audio-codec-name")
+        stats.fps = double("estimated-vf-fps") ?? double("container-fps")
+        let bitrate = ["video-bitrate", "audio-bitrate"].compactMap(double).reduce(0, +)
+        stats.bitrateKbps = bitrate > 0 ? Int((bitrate / 1000).rounded()) : nil
+        stats.droppedFrames = ["frame-drop-count", "decoder-frame-drop-count"].compactMap(int).map { max(0, $0) }
+            .reduce(0, +)
+        stats.bufferSecs = max(0, double("demuxer-cache-duration") ?? 0)
+        stats.cacheBytes = max(0, Int(cacheTotalBytes() ?? 0))
+        stats.hwDecoder = string("hwdec-current").flatMap { $0 == "no" ? nil : $0 }
+        return stats
     }
 
     /// Silence this player or let it be heard: a multi-view wall has exactly one tile
@@ -429,6 +478,19 @@ final class MPVPlayerController: UIViewController {
             }
         }
         return (end, start)
+    }
+
+    /// `demuxer-cache-state`'s `total-bytes`. On `queue`.
+    private func cacheTotalBytes() -> Double? {
+        guard let mpv else { return nil }
+        var node = mpv_node()
+        guard mpv_get_property(mpv, "demuxer-cache-state", MPV_FORMAT_NODE, &node) >= 0 else { return nil }
+        defer { mpv_free_node_contents(&node) }
+        guard node.format == MPV_FORMAT_NODE_MAP, let map = node.u.list?.pointee else { return nil }
+        for i in 0..<Int(map.num) {
+            if let key = map.keys[i], String(cString: key) == "total-bytes" { return number(map.values[i]) }
+        }
+        return nil
     }
 
     private func number(_ node: mpv_node) -> Double? {
