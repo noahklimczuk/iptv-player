@@ -570,7 +570,8 @@ pub fn library_episodes(
             }
             tracing::warn!(
                 series = id,
-                "a duplicate copy of this show would not list its episodes ({e});                  merging what the others have"
+                "a duplicate copy of this show would not list its episodes ({e}); \
+                 merging what the others have"
             );
         }
     }

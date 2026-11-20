@@ -237,7 +237,8 @@ fn main() {
             if reaped > 0 {
                 tracing::warn!(
                     reaped,
-                    "ended web view processes left behind by an Aurora that had exited:                      {reap_note}"
+                    "ended web view processes left behind by an Aurora that had exited: \
+                     {reap_note}"
                 );
             } else {
                 tracing::info!("web view folder at launch: {reap_note}");
@@ -454,7 +455,9 @@ fn main() {
                                     if event == aurora_app::parental::ClockEvent::TimeUp {
                                         tracing::info!("today's viewing time is used up");
                                         if let Err(e) = player.stop() {
-                                            tracing::warn!("could not stop playback at the daily limit: {e}");
+                                            tracing::warn!(
+                                                "could not stop playback at the daily limit: {e}"
+                                            );
                                         }
                                         if mosaic.is_open() {
                                             mosaic.close();

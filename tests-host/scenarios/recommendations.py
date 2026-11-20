@@ -150,11 +150,33 @@ def run(d, ctx):
     time.sleep(3)
     d.click(d.by_text("nav a", "Home", timeout=30))
     time.sleep(8)
-    body = d.body()
-    assert warm["title"] in body, (
-        f"the rail heading {warm['title']!r} is not on the home screen; it says "
-        f"{body[:400]!r}"
+    # Home is built by the feed now (`aurora_core::feed`), not by `library.recommended`:
+    # the same taste shows up as "Top Picks For You" and a "Because You Watched" row per
+    # anchor, rather than as the recommender's own heading. Read from the DOM, because
+    # rails below the fold are missing from WebDriver's text of the page.
+    headings = d.js(
+        "return [...document.querySelectorAll('h2, h3')].map((e) => e.textContent.trim());"
     )
+    assert "Top Picks For You" in headings, (
+        f"three films watched and Home has no personal row; its headings are {headings}"
+    )
+    anchors = [h[len("Because You Watched "):] for h in headings
+               if h.startswith("Because You Watched ")]
+    assert set(anchors) <= {t for _, t in watched}, (
+        f"a row names a film that was never watched: {set(anchors)}"
+    )
+    # A "Because You Watched" row needs something to be similar *by*: shared genres,
+    # cast, a TMDB link or a franchise (`feed::because_you_watched`). A library nothing
+    # has enriched has none of those, so the row is rightly absent there.
+    ids = ",".join(str(i) for i, _ in watched)
+    enriched = ctx.rows(
+        f"SELECT count(*) FROM movies WHERE id IN ({ids})"
+        " AND genres IS NOT NULL AND genres NOT IN ('', '[]')"
+    )[0][0]
+    if enriched:
+        assert anchors, f"no row names a film that was watched; headings are {headings}"
+    else:
+        print("   no metadata on the watched films, so no 'Because You Watched' row: expected")
 
     # Bring the rail into view before photographing it — it sits below Continue
     # Watching, so the top of the page is not evidence about it either way.
@@ -162,7 +184,7 @@ def run(d, ctx):
         "const h = [...document.querySelectorAll('h2, h3, section')]"
         "  .find((e) => e.textContent.trim().startsWith(arguments[0]));"
         " if (h) h.scrollIntoView({block: 'center'});",
-        warm["title"],
+        "Top Picks For You",
     )
     time.sleep(2)
     d.shot(ctx.shot("home"))
@@ -179,9 +201,12 @@ def run(d, ctx):
         "  .map((e) => e.textContent.trim());"
     )
     assert labels, "no card on the home screen says why it is there"
-    assert any(r.startswith("Because you watched") for r in labels), (
-        f"nothing named the film it came from; the cards say {sorted(set(labels))}"
-    )
+    # The feed credits a watched film through what they share (`anchor_sharing`), so
+    # an unenriched library's shelf matches rightly fall back to "Just added".
+    if enriched:
+        assert any(r.startswith("Because you watched") for r in labels), (
+            f"nothing named the film it came from; the cards say {sorted(set(labels))}"
+        )
     print(f"   {len(labels)} cards carry a reason, e.g. {labels[0]!r}")
 
     print(f"   {matching}/{len(shelves)} from the watched shelf, {len(because)} named "

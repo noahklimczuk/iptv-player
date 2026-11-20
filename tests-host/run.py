@@ -613,6 +613,12 @@ def main():
                     ctx.github = github
                     try:
                         d = WD(EXE)
+                        # As on the first attempt: a scenario that relaunches the app
+                        # (real_parental, real_privacy) needs both, and the retry used
+                        # to fail on "ctx.relaunch needs the runner's driver restart"
+                        # instead of on anything about the app.
+                        ctx.driver = d
+                        ctx.restart_driver = bring_the_driver_back
                         mod.run(d, ctx)
                         print(f"   ok (after restarting the driver {attempt}x)")
                         e = None

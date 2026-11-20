@@ -42,6 +42,13 @@ pub fn existing(data_dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// A log's text with every address in it redacted, a line at a time.
+fn redacted(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(aurora_core::redact::redact_in_text)
+        .collect()
+}
+
 /// Copy the logs somewhere a person can attach them to a message.
 ///
 /// Returns what was written. The destination is passed in rather than decided here, and
@@ -59,6 +66,11 @@ pub fn existing(data_dir: &Path) -> Vec<PathBuf> {
 /// 6,698 of this subscription's 6,699 stream addresses have none (R-61) -- so
 /// `aurora-ingest/tests/real_log_safety.rs` now checks the addresses this panel really
 /// produces against the real credentials.
+///
+/// And it was untrue again for a while: the rebuilt player wrote mpv's own lines, which
+/// name the address being opened, without redacting them. So the copy is redacted as
+/// well, line by line, rather than trusting that every writer of the log always did --
+/// which also cleans a log written by a version that did not.
 pub fn export_to(data_dir: &Path, destination: &Path) -> std::io::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(destination)?;
     let mut written = Vec::new();
@@ -67,7 +79,8 @@ pub fn export_to(data_dir: &Path, destination: &Path) -> std::io::Result<Vec<Pat
             continue;
         };
         let target = destination.join(name);
-        std::fs::copy(&source, &target)?;
+        let text = std::fs::read(&source)?;
+        std::fs::write(&target, redacted(&String::from_utf8_lossy(&text)))?;
         written.push(target);
     }
     Ok(written)
@@ -283,6 +296,25 @@ mod tests {
         );
         // Copied, not moved: the app is still writing to one of them.
         assert!(dir.join(LOG_NAME).exists());
+    }
+
+    /// A log written before mpv's lines were redacted still leaves this machine clean.
+    /// The line is the real one's shape: mpv's sentence about the address it opened.
+    #[test]
+    fn export_redacts_a_stream_address_the_log_holds() {
+        let dir = scratch("export-redacted");
+        let line = "2026-11-19T02:31:06Z  WARN mpv: stream: Failed to open \
+                    http://panel.example/live/alice/hunter2/1048115.ts.\n";
+        std::fs::write(dir.join(LOG_NAME), format!("first\n{line}last\n")).unwrap();
+        let out = dir.join("Desktop");
+
+        export_to(&dir, &out).unwrap();
+        let exported = std::fs::read_to_string(out.join(LOG_NAME)).unwrap();
+        assert!(!exported.contains("alice"), "{exported}");
+        assert!(!exported.contains("hunter2"), "{exported}");
+        assert!(exported.contains("1048115"), "{exported}");
+        assert!(exported.starts_with("first\n") && exported.ends_with("last\n"));
+        assert_eq!(exported.lines().count(), 3);
     }
 
     #[test]

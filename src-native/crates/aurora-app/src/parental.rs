@@ -75,7 +75,8 @@ pub fn parental_set_lock(services: State<'_, Services>, args: SetLockArgs) -> Re
     require_parent(&db)?;
     if args.locked && !profiles::parental_settings(&db)?.has_master_pin {
         return Err(AppError::Other(
-            "Set a parental PIN first: a lock is opened with it, so without one nothing              locked could be watched."
+            "Set a parental PIN first: a lock is opened with it, so without one nothing \
+             locked could be watched."
                 .into(),
         ));
     }
