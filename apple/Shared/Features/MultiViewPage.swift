@@ -8,6 +8,7 @@ import SwiftUI
 /// than Windows' dropdown, which a remote cannot type into.
 struct MultiViewPage: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.auroraTheme) private var theme
 
     /// Windows' `LAYOUTS`, in its order: cheapest line first.
     static let layouts: [(id: String, label: String, hint: String, tiles: Int)] = [
@@ -110,39 +111,38 @@ struct MultiViewPage: View {
 
     @ViewBuilder private var content: some View {
         VStack(alignment: .leading, spacing: 20) {
-            PageHeading("Multi-view")
-            #if os(tvOS)
-            let how = "Watch several channels at once. One tile has sound — select a tile to move it, and hold it to open that channel on its own."
-            #else
-            let how = "Watch several channels at once. One tile has sound — tap a tile to move it, and double-tap to open that channel on its own."
-            #endif
-            Text(how).foregroundStyle(.secondary).fontWeight(.medium)
-
-            Picker("Arrangement", selection: $layout) {
-                ForEach(Self.layouts, id: \.id) { l in
-                    Text(l.label).tag(l.id)
+            // Windows' header: the title and how it works, the arrangement beside them,
+            // wrapping under them where there is no room.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 20) {
+                    intro.frame(maxWidth: .infinity, alignment: .leading)
+                    arrangement
+                }
+                VStack(alignment: .leading, spacing: 16) {
+                    intro
+                    arrangement
                 }
             }
-            .pickerStyle(.segmented)
-            .accessibilityHint(Self.layouts.first { $0.id == layout }.map { "\($0.hint) · \($0.tiles) tiles" } ?? "")
 
             if let check { budget(check) }
 
             Text("Channels — leave a tile empty to open fewer streams")
-                .font(.subheadline.bold()).foregroundStyle(.secondary)
+                .font(.system(size: Daylight.px(13), weight: .bold))
+                .foregroundStyle(theme.textMuted)
             wall
 
             HStack(spacing: 12) {
                 Button(opening ? "Opening…" : "Open \(filled) channel\(filled == 1 ? "" : "s")",
                        systemImage: "square.grid.2x2") { open(rotating: false) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.daylight(.primary))
                     .disabled(filled == 0 || selectionBlocked || opening)
                 if filled == 0 {
-                    Text("Pick at least one channel.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Pick at least one channel.").font(.system(size: Daylight.px(13)))
+                        .foregroundStyle(theme.textMuted)
                 }
                 if selectionBlocked, let check {
                     Text("\(filled + Int(check.recordings)) streams is more than your provider allows.")
-                        .font(.footnote).foregroundStyle(.red)
+                        .font(.system(size: Daylight.px(13))).foregroundStyle(theme.danger)
                 }
             }
 
@@ -151,21 +151,67 @@ struct MultiViewPage: View {
             if selectionBlocked, check?.rotationOffered == true, filled > 1 {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Show them one at a time instead", systemImage: "square.stack.3d.up")
-                        .font(.subheadline.bold())
+                        .font(.system(size: Daylight.px(14), weight: .bold))
                     Text("Your line allows one stream, so Aurora can move it around the wall — each channel for \(dwell) seconds, with the rest showing what is on now. \(stayHint)")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.system(size: Daylight.px(13))).foregroundStyle(theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button(opening ? "Opening…" : "Rotate \(filled) channel\(filled == 1 ? "" : "s")",
                            systemImage: "square.stack.3d.up") { open(rotating: true) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.daylight(.primary))
                         .disabled(opening)
                 }
-                .padding()
+                .padding(Daylight.px(16))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 20))
+                .daylightRaised(theme, radius: Daylight.px(24))
+                #if os(tvOS)
+                .focusSection()
+                #endif
             }
 
             if !saved.isEmpty { savedLayouts }
         }
+        .foregroundStyle(theme.text)
+    }
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            PageHeading("Multi-view")
+            #if os(tvOS)
+            let how = "Watch several channels at once. One tile has sound — select a tile to move it, and hold it to open that channel on its own."
+            #else
+            let how = "Watch several channels at once. One tile has sound — tap a tile to move it, and double-tap to open that channel on its own."
+            #endif
+            Text(how)
+                .fontWeight(.medium)
+                .foregroundStyle(theme.textMuted)
+                .frame(maxWidth: Daylight.px(620), alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The arrangement, as Windows' `dl-seg`: each choice its miniature and its name,
+    /// the chosen one raised.
+    private var arrangement: some View {
+        HStack(spacing: 2) {
+            ForEach(Self.layouts, id: \.id) { l in
+                Button { layout = l.id } label: {
+                    HStack(spacing: 6) {
+                        LayoutThumb(layout: l.id, small: true)
+                        Text(l.label)
+                    }
+                }
+                .buttonStyle(SegmentStyle(active: layout == l.id))
+                .accessibilityLabel(l.label)
+                .accessibilityHint("\(l.hint) · \(l.tiles) tiles")
+                .accessibilityAddTraits(layout == l.id ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous))
+        .fixedSize()
+        #if os(tvOS)
+        .focusSection()
+        #endif
     }
 
     #if os(tvOS)
@@ -180,18 +226,18 @@ struct MultiViewPage: View {
 
     @ViewBuilder private func budget(_ check: MosaicCheck) -> some View {
         let blocked = check.verdict == "exceeds"
+        let shape = RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: blocked ? "exclamationmark.triangle.fill" : "info.circle")
+            Image(systemName: blocked ? "exclamationmark.triangle" : "info.circle")
             Text(Self.budgetLine(check) + (blocked ? " " + Self.fitting(check) : ""))
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.footnote.weight(.semibold))
-        .foregroundStyle(blocked ? Color.red : Color.secondary)
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .font(.system(size: Daylight.px(13), weight: .semibold))
+        .foregroundStyle(blocked ? theme.danger : theme.textMuted)
+        .padding(.horizontal, Daylight.px(14)).padding(.vertical, Daylight.px(10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(blocked ? Color.red.opacity(0.12) : Color.secondary.opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(blocked ? Color.red.opacity(0.4) : Color.secondary.opacity(0.25)))
+        .background(blocked ? theme.dangerSoft : theme.surface, in: shape)
+        .overlay(shape.strokeBorder(blocked ? theme.dangerBorder : theme.border, lineWidth: 1))
     }
 
     /// Windows' `budgetLine`.
@@ -219,20 +265,24 @@ struct MultiViewPage: View {
     // MARK: The wall as it will open
 
     private var wall: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 16), count: tiles >= 9 ? 3 : 2)
-        return LazyVGrid(columns: columns, spacing: 16) {
+        let gap = Daylight.px(16)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: tiles >= 9 ? 3 : 2)
+        return LazyVGrid(columns: columns, spacing: gap) {
             ForEach(0..<tiles, id: \.self) { index in
                 let id = picked.indices.contains(index) ? picked[index] : nil
                 let channel = id.flatMap { id in channels.first { $0.id == id } }
                 Button { choosingTile = index } label: {
                     TileCard(index: index, name: channel?.name, short: tiles >= 9)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TileCardStyle(ringed: channel != nil && index == 0))
                 .accessibilityLabel("Tile \(index + 1)\(index == 0 ? " — starts with sound" : ""): \(channel?.name ?? "Empty")")
             }
         }
-        .padding(16)
-        .background(.background.tertiary, in: RoundedRectangle(cornerRadius: 28))
+        .padding(gap)
+        .background(theme.surfaceSunk, in: RoundedRectangle(cornerRadius: Daylight.px(24), style: .continuous))
+        #if os(tvOS)
+        .focusSection()
+        #endif
     }
 
     private func setTile(_ index: Int, _ id: Int64?) {
@@ -248,30 +298,37 @@ struct MultiViewPage: View {
 
     private var savedLayouts: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Saved layouts").font(.title2.bold())
+            Text("Saved layouts")
+                .font(.system(size: Daylight.px(26), weight: .heavy))
+                .accessibilityAddTraits(.isHeader)
             ForEach(saved, id: \.id) { row in
                 HStack(spacing: 12) {
                     LayoutThumb(layout: row.layout)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.name).fontWeight(.semibold)
                         Text("\(row.channels.compactMap { $0 }.count) channels")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.system(size: Daylight.px(12))).foregroundStyle(theme.textMuted)
                     }
                     Spacer()
                     Button("Open", systemImage: "play.fill") { openSaved(row) }
+                        .buttonStyle(.daylight(.secondary))
                     // Asks first: a saved layout exists nowhere else, and there is no undo.
                     if confirming == row.id {
-                        Text("Delete this layout?").font(.footnote).foregroundStyle(.red)
-                        Button("Delete", role: .destructive) {
+                        Text("Delete this layout?")
+                            .font(.system(size: Daylight.px(13)))
+                            .foregroundStyle(theme.danger)
+                            .lineLimit(1)
+                        Button("Delete") {
                             confirming = nil
                             delete(row)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.daylight(.danger))
                         Button("Keep") {
                             confirming = nil
                             // Back to the button that asked, rather than the top of the page.
                             Task { savedFocus = .ask(row.id) }
                         }
+                        .buttonStyle(.daylight(.ghost))
                         .focused($savedFocus, equals: .keep(row.id))
                     } else {
                         Button("Delete \(row.name)", systemImage: "xmark") {
@@ -280,12 +337,15 @@ struct MultiViewPage: View {
                             Task { savedFocus = .keep(row.id) }
                         }
                         .labelStyle(.iconOnly)
+                        .buttonStyle(.daylight(.ghost, iconOnly: true))
                         .focused($savedFocus, equals: .ask(row.id))
                     }
                 }
-                .buttonStyle(.bordered)
-                .padding(.horizontal, 16).padding(.vertical, 12)
-                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, Daylight.px(16)).padding(.vertical, Daylight.px(12))
+                .daylightRaised(theme, radius: Daylight.px(18))
+                #if os(tvOS)
+                .focusSection()
+                #endif
             }
         }
     }
@@ -367,52 +427,129 @@ private struct ChosenTile: Identifiable {
     var id: Int { index }
 }
 
-/// One tile of the wall before it opens: a dashed "Add a channel", or the channel on
-/// its hue, the sound tile ringed.
+/// One tile of the wall before it opens (Windows' `mosaic-pick`): a dashed "Add a
+/// channel", or the channel on its hue, the sound tile ringed; under it Windows' channel
+/// `Select`, which here opens the chooser.
 private struct TileCard: View {
     let index: Int
     let name: String?
     let short: Bool
+    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading) {
+        let shape = RoundedRectangle(cornerRadius: Daylight.px(22), style: .continuous)
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 if let name {
                     Text("\(index + 1)").opacity(0.8)
                     Text(name).lineLimit(1)
                     Spacer(minLength: 0)
-                    if index == 0 { Image(systemName: "speaker.wave.2.fill").font(.footnote) }
+                    if index == 0 { Image(systemName: "speaker.wave.2.fill").font(.system(size: Daylight.px(14))) }
                 } else {
-                    Label("Add a channel", systemImage: "plus").foregroundStyle(.secondary)
+                    Label("Add a channel", systemImage: "plus").foregroundStyle(theme.textMuted)
                     Spacer(minLength: 0)
                 }
             }
-            .font(.headline.weight(.heavy))
+            .font(.system(size: Daylight.px(15), weight: .heavy))
             Spacer(minLength: 0)
-            Text(name == nil ? "Empty" : (index == 0 ? "Starts with sound" : "Tile \(index + 1)"))
-                .font(.caption).opacity(0.75)
+            // The Select's trigger: accent once chosen, the raised surface while empty.
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.down").font(.system(size: Daylight.px(13), weight: .bold))
+                Text(name ?? "Empty").lineLimit(1)
+            }
+            .font(.system(size: Daylight.px(13), weight: .heavy))
+            .padding(.horizontal, Daylight.px(14))
+            .frame(height: Daylight.px(36))
+            .frame(maxWidth: Daylight.px(260), alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(name == nil ? theme.text : theme.accentText)
+            .background {
+                let pill = RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous)
+                if name == nil {
+                    Color.clear.daylightRaised(theme, radius: Daylight.px(14))
+                } else {
+                    pill.fill(theme.accent)
+                }
+            }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: short ? 120 : 150, alignment: .topLeading)
-        .foregroundStyle(name == nil ? Color.primary : .white)
+        .padding(Daylight.px(14))
+        .frame(maxWidth: .infinity, minHeight: Daylight.px(short ? 120 : 150), alignment: .topLeading)
+        .foregroundStyle(name == nil ? theme.text : .white)
         .background {
-            if let name { RoundedRectangle(cornerRadius: 22).fill(ChannelTile.hue(name)) }
+            if let name { shape.fill(ChannelTile.hue(name)) }
         }
         .overlay {
             if name == nil {
-                RoundedRectangle(cornerRadius: 22)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [6])).foregroundStyle(.tertiary)
-            } else if index == 0 {
-                RoundedRectangle(cornerRadius: 22).strokeBorder(Color.accentColor, lineWidth: 4)
+                shape.strokeBorder(theme.borderStrong, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 22))
+        .contentShape(shape)
+    }
+}
+
+/// The tile as a button: the sound tile's 4-point accent ring outside it, and on a TV
+/// Windows' focus ring when the remote is on it.
+private struct TileCardStyle: ButtonStyle {
+    let ringed: Bool
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @Environment(\.isFocused) private var focused
+    #else
+    private let focused = false
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        let radius = Daylight.px(22)
+        configuration.label
+            .overlay {
+                if ringed && !focused {
+                    RoundedRectangle(cornerRadius: radius + 4, style: .continuous)
+                        .strokeBorder(theme.accent, lineWidth: 4)
+                        .padding(-4)
+                }
+            }
+            .daylightFocusRing(focused, radius: radius, theme: theme)
+            .scaleEffect(focused ? 1.03 : configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: focused)
+    }
+}
+
+/// One choice in Windows' `dl-seg`: muted and bare, or raised on the surface when it is
+/// the one chosen (on the accent in Contrast).
+private struct SegmentStyle: ButtonStyle {
+    let active: Bool
+    @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    @Environment(\.isFocused) private var focused
+    #else
+    private let focused = false
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        let radius = Daylight.px(10)
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        configuration.label
+            .font(.system(size: Daylight.px(13), weight: .bold))
+            .lineLimit(1)
+            .padding(.horizontal, Daylight.px(16))
+            .frame(height: Daylight.px(44))
+            .foregroundStyle(active ? (theme == .contrast ? theme.accentText : theme.text) : theme.textMuted)
+            .background {
+                if active {
+                    shape.fill(theme == .contrast ? theme.accent : theme.surface)
+                        .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
+                }
+            }
+            .contentShape(shape)
+            .daylightFocusRing(focused, radius: radius, theme: theme)
+            .opacity(configuration.isPressed ? 0.8 : 1)
     }
 }
 
 /// A miniature of an arrangement, from the core's own geometry.
 struct LayoutThumb: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.auroraTheme) private var theme
     let layout: String
     var small = false
 
@@ -423,7 +560,7 @@ struct LayoutThumb: View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(rects.enumerated()), id: \.offset) { _, r in
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.primary.opacity(0.24))
+                    .fill(theme.text.opacity(0.24))
                     .frame(width: max(0, CGFloat(r.width) / 10 - 2), height: max(0, CGFloat(r.height) / 10 - 2))
                     .offset(x: CGFloat(r.x) / 10 + 1, y: CGFloat(r.y) / 10 + 1)
             }
@@ -460,7 +597,8 @@ private struct ChannelChooser: View {
                                 HStack {
                                     Text(channel.name)
                                     Spacer()
-                                    if let n = channel.number { Text("\(n)").foregroundStyle(.secondary) }
+                                    // Verbatim: a localized integer would read 20,870.
+                                    if let n = channel.number { Text(verbatim: String(n)).foregroundStyle(.secondary) }
                                     if selected == channel.id { Image(systemName: "checkmark") }
                                 }
                             }

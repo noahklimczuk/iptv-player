@@ -251,7 +251,13 @@ screens. The app can:
   brings the picture to it and stays), and the bar has Windows' countdown, Resume, Save
   layout and Close. The core (`mosaic.rs`) gives the tiles' geometry, from the shared
   `aurora_core::mosaic`, their tunes, the budget and the saved layouts; `mirrors.rs`
-  checks the refusal and the dwell against Windows.
+  checks the refusal and the dwell against Windows. Drawn as Windows draws it: the
+  arrangement as Daylight's segmented well with each layout's miniature, the budget on
+  the surface or in the danger colours, the wall on the sunk ground with each tile on
+  its channel's hue (the sound tile ringed in the accent, an empty one dashed) and
+  Windows' Select under it, Daylight's buttons (`Daylight.swift`) and its focus ring on
+  a TV; on the open wall, the bar on the dock's glass and the tiles in the theme's sunk,
+  muted and accent colours.
 
   Where it differs, and why:
   - not on an iPhone, as the port's plan has it: four channels on a phone screen are

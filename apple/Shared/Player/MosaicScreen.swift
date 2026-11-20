@@ -188,6 +188,8 @@ struct MosaicScreen: View {
     /// A layout was saved, so the list under the wall is out of date.
     let saved: () -> Void
 
+    /// Read here as the player reads it: a full-screen cover is its own presentation.
+    @AppStorage(AppearanceKey.theme) private var theme: AuroraTheme = .dark
     @State private var guide: [Int64: NowNext] = [:]
     @State private var failure: (title: String, message: String)?
     @State private var naming = false
@@ -221,7 +223,8 @@ struct MosaicScreen: View {
             }
         }
         .ignoresSafeArea()
-        .preferredColorScheme(.dark)
+        .environment(\.auroraTheme, theme)
+        .preferredColorScheme(theme.scheme)
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -281,30 +284,33 @@ struct MosaicScreen: View {
                     .id(tile.generation)
             }
             if empty {
-                Color(white: 0.08)
-                Text("Empty").font(.callout.bold()).foregroundStyle(.secondary)
+                theme.surfaceSunk
+                Text("Empty")
+                    .font(.system(size: Daylight.px(13), weight: .bold))
+                    .foregroundStyle(theme.textMuted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = tile.error {
-                Color(white: 0.08)
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle").font(.title3)
-                    Text(error).font(.caption).multilineTextAlignment(.center).opacity(0.85)
+                theme.surfaceSunk
+                VStack(spacing: Daylight.px(8)) {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: Daylight.px(20)))
+                    Text(error).font(.system(size: Daylight.px(12))).multilineTextAlignment(.center).opacity(0.85)
                 }
-                .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(Daylight.px(12)).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if waiting {
                 // Waiting its turn: the channel it stands for, and what is on it now and
-                // next, which is why the viewer picked it.
-                Color(white: 0.11)
+                // next, which is why the viewer picked it. A shade off the player's black,
+                // so the wall reads as cards and one picture rather than as failures.
+                Color(white: 0.06)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(tile.name ?? "").font(.callout.weight(.semibold)).lineLimit(1)
+                    Text(tile.name ?? "").font(.system(size: Daylight.px(13), weight: .semibold)).lineLimit(1)
                     if let id = tile.channelId, let now = guide[id]?.now {
-                        Text(now.title).font(.caption).opacity(0.85).lineLimit(1)
+                        Text(now.title).font(.system(size: Daylight.px(12))).opacity(0.85).lineLimit(1)
                     }
                     if let id = tile.channelId, let next = guide[id]?.next {
-                        Text("Next: \(next.title)").font(.caption2).opacity(0.55).lineLimit(1)
+                        Text("Next: \(next.title)").font(.system(size: Daylight.px(11))).opacity(0.55).lineLimit(1)
                     }
                 }
-                .padding().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(Daylight.px(12)).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             } else if !tile.playing {
                 Color.black.allowsHitTesting(false)
                 ProgressView()
@@ -320,24 +326,27 @@ struct MosaicScreen: View {
                     Image(systemName: "speaker.wave.2.fill").font(.caption)
                 }
             }
-            .font(.callout.weight(.semibold))
-            .padding(.horizontal, 14).padding(.top, 18).padding(.bottom, 10)
+            .font(.system(size: Daylight.px(13), weight: .semibold))
+            .foregroundStyle(empty ? theme.text : .white)
+            .padding(.horizontal, Daylight.px(14)).padding(.top, Daylight.px(18)).padding(.bottom, Daylight.px(10))
             .background {
-                if !empty { LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .bottom, endPoint: .top) }
+                if !empty {
+                    LinearGradient(colors: [Color(red: 10 / 255, green: 12 / 255, blue: 20 / 255).opacity(0.75), .clear],
+                                   startPoint: .bottom, endPoint: .top)
+                }
             }
         }
         .foregroundStyle(.white)
         .overlay {
             if empty {
-                Rectangle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [6]))
-                    .foregroundStyle(.secondary)
+                Rectangle().strokeBorder(theme.borderStrong, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
         }
         // The sound tile carries the accent ring, drawn inside so it never covers a
         // neighbour.
         .overlay {
             if tile.index == session.focused && !empty {
-                Rectangle().strokeBorder(Color.accentColor, lineWidth: 4)
+                Rectangle().strokeBorder(theme.accent, lineWidth: 4)
             }
         }
         .contentShape(Rectangle())
@@ -350,8 +359,10 @@ struct MosaicScreen: View {
         .focusable(!inBar)
         .focused($focusedTile, equals: tile.index)
         .overlay {
+            // Windows' focus ring, inside the tile so it never covers a neighbour.
             if focusedTile == tile.index {
-                Rectangle().strokeBorder(.white.opacity(0.9), lineWidth: 3).padding(6)
+                Rectangle().strokeBorder(theme.background, lineWidth: 2).padding(6)
+                Rectangle().strokeBorder(Color.white, lineWidth: 3).padding(8)
             }
         }
         .onTapGesture { choose(tile.index) }
@@ -401,24 +412,31 @@ struct MosaicScreen: View {
 
     // MARK: The bar
 
+    /// Windows' bar over the wall: the dock's glass, its title in the display face, the
+    /// rotation's countdown on a dock button's well, and Save layout and Close.
     private var bar: some View {
-        HStack(spacing: 8) {
-            Text("Multi-view").font(.title3.bold()).padding(.horizontal, 8)
+        let dock = DockTokens(theme)
+        return HStack(spacing: Daylight.px(8)) {
+            Text("Multi-view")
+                .font(.system(size: Daylight.px(20), weight: .heavy))
+                .padding(.leading, Daylight.px(8)).padding(.trailing, Daylight.px(10))
             if session.rotating {
-                HStack(spacing: 8) {
-                    Image(systemName: "square.stack.3d.up")
+                HStack(spacing: Daylight.px(8)) {
+                    Image(systemName: "square.stack.3d.up").font(.system(size: Daylight.px(14)))
                     if let left = session.nextInSecs {
                         Text("Next tile in \(left)s").monospacedDigit()
                     } else {
-                        Text("Staying on \(session.tiles[session.focused].name ?? "this tile")")
+                        Text("Staying on \(session.tiles[session.focused].name ?? "this tile")").lineLimit(1)
                         Button("Resume") { session.resumeRotation() }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.daylight(.secondary, .sm))
                             .focused($barItem, equals: .resume)
                             .modifier(BackToTiles(action: backToTiles))
                     }
                 }
-                .font(.caption.bold())
-                .padding(.horizontal, 12)
+                .font(.system(size: Daylight.px(12), weight: .bold))
+                .padding(.horizontal, Daylight.px(12))
+                .frame(minHeight: Daylight.px(36))
+                .background(dock.button, in: RoundedRectangle(cornerRadius: Daylight.px(14), style: .continuous))
             }
             Button("Save layout", systemImage: "plus") { naming = true }
                 .focused($barItem, equals: .save)
@@ -427,9 +445,10 @@ struct MosaicScreen: View {
                 .focused($barItem, equals: .close)
                 .modifier(BackToTiles(action: backToTiles))
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.daylight(.secondary))
+        .foregroundStyle(dock.text)
         .padding(6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .dockGlass(RoundedRectangle(cornerRadius: Daylight.px(18), style: .continuous), dock)
     }
 
     /// Down from the bar: back to the tile with sound. The tiles take focus again only once
