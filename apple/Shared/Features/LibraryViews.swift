@@ -81,35 +81,13 @@ struct MoviesView: View {
     }
 }
 
+/// A film's page, as a sheet: Windows' detail modal (`TitleDetail`).
 struct MovieDetail: View {
-    @Environment(AppModel.self) private var model
     let movie: Movie
-    @State private var progress: WatchProgress?
-    @State private var playing: PlayerItem?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(movie.title).font(.largeTitle.bold())
-                    HStack {
-                        if let year = movie.year { Text(String(year)) }
-                        if let mins = movie.runtimeMins { Text("\(mins) min") }
-                        if let rating = movie.rating { Text(String(format: "★ %.1f", rating)) }
-                    }
-                    .foregroundStyle(.secondary)
-                    if let overview = movie.overview { Text(overview) }
-                    CastAndCrew(kind: .movie, id: movie.id, genres: movie.genres)
-                    PlayButtons(progress: progress) { startAt in
-                        playing = .movie(id: movie.id, title: movie.title, startAt: startAt)
-                    }
-                    MarkButtons(kind: .movie, id: movie.id)
-                }
-                .padding()
-            }
-            .task(id: playing == nil) { progress = await model.progress(.movie, id: movie.id) }
-            .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
-        }
+        TitleDetail(item: .movie(movie: movie)) { dismiss() }
     }
 }
 
@@ -317,149 +295,30 @@ struct LetterBar: View {
     }
 }
 
+/// A show's page, pushed: Windows' detail modal (`TitleDetail`), once the show is read.
 struct SeriesDetail: View {
     @Environment(AppModel.self) private var model
     let seriesId: Int64
     @State private var detail: Series?
-    @State private var season: UInt16?
-    /// Every episode of every season, every copy of the show merged (the core does that).
-    /// The season picker comes from these, not from the show's row, as on Windows: a
-    /// season only a hidden duplicate has is still reachable.
-    @State private var allEpisodes: [Episode] = []
-    @State private var loading = true
-    @State private var resume: SeriesResume?
-    @State private var playing: PlayerItem?
-
-    private var seasons: [UInt16] { Array(Set(allEpisodes.map(\.season))).sorted() }
-    private var episodes: [Episode] { allEpisodes.filter { $0.season == season } }
 
     var body: some View {
-        List {
+        Group {
             if let detail {
-                Section {
-                    MarkButtons(kind: .series, id: seriesId)
-                    if let overview = detail.overview { Text(overview) }
-                    CastAndCrew(kind: .series, id: seriesId, genres: detail.genres)
-                    SeriesSwitches(seriesId: seriesId)
-                    if let resume, let episode = allEpisodes.first(where: { $0.id == resume.episodeId }) {
-                        Button(resume.positionSecs > 0 ? "Resume \(label(episode))" : "Play \(label(episode))",
-                               systemImage: "play.fill") {
-                            playing = .episode(id: episode.id, title: label(episode),
-                                               startAt: resume.positionSecs > 0 ? Double(resume.positionSecs) : nil)
-                        }
-                    }
-                }
-                if seasons.count > 1 {
-                    Picker("Season", selection: $season) {
-                        ForEach(seasons, id: \.self) { Text("Season \($0)").tag(Optional($0)) }
-                    }
-                }
-            }
-            Section {
-                ForEach(episodes, id: \.id) { episode in
-                    Button {
-                        playing = .episode(id: episode.id, title: label(episode), startAt: nil)
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text(label(episode))
-                            if let overview = episode.overview {
-                                Text(overview).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            }
-                        }
-                    }
-                }
-            } footer: {
-                if loading && allEpisodes.isEmpty {
-                    // The first time a show is opened its listing comes from the provider.
-                    ProgressView("Fetching episodes…")
-                } else if allEpisodes.isEmpty {
-                    Text("The provider doesn't list any episodes for this show yet.")
-                }
+                TitleDetail(item: .series(series: detail))
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .auroraPageTitle(detail?.title ?? "")
-        .task {
-            detail = await model.seriesDetail(seriesId: seriesId)
-            allEpisodes = await model.episodes(seriesId: seriesId, season: nil)
-            loading = false
-            // Where the viewer is, or the first season.
-            let resumeSeason = allEpisodes.first { $0.id == resume?.episodeId }?.season
-            season = resumeSeason ?? seasons.first
-        }
-        .task(id: playing == nil) { resume = await model.seriesResume(seriesId: seriesId) }
-        .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
-    }
-
-    private func label(_ e: Episode) -> String {
-        let number = "S\(e.season)E\(e.episode)"
-        guard let title = e.title, !title.isEmpty else { return number }
-        return "\(number) · \(title)"
-    }
-}
-
-/// The show's own switches, read by the player's skip and Up Next (`DetailModal.tsx`
-/// `SeriesPrefsToggles`). Per profile.
-private struct SeriesSwitches: View {
-    @Environment(AppModel.self) private var model
-    let seriesId: Int64
-    @State private var prefs: SeriesPrefs?
-
-    var body: some View {
-        if let prefs {
-            toggle("Always skip intros", \.alwaysSkipIntro, prefs)
-            toggle("Always skip recaps", \.alwaysSkipRecap, prefs)
-            toggle("Autoplay next episode", \.autoplayNext, prefs)
-        } else {
-            Color.clear.frame(height: 0)
-                .task(id: model.profileId) {
-                    prefs = try? model.core?.seriesPrefs(profileId: model.profileId, seriesId: seriesId)
-                }
-        }
-    }
-
-    private func toggle(_ label: String, _ key: WritableKeyPath<SeriesPrefs, Bool>, _ current: SeriesPrefs) -> some View {
-        Toggle(label, isOn: Binding(get: { current[keyPath: key] }, set: { on in
-            var next = current
-            next[keyPath: key] = on
-            prefs = next
-            do {
-                try model.core?.setSeriesPrefs(profileId: model.profileId, seriesId: seriesId, prefs: next)
-            } catch {
-                // Put it back: a switch showing what wasn't saved would have the player
-                // skip (or not) against what the viewer sees (R-103).
-                prefs = current
-                model.error = "Could not save that preference: \(error.viewerMessage)"
-            }
-        }))
+        // The page's own heading is the title, large, in the hero.
+        .auroraPageTitle("")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .task { detail = await model.seriesDetail(seriesId: seriesId) }
     }
 }
 
 // MARK: Shared pieces
-
-/// Resume / Start over, or just Play.
-struct PlayButtons: View {
-    let progress: WatchProgress?
-    let play: (Double?) -> Void
-
-    var body: some View {
-        HStack {
-            // Past a minute and not finished is worth returning to; the same threshold
-            // the shared resume rule uses (`progress::resume_point`).
-            if let p = progress, !p.completed, p.positionSecs > 60 {
-                Button("Resume from \(clock(p.positionSecs))", systemImage: "play.fill") { play(Double(p.positionSecs)) }
-                Button("Start over", systemImage: "arrow.counterclockwise") { play(nil) }
-            } else {
-                Button("Play", systemImage: "play.fill") { play(nil) }
-            }
-        }
-        .buttonStyle(.borderedProminent)
-    }
-
-    private func clock(_ secs: Int64) -> String {
-        let h = secs / 3600, m = (secs % 3600) / 60, s = secs % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
-    }
-}
 
 struct ShelfPicker: View {
     let shelves: [Shelf]
@@ -618,61 +477,6 @@ struct FilterChip: View {
         .buttonStyle(.bordered)
         .tint(selected ? .accentColor : .secondary)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-/// Genres, then the cast and director from TMDB, as Windows' detail page lists them:
-/// the first six billed names, nothing where nothing is known.
-struct CastAndCrew: View {
-    @Environment(AppModel.self) private var model
-    let kind: ListKind
-    let id: Int64
-    let genres: [String]
-    @State private var credits: [Credit] = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            meta("Genres", genres.joined(separator: ", "))
-            meta("Cast", credits.filter(\.isCast).prefix(6).map(\.name).joined(separator: ", "))
-            let directors = credits.filter { !$0.isCast && $0.role?.lowercased() == "director" }
-            meta(directors.count == 1 ? "Director" : "Directors", directors.map(\.name).joined(separator: ", "))
-        }
-        .font(.callout)
-        // A finished sweep may have just found this title.
-        .task(id: model.libraryVersion) { credits = await model.credits(kind, id: id) }
-    }
-
-    @ViewBuilder
-    private func meta(_ label: String, _ value: String) -> some View {
-        if !value.isEmpty {
-            (Text("\(label): ").foregroundStyle(.tertiary) + Text(value).foregroundStyle(.secondary))
-        }
-    }
-}
-
-/// My List and Like, for a film's or a series' page.
-struct MarkButtons: View {
-    @Environment(AppModel.self) private var model
-    let kind: ListKind
-    let id: Int64
-    @State private var marks: ItemMarks?
-
-    var body: some View {
-        HStack {
-            Button {
-                Task { if let now = await model.toggleMyList(kind, id: id) { marks?.inMyList = now } }
-            } label: {
-                Label("My List", systemImage: marks?.inMyList == true ? "checkmark" : "plus")
-            }
-            Button {
-                Task { if let now = await model.toggleLiked(kind, id: id) { marks?.liked = now } }
-            } label: {
-                Label("Like", systemImage: marks?.liked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
-            }
-        }
-        .buttonStyle(.bordered)
-        .disabled(marks == nil)
-        .task { marks = await model.marks(kind, id: id) }
     }
 }
 

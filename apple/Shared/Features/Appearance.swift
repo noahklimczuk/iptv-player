@@ -49,6 +49,20 @@ enum AuroraTheme: String, CaseIterable, Identifiable {
     }
 }
 
+extension AuroraTheme {
+    /// `--accent-text`: type on the accent.
+    var accentText: Color { self == .contrast ? .black : .white }
+
+    /// `--border-strong`.
+    var borderStrong: Color {
+        switch self {
+        case .light: Color(red: 0xD9 / 255, green: 0xD6 / 255, blue: 0xCC / 255)
+        case .dark: Color(red: 0x3E / 255, green: 0x3E / 255, blue: 0x48 / 255)
+        case .oled, .contrast: Color(red: 0x34 / 255, green: 0x34 / 255, blue: 0x3C / 255)
+        }
+    }
+}
+
 enum AppearanceKey {
     static let theme = "AuroraTheme"
     static let use24h = "AuroraUse24h"

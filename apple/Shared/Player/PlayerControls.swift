@@ -930,8 +930,8 @@ private struct Chip: View {
     }
 }
 
-/// Wraps chips onto as many lines as they need.
-private struct FlowLayout: Layout {
+/// Wraps chips onto as many lines as they need, each centred on its line.
+struct FlowLayout: Layout {
     var spacing: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -945,7 +945,8 @@ private struct FlowLayout: Layout {
             var x = bounds.minX
             for index in row.items {
                 let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: bounds.minY + row.y), proposal: ProposedViewSize(size))
+                subviews[index].place(at: CGPoint(x: x, y: bounds.minY + row.y + (row.height - size.height) / 2),
+                                      proposal: ProposedViewSize(size))
                 x += size.width + spacing
             }
         }

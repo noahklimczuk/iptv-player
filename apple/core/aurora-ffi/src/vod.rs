@@ -85,6 +85,14 @@ pub struct Movie {
     pub runtime_mins: Option<u32>,
     pub rating: Option<f32>,
     pub genres: Vec<String>,
+    /// The provider's quality tag ("4K", "FHD"), when it gave one.
+    pub quality: Option<String>,
+    /// The age rating TMDB found ("12A", "TV-MA").
+    pub certification: Option<String>,
+    /// The cast the provider listed, for when TMDB has no credits.
+    pub cast: Vec<String>,
+    /// The language the provider's group named.
+    pub lang: Option<String>,
 }
 
 impl From<library::MovieRow> for Movie {
@@ -99,6 +107,10 @@ impl From<library::MovieRow> for Movie {
             runtime_mins: m.runtime_mins,
             rating: m.rating,
             genres: m.genres,
+            quality: m.quality,
+            certification: m.certification,
+            cast: m.cast,
+            lang: m.lang,
         }
     }
 }
@@ -113,6 +125,14 @@ pub struct Series {
     pub overview: Option<String>,
     pub rating: Option<f32>,
     pub genres: Vec<String>,
+    /// The provider's quality tag ("4K", "FHD"), when it gave one.
+    pub quality: Option<String>,
+    /// The age rating TMDB found ("12A", "TV-MA").
+    pub certification: Option<String>,
+    /// The cast the provider listed, for when TMDB has no credits.
+    pub cast: Vec<String>,
+    /// The language the provider's group named.
+    pub lang: Option<String>,
     /// Season numbers that have episodes. Empty until the episode listing has been
     /// fetched for this show.
     pub seasons: Vec<u16>,
@@ -129,6 +149,10 @@ impl From<library::SeriesRow> for Series {
             overview: s.overview,
             rating: s.rating,
             genres: s.genres,
+            quality: s.quality,
+            certification: s.certification,
+            cast: s.cast,
+            lang: s.lang,
             seasons: s.seasons,
         }
     }
@@ -209,6 +233,15 @@ pub struct VodTune {
 }
 
 /// The episode a series card should open on, and where in it.
+/// One episode's position, for the episode list's tick and bar. `progress::EpisodeProgress`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct EpisodeProgress {
+    pub episode_id: i64,
+    pub position_secs: i64,
+    pub duration_secs: i64,
+    pub completed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct SeriesResume {
     pub episode_id: i64,
@@ -338,6 +371,21 @@ impl AuroraCore {
             watched,
             now_unix(),
         )?)
+    }
+
+    /// Every position this profile holds for one show, in one query, for the episode
+    /// list. `aurora-app/src/library.rs` `progress_for_series`.
+    pub fn series_progress(&self, profile_id: i64, series_id: i64) -> Result<Vec<EpisodeProgress>> {
+        let db = self.db.lock();
+        Ok(progress::for_series(&db, profile_id, series_id)?
+            .into_iter()
+            .map(|p| EpisodeProgress {
+                episode_id: p.episode_id,
+                position_secs: p.position_secs,
+                duration_secs: p.duration_secs,
+                completed: p.completed,
+            })
+            .collect())
     }
 
     /// Which episode a series opens on: the one left part-way, else the next unwatched.
