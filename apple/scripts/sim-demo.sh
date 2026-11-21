@@ -36,10 +36,10 @@ while (( $# )); do
 done
 
 if [[ $PLATFORM == tv ]]; then
-  SCHEME=AuroraTV; BUNDLE=tv.aurora.app; SDK=appletvsimulator
+  SCHEME=AuroraTV; BUNDLE=io.github.noahklimczuk.aurora; SDK=appletvsimulator
   DEST='generic/platform=tvOS Simulator'; RUNTIME='tvOS 26'; KIND='Apple TV'
 else
-  SCHEME=AuroraMobile; BUNDLE=tv.aurora.app; SDK=iphonesimulator
+  SCHEME=AuroraMobile; BUNDLE=io.github.noahklimczuk.aurora; SDK=iphonesimulator
   DEST='generic/platform=iOS Simulator'; RUNTIME='iOS 26'; KIND='iPhone'
 fi
 

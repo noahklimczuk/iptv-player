@@ -17,9 +17,9 @@
 # The keys the core compiles in (AURORA_TMDB_KEY and the rest) are read from the
 # environment by build-core.sh, as for any build.
 #
-# Before the first upload, App Store Connect needs one app, tv.aurora.app, with both
+# Before the first upload, App Store Connect needs one app, io.github.noahklimczuk.aurora, with both
 # iOS and tvOS platforms (universal purchase: AURORA_BUNDLE_ID in project.yml), and the
-# developer account the app group group.tv.aurora.shared; Xcode makes the profiles
+# developer account the app group group.io.github.noahklimczuk.aurora; Xcode makes the profiles
 # itself (-allowProvisioningUpdates). AppStore/RELEASE_CHECKLIST.md has every step,
 # licensing (plan §2.6) first.
 #

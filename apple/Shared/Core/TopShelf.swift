@@ -21,7 +21,7 @@ struct TopShelfSnapshot: Codable, Equatable {
 
     let items: [Item]
 
-    static let appGroup = "group.tv.aurora.shared"
+    static let appGroup = "group.io.github.noahklimczuk.aurora"
     private static let fileName = "top-shelf.json"
 
     /// The shelf's deep link into the app: opens the title's page (`aurora://title/movie/12`).

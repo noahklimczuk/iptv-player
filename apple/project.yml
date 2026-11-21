@@ -6,7 +6,7 @@
 # is a reviewable diff of a few lines rather than of project.pbxproj.
 name: Aurora
 options:
-  bundleIdPrefix: tv.aurora
+  bundleIdPrefix: io.github.noahklimczuk.aurora
   deploymentTarget:
     iOS: "26.0"
     tvOS: "26.0"
@@ -21,7 +21,7 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     # One App Store listing for iPhone, iPad and Apple TV, bought once (universal
     # purchase): both apps share this identifier, and the Top Shelf hangs off it.
-    AURORA_BUNDLE_ID: tv.aurora.app
+    AURORA_BUNDLE_ID: io.github.noahklimczuk.aurora
     # Signing for a real device: set your team in Xcode, or DEVELOPMENT_TEAM here
     # locally. Simulators need none.
     CODE_SIGN_STYLE: Automatic
@@ -83,7 +83,7 @@ targets:
           NSAllowsArbitraryLoads: true
         # `aurora://title/movie/12`: the Top Shelf's way into a title's page.
         CFBundleURLTypes:
-          - CFBundleURLName: tv.aurora.title
+          - CFBundleURLName: io.github.noahklimczuk.aurora.title
             CFBundleURLSchemes: [aurora]
         # Pairing with a phone over the home network (Shared/Core/Pairing.swift).
         NSLocalNetworkUsageDescription: Aurora looks for your iPhone on this network so it can sign this Apple TV in to sync.
@@ -98,7 +98,7 @@ targets:
     entitlements:
       path: AuroraTV/AuroraTV.entitlements
       properties:
-        com.apple.security.application-groups: [group.tv.aurora.shared]
+        com.apple.security.application-groups: [group.io.github.noahklimczuk.aurora]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(AURORA_BUNDLE_ID)
@@ -161,7 +161,7 @@ targets:
     entitlements:
       path: AuroraTopShelf/AuroraTopShelf.entitlements
       properties:
-        com.apple.security.application-groups: [group.tv.aurora.shared]
+        com.apple.security.application-groups: [group.io.github.noahklimczuk.aurora]
     info:
       path: AuroraTopShelf/Info.plist
       properties:
