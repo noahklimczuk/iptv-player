@@ -13,6 +13,7 @@ pub mod gemini;
 pub mod home;
 pub mod library;
 pub mod logging;
+pub mod media_keys;
 pub mod metadata;
 pub mod mosaic;
 pub mod packaged;
@@ -165,6 +166,8 @@ mod event_name_tests {
         "sleep.state",
         "sleep.fired",
         "parental.clock",
+        // A media key, a headset button or the Windows media overlay was pressed.
+        "media.button",
     ];
 
     /// Every event name this crate passes to an emit, read out of its own source.
