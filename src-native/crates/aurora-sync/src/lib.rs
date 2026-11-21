@@ -20,6 +20,7 @@
 //! tests -- several simulated devices, offline edits, skewed clocks -- against
 //! [`transport::MemoryTransport`] with no network.
 
+pub mod backup;
 pub mod codec;
 pub mod engine;
 pub mod error;
