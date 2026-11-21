@@ -94,6 +94,22 @@ export function UpdatePanel() {
     }
   }, []);
 
+  // A Store copy is the Store's to update (policy 10.8), so there is nothing to check,
+  // download or switch on here — only the number, and who keeps it current.
+  if (data?.store) {
+    return (
+      <div>
+        <div style={{ fontWeight: 600 }}>
+          This build
+          <span style={{ marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>{data.current}</span>
+        </div>
+        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)' }}>
+          Installed from the Microsoft Store, which keeps it up to date.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div

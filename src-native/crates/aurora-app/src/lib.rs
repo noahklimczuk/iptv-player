@@ -15,6 +15,7 @@ pub mod library;
 pub mod logging;
 pub mod metadata;
 pub mod mosaic;
+pub mod packaged;
 pub mod parental;
 pub mod play;
 pub mod playlist;

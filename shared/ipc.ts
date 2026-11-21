@@ -593,6 +593,9 @@ export interface UpdateStatus {
   /** Which kind of copy this is: a portable one replaces its own files and restarts,
    *  an installed one runs the installer. */
   kind: 'installer' | 'portable';
+  /** Whether this copy came from the Microsoft Store, which keeps it up to date. When
+   *  true nothing here checks, downloads or installs — Store policy forbids it. */
+  store: boolean;
 }
 
 /* ── Sync (docs/APPLE_PORT_AND_SYNC.md §3) ─────────────────────────────── */

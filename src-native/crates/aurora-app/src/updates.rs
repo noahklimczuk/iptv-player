@@ -36,6 +36,9 @@ pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 /// validate and nothing to get wrong.
 pub const RELEASES_URL: &str = "https://github.com/noahklimczuk/iptv-player/releases/latest";
 
+/// What a Store copy says when asked to fetch or install an update of its own.
+const STORE_MANAGED: &str = "This copy came from the Microsoft Store, which keeps it up to date.";
+
 const LAST_CHECKED_KEY: &str = "updates.lastCheckedAt";
 const LAST_RESULT_KEY: &str = "updates.lastResult";
 const AUTOMATIC_KEY: &str = "updates.automatic";
@@ -59,6 +62,9 @@ pub struct UpdateStatus {
     /// A portable copy replaces its own files and restarts; an installed one runs the
     /// installer.
     pub kind: AssetKind,
+    /// Whether this copy came from the Microsoft Store. The Store updates it, so the
+    /// panel says so instead of offering a check, a download or an install of its own.
+    pub store: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -227,7 +233,18 @@ pub fn updates_check(
     args: Option<CheckArgs>,
 ) -> Result<UpdateStatus> {
     let force = args.unwrap_or_default().force;
-    let check = run(&services, crate::now_unix(), force)?;
+    // A Store copy never asks GitHub: the release there is not the build the Store
+    // will hand it, and "a newer version is available" would send the viewer to a
+    // download the package cannot install over itself.
+    let check = if crate::packaged::is_packaged() {
+        UpdateCheck {
+            current: current(),
+            latest: None,
+            available: false,
+        }
+    } else {
+        run(&services, crate::now_unix(), force)?
+    };
     Ok(status(&services, check))
 }
 
@@ -241,6 +258,7 @@ fn status(services: &Services, check: UpdateCheck) -> UpdateStatus {
         download: services.updates.get(),
         can_install: can_install(),
         kind: asset_kind(),
+        store: crate::packaged::is_packaged(),
     }
 }
 
@@ -314,6 +332,12 @@ fn install_dir_is_writable() -> bool {
 /// verification and staging could not be written, and the two reports against that
 /// path had nothing standing between them and a release.
 pub fn can_install() -> bool {
+    // Store policy 10.8: a packaged copy is updated by the Store and nothing else. Its
+    // folder is read-only anyway, which would otherwise make it look like an old copy
+    // in Program Files and send it off to run the NSIS installer.
+    if crate::packaged::is_packaged() {
+        return false;
+    }
     match asset_kind() {
         AssetKind::Portable => true,
         AssetKind::Installer => cfg!(windows),
@@ -340,6 +364,9 @@ pub const DATA_DIR_MARKER: &str = "data-dir.txt";
 /// be able to write to for the swap to be possible at all — so a failure here means the
 /// swap was never going to happen, and the installer is the path that copy takes.
 pub fn remember_data_dir(data_dir: &std::path::Path) {
+    if crate::packaged::is_packaged() {
+        return;
+    }
     let Some(dir) = install_dir() else { return };
     let marker = dir.join(DATA_DIR_MARKER);
     if std::fs::read_to_string(&marker).is_ok_and(|kept| kept.trim() == data_dir.to_string_lossy())
@@ -421,6 +448,9 @@ const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// further along (docs/DECISIONS.md D17).
 #[tauri::command(async)]
 pub fn updates_download(app: tauri::AppHandle, services: State<'_, Services>) -> Result<Download> {
+    if crate::packaged::is_packaged() {
+        return Err(AppError::Other(STORE_MANAGED.into()));
+    }
     let current = services.updates.get();
     if current.status == DownloadStatus::Downloading {
         return Ok(current);
@@ -696,6 +726,9 @@ fn refusal(
 
 #[tauri::command(async)]
 pub fn updates_install(app: tauri::AppHandle, services: State<'_, Services>) -> Result<()> {
+    if crate::packaged::is_packaged() {
+        return Err(AppError::Other(STORE_MANAGED.into()));
+    }
     let kind = asset_kind();
     let state = services.updates.get();
 
