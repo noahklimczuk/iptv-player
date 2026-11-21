@@ -111,10 +111,18 @@ def run(d, ctx):
     wait(lambda: d.invoke("player_state").get("status") in ("playing", "buffering"),
          "playing from the overlay did not resume the player")
 
-    before = d.invoke("player_state")["channelId"]
+    was = d.invoke("player_state")
+    before = was.get("channelId")
+    print(f"   before next: channel={before} title={was.get('title')!r} live={was.get('isLive')}")
     assert smtc("next", app) == "True", "Windows did not take next"
-    after = wait(lambda: (lambda s: s if s.get("channelId") not in (None, before) else None)(
-        d.invoke("player_state")), "next from the overlay did not change channel")
+    try:
+        after = wait(lambda: (lambda s: s if s.get("title") != was.get("title") else None)(
+            d.invoke("player_state")), "next from the overlay did not change channel")
+    except AssertionError:
+        now = d.invoke("player_state")
+        print(f"   after next: channel={now.get('channelId')} title={now.get('title')!r} "
+              f"status={now.get('status')} overlay={sessions()}")
+        raise
     wait(lambda: ours(after["title"]), f"the overlay never followed the zap to {after['title']!r}")
     ctx.assert_no_panic()
 
