@@ -384,9 +384,12 @@ fn zapping_follows_windows_zapper() {
             "zap.ts no longer has `{needle}`; update step_index"
         );
     }
+    // Windows reloads the list it zaps through on a profile switch and after a library
+    // refresh. `channel_step` reads the list afresh on every press, so it always has.
     let app = ui_src("App.tsx");
     for needle in [
-        "useCommand('channels.list', {}, [])",
+        "'channels.list', {}, [profile.active?.id ?? 0], profile.loaded,",
+        "onLibraryRefreshed(() => reloadChannels())",
         "useZapper(channels ?? []",
     ] {
         assert!(
