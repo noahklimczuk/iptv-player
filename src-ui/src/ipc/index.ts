@@ -219,6 +219,12 @@ export function onParentalClock(fn: (e: Events['parental.clock']) => void): () =
   return subscribe<Events['parental.clock']>('parental.clock', fn);
 }
 
+/** An import or a refresh finished, and the library may hold different things now. */
+export function onLibraryRefreshed(fn: (r: Events['library.refreshed']) => void): () => void {
+  if (!isNativeHost()) return viaMock((m) => m.onLibraryRefreshed, fn);
+  return subscribe<Events['library.refreshed']>('library.refreshed', fn);
+}
+
 /**
  * A media key, a headset button or the Windows media overlay. The page does with it what
  * its own key for the same thing does.

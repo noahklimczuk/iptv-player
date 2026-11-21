@@ -81,6 +81,35 @@ test('on a film, next does nothing and the overlay bar seeks', async ({ page }) 
   await expect.poll(async () => (await state(page)).positionSecs).toBeGreaterThanOrEqual(600);
 });
 
+test('on a first run, channel up and next work straight after the import', async ({ page }) => {
+  // `?empty`: no channels until the wizard imports them, as on a real first run. The
+  // channel list the keys walk used to be read once at start, empty, and never again.
+  await page.goto('/?setup&empty#/');
+  await expect(page.getByRole('heading', { name: 'Welcome to Aurora TV' })).toBeVisible();
+  await page
+    .getByLabel('Provider address')
+    .fill('http://panel.example.com/get.php?username=alice&password=hunter2');
+  await page.getByRole('button', { name: 'Check connection' }).click();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByRole('button', { name: 'Import library' }).click();
+  await expect(page.getByRole('heading', { name: 'Your library is ready' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole('button', { name: 'Start watching' }).click();
+
+  // Through the app's own navigation: `page.goto` would reload it, and a reload reads
+  // the list afresh, which is what hid this.
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Live TV' }).click();
+  await page.getByTestId('channel-row').first().click();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  const first = await channel(page);
+  await page.keyboard.press('PageUp');
+  await expect.poll(() => channel(page)).not.toBe(first);
+  const second = await channel(page);
+  await press(page, { button: 'next' });
+  await expect.poll(() => channel(page)).not.toBe(second);
+});
+
 test('with nothing playing, a media key does nothing', async ({ page }) => {
   await page.goto('/#/live');
   await expect(page.getByTestId('channel-row').first()).toBeVisible();

@@ -792,8 +792,26 @@ function applyFilters<T extends { id: number; quality: string | null; lang?: str
   );
 }
 
+/**
+ * `?empty`: a library with no channels until the first import, which is what a real
+ * first run has. The fixture otherwise ships full, and that hid that the app's channel
+ * list was read once at start and never again -- so on a first run channel up and down
+ * walked an empty list until the next launch.
+ */
+let mockEmptyLibrary = new URLSearchParams(window.location.search).has('empty');
+
+const libraryListeners = new Set<(r: { added: number; removed: number; updated: number }) => void>();
+
+/** The host's `library.refreshed` event. */
+export function onLibraryRefreshed(
+  fn: (r: { added: number; removed: number; updated: number }) => void,
+): () => void {
+  libraryListeners.add(fn);
+  return () => libraryListeners.delete(fn);
+}
+
 const visibleChannels = (): Channel[] =>
-  applyFilters(editedChannels(), 'live', (c) => c.name, () => null)
+  (mockEmptyLibrary ? [] : applyFilters(editedChannels(), 'live', (c) => c.name, () => null))
     .filter((c) => !(mockHideLocked && !parentalOpen() && channelLocked(c)));
 /**
  * The browse filters, applied the way the host applies them.
@@ -3531,6 +3549,8 @@ const handlers: { [K in CommandName]: Handler<K> } = {
       emitIngest(p);
       await new Promise((r) => setTimeout(r, 120));
     }
+    if (want.live) mockEmptyLibrary = false;
+    for (const fn of libraryListeners) fn({ added: channels + movies + episodes, removed: 0, updated: 0 });
 
     return {
       channels,

@@ -55,7 +55,9 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
-import { invoke, onMediaButton, onMosaicState, onParentalClock, onSleepFired } from '@/ipc';
+import {
+  invoke, onLibraryRefreshed, onMediaButton, onMosaicState, onParentalClock, onSleepFired,
+} from '@/ipc';
 import { notify, report } from '@/lib/errors';
 import { installScrollingFlag } from '@/lib/scrolling';
 import { useMarks } from '@/state/marks';
@@ -196,7 +198,32 @@ export default function App() {
   const [setupSkipped, setSetupSkipped] = useState(false);
   // Settings can open the same wizard first run uses, to add a second provider.
   const [addingProvider, setAddingProvider] = useState(false);
-  const { data: channels } = useCommand('channels.list', {}, []);
+
+  const profile = useProfile();
+  // `load` on its own, not `profile.load`: the rule cannot tell that only the function
+  // is read, so it asked for the whole `profile` in the dependencies — and that would
+  // re-run the fetch every time anything about the profile changed, including what the
+  // fetch itself writes.
+  const { load: loadProfiles } = profile;
+  useEffect(() => { void loadProfiles(); }, [loadProfiles]);
+
+  /**
+   * The list channel up and down walk, and the banner reads names from.
+   *
+   * Read again whenever what it holds can have changed: an import or a refresh (the
+   * host's `library.refreshed`), the wizard finishing, and a different profile, whose
+   * parental limits decide what is in it. Read once at start, it was empty for the
+   * whole of a first run -- the library was imported after it was read -- so PageUp,
+   * PageDown and the media keys' next and previous did nothing until the next launch.
+   *
+   * Not before the profiles are known, so it is read once for whoever is watching
+   * rather than once for nobody and again for them: a large line's list is tens of
+   * thousands of rows. Until then the boot screen is up and nothing reads it.
+   */
+  const { data: channels, reload: reloadChannels } = useCommand(
+    'channels.list', {}, [profile.active?.id ?? 0], profile.loaded,
+  );
+  useEffect(() => onLibraryRefreshed(() => reloadChannels()), [reloadChannels]);
   // Every tune path funnels through here, so digit entry and Ch+/Ch- surface the
   // player exactly like clicking a channel does.
   const zapper = useZapper(channels ?? [], { onTune: () => setPlayerOpen(true) });
@@ -252,14 +279,6 @@ export default function App() {
       .then(setMosaic)
       .catch(report('Could not close multi-view'));
   }, []);
-
-  const profile = useProfile();
-  // `load` on its own, not `profile.load`: the rule cannot tell that only the function
-  // is read, so it asked for the whole `profile` in the dependencies — and that would
-  // re-run the fetch every time anything about the profile changed, including what the
-  // fetch itself writes.
-  const { load: loadProfiles } = profile;
-  useEffect(() => { void loadProfiles(); }, [loadProfiles]);
 
   // Where the viewer got to. Nothing in the app wrote this before, so Continue
   // Watching had nothing to continue from — the mock saved progress, the host never
@@ -865,8 +884,10 @@ export default function App() {
         onFinished={() => {
           setSetupDone(true);
           setAddingProvider(false);
-          // The settings list is stale the moment a provider is added.
+          // The settings list is stale the moment a provider is added, and so is the
+          // list channel up and down walk.
           reloadProviders();
+          reloadChannels();
         }}
         onSkip={() => {
           setSetupSkipped(true);
