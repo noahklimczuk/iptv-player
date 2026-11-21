@@ -1,5 +1,10 @@
 # Release checklist
 
+> **Superseded for 2.0 (2026-11-20).** The scoping below — a private app with one user —
+> no longer holds: 2.0 goes to the Microsoft Store and the App Store. Code signing, the
+> store listing and the privacy note are open again; `docs/RELEASE_2.0.md` is the list.
+> What follows is kept as the record of 1.x.
+
 What is left for a person, in the order it blocks 1.0. Everything still open here
 needs a Windows machine, a paid account, a certificate, or a decision — none of which
 this audit could supply.
