@@ -121,3 +121,15 @@ test('the launch-time check can be turned off', async ({ page }) => {
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
 });
+
+test('a copy from the Microsoft Store leaves updating to the Store', async ({ page }) => {
+  // Store policy 10.8: a packaged app may not update itself. The panel shows the
+  // version and who keeps it current, and offers nothing to check, fetch or install.
+  await page.goto('/?store#/settings');
+  await expect(page.getByRole('heading', { name: 'Updates' })).toBeVisible();
+  await expect(page.getByText(/Installed from the Microsoft Store/)).toBeVisible();
+  await expect(page.getByText('0.1.0', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Check now' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Download update' })).toHaveCount(0);
+  await expect(page.getByRole('switch', { name: 'Check for updates on launch' })).toHaveCount(0);
+});

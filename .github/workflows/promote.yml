@@ -1,0 +1,54 @@
+name: Promote to stable
+
+# Every merge publishes a *preview* release (ci.yml). This turns one of them into the
+# stable release: it stops being a prerelease and becomes GitHub's "latest", which is the
+# one URL every installed copy of Aurora asks about — so running this is what ships an
+# update to people. Nothing is rebuilt; the files promoted are the files that were
+# tested (docs/RELEASE_2.0.md).
+#
+# Run it from the Actions tab, or: gh workflow run promote.yml -f tag=v2.0.0
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The preview release to promote, e.g. v2.0.0
+        required: true
+      notes_file:
+        description: Optional path in the repo to Markdown that replaces the release notes
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Promote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          NOTES: ${{ inputs.notes_file }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$TAG' is not a release tag like v2.0.0"; exit 1
+          fi
+          # Refuse anything that is not a finished build: a release with no installer
+          # promoted to latest would tell every copy there is an update it cannot fetch.
+          assets="$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')"
+          for want in setup.exe portable.zip; do
+            if [[ " $assets " != *"$want "* ]]; then
+              echo "::error::$TAG has no *$want asset; it did not finish building."; exit 1
+            fi
+          done
+          args=(--prerelease=false --latest)
+          if [[ -n "$NOTES" ]]; then
+            [[ -f "$NOTES" ]] || { echo "::error::$NOTES does not exist"; exit 1; }
+            args+=(--notes-file "$NOTES")
+          fi
+          gh release edit "$TAG" "${args[@]}"
+          echo "Promoted $TAG: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG"

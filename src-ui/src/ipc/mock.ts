@@ -73,6 +73,8 @@ const mockUpdates: UpdateStatus = {
   // The browser preview is not Windows, but the panel's install path is the
   // interesting one to be able to see and to test.
   canInstall: true,
+  // `?store` stands in for a copy installed from the Microsoft Store.
+  get store() { return new URLSearchParams(window.location.search).has('store'); },
   // `?portable` stands in for an unzipped copy, the way `?setup` forces the wizard.
   // Both kinds install now; what differs is what pressing the button does, and that
   // is what the panel words differently.
