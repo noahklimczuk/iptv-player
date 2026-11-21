@@ -82,8 +82,12 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
 - [ ] Follow **4c** (the first-run wizard offering sync) when Windows merges it. Windows'
   `docs/PRIVACY.md` covers Windows only, so `PRIVACY_POLICY.md` stays Apple's; keep the
   two in step.
-- [ ] Screenshots (`METADATA.md` → Screenshots). UI screens can be taken in the
-  simulator with the demo playlist; the player needs a real device on an Intel Mac.
+- [x] Screenshots of the UI in `apple/AppStore/screenshots/` on this Mac (the repository's
+  `.gitignore` keeps `screenshots/` out of git) (iPhone 6.9", iPad 13", Apple TV 4K), taken
+  in the simulator with the demo playlist (no real channels or artwork). Upload them in
+  the listing's order. Still to add: **the player**, which needs a real device on this
+  Intel Mac. This Mac has no TMDB key, so the films show grey placeholders: retake the
+  Home and Movies screens from a TestFlight build (which compiles the key in) for posters.
 
 ## 4. On real hardware (needs devices)
 

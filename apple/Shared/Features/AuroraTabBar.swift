@@ -21,6 +21,10 @@ struct AuroraTabBar<Value: Hashable>: View {
 
     let items: [Item]
     @Binding var selection: Value
+    #if os(tvOS)
+    /// Which tab has the focus, if any: the page's Menu button sends it here.
+    var focus: FocusState<Value?>.Binding
+    #endif
 
     @Environment(\.auroraTheme) private var theme
     /// The bar is held down (`data-pressed`).
@@ -139,6 +143,9 @@ struct AuroraTabBar<Value: Hashable>: View {
         return Button { selection = item.value } label: { label(item) }
             .buttonStyle(TabStyle(selected: selected, radius: Self.radius - inset, theme: theme))
             .id(item.value)
+            #if os(tvOS)
+            .focused(focus, equals: item.value)
+            #endif
             .accessibilityAddTraits(item.value == selection ? .isSelected : [])
     }
 

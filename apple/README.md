@@ -336,15 +336,15 @@ screens. The app can:
   platter that slides to the current one. It scrolls sideways where the screen is too
   narrow, as Windows' does in a narrow window; a phone leaves out Multi-view. Pressing
   the bar swells the platter and dragging along it moves the platter, as on Windows
-  (where every tab fits). Not yet: on Apple TV the Menu button does not jump back to
-  the bar (down does).
+  (where every tab fits). On Apple TV the Menu button goes to the bar from a page, as
+  under the system's tab bar, and leaves the app from the bar.
 - Windows' top bar over every page (`AuroraTopBar`, from App.tsx's `TopBar`): the
   "aurora" wordmark with its accent dot, the page's name in faint display type, and on
   their own glass (`WindowsGlass.swift`, shared with the tab bar) the search field
   (⌘K on an iPad keyboard), the light/dark switch, the clock and the profile button,
-  which opens "Who's watching?". Not yet: Windows' page scrolls on beneath the bar's
-  fade, but here it stops at the bar's foot, since a navigation stack clips its pages
-  to its own frame. Where the screen is narrow the search field becomes a
+  which opens "Who's watching?". The page scrolls on beneath the bar's
+  fade, as Windows' does (each navigation stack is given the bar's height as safe area).
+  Where the screen is narrow the search field becomes a
   round button, then the page's name goes, then the clock (an iPhone keeps the
   wordmark, search, the switch and the profile).
 

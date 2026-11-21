@@ -78,8 +78,9 @@ struct HomeView: View {
         } else if let rails {
             let shown = visible(rails, ai: ai)
             if shown.isEmpty {
-                ContentUnavailableView("Nothing here yet", systemImage: "house",
-                                       description: Text("Add a provider in Settings and Aurora will build your library."))
+                DaylightEmpty(icon: "house", title: "Nothing here yet",
+                              message: "Add a provider in Settings and Aurora will build your library.")
+                    .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: railSpacing) {

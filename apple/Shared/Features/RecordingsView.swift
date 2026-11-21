@@ -6,6 +6,7 @@ import SwiftUI
 /// watch", "what is Aurora about to do", and "what went wrong". The words are Windows',
 /// checked against `RecordingsPage.tsx` by `mirrors.rs`.
 struct RecordingsView: View {
+    @Environment(\.auroraTheme) private var theme
     @Environment(AppModel.self) private var model
     var closable = false
     @Environment(\.dismiss) private var dismiss
@@ -134,7 +135,7 @@ struct RecordingsView: View {
         } else {
             VStack(spacing: 8) {
                 ForEach(0..<6, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 18).fill(.quaternary.opacity(0.5)).frame(height: 72)
+                    RoundedRectangle(cornerRadius: 18).fill(theme.surface).frame(height: 72)
                 }
             }
         }
@@ -171,12 +172,13 @@ private let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 // MARK: Storage
 
 private struct StorageMeter: View {
+    @Environment(\.auroraTheme) private var theme
     let storage: DvrStorage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Storage").foregroundStyle(.secondary)
+                Text("Storage").foregroundStyle(theme.textMuted)
                 Spacer(minLength: 12)
                 Text(storage.quotaBytes > 0
                      ? "\(Format.bytes(storage.usedBytes)) of \(Format.bytes(storage.quotaBytes))"
@@ -189,18 +191,19 @@ private struct StorageMeter: View {
                     .accessibilityLabel("Recording storage used")
             }
             Text(storage.folder)
-                .font(.ui(.caption)).foregroundStyle(.tertiary)
+                .font(.ui(.caption)).foregroundStyle(theme.textFaint)
                 .lineLimit(1).truncationMode(.middle)
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .frame(minWidth: 280, maxWidth: 360, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+        .daylightRaised(theme, radius: 16)
     }
 }
 
 // MARK: Conflicts
 
 private struct ConflictNotice: View {
+    @Environment(\.auroraTheme) private var theme
     let conflicts: [RecordingConflict]
     let recordings: [Recording]
 
@@ -214,7 +217,7 @@ private struct ConflictNotice: View {
                     (Text("\(Format.dayLabel(c.start)) \(Format.clock(c.start))–\(Format.clock(c.stop)): \(c.slotIds.count) at once, \(c.overBy) more than your subscription allows. ")
                      + Text(titleOf(c.slotIds.last ?? 0)).italic()
                      + Text(" will be dropped."))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.textMuted)
                 }
             }
         }
@@ -245,6 +248,7 @@ private func act(_ model: AppModel, _ whenItFails: String,
 }
 
 private struct RowShell<Content: View>: View {
+    @Environment(\.auroraTheme) private var theme
     var accent: Color?
     @ViewBuilder let content: Content
 
@@ -252,7 +256,7 @@ private struct RowShell<Content: View>: View {
         HStack(spacing: 12) { content }
             .padding(.horizontal, 16).padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+            .daylightRaised(theme, radius: 16)
             .overlay(alignment: .leading) {
                 if let accent {
                     UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16)
@@ -264,6 +268,7 @@ private struct RowShell<Content: View>: View {
 
 /// The channel's logo, the title, and when it aired (Windows' `TitleBlock`).
 private struct TitleBlock: View {
+    @Environment(\.auroraTheme) private var theme
     let rec: Recording
 
     var body: some View {
@@ -271,9 +276,9 @@ private struct TitleBlock: View {
             ChannelTile(name: rec.channelName ?? rec.title, number: nil, logo: rec.channelLogo, size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 (Text(rec.title).fontWeight(.heavy)
-                 + Text(episode.map { " · \($0)" } ?? "").foregroundStyle(.tertiary))
+                 + Text(episode.map { " · \($0)" } ?? "").foregroundStyle(theme.textFaint))
                     .lineLimit(1)
-                Text(whenAired(rec)).font(.ui(.callout)).foregroundStyle(.secondary)
+                Text(whenAired(rec)).font(.ui(.callout)).foregroundStyle(theme.textMuted)
             }
             Spacer(minLength: 0)
         }
@@ -292,6 +297,7 @@ private func whenAired(_ rec: Recording) -> String {
 }
 
 private struct RecordedCard: View {
+    @Environment(\.auroraTheme) private var theme
     @Environment(AppModel.self) private var model
     let rec: Recording
     let play: () -> Void
@@ -303,19 +309,19 @@ private struct RecordedCard: View {
             art
             VStack(alignment: .leading, spacing: 2) {
                 Text(rec.title).font(.ui(.headline).weight(.heavy)).lineLimit(1)
-                Text(whenAired(rec)).font(.ui(.callout)).foregroundStyle(.secondary).lineLimit(1)
+                Text(whenAired(rec)).font(.ui(.callout)).foregroundStyle(theme.textMuted).lineLimit(1)
             }
             if confirming {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Delete permanently, freeing \(Format.bytes(rec.bytes))?")
-                        .font(.ui(.callout).bold()).foregroundStyle(.red)
+                        .font(.ui(.callout).bold()).foregroundStyle(theme.danger)
                     HStack {
                         Button("Delete", role: .destructive) {
                             let id = rec.id
                             act(model, "That did not work") { _ = try $0.dvrDelete(id: id) }
                         }
-                        .buttonStyle(.borderedProminent).tint(.red)
-                        Button("Keep") { confirming = false }.buttonStyle(.bordered)
+                        .buttonStyle(.daylight(.danger, .sm))
+                        Button("Keep") { confirming = false }.buttonStyle(.daylight(.secondary, .sm))
                     }
                 }
             } else {
@@ -332,21 +338,19 @@ private struct RecordedCard: View {
                         actions
                     }
                 }
-                #if os(iOS)
-                .buttonStyle(.bordered)
-                #endif
+                .buttonStyle(.daylight(.secondary, .sm))
             }
         }
         .padding(14)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
+        .daylightRaised(theme, radius: 20)
         .overlay {
-            if confirming { RoundedRectangle(cornerRadius: 20).strokeBorder(.red, lineWidth: 2) }
+            if confirming { RoundedRectangle(cornerRadius: 20).strokeBorder(theme.danger, lineWidth: 2) }
         }
     }
 
     private var meta: some View {
         Text("\(Format.duration(rec.durationSecs)) · \(Format.bytes(rec.bytes))")
-            .font(.ui(.caption).bold()).foregroundStyle(.secondary).lineLimit(1)
+            .font(.ui(.caption).bold()).foregroundStyle(theme.textMuted).lineLimit(1)
     }
 
     private var actions: some View {
@@ -357,11 +361,13 @@ private struct RecordedCard: View {
             } label: {
                 Image(systemName: rec.keep ? "heart.fill" : "heart")
             }
+            .buttonStyle(.daylight(.secondary, .sm, iconOnly: true))
             .accessibilityLabel(rec.keep ? "Allow deleting to free space" : "Keep — never delete for space")
             Button { confirming = true } label: { Image(systemName: "xmark") }
+                .buttonStyle(.daylight(.secondary, .sm, iconOnly: true))
                 .accessibilityLabel("Delete \(rec.title)")
             Button("Play", systemImage: "play.fill", action: play)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.daylight(.primary, .sm))
                 .lineLimit(1).fixedSize()
         }
     }
@@ -380,8 +386,7 @@ private struct RecordedCard: View {
                 // A completed-but-short recording still plays: say so before it ends early.
                 if rec.reason != nil { chip("Cut short") }
                 if !rec.watched {
-                    Text("New").font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(.green, in: Capsule()).foregroundStyle(.white)
+                    DaylightBadge("New", tone: .new)
                 }
                 if rec.keep { chip("Kept") }
             }
@@ -400,6 +405,7 @@ private struct RecordedCard: View {
 /// Each scheduled recording with a REC chip, the channel, when, and whether a series
 /// rule or a one-off asked for it.
 private struct ComingUp: View {
+    @Environment(\.auroraTheme) private var theme
     let upcoming: [Recording]
     let showRules: () -> Void
 
@@ -408,7 +414,7 @@ private struct ComingUp: View {
             HStack {
                 Text("Coming up").displayFont(.title2)
                 Spacer()
-                Button("Series rules", action: showRules).buttonStyle(.bordered)
+                Button("Series rules", action: showRules).buttonStyle(.daylight(.secondary, .sm))
             }
             .padding(.bottom, 8)
             ForEach(upcoming, id: \.id) { r in
@@ -417,14 +423,14 @@ private struct ComingUp: View {
                         recChip
                         Text(r.subTitle.map { "\(r.title): \($0)" } ?? r.title).fontWeight(.heavy).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text(r.channelName ?? "").foregroundStyle(.secondary).lineLimit(1)
+                        Text(r.channelName ?? "").foregroundStyle(theme.textMuted).lineLimit(1)
                         Text(when(r)).fontWeight(.heavy).lineLimit(1)
                         kindChip(r)
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         HStack { recChip; Text(r.subTitle.map { "\(r.title): \($0)" } ?? r.title).fontWeight(.heavy).lineLimit(1) }
                         HStack {
-                            Text(r.channelName ?? "").foregroundStyle(.secondary).lineLimit(1)
+                            Text(r.channelName ?? "").foregroundStyle(theme.textMuted).lineLimit(1)
                             // The time whole on one line; the channel gives way, as
                             // Windows' grid ellipsises it first.
                             Text(when(r)).fontWeight(.heavy).lineLimit(1).fixedSize().layoutPriority(1)
@@ -438,19 +444,16 @@ private struct ComingUp: View {
             }
         }
         .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
+        .daylightRaised(theme, radius: 20)
         .padding(.top, 16)
     }
 
     private var recChip: some View {
-        Text("REC").font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
-            .background(.red, in: Capsule()).foregroundStyle(.white)
+        DaylightBadge("REC", tone: .live)
     }
 
     private func kindChip(_ r: Recording) -> some View {
-        Text(r.ruleId != nil ? "Series rule" : "Once").font(.ui(.caption).bold())
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(.quaternary, in: Capsule())
+        DaylightBadge(r.ruleId != nil ? "Series rule" : "Once")
     }
 
     private func when(_ r: Recording) -> String {
@@ -459,29 +462,30 @@ private struct ComingUp: View {
 }
 
 private struct ScheduledRow: View {
+    @Environment(\.auroraTheme) private var theme
     @Environment(AppModel.self) private var model
     let rec: Recording
 
     private var live: Bool { rec.state == .recording }
 
     var body: some View {
-        RowShell(accent: live ? .red : nil) {
+        RowShell(accent: live ? theme.live : nil) {
             TitleBlock(rec: rec)
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 HStack(spacing: 8) {
                     if live {
                         Label("Recording", systemImage: "record.circle.fill")
                             .font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(.red, in: Capsule()).foregroundStyle(.white)
+                            .background(theme.live, in: Capsule()).foregroundStyle(theme.liveText)
                         let elapsed = max(0, context.date.timeIntervalSince1970 - Double(rec.start))
                         ProgressView(value: min(1, elapsed / Double(max(1, rec.stop - rec.start))))
                             .frame(width: 120)
                             .accessibilityLabel("Recording \(rec.title)")
                         Text(Format.bytes(Int64(clamping: rec.liveBytes ?? UInt64(max(0, rec.bytes)))))
-                            .font(.ui(.callout)).foregroundStyle(.tertiary)
+                            .font(.ui(.callout)).foregroundStyle(theme.textFaint)
                     } else {
                         Text(Format.until(rec.start, now: context.date))
-                            .font(.ui(.callout)).foregroundStyle(.secondary).lineLimit(1)
+                            .font(.ui(.callout)).foregroundStyle(theme.textMuted).lineLimit(1)
                     }
                 }
             }
@@ -489,32 +493,32 @@ private struct ScheduledRow: View {
                 let id = rec.id
                 act(model, "Could not stop that recording") { _ = try $0.dvrCancel(id: id) }
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.daylight(.secondary, .sm))
         }
     }
 }
 
 private struct ProblemRow: View {
+    @Environment(\.auroraTheme) private var theme
     @Environment(AppModel.self) private var model
     let rec: Recording
 
     var body: some View {
-        RowShell(accent: .red) {
+        RowShell(accent: theme.danger) {
             VStack(alignment: .leading, spacing: 2) {
                 TitleBlock(rec: rec)
                 if let reason = rec.reason {
-                    Text(reason).font(.ui(.callout)).foregroundStyle(.red)
+                    Text(reason).font(.ui(.callout)).foregroundStyle(theme.danger)
                 }
             }
-            Text(rec.state == .skipped ? "Skipped" : "Failed")
-                .font(.ui(.caption).bold()).padding(.horizontal, 8).padding(.vertical, 3)
-                .overlay(Capsule().strokeBorder(.secondary))
+            DaylightBadge(rec.state == .skipped ? "Skipped" : "Failed", tone: .outline)
             Button {
                 let id = rec.id
                 act(model, "Could not dismiss that recording") { _ = try $0.dvrDelete(id: id) }
             } label: {
                 Image(systemName: "xmark")
             }
+            .buttonStyle(.daylight(.ghost, .sm, iconOnly: true))
             .accessibilityLabel("Dismiss \(rec.title)")
         }
     }
@@ -523,38 +527,40 @@ private struct ProblemRow: View {
 /// One series rule. Deleting it asks first, as deleting a recording does: it sits beside
 /// Pause, the reversible version of the same intent.
 private struct RuleRow: View {
+    @Environment(\.auroraTheme) private var theme
     @Environment(AppModel.self) private var model
     let rule: SeriesRule
     @State private var confirming = false
 
     var body: some View {
-        RowShell(accent: confirming ? .red : nil) {
+        RowShell(accent: confirming ? theme.danger : nil) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(rule.title).fontWeight(.bold)
-                Text(summary).font(.ui(.callout)).foregroundStyle(.secondary)
+                Text(summary).font(.ui(.callout)).foregroundStyle(theme.textMuted)
             }
             .opacity(rule.enabled ? 1 : 0.55)
             Spacer(minLength: 0)
             if confirming {
                 Text("Stop recording \(rule.title) and forget this rule?")
-                    .font(.ui(.callout)).foregroundStyle(.red)
+                    .font(.ui(.callout)).foregroundStyle(theme.danger)
                 Button("Delete rule", role: .destructive) {
                     let id = rule.id
                     act(model, "Could not delete that rule") { _ = try $0.dvrDeleteRule(id: id) }
                 }
-                .buttonStyle(.borderedProminent).tint(.red)
-                Button("Keep") { confirming = false }.buttonStyle(.bordered)
+                .buttonStyle(.daylight(.danger, .sm))
+                Button("Keep") { confirming = false }.buttonStyle(.daylight(.secondary, .sm))
             } else {
                 // "tracked", not "recorded": the count is rows in any state (R-119).
-                Text("\(rule.scheduled) tracked").font(.ui(.callout)).foregroundStyle(.tertiary)
+                Text("\(rule.scheduled) tracked").font(.ui(.callout)).foregroundStyle(theme.textFaint)
                 Button(rule.enabled ? "Pause" : "Resume") {
                     let (id, enabled) = (rule.id, !rule.enabled)
                     act(model, rule.enabled ? "Could not pause that rule" : "Could not resume it") {
                         try $0.dvrSetRuleEnabled(id: id, enabled: enabled)
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.daylight(.secondary, .sm))
                 Button { confirming = true } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.daylight(.ghost, .sm, iconOnly: true))
                     .accessibilityLabel("Delete the rule for \(rule.title)")
             }
         }

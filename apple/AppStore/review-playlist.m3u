@@ -18,3 +18,7 @@ https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_
 https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
 #EXTINF:-1 tvg-id="aurora.open.tos" tvg-chno="5" group-title="Open films",Tears of Steel (CC BY 3.0, Blender Foundation)
 https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8
+#EXTINF:-1 tvg-id="aurora.open.ed" tvg-chno="6" group-title="Open films",Elephants Dream (CC BY 2.5, Blender Foundation)
+https://download.blender.org/ED/elephantsdream-480-h264-st-aac.mov
+#EXTINF:-1 tvg-id="aurora.open.sintel" tvg-chno="7" group-title="Open films",Sintel trailer (CC BY 3.0, Blender Foundation)
+https://download.blender.org/durian/trailer/sintel_trailer-720p.mp4

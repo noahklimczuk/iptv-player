@@ -15,8 +15,9 @@ To try it, add our demo playlist of public test streams and open-licence films:
 1. Open the app. The setup screen asks for a playlist or provider address.
 2. Paste: https://raw.githubusercontent.com/noahklimczuk/iptv-player/main/apple/AppStore/review-playlist.m3u
 3. Continue, choose to import live TV with films and series, and wait a few seconds.
-4. Live TV lists three channels and Movies two open films (Big Buck Bunny and Tears of
-   Steel). Choose one to play. Settings → Providers can add more.
+4. Live TV lists three channels and Movies four open films (Big Buck Bunny, Tears of
+   Steel, Elephants Dream and the Sintel trailer). Choose one to play. Settings →
+   Providers can add more.
 
 Optional features:
 

@@ -14,6 +14,11 @@ struct AssistantView: View {
     @State private var steps: [String] = []
     @State private var playing: PlayerItem?
     @State private var series: Int64?
+    @State private var movie: Movie?
+    @Environment(\.auroraTheme) private var theme
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     /// Shown as a sheet (an iPhone), so it needs its own way out.
     var closable = false
     @Environment(\.dismiss) private var dismiss
@@ -30,17 +35,13 @@ struct AssistantView: View {
             content
                 .auroraTitle("Ask Aurora")
                 .toolbar {
-                    if !messages.isEmpty {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Clear") { Task { await clear() } }.disabled(thinking)
-                        }
-                    }
                     if closable {
                         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                     }
                 }
                 .task(id: model.profileId) { await load() }
                 .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
+                .sheet(item: $movie) { MovieDetail(movie: $0).auroraAppearance() }
                 .navigationDestination(item: $series) { SeriesDetail(seriesId: $0) }
         }
     }
@@ -61,16 +62,42 @@ struct AssistantView: View {
                 .buttonStyle(DaylightButtonStyle(variant: .primary))
                 Spacer()
             }
-            .padding()
-            .frame(maxWidth: 760, alignment: .leading)
+            .padding(.horizontal, side)
+            .frame(maxWidth: 760 + side * 2, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else if let status, !status.hasKey {
-            ContentUnavailableView("The assistant needs a key", systemImage: "sparkles",
-                                   description: Text("Add a Gemini API key in Settings → Recommendations, and this becomes a conversation about your own library."))
+            ScrollView {
+                VStack(alignment: .leading, spacing: Daylight.px(20)) {
+                    header
+                    DaylightEmpty(icon: "sparkles", title: "The assistant needs a key",
+                                  message: "Add a Gemini API key in Settings → Recommendations, and this becomes a conversation about your own library.")
+                }
+                .padding(.horizontal, side)
+            }
         } else {
-            VStack(spacing: 0) {
-                PageHeading("Ask Aurora")
+            VStack(alignment: .leading, spacing: 0) {
                 thread
                 input
+            }
+        }
+    }
+
+    /// Windows' header: the page's name, what it is for, and Clear once there is
+    /// something to clear.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                PageHeading("Ask Aurora")
+                Text("Ask for something to watch. It can look through your library and hand you titles to play.")
+                    .font(.ui(size: Daylight.px(15), weight: .medium))
+                    .foregroundStyle(theme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if !messages.isEmpty {
+                Button("Clear") { Task { await clear() } }
+                    .buttonStyle(.daylight(.secondary))
+                    .disabled(thinking)
             }
         }
     }
@@ -78,52 +105,80 @@ struct AssistantView: View {
     private var thread: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    Text("Ask for something to watch. It can look through your library and hand you titles to play.")
-                        .font(.ui(.callout)).foregroundStyle(.secondary)
+                LazyVStack(alignment: .leading, spacing: Daylight.px(20)) {
+                    header
                     if messages.isEmpty && !thinking {
-                        Text("Try one of these:").foregroundStyle(.secondary)
-                        ForEach(Self.suggestions, id: \.self) { s in
-                            Button(s) { Task { await send(s) } }
-                                .buttonStyle(.bordered)
+                        VStack(alignment: .leading, spacing: Daylight.px(12)) {
+                            Text("Try one of these:").foregroundStyle(theme.textMuted)
+                            FlowLayout(spacing: Daylight.px(8)) {
+                                ForEach(Self.suggestions, id: \.self) { s in
+                                    Button(s) { Task { await send(s) } }
+                                        .buttonStyle(.daylight(.secondary))
+                                }
+                            }
                         }
+                        #if os(tvOS)
+                        .focusSection()
+                        #endif
                     }
                     ForEach(Array(messages.enumerated()), id: \.offset) { _, message in
-                        Bubble(message: message, play: play)
+                        Bubble(message: message, play: play, open: open)
                     }
                     if thinking {
                         VStack(alignment: .leading, spacing: 4) {
-                            Label("Thinking…", systemImage: "sparkles").foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                AuroraIcon(name: .sparkle, size: Daylight.px(16), strokeWidth: 2)
+                                Text("Thinking…").foregroundStyle(theme.textMuted)
+                            }
                             ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                                Text(step).font(.ui(.caption)).foregroundStyle(.tertiary)
+                                Text(step).font(.ui(size: Daylight.px(12))).foregroundStyle(theme.textFaint)
                             }
                         }
+                        .padding(.vertical, 12).padding(.horizontal, 18)
+                        .daylightRaised(theme, radius: 18)
+                        .frame(maxWidth: 736, alignment: .leading)
                         #if os(tvOS)
                         .focusable()
                         #endif
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding()
+                .padding(.horizontal, side)
+                .padding(.bottom, 16)
             }
             .onChange(of: messages.count) { withAnimation { proxy.scrollTo("bottom") } }
             .onChange(of: steps.count) { withAnimation { proxy.scrollTo("bottom") } }
         }
     }
 
+    /// Windows' form: one panel holding the field and Ask.
     private var input: some View {
-        HStack {
+        HStack(spacing: 8) {
             TextField("Ask for something to watch…", text: $draft)
-                #if os(iOS)
-                .textFieldStyle(.roundedBorder)
-                #endif
+                .font(.ui(size: Daylight.px(15)))
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 8)
                 .onSubmit { Task { await send(draft) } }
                 .disabled(thinking)
+                .accessibilityLabel("Ask the assistant")
             Button("Ask") { Task { await send(draft) } }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.daylight(.primary))
                 .disabled(thinking || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding()
+        .padding(10)
+        .daylightRaised(theme, radius: Daylight.px(24))
+        .frame(maxWidth: 780)
+        .padding(.horizontal, side)
+        .padding(.bottom, 16)
+    }
+
+    /// Windows' page padding, 36 either side; a phone keeps 20.
+    private var side: CGFloat {
+        #if os(iOS)
+        sizeClass == .compact ? 20 : 36
+        #else
+        Daylight.px(36)
+        #endif
     }
 
     private func load() async {
@@ -177,38 +232,59 @@ struct AssistantView: View {
         default: playing = .movie(id: item.id, title: item.title, startAt: nil)
         }
     }
+
+    /// The card's (i): the title's own page, as Windows' detail modal.
+    private func open(_ item: ChatItem) {
+        if item.kind == "series" {
+            series = item.id
+        } else {
+            Task { movie = await model.movieDetail(id: item.id) }
+        }
+    }
 }
 
+/// Daylight: the viewer's turn is an ink bubble on the right; the answer is bold text on
+/// the page, with its picks as cards under it.
 private struct Bubble: View {
     let message: ChatMessage
     let play: (ChatItem) -> Void
+    let open: (ChatItem) -> Void
+    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
         let mine = message.role == "user"
-        VStack(alignment: mine ? .trailing : .leading, spacing: 12) {
-            Text(message.text)
-                .fontWeight(mine ? .semibold : .regular)
-                .padding(mine ? 12 : 0)
-                .background(mine ? AnyShapeStyle(.tint.opacity(0.15)) : AnyShapeStyle(.clear),
-                            in: RoundedRectangle(cornerRadius: 16))
-                .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
-                #if os(tvOS)
-                .focusable()
-                #else
-                .textSelection(.enabled)
-                #endif
-            if !message.items.isEmpty {
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: cardSpacing) {
-                        ForEach(message.items, id: \.self) { item in
-                            Card(item: item, play: play)
-                        }
-                    }
-                    #if os(tvOS)
-                    .padding(.vertical, 24)
-                    #endif
+        VStack(alignment: mine ? .trailing : .leading, spacing: Daylight.px(12)) {
+            Group {
+                if mine {
+                    Text(message.text)
+                        .font(.ui(size: Daylight.px(15), weight: .bold))
+                        .lineSpacing(3)
+                        .foregroundStyle(theme.background)
+                        .padding(.vertical, 10).padding(.horizontal, 18)
+                        .background(theme.text, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .frame(maxWidth: 640, alignment: .trailing)
+                } else {
+                    Text(message.text)
+                        .font(.ui(size: Daylight.px(17), weight: .bold))
+                        .lineSpacing(5)
+                        .foregroundStyle(theme.text)
+                        .frame(maxWidth: 832, alignment: .leading)
                 }
-                .scrollClipDisabled()
+            }
+            .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+            #if os(tvOS)
+            .focusable()
+            #else
+            .textSelection(.enabled)
+            #endif
+            if !message.items.isEmpty {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: cardMin), spacing: Daylight.px(16), alignment: .top)],
+                          alignment: .leading, spacing: Daylight.px(16)) {
+                    ForEach(message.items, id: \.self) { item in
+                        Card(item: item, play: play, open: open)
+                    }
+                }
+                .frame(maxWidth: Daylight.px(1000), alignment: .leading)
                 #if os(tvOS)
                 .focusSection()
                 #endif
@@ -217,48 +293,67 @@ private struct Bubble: View {
     }
 
     #if os(tvOS)
-    private let cardSpacing: CGFloat = 40
+    private let cardMin: CGFloat = Daylight.px(260)
     #else
-    private let cardSpacing: CGFloat = 12
+    private let cardMin: CGFloat = 160
     #endif
 }
 
-/// One title the assistant offered: poster, its line about why, and Play.
+/// Windows' `ItemCard`: a panel with the poster, the title over its foot, (i) for a film
+/// or show, the year and why, and Play.
 private struct Card: View {
     let item: ChatItem
     let play: (ChatItem) -> Void
+    let open: (ChatItem) -> Void
+    @Environment(\.auroraTheme) private var theme
 
     var body: some View {
-        Button { play(item) } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                AsyncImage(url: item.poster.flatMap(URL.init(string:))) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    ZStack {
-                        Rectangle().fill(.quaternary)
-                        Text(item.title).font(.ui(.caption)).multilineTextAlignment(.center).padding(6)
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack(alignment: .bottomLeading) {
+                Color.clear
+                    .aspectRatio(1.28, contentMode: .fit)
+                    .overlay {
+                        AsyncImage(url: item.poster.flatMap(URL.init(string:))) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            Rectangle().fill(theme.surfaceSunk)
+                        }
                     }
-                }
-                .frame(width: width, height: item.kind == "live" ? width * 9 / 16 : width * 3 / 2)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: "play.circle.fill").font(.ui(.title2))
-                        .foregroundStyle(.white).shadow(radius: 3).padding(6)
-                }
-                Text(item.title).font(.ui(.caption)).lineLimit(1)
-                let line = [item.year.map(String.init), item.note].compactMap { $0 }.joined(separator: " · ")
-                if !line.isEmpty {
-                    Text(line).font(.ui(.caption2)).foregroundStyle(.secondary).lineLimit(3)
+                    .clipped()
+                LinearGradient(colors: [Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255).opacity(0.55), .clear],
+                               startPoint: .bottom, endPoint: .top)
+                    .frame(height: Daylight.px(90))
+                Text(item.title)
+                    .font(.ui(size: Daylight.px(20), weight: .heavy))
+                    .tracking(Daylight.px(20) * -0.01)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .padding(.horizontal, 16).padding(.bottom, 12)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Daylight.px(18), style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                if item.kind != "live" {
+                    Button { open(item) } label: { Image(systemName: "info.circle") }
+                        .buttonStyle(.daylight(.secondary, .sm, iconOnly: true))
+                        .accessibilityLabel("About \(item.title)")
+                        .padding(10)
                 }
             }
-            .frame(width: width)
+            let line = [item.year.map(String.init), item.note].compactMap { $0 }.joined(separator: " · ")
+            if !line.isEmpty {
+                Text(line)
+                    .font(.ui(size: Daylight.px(13), weight: .semibold))
+                    .foregroundStyle(theme.textMuted)
+                    .lineLimit(3)
+                    .padding(.horizontal, 2)
+            }
+            Spacer(minLength: 0)
+            Button { play(item) } label: {
+                Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.daylight(.primary))
         }
-        .tileButtonStyle()
+        .padding(12)
+        .daylightRaised(theme, radius: Daylight.px(24))
     }
-
-    #if os(tvOS)
-    private let width: CGFloat = 220
-    #else
-    private let width: CGFloat = 130
-    #endif
 }
