@@ -4,6 +4,7 @@
 //! state is owned here and mirrored to the UI.
 
 pub mod assistant;
+pub mod backup;
 pub mod commands;
 pub mod community_markers;
 pub mod dblock;

@@ -883,9 +883,32 @@ CREATE INDEX idx_series_tmdb ON series(tmdb_id) WHERE tmdb_id IS NOT NULL;
         name: "people_name_index",
         sql: "CREATE INDEX idx_people_name ON people(name);",
     },
+    Migration {
+        version: 24,
+        name: "restore_pending",
+        sql: RESTORE_PENDING,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 23;
+pub const LATEST_VERSION: u32 = 24;
+
+/// Migration 24: what a restored backup named that this library does not have yet
+/// (`aurora_sync::backup`).
+///
+/// A backup restored onto a fresh install arrives before the library does: a favourite
+/// names a channel that is only imported once the provider it also restored has been
+/// refreshed. It waits here and is tried again after each import. Its own table rather
+/// than `sync_pending`, because signing out of sync empties that -- and a backup is for
+/// the people who do not use sync at all.
+const RESTORE_PENDING: &str = r#"
+CREATE TABLE restore_pending (
+    sync_key   TEXT    PRIMARY KEY,
+    kind       TEXT    NOT NULL,
+    ident      TEXT    NOT NULL,
+    fields     TEXT    NOT NULL,
+    parked_at  INTEGER NOT NULL
+) WITHOUT ROWID;
+"#;
 
 /// Migration 21: adult categories show only while there is a parental PIN (README §11:
 /// "requires explicit opt-in plus the master PIN to reveal"; `AUDIT/findings.md` F-39).

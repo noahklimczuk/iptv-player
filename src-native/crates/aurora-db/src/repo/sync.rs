@@ -95,6 +95,27 @@ pub fn disable(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Every synced row on this device, as `(kind, ident)` -- what the first sync would send,
+/// read without sending it or changing anything.
+///
+/// The same [`SNAPSHOT`] that [`enable`] queues, run inside a transaction that is always
+/// rolled back: the outbox is emptied first so only the snapshot is read, and capture is
+/// switched on for the moment it takes. Whether sync is on, and anything waiting to go,
+/// are exactly as they were afterwards. For a backup file (`aurora_sync::backup`).
+pub fn snapshot(conn: &mut Connection) -> Result<Vec<(String, String)>> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM sync_outbox", [])?;
+    clear_state(&tx, APPLYING)?;
+    set_state(&tx, ENABLED, "1")?;
+    tx.execute_batch(SNAPSHOT)?;
+    let rows = tx
+        .prepare("SELECT kind, ident FROM sync_outbox ORDER BY rowid")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    tx.rollback()?;
+    Ok(rows)
+}
+
 // Records this device could not read (§3.8) -----------------------------------------
 
 /// Note a record that would not decode, under the reader that tried.
