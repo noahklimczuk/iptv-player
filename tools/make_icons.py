@@ -6,6 +6,9 @@ opaque binary, this script draws the mark from scratch — the same rounded squa
 "A" the app shows in its sidebar, in the accent-to-accent-2 gradient from
 src-ui/src/styles/tokens.css — and writes both the PNG set and a 32bpp BMP-backed ICO.
 
+It also writes the tile and logo set an MSIX package needs for the Microsoft Store
+(docs/RELEASE_2.0.md), into `src-native/crates/aurora-app/msix/Assets`.
+
 Pure stdlib: no Pillow, no ImageMagick. Run it from the repo root:
 
     python3 tools/make_icons.py
@@ -17,6 +20,7 @@ import zlib
 from pathlib import Path
 
 OUT = Path("src-native/crates/aurora-app/icons")
+MSIX_ASSETS = Path("src-native/crates/aurora-app/msix/Assets")
 
 # --- tokens.css: --accent #7c5cff, --accent-2 #2dd4bf -------------------------
 ACCENT = (0x7C, 0x5C, 0xFF)
@@ -110,11 +114,13 @@ def render(size: int) -> bytes:
     return bytes(out)
 
 
-def write_png(path: Path, rgba: bytes, size: int) -> None:
+def write_png(path: Path, rgba: bytes, size: int, height: int | None = None) -> None:
+    """Write RGBA as a PNG. `size` is the width; `height` defaults to it."""
+    width, height = size, height or size
     raw = bytearray()
-    for y in range(size):
+    for y in range(height):
         raw.append(0)  # filter type 0
-        raw += rgba[y * size * 4 : (y + 1) * size * 4]
+        raw += rgba[y * width * 4 : (y + 1) * width * 4]
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         return (
@@ -125,7 +131,7 @@ def write_png(path: Path, rgba: bytes, size: int) -> None:
         )
 
     png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
     png += chunk(b"IEND", b"")
     path.write_bytes(png)
@@ -173,6 +179,49 @@ def write_ico(path: Path, images: list[tuple[int, bytes]]) -> None:
     )
 
 
+def place(mark: bytes, msize: int, width: int, height: int) -> bytes:
+    """Centre a `msize` square mark on a transparent `width` x `height` canvas."""
+    out = bytearray(width * height * 4)
+    left, top = (width - msize) // 2, (height - msize) // 2
+    for y in range(msize):
+        row = mark[y * msize * 4 : (y + 1) * msize * 4]
+        start = ((top + y) * width + left) * 4
+        out[start : start + msize * 4] = row
+    return bytes(out)
+
+
+# (name, width, height, share of the shorter edge the mark fills) at scale 100. Each is
+# also written at scale 200, which is what a 150%+ display — most of them — asks for.
+STORE_TILES = [
+    ("StoreLogo", 50, 50, 1.0),
+    ("Square44x44Logo", 44, 44, 1.0),
+    ("Square71x71Logo", 71, 71, 0.7),
+    ("Square150x150Logo", 150, 150, 0.6),
+    ("Wide310x150Logo", 310, 150, 0.6),
+    ("Square310x310Logo", 310, 310, 0.6),
+    ("SplashScreen", 620, 300, 0.5),
+]
+
+# The taskbar and Start list ask for the small logo at exact pixel sizes, unplated, so
+# Windows draws it without a coloured square behind a mark that is already one.
+UNPLATED = [16, 24, 32, 48, 256]
+
+
+def store_assets(get) -> None:
+    MSIX_ASSETS.mkdir(parents=True, exist_ok=True)
+    for name, w, h, share in STORE_TILES:
+        for scale in (100, 200):
+            sw, sh = w * scale // 100, h * scale // 100
+            msize = round(min(sw, sh) * share)
+            path = MSIX_ASSETS / f"{name}.scale-{scale}.png"
+            write_png(path, place(get(msize), msize, sw, sh), sw, sh)
+            print(f"  {path.name} ({sw}x{sh})")
+    for size in UNPLATED:
+        path = MSIX_ASSETS / f"Square44x44Logo.targetsize-{size}_altform-unplated.png"
+        write_png(path, get(size), size)
+        print(f"  {path.name}")
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     cache: dict[int, bytes] = {}
@@ -196,6 +245,8 @@ def main() -> None:
     ico_sizes = [16, 24, 32, 48, 64, 128, 256]
     write_ico(OUT / "icon.ico", [(s, get(s)) for s in ico_sizes])
     print(f"  icon.ico ({', '.join(str(s) for s in ico_sizes)})")
+
+    store_assets(get)
 
 
 if __name__ == "__main__":

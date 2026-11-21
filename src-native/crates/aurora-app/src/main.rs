@@ -116,6 +116,11 @@ const LIBRARY_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(
 /// first seconds after launch belong to getting a picture on screen.
 fn check_for_updates(app: &tauri::AppHandle) {
     use tauri::Manager;
+    // The Store keeps a packaged copy current; asking GitHub would only find a release
+    // this copy is not allowed to install.
+    if aurora_app::packaged::is_packaged() {
+        return;
+    }
     let services = app.state::<Services>();
 
     let (automatic, last) = {
@@ -148,6 +153,9 @@ fn check_for_updates(app: &tauri::AppHandle) {
 /// Returns true when the caller should stop: the new binary is on disk and has been
 /// launched, and this process is the old one.
 fn take_staged_update() -> bool {
+    if aurora_app::packaged::is_packaged() {
+        return false;
+    }
     // Where the data lives has to be worked out before `Services`, because this runs
     // before anything is built. A portable copy knows by definition; an installed one
     // is told by the last launch, which wrote the path beside the executable. Before
