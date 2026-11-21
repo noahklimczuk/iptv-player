@@ -747,6 +747,12 @@ fn settings_are_locked_where_windows_locks_them() {
             Some("sync_recovery_code"),
         ),
         (
+            "sync.rs",
+            "sync_delete_account",
+            "sync.rs",
+            Some("sync_delete_account"),
+        ),
+        (
             "providers.rs",
             "providers_save",
             "providers.rs",
@@ -1374,7 +1380,7 @@ fn settings_sections_follow_windows_order() {
     let marks = [
         ("Providers", "SettingsHead(\"Providers\")"),
         ("Appearance", "AppearanceSection()"),
-        ("Sync", "SyncSection()"),
+        ("Account and sync", "SyncSection()"),
         ("Parental controls", "SettingsHead(\"Parental controls\")"),
         ("Artwork and metadata", "MetadataSection()"),
         ("Recommendations", "RecommendationsSection()"),

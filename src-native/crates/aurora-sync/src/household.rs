@@ -286,6 +286,12 @@ impl<H: Http + Clone> Household<H> {
         self.check_can_sign_in(conn, account.email)?;
         check_passphrase(passphrase)?;
         let session = firebase::sign_up(&self.http, cfg, account.email, account.password)?;
+        // Best effort: an address nobody has proved is the one thing that makes a lost
+        // password unrecoverable, but failing to send the email is no reason to fail
+        // setting sync up. The panel offers to send it again.
+        if let Err(e) = firebase::send_verification(&self.http, cfg, &session.id_token) {
+            tracing::info!("could not send the verification email: {e}");
+        }
         self.join(
             conn,
             session,
@@ -483,6 +489,61 @@ impl<H: Http + Clone> Household<H> {
             .transpose()?
             .ok_or_else(|| SyncError::Account("This device is not signed in to sync.".into()))?;
         Ok(wrapped.unwrap_key(passphrase)?.recovery_code())
+    }
+
+    /// Email a password-reset link to `email`. Needs no sign-in -- it is what someone
+    /// who has forgotten the password presses -- and says the same whether or not there
+    /// is an account with that address.
+    pub fn send_password_reset(&self, email: &str) -> Result<()> {
+        let email = email.trim();
+        if !email.contains('@') {
+            return Err(SyncError::Account(
+                "Enter the email address the account was made with.".into(),
+            ));
+        }
+        firebase::send_password_reset(&self.http, self.cfg()?, email)
+    }
+
+    /// Whether the signed-in account's address has been verified. One account lookup;
+    /// no Firestore reads.
+    pub fn email_verified(&self, conn: &Connection) -> Result<bool> {
+        let engine = self.engine(conn)?;
+        let token = engine.transport().fresh_id_token()?;
+        self.keep(&engine);
+        firebase::email_verified(&self.http, self.cfg()?, &token)
+    }
+
+    /// Send the verification email again.
+    pub fn send_verification(&self, conn: &Connection) -> Result<()> {
+        let engine = self.engine(conn)?;
+        let token = engine.transport().fresh_id_token()?;
+        self.keep(&engine);
+        firebase::send_verification(&self.http, self.cfg()?, &token)
+    }
+
+    /// Delete the account: every record and the vault on the server, then the user
+    /// itself, then sign this device out. The library on this device is untouched.
+    ///
+    /// Asks for the account password, for two reasons: Firebase only deletes a user
+    /// with a token from a recent sign-in, which the stored session is not; and a
+    /// password is the right price for something this final. Other devices find their
+    /// session revoked on their next round and say so.
+    pub fn delete_account(&self, conn: &mut Connection, password: &str) -> Result<()> {
+        let cfg = self.cfg()?.clone();
+        let email = db::get_state(conn, EMAIL)?
+            .ok_or_else(|| SyncError::Account("This device is not signed in to sync.".into()))?;
+        let session = firebase::sign_in(&self.http, &cfg, &email, password)?;
+        let token = session.id_token.clone();
+        let server = FirestoreTransport::new(self.http.clone(), cfg.clone(), session);
+        server.delete_records()?;
+        server.delete_vault()?;
+        firebase::delete_user(&self.http, &cfg, &token)?;
+        self.sign_out(conn)
+    }
+
+    /// Keep the session an engine may have refreshed, so the next call reuses it.
+    fn keep(&self, engine: &Live<H>) {
+        *self.live.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.transport().session());
     }
 
     /// Stop syncing on this device. Its library is untouched; only what sync knew goes.

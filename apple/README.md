@@ -208,7 +208,7 @@ screens. The app can:
   watching?", while there is no provider; "Skip for now" lasts until the next launch.
   Settings and Live TV open it as "Add another provider". `-AuroraSetup YES` shows it
   over a library that has providers (debug builds).
-- sync with the household's other devices, Windows included (Settings → Sync, Windows'
+- sync with the household's other devices, Windows included (Settings → Account and sync, Windows'
   Sync panel and wording): set up or join with an email, a password and a passphrase
   (or the recovery code); favourites, My List, watch progress, profiles and playlist
   edits follow, end-to-end encrypted. Opening a film or episode first asks the
@@ -301,8 +301,8 @@ screens. The app can:
   the `AuroraTopShelf` extension reads that and nothing else. Choosing a title opens
   the app on Home with its page up (`aurora://title/movie/12`). Windows has no shelf.
 - pairing an Apple TV from a phone (plan §2.4 and §3.6), so nothing is typed with the
-  remote: on the TV, Settings → Sync → Sign in with your iPhone shows a six-digit code;
-  on an iPhone or iPad that syncs, Settings → Sync → Set up an Apple TV lists the TVs
+  remote: on the TV, Settings → Account and sync → Sign in with your iPhone shows a six-digit code;
+  on an iPhone or iPad that syncs, Settings → Account and sync → Set up an Apple TV lists the TVs
   showing one, and takes the code, the account password and the sync passphrase. The
   TV then signs in exactly as its own form would. Where it differs from the plan, and
   why: the plan pairs through a `pairing/{id}` document on the server, which needs a
@@ -348,16 +348,12 @@ screens. The app can:
   round button, then the page's name goes, then the clock (an iPhone keeps the
   wordmark, search, the switch and the profile).
 
-- the sync account made and deleted inside the app, for the App Store's public. Windows'
-  panel offers "Set up sync" and "Join my household"; here Settings → Sync is a sign-up
-  form, **Create account** and **Sign in**, saying what the account is (an email and
-  password just for Aurora, not an Apple Account), asking for the password twice and
-  for Firebase's six characters, explaining the passphrase, and linking the privacy
-  policy. Sign in has "Forgot the password?", which has Firebase email a reset link
-  (`sync_send_password_reset`). **Delete sync account** takes the password, signs in
-  afresh, deletes every record and the vault, then the Firebase account, and signs the
-  device out (`sync_delete_account`); the App Store requires both (guideline 5.1.1(v)).
-  The calls and rules behind them are Windows' own, from the shared `aurora_sync`.
+- Account and sync is Windows' panel in Windows' words (Create account and Sign in, the
+  password twice, agreement to the privacy policy, "Forgot the password?", the
+  confirm-your-email card and Delete account, all from the shared `aurora_sync`). Two
+  differences: the privacy policy is Apple's own (`AppStore/PRIVACY_POLICY.md`, since
+  `docs/PRIVACY.md` covers Windows), and on a TV, which has no browser, its address is
+  shown instead of a link, and Create account suggests making it on an iPhone.
 - Gemini asks first. Windows turns "Because of what you watch" and the assistant on out
   of the box with the release's key; the App Store requires asking before personal data
   goes to a third-party AI (guideline 5.1.2(i)). So the switch starts off on Apple
@@ -369,7 +365,7 @@ screens. The app can:
   turned it on on Windows does not turn it on here unasked.
 
 Provider passwords and the TMDB and Gemini keys sync only when the household turns on
-"Also share sign-ins and keys" in Settings → Sync (D34), as on Windows; they go from and
+"Also share sign-ins and keys" in Settings → Account and sync (D34), as on Windows; they go from and
 to the Keychain under the same record names Windows uses.
 
 The app targets **iOS 26 and tvOS 26 only**.

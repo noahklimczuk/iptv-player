@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The Apple TV's half of pairing (`Pairing.swift`): its code, big enough to read from
-/// the sofa, and what to do on the phone. Settings → Sync → Sign in with your iPhone.
+/// the sofa, and what to do on the phone. Settings → Account and sync → Sign in with your iPhone.
 struct PairWithPhoneView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -18,7 +18,7 @@ struct PairWithPhoneView: View {
                 .foregroundStyle(theme.accent)
             Text("Sign in with your iPhone")
                 .displayFont(size: Daylight.px(28))
-            Text("On an iPhone or iPad that already syncs, open Aurora, go to Settings → Sync, choose Set up an Apple TV, pick \(deviceName), and enter this code.")
+            Text("On an iPhone or iPad that already syncs, open Aurora, go to Settings → Account and sync, choose Set up an Apple TV, pick \(deviceName), and enter this code.")
                 .font(.ui(size: Daylight.px(15)))
                 .foregroundStyle(theme.textMuted)
                 .multilineTextAlignment(.center)
@@ -97,7 +97,7 @@ struct PairWithPhoneView: View {
 }
 
 /// The phone's half: find the Apple TVs showing a code, and sign one in with this
-/// household's account. Settings → Sync → Set up an Apple TV.
+/// household's account. Settings → Account and sync → Set up an Apple TV.
 struct SetUpAppleTVView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.auroraTheme) private var theme
@@ -115,7 +115,7 @@ struct SetUpAppleTVView: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("On the Apple TV, open Aurora, go to Settings → Sync and choose Sign in with your iPhone. It shows a code and appears here.")
+                    Text("On the Apple TV, open Aurora, go to Settings → Account and sync and choose Sign in with your iPhone. It shows a code and appears here.")
                         .font(.ui(.caption)).foregroundStyle(.secondary)
                     if sender.found.isEmpty {
                         HStack(spacing: 10) {

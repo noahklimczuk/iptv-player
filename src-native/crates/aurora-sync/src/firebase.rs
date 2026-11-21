@@ -200,6 +200,12 @@ fn account_error(reply: &Reply) -> SyncError {
         "WEAK_PASSWORD" => "Choose a password of at least six characters.",
         "TOO_MANY_ATTEMPTS_TRY_LATER" => "Too many attempts. Wait a few minutes and try again.",
         "USER_DISABLED" => "This sync account has been disabled.",
+        "CREDENTIAL_TOO_OLD_LOGIN_AGAIN" => {
+            "For your security, enter your account password again to do that."
+        }
+        "RESET_PASSWORD_EXCEED_LIMIT" | "QUOTA_EXCEEDED" => {
+            "Too many emails have been sent. Wait a while and try again."
+        }
         "OPERATION_NOT_ALLOWED" => {
             "Email sign-in is not enabled for this Firebase project. Turn on the \
              Email/Password provider in the Firebase console."
@@ -272,6 +278,60 @@ pub fn sign_in(
     password: &str,
 ) -> Result<Session> {
     email_password(http, cfg, "signInWithPassword", email, password)
+}
+
+/// One Identity Toolkit call that answers with nothing a caller needs but success.
+fn account_call(
+    http: &dyn Http,
+    cfg: &FirebaseConfig,
+    endpoint: &str,
+    body: Value,
+) -> Result<Value> {
+    let reply = http.send(
+        Method::Post,
+        &format!("{IDENTITY}:{endpoint}?key={}", cfg.api_key),
+        None,
+        Some(&Body::Json(body)),
+    )?;
+    if reply.status != 200 {
+        return Err(account_error(&reply));
+    }
+    Ok(reply.body)
+}
+
+/// Email the account's owner a link that proves the address is theirs.
+pub fn send_verification(http: &dyn Http, cfg: &FirebaseConfig, id_token: &str) -> Result<()> {
+    account_call(
+        http,
+        cfg,
+        "sendOobCode",
+        json!({ "requestType": "VERIFY_EMAIL", "idToken": id_token }),
+    )
+    .map(|_| ())
+}
+
+/// Email a password-reset link. Firebase answers the same whether or not an account
+/// has that address (email enumeration protection), and so does this.
+pub fn send_password_reset(http: &dyn Http, cfg: &FirebaseConfig, email: &str) -> Result<()> {
+    account_call(
+        http,
+        cfg,
+        "sendOobCode",
+        json!({ "requestType": "PASSWORD_RESET", "email": email.trim() }),
+    )
+    .map(|_| ())
+}
+
+/// Whether the account's email address has been verified.
+pub fn email_verified(http: &dyn Http, cfg: &FirebaseConfig, id_token: &str) -> Result<bool> {
+    let body = account_call(http, cfg, "lookup", json!({ "idToken": id_token }))?;
+    Ok(body["users"][0]["emailVerified"].as_bool().unwrap_or(false))
+}
+
+/// Delete the Firebase user. Needs an ID token from a *recent* sign-in: one minted by
+/// a refresh is refused with `CREDENTIAL_TOO_OLD_LOGIN_AGAIN`.
+pub fn delete_user(http: &dyn Http, cfg: &FirebaseConfig, id_token: &str) -> Result<()> {
+    account_call(http, cfg, "delete", json!({ "idToken": id_token })).map(|_| ())
 }
 
 /// Exchange a refresh token for a fresh ID token.
@@ -519,6 +579,18 @@ impl<H: Http> FirestoreTransport<H> {
             (_, "FAILED_PRECONDITION") | (_, "ALREADY_EXISTS") => Ok(false),
             _ => Self::check(reply).map(|_| false),
         }
+    }
+
+    /// An ID token that is good for the next few minutes, refreshing it if need be.
+    pub fn fresh_id_token(&self) -> Result<String> {
+        self.token(false)
+    }
+
+    /// Delete the wrapped vault key. With the records gone too, nothing of the
+    /// household is left on the server (deleting the account).
+    pub fn delete_vault(&self) -> Result<()> {
+        let name = format!("{}{}/meta/vault", self.docs_root(), self.user_path());
+        self.commit(vec![json!({ "delete": name })])
     }
 
     /// Delete every record on the server, keeping the vault. What **Reset sync** does

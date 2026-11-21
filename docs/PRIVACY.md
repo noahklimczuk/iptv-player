@@ -1,8 +1,13 @@
 # What Aurora TV sends, and where
 
 Short version: Aurora talks to your provider, to Google, to TMDB, and to GitHub. It has no
-analytics, no telemetry and no account. Nothing is sent anywhere to be counted, and
-nobody — including whoever built this — can see what you watch.
+analytics and no telemetry, and an account only if you create one for sync. Nothing is
+sent anywhere to be counted, and nobody — including whoever built this — can see what you
+watch.
+
+This is Aurora TV's privacy policy. It covers the Windows app, including the copy from the
+Microsoft Store. Questions or a request about your data: open an issue at
+https://github.com/noahklimczuk/iptv-player/issues.
 
 The long version matters more than the short one, because "no telemetry" is often said by
 software that still sends plenty. Here is each destination and exactly what goes to it.
@@ -152,14 +157,40 @@ Firebase so that your other devices can fetch them. They are **encrypted on your
 with a key only your devices hold, unlocked by your sync passphrase. Firebase stores
 ciphertext and can't tell a film's progress from a favourite. Clearing your history or
 choosing a window removes those entries on your other devices too. Sync is off until you
-set it up in **Settings → Sync**.
+set it up in **Settings → Account and sync**.
 
-**Playlist passwords and API keys are not synced unless you choose to.** Settings → Sync has
+**Playlist passwords and API keys are not synced unless you choose to.** That section has
 a switch, *Also share sign-ins and keys*, which is off. Turned on, your playlist passwords
 and your TMDB and Gemini keys go to your other devices the same way: encrypted on this
 device with your sync passphrase, so Firebase never sees them. They are kept in each
 device's credential store, never in the library file. Turning it off stops sending them;
 what was already sent stays in the household's encrypted sync until you reset sync.
+
+## Your Aurora account
+
+Sync needs an account, and creating one is optional. What it holds:
+
+- **Your email address and a password**, kept by Google Firebase Authentication. The
+  password is checked by Firebase and never stored by Aurora; the device keeps only a
+  sign-in token, in Windows Credential Manager.
+- **Your encrypted library**, as described above. Your **sync passphrase is not part of
+  the account** and never leaves your devices — which is why nobody, Aurora included,
+  can recover it. The recovery code you are shown once is the only way back if it is
+  lost.
+
+Firebase sends two kinds of email on Aurora's behalf, and no others: a link to confirm
+your address when the account is created, and a password-reset link when you ask for
+one. Aurora sends no newsletters or marketing, and your address is not shared with
+anyone.
+
+**Deleting your account** is in **Settings → Account and sync → Delete account**, and
+needs your password. It deletes, in this order, every record your household synced, the
+encrypted key, and the account itself. Nothing of it remains on Firebase afterwards. The
+library on each of your devices is not touched, and your other devices stop syncing. You
+can also ask for deletion through the issue tracker above if you no longer have the app.
+
+Firebase keeps data in Google Cloud under Google's own terms
+(https://firebase.google.com/support/privacy).
 
 ## Where your data lives
 

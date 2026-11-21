@@ -60,7 +60,7 @@ enum Pairing {
         var errorDescription: String? {
             switch self {
             case .wrongCode: "That code isn't the one on this Apple TV. Check the code on the TV screen and try again."
-            case .closed: "The Apple TV stopped listening. Open Settings → Sync on the TV and choose Sign in with your iPhone again."
+            case .closed: "The Apple TV stopped listening. Open Settings → Account and sync on the TV and choose Sign in with your iPhone again."
             case .unreadable: "The Apple TV sent something this version of Aurora can't read."
             case .newerVersion: "The Apple TV has a newer version of Aurora. Update Aurora on this device first."
             }

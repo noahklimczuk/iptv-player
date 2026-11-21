@@ -20,11 +20,10 @@ struct SettingsHead: View {
     /// this is where the Apple apps do it.
     static let profile = "Profile"
 
-    /// The sections, in page order, for the index (Windows' `SECTIONS`, with Sync, which
-    /// Windows' page has and its index leaves out). Updates and Keyboard are not here
-    /// (apple/README.md).
+    /// The sections, in page order, for the index (Windows' `SECTIONS`). Updates and
+    /// Keyboard are not here (apple/README.md).
     static let order = [
-        profile, "Providers", "Appearance", "Sync", "Parental controls", "Artwork and metadata",
+        profile, "Providers", "Appearance", "Account and sync", "Parental controls", "Artwork and metadata",
         "Recommendations", "Privacy", "Filtering", "Pause live TV", "Library", "About",
         "Diagnostics",
     ]
@@ -34,7 +33,7 @@ struct SettingsHead: View {
         profile: "person.2",
         "Providers": "square.3.layers.3d",
         "Appearance": "sun.max",
-        "Sync": "arrow.triangle.2.circlepath",
+        "Account and sync": "person.crop.circle",
         "Parental controls": "lock",
         "Artwork and metadata": "film",
         "Recommendations": "sparkles",
@@ -51,6 +50,7 @@ struct SettingsHead: View {
         profile: "Who is watching, and the profiles on this device.",
         "Providers": "The playlists and Xtream lines your library is built from.",
         "Appearance": "How Aurora looks and moves.",
+        "Account and sync": "Your Aurora account, and keeping every device in step.",
         "Parental controls": "What each profile may watch, and what needs the PIN.",
         "Privacy": "What Aurora remembers you watched, and for how long.",
         "Filtering": "What your library shows, and what it hides.",

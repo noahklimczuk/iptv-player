@@ -9,6 +9,11 @@
  * the account. The **passphrase** unlocks the encryption key and never leaves the
  * device; without it, or the recovery code, nobody -- the service included -- can read
  * what is stored.
+ *
+ * Public since 2.0 (docs/RELEASE_2.0.md §2), so the account is a real one: creating it
+ * asks for the password twice and agreement to the privacy policy, sends a verification
+ * email, a forgotten password can be reset from the sign-in form, and the account can be
+ * deleted -- server copy and all -- from here (App Store guideline 5.1.1(v)).
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { SyncProblem, SyncStatus } from '@shared/ipc';
@@ -121,6 +126,9 @@ function RecoveryCode({ code, onDone }: { code: string; onDone: () => void }) {
 
 type Mode = 'create' | 'join';
 
+/** Our rule, stricter than Firebase's six: an account guards a household's sync. */
+const MIN_PASSWORD = 8;
+
 function SignInForm({ status, onJoined }: {
   status: SyncStatus;
   onJoined: (recoveryCode: string | null, problem: SyncProblem | null) => void;
@@ -129,6 +137,9 @@ function SignInForm({ status, onJoined }: {
   const [mode, setMode] = useState<Mode>(again ? 'join' : 'create');
   const [email, setEmail] = useState(status.email ?? '');
   const [password, setPassword] = useState('');
+  const [password2, setPassword2] = useState('');
+  const [agreed, setAgreed] = useState(false);
+  const [resetSent, setResetSent] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState('');
   const [confirm, setConfirm] = useState('');
   const [useCode, setUseCode] = useState(false);
@@ -142,11 +153,27 @@ function SignInForm({ status, onJoined }: {
     invoke('sync.deviceName', undefined).then(setDeviceName).catch(() => {});
   }, [deviceName]);
 
-  const mismatch = mode === 'create' && confirm.length > 0 && confirm !== passphrase;
+  const creating = mode === 'create';
+  const mismatch = creating && confirm.length > 0 && confirm !== passphrase;
+  const passwordShort = creating && password.length > 0 && password.length < MIN_PASSWORD;
+  const passwordMismatch = creating && password2.length > 0 && password2 !== password;
+  const samePassphrase = creating && passphrase.length > 0 && passphrase === password;
   const ready = email.trim() && password
-    && (mode === 'create'
-      ? passphrase.length >= 8 && passphrase === confirm
+    && (creating
+      ? password.length >= MIN_PASSWORD && password === password2 && agreed
+        && passphrase.length >= 8 && passphrase === confirm && !samePassphrase
       : (useCode ? code.trim() : passphrase));
+
+  const forgot = useCallback(async () => {
+    setError(null);
+    setResetSent(null);
+    try {
+      await invoke('sync.sendPasswordReset', { email });
+      setResetSent(email.trim());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [email]);
 
   const submit = useCallback(async () => {
     setBusy(true);
@@ -159,6 +186,7 @@ function SignInForm({ status, onJoined }: {
           ...(useCode ? { recoveryCode: code } : { passphrase }),
         });
       setPassword('');
+      setPassword2('');
       setPassphrase('');
       setConfirm('');
       setCode('');
@@ -180,16 +208,16 @@ function SignInForm({ status, onJoined }: {
           <Button
             type="button" size="sm" role="tab" aria-selected={mode === 'create'}
             variant={mode === 'create' ? 'primary' : 'secondary'}
-            onClick={() => { setMode('create'); setError(null); }}
+            onClick={() => { setMode('create'); setError(null); setResetSent(null); }}
           >
-            Set up sync
+            Create account
           </Button>
           <Button
             type="button" size="sm" role="tab" aria-selected={mode === 'join'}
             variant={mode === 'join' ? 'primary' : 'secondary'}
             onClick={() => { setMode('join'); setError(null); }}
           >
-            Join my household
+            Sign in
           </Button>
         </div>
       )}
@@ -197,17 +225,44 @@ function SignInForm({ status, onJoined }: {
       <div style={MUTED}>
         {again
           ? 'The sync account needs its password again. Nothing on this device has been lost.'
-          : mode === 'create'
-            ? 'For the first device in the household. Every other device then joins with '
-              + 'the same email, password and passphrase.'
-            : 'For a device joining a household that already set sync up on another one.'}
+          : creating
+            ? 'A free Aurora account, for the first device in your household. Every other '
+              + 'device then signs in with the same email, password and passphrase.'
+            : 'For a device joining a household that already has an Aurora account.'}
       </div>
 
       <Field label="Email" value={email} onChange={setEmail} type="email"
         autoComplete="username" testId="sync-email" />
       <Field label="Account password" value={password} onChange={setPassword}
-        type="password" autoComplete={mode === 'create' ? 'new-password' : 'current-password'}
+        type="password" autoComplete={creating ? 'new-password' : 'current-password'}
+        placeholder={creating ? `At least ${MIN_PASSWORD} characters` : undefined}
         testId="sync-password" />
+      {creating && (
+        <Field label="Password again" value={password2} onChange={setPassword2}
+          type="password" autoComplete="new-password" testId="sync-password-again" />
+      )}
+      {passwordShort && (
+        <div style={{ ...MUTED, color: 'var(--danger)' }}>
+          The password needs at least {MIN_PASSWORD} characters.
+        </div>
+      )}
+      {passwordMismatch && (
+        <div style={{ ...MUTED, color: 'var(--danger)' }}>The passwords differ.</div>
+      )}
+      {mode === 'join' && !again && (
+        <div>
+          <Button type="button" size="sm" variant="ghost" disabled={!email.includes('@')}
+            onClick={() => void forgot()} data-testid="sync-forgot-password">
+            Forgot the password?
+          </Button>
+        </div>
+      )}
+      {resetSent && (
+        <Message ok>
+          If there is an Aurora account for {resetSent}, an email with a link to choose a
+          new password is on its way. Check the spam folder if it does not arrive.
+        </Message>
+      )}
 
       {mode === 'join' && useCode ? (
         <Field label="Recovery code" value={code} onChange={setCode}
@@ -228,6 +283,12 @@ function SignInForm({ status, onJoined }: {
         </>
       )}
       {mismatch && <div style={{ ...MUTED, color: 'var(--danger)' }}>The passphrases differ.</div>}
+      {samePassphrase && (
+        <div style={{ ...MUTED, color: 'var(--danger)' }}>
+          Use a passphrase that is not the account password: the password is checked by
+          the sync service, the passphrase must never reach it.
+        </div>
+      )}
       {mode === 'join' && !again && (
         <div>
           <Button type="button" size="sm" variant="ghost" onClick={() => setUseCode(!useCode)}>
@@ -239,11 +300,36 @@ function SignInForm({ status, onJoined }: {
       <Field label="Call this device" value={deviceName} onChange={setDeviceName}
         testId="sync-device-name" />
 
+      {creating && (
+        <label style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'start', ...MUTED }}>
+          <input
+            type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)}
+            data-testid="sync-agree" style={{ marginTop: 3 }}
+          />
+          <span>
+            I agree to the{' '}
+            <button
+              type="button" className="link-button"
+              onClick={() => void invoke('sync.openPrivacyPolicy', undefined).catch(() => {})}
+              style={{
+                background: 'none', border: 0, padding: 0, color: 'var(--accent)',
+                textDecoration: 'underline', cursor: 'pointer', font: 'inherit',
+              }}
+            >
+              privacy policy
+            </button>
+            . Aurora stores your email address and your encrypted library with Google
+            Firebase; it cannot read the library, and you can delete the account and
+            everything in it at any time from this page.
+          </span>
+        </label>
+      )}
+
       <div>
         <Button type="submit" variant="primary" disabled={!ready || busy}>
           {busy
-            ? (mode === 'create' ? 'Setting up…' : 'Signing in…')
-            : again ? 'Sign in again' : mode === 'create' ? 'Set up sync' : 'Join'}
+            ? (creating ? 'Creating account…' : 'Signing in…')
+            : again ? 'Sign in again' : creating ? 'Create account' : 'Sign in'}
         </Button>
       </div>
       {error && <Message ok={false}>{error}</Message>}
@@ -258,7 +344,12 @@ export function SyncPanel() {
   const [recovery, setRecovery] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const [confirming, setConfirming] = useState<'signOut' | 'reset' | null>(null);
+  const [confirming, setConfirming] = useState<'signOut' | 'reset' | 'delete' | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  // Asked once per sign-in rather than on every poll: it is an account call, not a
+  // Firestore read, but there is no reason to make one every five seconds.
+  const [verified, setVerified] = useState<boolean | null>(null);
+  const [verifyNote, setVerifyNote] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
   const [codePassphrase, setCodePassphrase] = useState('');
 
@@ -269,6 +360,35 @@ export function SyncPanel() {
     const id = window.setInterval(reload, POLL_MS);
     return () => window.clearInterval(id);
   }, [signedIn, reload]);
+
+  const account = signedIn ? status?.email ?? null : null;
+  useEffect(() => {
+    setVerified(null);
+    setVerifyNote(null);
+    if (!account) return;
+    invoke('sync.emailVerified', undefined).then(setVerified).catch(() => setVerified(null));
+  }, [account]);
+
+  const recheck = useCallback(async () => {
+    setVerifyNote(null);
+    try {
+      const ok = await invoke('sync.emailVerified', undefined);
+      setVerified(ok);
+      if (!ok) setVerifyNote('Not confirmed yet. Open the link in the email, then try again.');
+    } catch (e) {
+      setVerifyNote(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const resend = useCallback(async () => {
+    setVerifyNote(null);
+    try {
+      await invoke('sync.sendVerification', undefined);
+      setVerifyNote('Sent. Check the spam folder if it does not arrive.');
+    } catch (e) {
+      setVerifyNote(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   const run = useCallback(async (what: () => Promise<string>, failed: string) => {
     setBusy(true);
@@ -332,6 +452,22 @@ export function SyncPanel() {
   const state = describe(status);
   return (
     <div style={{ display: 'grid', gap: 'var(--sp-3)' }} data-testid="sync-signed-in">
+      {verified === false && (
+        <div style={{ ...CARD, borderColor: 'var(--warning)' }} data-testid="sync-verify">
+          <div style={{ fontWeight: 650 }}>Confirm your email address</div>
+          <div style={MUTED}>
+            We sent a link to {status.email}. Confirming it is what lets you reset the
+            password if you ever forget it. Sync works in the meantime.
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--sp-2)', flexWrap: 'wrap' }}>
+            <Button size="sm" variant="primary" onClick={() => void recheck()}>
+              I have confirmed it
+            </Button>
+            <Button size="sm" onClick={() => void resend()}>Send the email again</Button>
+          </div>
+          {verifyNote && <div style={MUTED}>{verifyNote}</div>}
+        </div>
+      )}
       <div style={CARD}>
         <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 650 }}>{status.email}</span>
@@ -506,9 +642,51 @@ export function SyncPanel() {
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming('reset')}>
               Reset sync from this device
             </Button>
+            <Button size="sm" variant="ghost" disabled={busy}
+              onClick={() => { setConfirming('delete'); setDeletePassword(''); setResult(null); }}
+              data-testid="sync-delete-account">
+              Delete account
+            </Button>
           </>
         )}
       </div>
+
+      {/* Three steps, the last behind the password: this is the one action here that
+          cannot be undone, and it reaches every device in the household. */}
+      {confirming === 'delete' && (
+        <form
+          style={{ ...CARD, borderColor: 'var(--danger)', maxWidth: 520 }}
+          data-testid="sync-delete-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const password = deletePassword;
+            setDeletePassword('');
+            void run(async () => {
+              await invoke('sync.deleteAccount', { password });
+              return 'Your Aurora account and everything it stored have been deleted. '
+                + 'This device keeps its library; other devices stop syncing.';
+            }, 'Could not delete the account');
+          }}
+        >
+          <div style={{ fontWeight: 650, color: 'var(--danger)' }}>Delete your Aurora account?</div>
+          <div style={MUTED}>
+            This permanently deletes {status.email} and everything the household has synced
+            to it: favourites, lists, watch progress, profiles and settings on the server.
+            The library on each device stays as it is, but no device will sync again until
+            someone creates a new account. This cannot be undone.
+          </div>
+          <Field label="Account password" value={deletePassword} onChange={setDeletePassword}
+            type="password" autoComplete="current-password" testId="sync-delete-password" />
+          <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+            <Button type="submit" size="sm" variant="danger" disabled={busy || !deletePassword}>
+              {busy ? 'Deleting…' : 'Delete account permanently'}
+            </Button>
+            <Button type="button" size="sm" disabled={busy} onClick={() => setConfirming(null)}>
+              Keep it
+            </Button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }

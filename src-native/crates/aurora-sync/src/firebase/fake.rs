@@ -38,6 +38,13 @@ struct State {
     firestore_status: Option<(u16, &'static str)>,
     /// Requests seen, as `METHOD url`, for assertions about what was sent.
     log: Vec<String>,
+    /// ID tokens from a password sign-in, as opposed to a refresh: the only kind
+    /// Firebase accepts for deleting a user.
+    fresh: std::collections::HashSet<String>,
+    /// uids whose email address has been verified.
+    verified: std::collections::HashSet<String>,
+    /// Emails "sent", as `(requestType, address)`.
+    emails: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -100,6 +107,82 @@ impl FakeFirebase {
         self.state.lock().unwrap().log.clone()
     }
 
+    /// Emails sent so far, as `(requestType, address)`.
+    pub fn emails(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap().emails.clone()
+    }
+
+    /// Follow the verification link, as the account's owner would.
+    pub fn verify(&self, email: &str) {
+        let mut s = self.state.lock().unwrap();
+        if let Some((_, uid)) = s.accounts.get(&email.to_lowercase()).cloned() {
+            s.verified.insert(uid);
+        }
+    }
+
+    /// Whether an account exists for this address.
+    pub fn has_account(&self, email: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .accounts
+            .contains_key(&email.to_lowercase())
+    }
+
+    /// The other Identity Toolkit calls: emails, lookup and delete.
+    fn account_ops(s: &mut State, url: &str, body: &Value) -> Option<Result<Reply>> {
+        let token = body["idToken"].as_str().unwrap_or_default().to_string();
+        let uid = s.tokens.get(&token).cloned();
+        let email_of = |s: &State, uid: &str| {
+            s.accounts
+                .iter()
+                .find(|(_, (_, u))| u == uid)
+                .map(|(e, _)| e.clone())
+        };
+        if url.contains(":sendOobCode") {
+            let kind = body["requestType"].as_str().unwrap_or_default().to_string();
+            let to = if kind == "PASSWORD_RESET" {
+                // Enumeration protection: success either way, but only a real account
+                // gets mail.
+                let e = body["email"].as_str().unwrap_or_default().to_lowercase();
+                s.accounts.contains_key(&e).then_some(e)
+            } else {
+                match &uid {
+                    Some(uid) => email_of(s, uid),
+                    None => return Some(auth_error("INVALID_ID_TOKEN")),
+                }
+            };
+            if let Some(to) = to {
+                s.emails.push((kind, to));
+            }
+            return Some(reply(200, json!({})));
+        }
+        if url.contains(":lookup") {
+            let Some(uid) = uid else {
+                return Some(auth_error("INVALID_ID_TOKEN"));
+            };
+            let email = email_of(s, &uid);
+            let verified = s.verified.contains(&uid);
+            return Some(reply(
+                200,
+                json!({ "users": [{ "localId": uid, "email": email, "emailVerified": verified }] }),
+            ));
+        }
+        if url.contains(":delete") {
+            let Some(uid) = uid else {
+                return Some(auth_error("INVALID_ID_TOKEN"));
+            };
+            if !s.fresh.contains(&token) {
+                return Some(auth_error("CREDENTIAL_TOO_OLD_LOGIN_AGAIN"));
+            }
+            s.accounts.retain(|_, (_, u)| *u != uid);
+            s.tokens.retain(|_, u| *u != uid);
+            s.refresh.retain(|_, u| *u != uid);
+            return Some(reply(200, json!({})));
+        }
+        None
+    }
+
     fn issue(s: &mut State, uid: &str) -> Value {
         s.serial += 1;
         // As long as the real ones: an ID token is a signed JWT of about a kilobyte and a
@@ -136,6 +219,8 @@ impl FakeFirebase {
             }
         };
         let t = Self::issue(s, &uid);
+        s.fresh
+            .insert(t["id"].as_str().unwrap_or_default().to_string());
         reply(
             200,
             json!({ "localId": uid, "idToken": t["id"], "refreshToken": t["rt"], "expiresIn": "3600" }),
@@ -286,6 +371,9 @@ impl Http for FakeFirebase {
         };
 
         if url.contains("identitytoolkit.googleapis.com") {
+            if let Some(answer) = Self::account_ops(&mut s, url, &json_body) {
+                return answer;
+            }
             return Self::accounts(&mut s, url, &json_body);
         }
         if url.contains("securetoken.googleapis.com") {
