@@ -1,5 +1,6 @@
 /** A working slice of README §15 — enough to prove the settings architecture. */
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { Theme } from '@/state/ui';
 import { Badge, Button } from '@/components/Primitives';
 import { Icon, type IconName } from '@/components/Icon';
@@ -111,6 +112,22 @@ function SettingsContent({ onAddProvider }: { onAddProvider: () => void }) {
   const { data: stats } = useCommand('library.stats', undefined, []);
   const [current, setCurrent] = useState(SECTIONS[0]!);
   useCurrentSection(setCurrent);
+
+  // `#/settings?section=Account and sync` opens the page at that section -- how the
+  // setup wizard hands someone over to creating an account.
+  const [params] = useSearchParams();
+  const jump = params.get('section');
+  useEffect(() => {
+    const title = SECTIONS.find((t) => t === jump);
+    if (!title) return undefined;
+    setCurrent(title);
+    // After the cards above it have laid out, or it lands short.
+    const id = window.setTimeout(
+      () => document.getElementById(sectionId(title))?.scrollIntoView({ block: 'start' }),
+      80,
+    );
+    return () => window.clearTimeout(id);
+  }, [jump]);
 
   return (
     <div
