@@ -15,6 +15,9 @@ struct SetupWizard: View {
     /// Leave with nothing added. Separate from `onFinished`, as on Windows: skipping
     /// leaves no provider, and the caller has to know or it puts the wizard straight back.
     let onSkip: () -> Void
+    /// Windows' offer at the end of first-run setup: leave for Settings → Account and
+    /// sync. Given on the first provider only; someone adding a second has seen it.
+    var onSync: (() -> Void)? = nil
 
     enum Step: Int, CaseIterable {
         case source, content, importing, done
@@ -480,11 +483,12 @@ struct SetupWizard: View {
 
     @ViewBuilder private var doneStep: some View {
         if let report {
-            DoneSummary(report: report, onFinished: onFinished)
+            DoneSummary(report: report, onFinished: onFinished, onSync: onSync)
         } else {
             VStack(spacing: 16) {
                 Text("Import finished").font(.ui(.title3).weight(.bold))
                 Button("Start watching", action: onFinished).buttonStyle(.borderedProminent)
+                SyncOffer(onSync: onSync)
             }
             .frame(maxWidth: .infinity)
         }
@@ -518,6 +522,7 @@ private func host(of url: String) -> String {
 private struct DoneSummary: View {
     let report: ImportReport
     let onFinished: () -> Void
+    let onSync: (() -> Void)?
 
     var body: some View {
         // Coverage over every channel, not over the names that fitted in the report:
@@ -559,6 +564,7 @@ private struct DoneSummary: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            SyncOffer(onSync: onSync)
         }
     }
 
@@ -584,5 +590,33 @@ private struct DoneSummary: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// Windows' last line of first-run setup: a quiet offer of an account, only where sync
+/// is built in and nobody is signed in yet.
+private struct SyncOffer: View {
+    @Environment(AppModel.self) private var model
+    let onSync: (() -> Void)?
+    @State private var offer = false
+
+    var body: some View {
+        Group {
+            if offer, let onSync {
+                Button("Watching on more than one device? Create a free account to sync", action: onSync)
+                    .buttonStyle(.daylight(.ghost))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            } else {
+                // Something to hang the check on: an empty view never runs its task.
+                Color.clear.frame(height: 0)
+            }
+        }
+        .task {
+            guard onSync != nil, let core = model.core,
+                  let status = try? await Task.detached(operation: { try core.syncStatus() }).value
+            else { return }
+            offer = status.available && !status.signedIn
+        }
     }
 }

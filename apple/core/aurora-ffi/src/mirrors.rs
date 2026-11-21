@@ -1355,6 +1355,32 @@ fn multiview_refuses_and_rotates_as_windows_does() {
     assert!(host.contains("self.dvr.active_ids().len()"));
 }
 
+/// The end of first-run setup offers an account for sync in Windows' words, only on
+/// the first provider, and opens Settings at Account and sync.
+#[test]
+fn setup_offers_an_account_as_windows_does() {
+    let wizard = ui_src("features/setup/SetupWizard.tsx");
+    let offer = "Watching on more than one device? Create a free account to sync";
+    assert!(wizard.contains(offer), "Windows no longer says {offer:?}");
+    assert!(wizard.contains("onSync={additional ? undefined"));
+    assert!(wizard.contains("sync?.available && !sync.signedIn"));
+
+    let features = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features");
+    let swift = std::fs::read_to_string(features.join("SetupWizard.swift")).unwrap();
+    assert!(swift.contains(offer), "we must say {offer:?}");
+    assert!(swift.contains("status.available && !status.signedIn"));
+    let root = std::fs::read_to_string(features.join("RootView.swift")).unwrap();
+    assert!(root.contains("settingsSection = SyncSection.title"));
+    // Only the first-run wizard is given the offer: the "add another" ones are not.
+    for file in ["SettingsView.swift", "LiveView.swift"] {
+        let src = std::fs::read_to_string(features.join(file)).unwrap();
+        assert!(
+            !src.contains("onSync:"),
+            "{file} offers sync from an additional provider"
+        );
+    }
+}
+
 /// Settings lists Windows' sections in Windows' order, less the two an Apple device has
 /// no use for (apple/README.md): a new Windows section, or a reordering, fails here.
 #[test]

@@ -7,6 +7,8 @@ import UIKit
 /// `aurora_sync::household`); this only shows its status and passes on what was typed.
 /// Each call blocks on the network, so it runs off the main actor.
 struct SyncSection: View {
+    /// Its heading, which the setup wizard's offer of an account opens Settings at.
+    static let title = "Account and sync"
     @Environment(AppModel.self) private var model
     @State private var status: SyncStatus?
     @State private var busy = false
@@ -39,7 +41,7 @@ struct SyncSection: View {
 
     var body: some View {
         Section {
-            SettingsHead("Account and sync").id("Account and sync")
+            SettingsHead(Self.title).id(Self.title)
             if let status {
                 content(status)
             } else {
