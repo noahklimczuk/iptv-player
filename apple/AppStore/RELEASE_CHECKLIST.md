@@ -76,6 +76,11 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
   card, in Ask Aurora or in Settings.
 - [x] Store listing, review notes, demo playlist, privacy policy and labels in this
   folder.
+- [ ] Follow Windows' 2.0 plan (`docs/RELEASE_2.0.md`) where it adds account features in
+  the shared crates: **2b** email verification after sign-up and **4c** the first-run
+  wizard offering sync. Port each to Apple when Windows merges it, so the two apps
+  behave the same. Keep `PRIVACY_POLICY.md` in step with Windows' public policy (3a)
+  once that exists, or point both listings at one.
 - [ ] Screenshots (`METADATA.md` → Screenshots). UI screens can be taken in the
   simulator with the demo playlist; the player needs a real device on an Intel Mac.
 
