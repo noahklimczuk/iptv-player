@@ -1,7 +1,7 @@
 # App Store listing
 
 One listing, **universal purchase**: the iPhone/iPad app and the Apple TV app share the
-bundle identifier `tv.aurora.app` (`AURORA_BUNDLE_ID` in `apple/project.yml`), so they
+bundle identifier `io.github.noahklimczuk.aurora` (`AURORA_BUNDLE_ID` in `apple/project.yml`), so they
 are one product in App Store Connect with an iOS and a tvOS platform.
 
 Character limits are Apple's. Counts are given where they are close.
@@ -12,7 +12,7 @@ Character limits are Apple's. Counts are given where they are close.
 |---|---|
 | Name (30) | **Aurora TV: IPTV Player** (22). "Aurora" alone is almost certainly taken; check availability when making the app record. |
 | Subtitle (30) | **Live TV, guide, DVR and sync** (28) |
-| Bundle ID | `tv.aurora.app` (+ `tv.aurora.app.topshelf`) |
+| Bundle ID | `io.github.noahklimczuk.aurora` (+ `io.github.noahklimczuk.aurora.topshelf`) |
 | SKU | `aurora-tv-2` |
 | Primary category | Entertainment |
 | Secondary category | Photo & Video |

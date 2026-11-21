@@ -43,10 +43,11 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
 ## 2. App Store Connect set-up (you)
 
 - [ ] Register the identifiers in Certificates, Identifiers & Profiles:
-  `tv.aurora.app` (iOS and tvOS), `tv.aurora.app.topshelf`, and the app group
-  `group.tv.aurora.shared`, enabled on both tvOS identifiers.
-- [ ] Create **one** app record: platforms iOS and tvOS, bundle ID `tv.aurora.app`, name
-  and SKU from `METADATA.md` (universal purchase).
+  `io.github.noahklimczuk.aurora` (iOS and tvOS), `io.github.noahklimczuk.aurora.topshelf`,
+  and the app group `group.io.github.noahklimczuk.aurora`, enabled on both tvOS
+  identifiers. (`tv.aurora.app` was taken by another team.)
+- [ ] Create **one** app record: platforms iOS and tvOS, bundle ID
+  `io.github.noahklimczuk.aurora`, name and SKU from `METADATA.md` (universal purchase).
 - [ ] Create an App Store Connect API key (Users and Access → Integrations) for
   `scripts/testflight.sh`, and add the secrets listed in `apple/README.md` → Releasing
   if CI uploads.
@@ -60,7 +61,7 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
 - [x] Version **2.0.0** on every target, and the build number taken from
   `CURRENT_PROJECT_VERSION`, which `testflight.sh` sets per upload (the Info.plists had
   `1.0` and `1` written in, so every upload would have been build 1).
-- [x] One bundle ID for both apps (universal purchase), `tv.aurora.app`.
+- [x] One bundle ID for both apps (universal purchase), `io.github.noahklimczuk.aurora`.
 - [x] Privacy manifest (`Shared/Privacy/PrivacyInfo.xcprivacy`) in both apps and the Top
   Shelf: no tracking, the data types above, and the required-reason APIs (UserDefaults,
   system boot time, file timestamps).

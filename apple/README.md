@@ -296,7 +296,7 @@ screens. The app can:
     "double-tap"/"hold" where Windows says "click" and "double-click", and the `1`–`9`
     keys are not there: a remote has no number keys.
 - the Apple TV's Top Shelf (plan §2.4): Continue Watching, with each title's art and
-  progress. The app writes a small snapshot to the app group `group.tv.aurora.shared`
+  progress. The app writes a small snapshot to the app group `group.io.github.noahklimczuk.aurora`
   whenever Home reads its rails, and tells the shelf to reload only when it changed;
   the `AuroraTopShelf` extension reads that and nothing else. Choosing a title opens
   the app on Home with its page up (`aurora://title/movie/12`). Windows has no shelf.
@@ -477,7 +477,7 @@ nightly the first time. Apple-silicon Macs only need stable.
 **Aurora 2.0 for the App Store:** `AppStore/RELEASE_CHECKLIST.md` is every step from here
 to the store, with the listing (`METADATA.md`), App Review's notes and demo playlist, the
 privacy policy and labels, and export compliance beside it. Both apps are one product
-(universal purchase, bundle ID `tv.aurora.app`), version `MARKETING_VERSION` in
+(universal purchase, bundle ID `io.github.noahklimczuk.aurora`), version `MARKETING_VERSION` in
 `project.yml`.
 
 `apple/scripts/testflight.sh` builds every device slice of the core, archives the
@@ -526,7 +526,7 @@ Store Connect. Read plan §2.6 on licensing before inviting testers beyond the h
 ### Trying it without tapping (debug builds)
 
 ```sh
-xcrun simctl launch <device> tv.aurora.app \
+xcrun simctl launch <device> io.github.noahklimczuk.aurora \
   -AuroraDemoPlaylist http://127.0.0.1:8000/demo.m3u   # imports it, live TV only
   -AuroraAutoplay YES                                  # then plays the first channel
   -AuroraMpvLog v                                      # mpv's full log, to the system log
