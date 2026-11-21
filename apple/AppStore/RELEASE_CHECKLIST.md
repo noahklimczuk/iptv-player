@@ -79,7 +79,10 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
 - [x] Windows' 2.0 account work (`docs/RELEASE_2.0.md` §2, PR 232): the confirmation
   email after sign-up, the same delete and reset calls from the shared crate, and the
   section's new name, Account and sync.
-- [ ] Follow **4c** (the first-run wizard offering sync) when Windows merges it. Windows'
+- [x] Follow **4c**: first-run setup ends by offering a free account for sync (first
+  provider only, only where sync is built in and nobody is signed in), opening Settings at
+  Account and sync. Its Done step now shows on Apple too; before, saving the provider
+  closed the wizard mid-import. Windows'
   `docs/PRIVACY.md` covers Windows only, so `PRIVACY_POLICY.md` stays Apple's; keep the
   two in step.
 - [x] Screenshots of the UI in `apple/AppStore/screenshots/` on this Mac (the repository's

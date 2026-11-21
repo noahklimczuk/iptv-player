@@ -24,6 +24,12 @@ struct RootView: View {
     @State private var setupFinished = false
     /// "Skip for now": this run only, which is what the button says.
     @State private var setupSkipped = false
+    /// The wizard is up. It stays until it is finished or skipped: the provider it saves
+    /// would otherwise end it there and then, mid-import and before its Done step.
+    @State private var setupShown = false
+    /// A Settings section to open at (Windows' `#/settings?section=`), as the setup
+    /// wizard's offer of an account asks for.
+    @State private var settingsSection: String?
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -41,7 +47,13 @@ struct RootView: View {
             } else if needsSetup {
                 // Before "Who's watching?": there is no point choosing a profile for an
                 // empty library.
-                SetupWizard(onFinished: { setupFinished = true }, onSkip: { setupSkipped = true })
+                SetupWizard(onFinished: { setupFinished = true }, onSkip: { setupSkipped = true },
+                            onSync: {
+                                setupFinished = true
+                                tab = .settings
+                                settingsSection = SyncSection.title
+                            })
+                    .onAppear { setupShown = true }
             } else if model.picking && !model.profiles.isEmpty {
                 ProfilePicker()
             } else {
@@ -142,6 +154,8 @@ struct RootView: View {
             if let name = UserDefaults.standard.string(forKey: "AuroraTab"), let start = AppTab(rawValue: name) {
                 if start == .search { showingSearch = true } else { tab = start }
             }
+            // `-AuroraSettingsSection "Account and sync"` opens Settings there.
+            settingsSection = UserDefaults.standard.string(forKey: "AuroraSettingsSection")
         }
         #endif
         .task { await model.reload() }
@@ -247,7 +261,7 @@ struct RootView: View {
         case .multiview: if compact { HomeView() } else { MultiViewPage() }
         case .assistant: AssistantView()
         case .playlist: NavigationStack { PlaylistEditorView() }
-        case .settings: SettingsView()
+        case .settings: SettingsView(section: $settingsSection)
         case .search: SearchView()
         }
     }
@@ -255,6 +269,7 @@ struct RootView: View {
     /// No provider yet, and the wizard neither finished nor skipped this run.
     private var needsSetup: Bool {
         guard !setupFinished && !setupSkipped else { return false }
+        if setupShown { return true }
         #if DEBUG
         // `-AuroraSetup YES` shows it over a library that has providers, for demos and
         // tests (Windows' `?setup`).

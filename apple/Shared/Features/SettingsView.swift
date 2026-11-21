@@ -6,6 +6,8 @@ struct SettingsView: View {
     @State private var adding = false
     /// Shown as a sheet (an iPhone), so it needs its own way out.
     var closable = false
+    /// A section to open at, then cleared (Windows' `?section=`).
+    var section: Binding<String?> = .constant(nil)
     @Environment(\.dismiss) private var dismiss
 
     /// The section the index marks: the first heading on screen, or the last one chosen.
@@ -44,16 +46,15 @@ struct SettingsView: View {
                 AuroraRebuild.returnToPicker = false
                 Task { scroller.scrollTo(AppearanceSection.id, anchor: .center) }
             }
-            #if DEBUG
-            // `-AuroraSettingsSection "Account and sync"` opens on that section, for
-            // tests and the store's screenshots (DemoLaunch).
-            .task {
-                guard let title = UserDefaults.standard.string(forKey: "AuroraSettingsSection") else { return }
-                try? await Task.sleep(for: .seconds(1))
+            // Opening at a section: after the cards above it have laid out, or it
+            // lands short, as on Windows.
+            .task(id: section.wrappedValue) {
+                guard let title = section.wrappedValue, SettingsHead.order.contains(title) else { return }
+                try? await Task.sleep(for: .milliseconds(300))
                 chosen = title
                 scroller.scrollTo(title, anchor: .top)
+                section.wrappedValue = nil
             }
-            #endif
             }
             .auroraTitle("Settings")
             .toolbar {
