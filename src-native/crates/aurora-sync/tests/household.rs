@@ -559,3 +559,114 @@ fn reset_replaces_the_server_copy_with_this_devices() {
     assert_eq!(favourites(&laptop.conn, 210), 0);
     assert_eq!(db::outbox_len(&pc.conn).unwrap(), 0);
 }
+
+#[test]
+fn creating_an_account_sends_a_verification_email_and_the_link_verifies_it() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    assert_eq!(
+        fb.emails(),
+        vec![("VERIFY_EMAIL".to_string(), "home@example.com".to_string())]
+    );
+    assert!(!pc.household.email_verified(&pc.conn).unwrap());
+
+    pc.household.send_verification(&pc.conn).unwrap();
+    assert_eq!(fb.emails().len(), 2);
+
+    fb.verify("home@example.com");
+    assert!(pc.household.email_verified(&pc.conn).unwrap());
+}
+
+#[test]
+fn a_password_reset_says_the_same_whether_or_not_the_account_exists() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    let before = fb.emails().len();
+
+    // No sign-in needed: this is what someone who forgot the password presses.
+    let mut laptop = device(&fb, 200);
+    laptop
+        .household
+        .send_password_reset(" home@example.com ")
+        .unwrap();
+    laptop
+        .household
+        .send_password_reset("nobody@example.com")
+        .unwrap();
+    let sent = fb.emails();
+    assert_eq!(sent.len(), before + 1);
+    assert_eq!(
+        sent.last().unwrap(),
+        &("PASSWORD_RESET".to_string(), "home@example.com".to_string())
+    );
+
+    let err = laptop
+        .household
+        .send_password_reset("not an address")
+        .unwrap_err();
+    assert!(err.to_string().contains("email address"), "{err}");
+    let _ = &mut laptop.conn;
+}
+
+#[test]
+fn deleting_the_account_removes_everything_on_the_server_and_needs_the_password() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    let mut tv = device(&fb, 100);
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    tv.household
+        .sign_in(
+            &mut tv.conn,
+            &account("TV"),
+            Unlock::Passphrase(PASS.into()),
+        )
+        .unwrap();
+    lists::toggle_favorite(&tv.conn, 1, 110, None, 1).unwrap();
+    tv.household.sync(&mut tv.conn).unwrap();
+    assert!(!fb.document_names().is_empty());
+
+    // The wrong password deletes nothing.
+    let err = pc
+        .household
+        .delete_account(&mut pc.conn, "not it")
+        .unwrap_err();
+    assert!(err.to_string().contains("do not match"), "{err}");
+    assert!(fb.has_account("home@example.com"));
+    assert!(!fb.document_names().is_empty());
+
+    // An hour later the stored session is a refreshed one, which Firebase will not
+    // accept for deleting a user -- so the password is asked for and a fresh sign-in
+    // is what does it.
+    fb.expire_id_tokens();
+    pc.household
+        .delete_account(&mut pc.conn, "hunter22")
+        .unwrap();
+    assert!(fb.document_names().is_empty(), "{:?}", fb.document_names());
+    assert!(!fb.has_account("home@example.com"));
+
+    // This device is signed out with its library intact.
+    let status = pc.household.status(&pc.conn).unwrap();
+    assert!(!status.signed_in && status.email.is_none());
+    assert!(pc.secrets.get(VAULT_SECRET).is_none());
+    let channels: i64 = pc
+        .conn
+        .query_row("SELECT COUNT(*) FROM channels", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(channels, 1);
+
+    // The other device's session no longer works, and it says so.
+    assert!(tv.household.sync(&mut tv.conn).is_err());
+
+    // And the address is free to make a new account with.
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+}
