@@ -104,10 +104,10 @@ struct RootView: View {
         // on beneath its fade as Windows' does. A navigation stack ignores a SwiftUI
         // inset from outside it, so `StackInset` gives each stack the bar's height as
         // UIKit safe area instead: its bar and first row start below ours, and its
-        // content still scrolls up under it.
+        // content still scrolls up under it. (The tab bar's space at the foot, likewise,
+        // in `tabView`.)
         ZStack(alignment: .top) {
             tabView.auroraRebuildOnSwitch()
-                .background(StackInset(top: headerHeight).id(tab))
             VStack(spacing: 0) {
                 AuroraTopBar(title: pageTitle)
                 ConnectionBudget()
@@ -162,6 +162,9 @@ struct RootView: View {
                 // The page scrolls on beneath the bar, clear of it at the end
                 // (`--navpill-space`).
                 .safeAreaPadding(.bottom, barSpace(edge))
+                // The same for a navigation stack, which ignores the line above: without
+                // it what a page pins to its foot, as Ask Aurora's box, sits under the bar.
+                .background(StackInset(top: headerHeight, bottom: barSpace(edge)).id(tab))
                 #if os(tvOS)
                 // The Menu button, as under the system's tab bar: on a page it goes to
                 // the bar, on the current tab; on the bar it leaves the app (no handler,
@@ -329,23 +332,27 @@ private struct ConnectionBudget: View {
 }
 
 /// Gives every navigation stack in this window's tab pages `top` points more safe area,
-/// so each starts below the floating top bar yet scrolls on beneath it. Set in UIKit
+/// so each starts below the floating top bar yet scrolls on beneath it, and `bottom` more
+/// for the floating tab bar. Set in UIKit
 /// because a stack ignores SwiftUI's `safeAreaPadding` and `safeAreaInset` from outside
 /// it. Only the hierarchy's children are touched, never a presented sheet or cover, which
 /// have no top bar over them. Re-made per tab (`.id`), since each tab brings its own
 /// stack, and it looks again shortly after, since a stack can appear after this does.
 private struct StackInset: UIViewRepresentable {
     let top: CGFloat
+    let bottom: CGFloat
 
     func makeUIView(context: Context) -> Probe { Probe() }
 
     func updateUIView(_ probe: Probe, context: Context) {
         probe.top = top
+        probe.bottom = bottom
         probe.apply()
     }
 
     final class Probe: UIView {
         var top: CGFloat = 0
+        var bottom: CGFloat = 0
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -363,8 +370,9 @@ private struct StackInset: UIViewRepresentable {
         func apply() {
             guard let root = window?.rootViewController else { return }
             func walk(_ vc: UIViewController) {
-                if let stack = vc as? UINavigationController, stack.additionalSafeAreaInsets.top != top {
-                    stack.additionalSafeAreaInsets.top = top
+                if let stack = vc as? UINavigationController {
+                    if stack.additionalSafeAreaInsets.top != top { stack.additionalSafeAreaInsets.top = top }
+                    if stack.additionalSafeAreaInsets.bottom != bottom { stack.additionalSafeAreaInsets.bottom = bottom }
                 }
                 vc.children.forEach(walk)
             }
