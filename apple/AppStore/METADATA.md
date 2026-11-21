@@ -112,7 +112,7 @@ rejected (guideline 5.2).
 | Apple TV | 3840 × 2160 or 1920 × 1080 | Yes, 1 to 10 |
 
 Suggested set, in order: Home, Live TV with the guide, the player with its controls,
-Film page, Recordings, Settings → Sync, Multi-view (iPad, Apple TV).
+Film page, Recordings, Settings → Account and sync, Multi-view (iPad, Apple TV).
 
 On an Intel Mac the simulator cannot draw mpv's picture (the player shows "only the sound
 is playing"), so the player screenshot must come from a real device or an Apple-silicon

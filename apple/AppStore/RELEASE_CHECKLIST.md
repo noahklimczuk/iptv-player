@@ -27,7 +27,7 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
   day **for the whole project**, not per household. A few dozen active households will
   use that up by mid-morning and sync stops for everyone until midnight Pacific. Before
   release: move the project to the **Blaze** (pay-as-you-go) plan with a budget alert,
-  and deploy `firebase/firestore.rules`. The shared pacer and Settings → Sync's "free
+  and deploy `firebase/firestore.rules`. The shared pacer and Settings → Account and sync's "free
   plan's 50,000 reads" line assume one household per project; that wording and pacing
   live in the shared crates and Windows' panel, so changing them is outside `apple/`.
   Enable **email enumeration protection** and check the password-reset email template
@@ -66,21 +66,22 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
   system boot time, file timestamps).
 - [x] `ITSAppUsesNonExemptEncryption = NO`, so uploads skip the export question
   (confirm `EXPORT_COMPLIANCE.md`).
-- [x] **Sync: create an account in the app**, laid out for the public (Settings → Sync →
+- [x] **Sync: create an account in the app**, laid out for the public (Settings → Account and sync →
   Create account): what the account is, password twice, the passphrase explained, the
   privacy policy, and "Forgot the password?" by email.
-- [x] **Sync: delete the account in the app** (guideline 5.1.1(v)): Settings → Sync →
-  Delete sync account, with the password, removing every record, the vault and the
+- [x] **Sync: delete the account in the app** (guideline 5.1.1(v)): Settings → Account and sync →
+  Delete account, with the password, removing every record, the vault and the
   Firebase account.
 - [x] **Gemini asks first** (guideline 5.1.2(i)): off until the viewer agrees on Home's
   card, in Ask Aurora or in Settings.
 - [x] Store listing, review notes, demo playlist, privacy policy and labels in this
   folder.
-- [ ] Follow Windows' 2.0 plan (`docs/RELEASE_2.0.md`) where it adds account features in
-  the shared crates: **2b** email verification after sign-up and **4c** the first-run
-  wizard offering sync. Port each to Apple when Windows merges it, so the two apps
-  behave the same. Keep `PRIVACY_POLICY.md` in step with Windows' public policy (3a)
-  once that exists, or point both listings at one.
+- [x] Windows' 2.0 account work (`docs/RELEASE_2.0.md` §2, PR 232): the confirmation
+  email after sign-up, the same delete and reset calls from the shared crate, and the
+  section's new name, Account and sync.
+- [ ] Follow **4c** (the first-run wizard offering sync) when Windows merges it. Windows'
+  `docs/PRIVACY.md` covers Windows only, so `PRIVACY_POLICY.md` stays Apple's; keep the
+  two in step.
 - [ ] Screenshots (`METADATA.md` → Screenshots). UI screens can be taken in the
   simulator with the demo playlist; the player needs a real device on an Intel Mac.
 

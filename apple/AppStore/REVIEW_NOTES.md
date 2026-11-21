@@ -20,9 +20,9 @@ To try it, add our demo playlist of public test streams and open-licence films:
 
 Optional features:
 
-- **Sync** (Settings → Sync): creates an account with an email and password so a
+- **Sync** (Settings → Account and sync): creates an account with an email and password so a
   household's devices share favourites and progress. The data is end-to-end encrypted
-  on the device. The account can be deleted in Settings → Sync → Delete sync account.
+  on the device. The account can be deleted in Settings → Account and sync → Delete account.
 - **Recommendations / Ask Aurora**: uses Google Gemini. Off until the viewer agrees on
   the Home screen card or in Settings → Recommendations, which says what is sent.
 - **Apple TV set-up from iPhone**: uses the local network (Bonjour) to find the TV, so

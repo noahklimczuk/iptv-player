@@ -51,8 +51,8 @@ internet for this.
 
 - **Watch history:** clear it, or choose how long it is kept, in Settings → Privacy.
 - **Gemini:** off until you turn it on; Settings → Recommendations turns it off again.
-- **Sync:** off until you create an account or sign in. Settings → Sync → Sign out stops
-  this device syncing. **Delete sync account** in the same place deletes the account
+- **Sync:** off until you create an account or sign in. Settings → Account and sync → Sign out stops
+  this device syncing. **Delete account** in the same place deletes the account
   and everything it keeps on the server, immediately and for good.
 - **Everything else:** delete the app.
 
