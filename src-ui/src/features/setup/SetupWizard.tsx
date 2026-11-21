@@ -7,11 +7,13 @@
  */
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type {
   DraftProvider, IngestProgress, SyncReport, ValidationResult,
 } from '@shared/ipc';
 import { Badge, Button, EmptyState, FIELD } from '@/components/Primitives';
 import { Icon } from '@/components/Icon';
+import { useCommand } from '@/hooks/useCommand';
 import { invoke, onIngestProgress } from '@/ipc';
 // Shared with Settings → Refresh, which had its own copy with two invented phases
 // and four missing ones (R-145).
@@ -45,6 +47,7 @@ export function SetupWizard({
   onSkip: () => void;
   additional?: boolean;
 }) {
+  const navigate = useNavigate();
   const [step, setStep] = useState<Step>('source');
   const [draft, setDraft] = useState<DraftProvider>({
     name: '', kind: 'm3u', url: '', username: '', password: '',
@@ -241,7 +244,18 @@ export function SetupWizard({
             {step === 'importing' && (
               <ImportingStep progress={progress} onBackground={onFinished} />
             )}
-            {step === 'done' && <DoneStep report={report} onFinished={onFinished} />}
+            {step === 'done' && (
+              <DoneStep
+                report={report}
+                onFinished={onFinished}
+                // Offered once, on the first provider only: someone adding a second
+                // provider has already seen it, and may well have an account.
+                onSync={additional ? undefined : () => {
+                  onFinished();
+                  navigate(`/settings?section=${encodeURIComponent('Account and sync')}`);
+                }}
+              />
+            )}
           </motion.div>
         </AnimatePresence>
 
@@ -783,8 +797,10 @@ function ImportingStep({
 }
 
 function DoneStep({
-  report, onFinished,
-}: { report: SyncReport | null; onFinished: () => void }) {
+  report, onFinished, onSync,
+}: { report: SyncReport | null; onFinished: () => void; onSync?: () => void }) {
+  const { data: sync } = useCommand('sync.status', undefined, []);
+  const offerSync = onSync && sync?.available && !sync.signedIn;
   if (!report) {
     return <EmptyState title="Import finished" action={<Button onClick={onFinished}>Start watching</Button>} />;
   }
@@ -869,6 +885,13 @@ function DoneStep({
       <Button variant="primary" onClick={onFinished} style={{ width: '100%' }} icon="play" iconFilled>
         Start watching
       </Button>
+      {offerSync && (
+        <div style={{ marginTop: 'var(--sp-3)', textAlign: 'center' }}>
+          <Button variant="ghost" onClick={onSync} data-testid="wizard-sync">
+            Watching on more than one device? Create a free account to sync
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

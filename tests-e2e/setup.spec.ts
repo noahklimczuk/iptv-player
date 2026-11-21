@@ -154,6 +154,23 @@ test('the full journey ends in a populated library', async ({ page }) => {
  * whole cost of the import, and skipping it is the entire reason the step exists. The
  * host had honoured `SyncOptions::import_vod` and `import_series` the whole time (R-120).
  */
+test('the last step offers an account for sync, and goes straight to it', async ({ page }) => {
+  await openWizard(page);
+  await page
+    .getByLabel('Provider address')
+    .fill('http://panel.example.com/get.php?username=alice&password=hunter2');
+  await page.getByRole('button', { name: 'Check connection' }).click();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByRole('button', { name: 'Import library' }).click();
+  await expect(page.getByRole('heading', { name: 'Your library is ready' })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.getByTestId('wizard-sync').click();
+  await expect(page.getByRole('tab', { name: 'Create account' })).toBeInViewport();
+  await expect(page.getByTestId('sync-email')).toBeVisible();
+});
+
 test('unchecking a content type keeps it out of the library', async ({ page }) => {
   await openWizard(page);
   await page
