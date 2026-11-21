@@ -42,7 +42,6 @@ struct MoviesView: View {
                 }
             }
             .auroraTitle("Movies")
-            .searchable(text: $filters.search)
             .task(id: ReloadKey(filters: filters, library: model.libraryVersion, extra: selected == nil)) {
                 // Reloaded when a film's page closes, so My List shows what was just added.
                 guard selected == nil else { return }
@@ -132,7 +131,6 @@ struct SeriesView: View {
                 }
             }
             .auroraTitle("Series")
-            .searchable(text: $filters.search)
             .task(id: ReloadKey(filters: filters, library: model.libraryVersion)) { await reload() }
             .onAppear {
                 // Back from a series page, which may have added or removed it.
@@ -197,6 +195,7 @@ struct FilterBar: View {
     @Binding var filters: BrowseFilters
     let facets: BrowseFacets?
     let noun: (one: String, many: String)
+    @Environment(\.auroraTheme) private var theme
 
     /// Windows' `CHIP_GENRES`.
     private static let chipGenres = 7
@@ -219,6 +218,11 @@ struct FilterBar: View {
                 .accessibilityLabel("Popular genres")
             }
             HStack(spacing: 16) {
+                // Windows' search box beside the genres, not the system's search bar (on
+                // a TV that was a keyboard over the top of the page).
+                DaylightSearchField(text: $filters.search,
+                                    placeholder: noun.many == "films" ? "Search films…" : "Search series…",
+                                    width: 240)
                 // Only with genres to offer: an "All genres" menu with nothing in it looks
                 // broken, and is, on a library its provider sends no genres for.
                 if !(facets?.genres.isEmpty ?? true) { genreMenu }
@@ -260,17 +264,25 @@ struct FilterBar: View {
                 }
             }
         } label: {
-            // One line: a long genre name is cut short, not wrapped.
-            Label(filters.genre ?? "All genres", systemImage: "theatermasks")
-                .lineLimit(1)
+            // Windows' `Select`, as in the playlist editor. One line: a long genre name is
+            // cut short, not wrapped.
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.down").font(.ui(size: Daylight.px(13), weight: .bold))
+                Text(filters.genre ?? "All genres").lineLimit(1)
+                    .frame(maxWidth: Daylight.px(200), alignment: .leading)
+            }
         }
+        .menuStyle(.button)
+        .buttonStyle(.daylight(filters.genre == nil ? .secondary : .primary, .sm))
+        .accessibilityLabel("Genre: \(filters.genre ?? "All genres")")
     }
 
     @ViewBuilder
     private var total: some View {
         if let total = facets?.total {
             Text("\(total.formatted()) \(total == 1 ? noun.one : noun.many)")
-                .foregroundStyle(.secondary)
+                .font(.ui(size: Daylight.px(14), weight: .medium))
+                .foregroundStyle(theme.textFaint)
                 .lineLimit(1)
         }
     }

@@ -14,6 +14,7 @@ import { MetadataPanel } from '@/features/settings/MetadataPanel';
 import { ParentalPanel } from '@/features/settings/ParentalPanel';
 import { PrivacyPanel } from '@/features/settings/PrivacyPanel';
 import { SyncPanel } from '@/features/settings/SyncPanel';
+import { BackupPanel } from '@/features/settings/BackupPanel';
 import { ProviderEditor } from '@/features/settings/ProviderEditor';
 import { RefreshButton } from '@/features/settings/RefreshButton';
 import { TimeshiftPanel } from '@/features/settings/TimeshiftPanel';
@@ -338,6 +339,7 @@ function SettingsContent({ onAddProvider }: { onAddProvider: () => void }) {
 
       <Section title="Account and sync">
         <SyncPanel />
+        <BackupPanel />
       </Section>
 
       <Section title="Parental controls">

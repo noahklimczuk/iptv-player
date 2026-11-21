@@ -2119,6 +2119,17 @@ export interface Commands {
   'sync.deleteAccount': (args: { password: string }) => void;
   /** Open the privacy policy in the viewer's browser. Takes no URL, like openReleases. */
   'sync.openPrivacyPolicy': () => void;
+  /**
+   * Save a backup to `Documents\Aurora TV\Backups` (`aurora-app/src/backup.rs`). Behind
+   * the Settings lock.
+   */
+  'backup.save': () => BackupSaved;
+  /** What a backup file's text holds, without restoring it. */
+  'backup.inspect': (args: { text: string }) => BackupSummary;
+  /** Restore a backup file's text. Behind the Settings lock and the parental PIN. */
+  'backup.restore': (args: { text: string }) => BackupRestored;
+  /** Open the backups folder in Explorer. */
+  'backup.openFolder': () => void;
 }
 
 export type CommandName = keyof Commands;
@@ -2132,6 +2143,33 @@ export type CommandResult<K extends CommandName> = ReturnType<Commands[K]>;
 export type MediaButton =
   | { button: 'play' | 'pause' | 'next' | 'previous' }
   | { button: 'seek'; positionSecs: number };
+
+/**
+ * A backup file: profiles, parental settings, favourites and lists, progress, channel
+ * edits, rules, layouts and settings -- never a password (`aurora_sync::backup`).
+ */
+export interface BackupSummary {
+  /** Unix seconds. */
+  createdAt: number;
+  appVersion: string;
+  /** Records by kind: `favorite`, `profile`, `setting`, `provider`, … */
+  counts: Record<string, number>;
+}
+
+export interface BackupSaved {
+  path: string;
+  summary: BackupSummary;
+}
+
+export interface BackupRestored {
+  applied: number;
+  /** Name something this library has not imported yet; they go in after the next import. */
+  waiting: number;
+  /** From a newer Aurora, of a kind this one does not know. */
+  skipped: number;
+  /** Providers restored, each of which needs its password entered again. */
+  providers: number;
+}
 
 /** Push events from the host. */
 export interface Events {

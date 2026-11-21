@@ -16,6 +16,11 @@ struct AssistantView: View {
     @State private var series: Int64?
     @State private var movie: Movie?
     @Environment(\.auroraTheme) private var theme
+    #if os(tvOS)
+    /// Where focus goes once the consent button it was on has gone: the first suggestion,
+    /// not wherever the system falls to (the tab bar).
+    @FocusState private var suggestion: String?
+    #endif
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -57,6 +62,10 @@ struct AssistantView: View {
                         UserDefaults.standard.set(true, forKey: AIConsentCard.answeredKey)
                         await model.setGeminiEnabled(true)
                         await load()
+                        #if os(tvOS)
+                        try? await Task.sleep(for: .milliseconds(100))
+                        suggestion = Self.suggestions.first
+                        #endif
                     }
                 }
                 .buttonStyle(DaylightButtonStyle(variant: .primary))
@@ -114,6 +123,9 @@ struct AssistantView: View {
                                 ForEach(Self.suggestions, id: \.self) { s in
                                     Button(s) { Task { await send(s) } }
                                         .buttonStyle(.daylight(.secondary))
+                                        #if os(tvOS)
+                                        .focused($suggestion, equals: s)
+                                        #endif
                                 }
                             }
                         }

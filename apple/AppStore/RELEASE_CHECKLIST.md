@@ -79,15 +79,17 @@ something outside `apple/`. The rest is done in this folder, or says what is lef
 - [x] Windows' 2.0 account work (`docs/RELEASE_2.0.md` §2, PR 232): the confirmation
   email after sign-up, the same delete and reset calls from the shared crate, and the
   section's new name, Account and sync.
-- [ ] Follow **4c** (the first-run wizard offering sync) when Windows merges it. Windows'
+- [x] Follow **4c**: first-run setup ends by offering a free account for sync (first
+  provider only, only where sync is built in and nobody is signed in), opening Settings at
+  Account and sync. Its Done step now shows on Apple too; before, saving the provider
+  closed the wizard mid-import. Windows'
   `docs/PRIVACY.md` covers Windows only, so `PRIVACY_POLICY.md` stays Apple's; keep the
   two in step.
 - [x] Screenshots of the UI in `apple/AppStore/screenshots/` on this Mac (the repository's
   `.gitignore` keeps `screenshots/` out of git) (iPhone 6.9", iPad 13", Apple TV 4K), taken
   in the simulator with the demo playlist (no real channels or artwork). Upload them in
   the listing's order. Still to add: **the player**, which needs a real device on this
-  Intel Mac. This Mac has no TMDB key, so the films show grey placeholders: retake the
-  Home and Movies screens from a TestFlight build (which compiles the key in) for posters.
+  Intel Mac. The film screens carry TMDB posters (the key is in this Mac's `keys.env`).
 
 ## 4. On real hardware (needs devices)
 

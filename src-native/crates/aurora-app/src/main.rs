@@ -5,7 +5,7 @@ use aurora_app::play::commands as play;
 use aurora_app::play::player::Player;
 use aurora_app::play::sleep::{SleepAction, SleepDeadline};
 use aurora_app::{
-    assistant, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, parental,
+    assistant, backup, commands, dvr, gemini, home, library, metadata, mosaic, now_unix, parental,
     playlist, privacy, profiles, providers, recommend,
     services::Services,
     supervise::{log_panics, supervised},
@@ -831,6 +831,10 @@ fn main() {
             sync::sync_send_verification,
             sync::sync_delete_account,
             sync::sync_open_privacy_policy,
+            backup::backup_save,
+            backup::backup_inspect,
+            backup::backup_restore,
+            backup::backup_open_folder,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");

@@ -18,7 +18,7 @@ import type {
   UpdateStatus,
   ValidationResult,
 } from '@shared/ipc';
-import type { SyncJoined, SyncRound, SyncStatus } from '@shared/ipc';
+import type { BackupSummary, SyncJoined, SyncRound, SyncStatus } from '@shared/ipc';
 import { MOSAIC_TILES } from '@shared/ipc';
 import * as fx from './fixtures';
 import {
@@ -411,6 +411,30 @@ export function setWatchedTodayMock(secs: number): void {
   if (event) for (const fn of clockListeners) fn(event);
 }
 
+/** The host's `Backup::from_json`, as far as a journey needs it to go. */
+function mockBackup(text: string): { summary: BackupSummary } {
+  let raw: { format?: unknown; version?: unknown; createdAt?: unknown; appVersion?: unknown; records?: unknown };
+  try {
+    raw = JSON.parse(text) as typeof raw;
+  } catch {
+    throw new Error('this is not an Aurora backup file');
+  }
+  if (raw.format !== 'aurora-backup') throw new Error('this is not an Aurora backup file');
+  if (typeof raw.version === 'number' && raw.version > 1) {
+    throw new Error('this backup was made by a newer Aurora; update this one to restore it');
+  }
+  const records = Array.isArray(raw.records) ? (raw.records as { kind?: string }[]) : [];
+  const counts: Record<string, number> = {};
+  for (const r of records) if (r.kind) counts[r.kind] = (counts[r.kind] ?? 0) + 1;
+  return {
+    summary: {
+      createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : 0,
+      appVersion: typeof raw.appVersion === 'string' ? raw.appVersion : '',
+      counts,
+    },
+  };
+}
+
 function requireParent(): void {
   if (mockMasterPin != null && mockUnlockedUntil <= nowSecs()) {
     throw new Error(PIN_REQUIRED_MESSAGE);
@@ -432,7 +456,7 @@ const SETTINGS_GUARDED: ReadonlySet<CommandName> = new Set<CommandName>([
   'providers.save', 'providers.credentials', 'providers.update', 'providers.delete',
   'metadata.setKey', 'metadata.setConcurrency', 'artwork.clear',
   'sync.createAccount', 'sync.signIn', 'sync.reset', 'sync.signOut', 'sync.recoveryCode',
-  'sync.setShareSecrets', 'sync.deleteAccount',
+  'sync.setShareSecrets', 'sync.deleteAccount', 'backup.save', 'backup.restore',
   'gemini.setEnabled', 'gemini.setKey', 'updates.setAutomatic',
   'timeshift.setSettings', 'timeshift.clear',
   'playlist.update', 'playlist.setHidden', 'playlist.hideMatching', 'playlist.reset',
@@ -3365,6 +3389,22 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   'sync.signOut': () => { mockSync = null; },
   'sync.setShareSecrets': ({ enabled }) => { mockShareSecrets = enabled; },
   'sync.openPrivacyPolicy': () => {},
+  'backup.save': () => ({
+    path: 'C:\\Users\\viewer\\Documents\\Aurora TV\\Backups\\aurora-tv-backup-2026-11-21-1405.json',
+    summary: {
+      createdAt: nowSecs(),
+      appVersion: '2.0.0',
+      counts: { provider: 1, profile: mockProfiles.length, favorite: 3, setting: 12 },
+    },
+  }),
+  'backup.inspect': ({ text }) => mockBackup(text).summary,
+  'backup.restore': ({ text }) => {
+    const { summary } = mockBackup(text);
+    requireParent();
+    const total = Object.values(summary.counts).reduce((a, b) => a + b, 0);
+    return { applied: total, waiting: 0, skipped: 0, providers: summary.counts.provider ?? 0 };
+  },
+  'backup.openFolder': () => {},
   'sync.sendPasswordReset': ({ email }) => {
     mockSyncAvailable();
     if (!email.includes('@')) throw new Error('Enter the email address the account was made with.');
