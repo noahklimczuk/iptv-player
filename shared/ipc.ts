@@ -2137,6 +2137,14 @@ export type CommandArgs<K extends CommandName> = Parameters<Commands[K]>[0];
 export type CommandResult<K extends CommandName> = ReturnType<Commands[K]>;
 
 /**
+ * A press Windows routed to Aurora. Next and previous are only offered on live TV, where
+ * they change channel; `seek` is the overlay's bar being dragged on a film or an episode.
+ */
+export type MediaButton =
+  | { button: 'play' | 'pause' | 'next' | 'previous' }
+  | { button: 'seek'; positionSecs: number };
+
+/**
  * A backup file: profiles, parental settings, favourites and lists, progress, channel
  * edits, rules, layouts and settings -- never a password (`aurora_sync::backup`).
  */
@@ -2188,6 +2196,11 @@ export interface Events {
    * playback.
    */
   'parental.clock': ParentalClockEvent;
+  /**
+   * A media key, a headset button or the Windows media overlay was pressed
+   * (`aurora-app/src/media_keys`). The page acts on it as it does on its own keys.
+   */
+  'media.button': MediaButton;
   /** One lookup the assistant just ran, so a long turn shows its working. */
   'assistant.step': { step: string };
   /** Emitted shortly after launch when a newer build turns out to be published. */

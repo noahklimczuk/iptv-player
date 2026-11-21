@@ -193,6 +193,48 @@ fn take_staged_update() -> bool {
     }
 }
 
+/// The media keys and the Windows media overlay, for the main window. A press goes to the
+/// page, which already owns play-pause and changing channel (`useHotkeys`).
+#[cfg(windows)]
+fn media_keys(
+    window: Option<&tauri::WebviewWindow>,
+    app: &tauri::AppHandle,
+    services: &Services,
+) -> aurora_app::media_keys::MediaKeys {
+    use aurora_app::media_keys::{self, Button, Controls, MediaKeys, Smtc};
+    let Some(hwnd) = window.and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize) else {
+        tracing::warn!("media keys are off: there is no main window to give them to");
+        return MediaKeys::none();
+    };
+    let handle = app.clone();
+    let db = std::sync::Arc::clone(&services.db);
+    let artwork = std::sync::Arc::clone(&services.artwork);
+    MediaKeys::start(
+        move || {
+            let pressed = std::sync::Arc::new(move |b: Button| {
+                aurora_app::emit(&handle, "media.button", b);
+            });
+            match Smtc::new(hwnd, pressed) {
+                Ok(s) => Some(Box::new(s) as Box<dyn Controls>),
+                Err(e) => {
+                    tracing::warn!("media keys are off: Windows gave no media controls: {e}");
+                    None
+                }
+            }
+        },
+        move |state| media_keys::lookup(&db, &artwork, state),
+    )
+}
+
+#[cfg(not(windows))]
+fn media_keys(
+    _window: Option<&tauri::WebviewWindow>,
+    _app: &tauri::AppHandle,
+    _services: &Services,
+) -> aurora_app::media_keys::MediaKeys {
+    aurora_app::media_keys::MediaKeys::none()
+}
+
 fn main() {
     // How long a launch takes before the window can appear, logged once the logger
     // exists: the target is a window on screen within two seconds of the click.
@@ -320,11 +362,14 @@ fn main() {
             let mosaic_handle = std::sync::Arc::clone(&services.mosaic);
             let player = std::sync::Arc::clone(&services.player);
 
-            // Every state the session reaches goes to the page as it happens.
+            // Every state the session reaches goes to the page as it happens, and to the
+            // Windows media overlay, which is what makes the media keys Aurora's.
             {
                 let handle = app.handle().clone();
+                let media = media_keys(main_window.as_ref(), app.handle(), &services);
                 player.session.on_state(Box::new(move |state| {
                     aurora_app::emit(&handle, "player.state", state);
+                    media.push(state);
                 }));
                 player.session.spawn_loop();
             }
