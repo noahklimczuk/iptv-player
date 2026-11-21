@@ -44,6 +44,16 @@ struct SettingsView: View {
                 AuroraRebuild.returnToPicker = false
                 Task { scroller.scrollTo(AppearanceSection.id, anchor: .center) }
             }
+            #if DEBUG
+            // `-AuroraSettingsSection "Account and sync"` opens on that section, for
+            // tests and the store's screenshots (DemoLaunch).
+            .task {
+                guard let title = UserDefaults.standard.string(forKey: "AuroraSettingsSection") else { return }
+                try? await Task.sleep(for: .seconds(1))
+                chosen = title
+                scroller.scrollTo(title, anchor: .top)
+            }
+            #endif
             }
             .auroraTitle("Settings")
             .toolbar {

@@ -111,7 +111,9 @@ rejected (guideline 5.2).
 | iPad 13" | 2064 × 2752 (portrait) | Yes, 3 to 10 (the app runs on iPad) |
 | Apple TV | 3840 × 2160 or 1920 × 1080 | Yes, 1 to 10 |
 
-Suggested set, in order: Home, Live TV with the guide, the player with its controls,
+Taken ones are in `screenshots/` on the Mac that made them (not in git) (made by launching the debug build with the demo playlist
+and `-AuroraTab <tab>`, `-AuroraSettingsSection "Account and sync"`). Suggested set, in
+order: Home, Live TV with the guide, the player with its controls,
 Film page, Recordings, Settings → Account and sync, Multi-view (iPad, Apple TV).
 
 On an Intel Mac the simulator cannot draw mpv's picture (the player shows "only the sound

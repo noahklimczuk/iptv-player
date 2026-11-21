@@ -10,6 +10,12 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var tab: AppTab = .home
     @State private var showingSearch = false
+    /// The top bar's height, with the connection strip when it shows.
+    @State private var headerHeight: CGFloat = AuroraTopBar.height
+    #if os(tvOS)
+    /// The tab the focus is on in the bar, or nil while it is on the page.
+    @FocusState private var barFocus: AppTab?
+    #endif
     #if DEBUG
     @State private var debugPairing = false
     #endif
@@ -94,14 +100,19 @@ struct RootView: View {
 
     private var tabs: some View {
         // Windows' top bar heads every tab, with its `ConnectionBudget` under it while
-        // recordings use every stream there is. Above the page, not inset into it: a
-        // navigation bar's title ignores an inset from outside its stack and would sit
-        // under the bar. So the page stops at the bar's foot rather than scrolling on
-        // beneath it as Windows' does: a navigation stack clips its pages to its frame.
-        VStack(spacing: 0) {
-            AuroraTopBar(title: pageTitle)
-            ConnectionBudget()
+        // recordings use every stream there is. It floats over the page, which scrolls
+        // on beneath its fade as Windows' does. A navigation stack ignores a SwiftUI
+        // inset from outside it, so `StackInset` gives each stack the bar's height as
+        // UIKit safe area instead: its bar and first row start below ours, and its
+        // content still scrolls up under it.
+        ZStack(alignment: .top) {
             tabView.auroraRebuildOnSwitch()
+                .background(StackInset(top: headerHeight).id(tab))
+            VStack(spacing: 0) {
+                AuroraTopBar(title: pageTitle)
+                ConnectionBudget()
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
         }
         // Search opens over the page from Home's toolbar, as Windows' opens from its top
         // bar; every other destination is a tab, on a phone as well.
@@ -151,14 +162,27 @@ struct RootView: View {
                 // The page scrolls on beneath the bar, clear of it at the end
                 // (`--navpill-space`).
                 .safeAreaPadding(.bottom, barSpace(edge))
+                #if os(tvOS)
+                // The Menu button, as under the system's tab bar: on a page it goes to
+                // the bar, on the current tab; on the bar it leaves the app (no handler,
+                // so the system's own). A stack's pushed page still goes back first.
+                .onExitCommand(perform: barFocus == nil ? { barFocus = tab } : nil)
+                #endif
                 .overlay(alignment: .bottom) {
-                    AuroraTabBar(items: navItems, selection: $tab)
-                        .offset(y: barDrop(edge))
+                    tabBar.offset(y: barDrop(edge))
                 }
         }
         #if os(iOS)
         // The keyboard rises over the bar rather than lifting it.
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        #endif
+    }
+
+    private var tabBar: some View {
+        #if os(tvOS)
+        AuroraTabBar(items: navItems, selection: $tab, focus: $barFocus)
+        #else
+        AuroraTabBar(items: navItems, selection: $tab)
         #endif
     }
 
@@ -300,6 +324,51 @@ private struct ConnectionBudget: View {
         .task(id: model.recordingsVersion) {
             allowed = await model.dvrStorage()?.maxConcurrent ?? 0
             inFlight = await model.recordingsInFlight()
+        }
+    }
+}
+
+/// Gives every navigation stack in this window's tab pages `top` points more safe area,
+/// so each starts below the floating top bar yet scrolls on beneath it. Set in UIKit
+/// because a stack ignores SwiftUI's `safeAreaPadding` and `safeAreaInset` from outside
+/// it. Only the hierarchy's children are touched, never a presented sheet or cover, which
+/// have no top bar over them. Re-made per tab (`.id`), since each tab brings its own
+/// stack, and it looks again shortly after, since a stack can appear after this does.
+private struct StackInset: UIViewRepresentable {
+    let top: CGFloat
+
+    func makeUIView(context: Context) -> Probe { Probe() }
+
+    func updateUIView(_ probe: Probe, context: Context) {
+        probe.top = top
+        probe.apply()
+    }
+
+    final class Probe: UIView {
+        var top: CGFloat = 0
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            apply()
+            for delay in [0.05, 0.3, 1.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.apply() }
+            }
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            apply()
+        }
+
+        func apply() {
+            guard let root = window?.rootViewController else { return }
+            func walk(_ vc: UIViewController) {
+                if let stack = vc as? UINavigationController, stack.additionalSafeAreaInsets.top != top {
+                    stack.additionalSafeAreaInsets.top = top
+                }
+                vc.children.forEach(walk)
+            }
+            walk(root)
         }
     }
 }
