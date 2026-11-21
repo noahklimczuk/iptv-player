@@ -319,7 +319,7 @@ function SettingsContent({ onAddProvider }: { onAddProvider: () => void }) {
         </Field>
       </Section>
 
-      <Section title="Sync">
+      <Section title="Account and sync">
         <SyncPanel />
       </Section>
 
@@ -440,7 +440,8 @@ function SettingsContent({ onAddProvider }: { onAddProvider: () => void }) {
 
 /** The sections, in page order, for the index. */
 const SECTIONS = [
-  'Providers', 'Appearance', 'Parental controls', 'Artwork and metadata', 'Recommendations',
+  'Providers', 'Appearance', 'Account and sync', 'Parental controls', 'Artwork and metadata',
+  'Recommendations',
   'Privacy', 'Filtering',
   'Pause live TV', 'Library', 'Updates', 'About', 'Diagnostics', 'Keyboard',
 ];
@@ -449,6 +450,7 @@ const SECTIONS = [
 const SECTION_ICONS: Record<string, IconName> = {
   Providers: 'layers',
   Appearance: 'sun',
+  'Account and sync': 'person',
   'Parental controls': 'lock',
   'Artwork and metadata': 'film',
   Recommendations: 'sparkle',
@@ -469,6 +471,7 @@ const SECTION_ICONS: Record<string, IconName> = {
 const SECTION_BLURBS: Record<string, string> = {
   Providers: 'The playlists and Xtream lines your library is built from.',
   Appearance: 'How Aurora looks and moves.',
+  'Account and sync': 'Your Aurora account, and keeping every device in step.',
   'Parental controls': 'What each profile may watch, and what needs the PIN.',
   Privacy: 'What Aurora remembers you watched, and for how long.',
   Filtering: 'What your library shows, and what it hides.',
