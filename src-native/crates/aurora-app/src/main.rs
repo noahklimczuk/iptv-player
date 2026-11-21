@@ -781,6 +781,11 @@ fn main() {
             sync::sync_set_share_secrets,
             sync::sync_recovery_code,
             sync::sync_device_name,
+            sync::sync_send_password_reset,
+            sync::sync_email_verified,
+            sync::sync_send_verification,
+            sync::sync_delete_account,
+            sync::sync_open_privacy_policy,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Aurora TV");

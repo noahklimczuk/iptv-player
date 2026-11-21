@@ -573,6 +573,108 @@ pub fn sync_recovery_code(services: State<'_, Services>, args: RecoveryArgs) -> 
         .map_err(sync_error)
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetPasswordArgs {
+    pub email: String,
+}
+
+/// Email a password-reset link. Needs no sign-in, and is not behind the Settings lock:
+/// it changes nothing on this device, and a forgotten password is exactly when it is
+/// needed. Answers the same whether or not the address has an account.
+#[tauri::command(async)]
+pub fn sync_send_password_reset(
+    services: State<'_, Services>,
+    args: ResetPasswordArgs,
+) -> Result<()> {
+    services
+        .sync
+        .household()?
+        .send_password_reset(&args.email)
+        .map_err(sync_error)
+}
+
+/// Whether the signed-in account's email address is verified. One account lookup.
+#[tauri::command(async)]
+pub fn sync_email_verified(services: State<'_, Services>) -> Result<bool> {
+    let household = services.sync.household()?;
+    let db = services.read();
+    household.email_verified(&db).map_err(sync_error)
+}
+
+/// Send the verification email again.
+#[tauri::command(async)]
+pub fn sync_send_verification(services: State<'_, Services>) -> Result<()> {
+    let household = services.sync.household()?;
+    let db = services.read();
+    household.send_verification(&db).map_err(sync_error)
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAccountArgs {
+    pub password: String,
+}
+
+/// Delete the sync account and everything it holds on the server, then sign this
+/// device out. Behind the Settings lock, and it needs the account password. The
+/// library on every device is untouched.
+#[tauri::command(async)]
+pub fn sync_delete_account(services: State<'_, Services>, args: DeleteAccountArgs) -> Result<()> {
+    crate::profiles::require_settings(&services.db.lock())?;
+    services.sync.with_conn(|household, conn| {
+        household
+            .delete_account(conn, &args.password)
+            .map_err(sync_error)
+    })?;
+    *services.sync.pacer.lock() = Pacer::default();
+    Ok(())
+}
+
+/// The privacy policy someone agrees to when creating an account. A constant, opened by
+/// the host, for the same reason as the releases page: nothing the UI sends can make the
+/// app open another address.
+pub const PRIVACY_URL: &str =
+    "https://github.com/noahklimczuk/iptv-player/blob/main/docs/PRIVACY.md";
+
+/// Open the privacy policy in the viewer's browser.
+#[tauri::command(async)]
+pub fn sync_open_privacy_policy() -> Result<()> {
+    open_privacy_policy().map_err(AppError::Other)
+}
+
+#[cfg(windows)]
+fn open_privacy_policy() -> std::result::Result<(), String> {
+    use windows::core::w;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    // Must match PRIVACY_URL; `w!` needs a literal. Checked by a test below.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            w!("https://github.com/noahklimczuk/iptv-player/blob/main/docs/PRIVACY.md"),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    if result.0 as isize <= 32 {
+        return Err(format!(
+            "Windows would not open a browser (ShellExecute returned {})",
+            result.0 as isize
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn open_privacy_policy() -> std::result::Result<(), String> {
+    tracing::info!(url = PRIVACY_URL, "no browser to open on this platform");
+    Ok(())
+}
+
 /// What the panel suggests calling this PC.
 #[tauri::command(async)]
 pub fn sync_device_name() -> Result<String> {
@@ -586,6 +688,17 @@ pub fn sync_device_name() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_privacy_link_opened_is_the_one_declared() {
+        // The Windows opener spells the URL out again because `w!` takes a literal.
+        let source = include_str!("sync.rs");
+        let opened = format!("w!(\"{PRIVACY_URL}\")");
+        assert!(
+            source.contains(&opened),
+            "open_privacy_policy must open {PRIVACY_URL}"
+        );
+    }
     use aurora_ingest::credentials::MemoryStore;
 
     fn library() -> Connection {

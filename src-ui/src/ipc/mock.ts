@@ -419,7 +419,7 @@ const SETTINGS_GUARDED: ReadonlySet<CommandName> = new Set<CommandName>([
   'providers.save', 'providers.credentials', 'providers.update', 'providers.delete',
   'metadata.setKey', 'metadata.setConcurrency', 'artwork.clear',
   'sync.createAccount', 'sync.signIn', 'sync.reset', 'sync.signOut', 'sync.recoveryCode',
-  'sync.setShareSecrets',
+  'sync.setShareSecrets', 'sync.deleteAccount',
   'gemini.setEnabled', 'gemini.setKey', 'updates.setAutomatic',
   'timeshift.setSettings', 'timeshift.clear',
   'playlist.update', 'playlist.setHidden', 'playlist.hideMatching', 'playlist.reset',
@@ -1882,6 +1882,12 @@ const SYNC_UNREADABLE =
   && new URLSearchParams(window.location.search).has('syncUnreadable');
 
 /** The household on the "server": accounts by email, and the one vault. */
+/** Addresses whose verification link has been followed. The seeded account's has. */
+const mockVerified = new Set<string>(['home@example.com']);
+/** `?unverified` — the seeded account's address has not been verified yet. */
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('unverified')) {
+  mockVerified.clear();
+}
 const mockSyncAccounts = new Map<string, { password: string; passphrase: string; code: string }>([
   // Another device already set this household up, so "Sign in" has something to join.
   ['home@example.com', {
@@ -3327,6 +3333,32 @@ const handlers: { [K in CommandName]: Handler<K> } = {
   },
   'sync.signOut': () => { mockSync = null; },
   'sync.setShareSecrets': ({ enabled }) => { mockShareSecrets = enabled; },
+  'sync.openPrivacyPolicy': () => {},
+  'sync.sendPasswordReset': ({ email }) => {
+    mockSyncAvailable();
+    if (!email.includes('@')) throw new Error('Enter the email address the account was made with.');
+  },
+  'sync.emailVerified': () => {
+    mockSyncAvailable();
+    if (!mockSync) throw new Error('This device is not signed in to sync.');
+    return mockVerified.has(mockSync.email.toLowerCase());
+  },
+  'sync.sendVerification': () => {
+    mockSyncAvailable();
+    if (!mockSync) throw new Error('This device is not signed in to sync.');
+  },
+  'sync.deleteAccount': ({ password }) => {
+    mockSyncAvailable();
+    const key = mockSync?.email.toLowerCase();
+    const account = key ? mockSyncAccounts.get(key) : undefined;
+    if (!key || !account) throw new Error('This device is not signed in to sync.');
+    if (account.password !== password) {
+      throw new Error('That email and password do not match a sync account.');
+    }
+    mockSyncAccounts.delete(key);
+    mockVerified.delete(key);
+    mockSync = null;
+  },
   'sync.recoveryCode': ({ passphrase }) => {
     const account = mockSync && mockSyncAccounts.get(mockSync.email.toLowerCase());
     if (!account) throw new Error('This device is not signed in to sync.');

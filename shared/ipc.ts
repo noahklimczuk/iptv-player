@@ -2102,6 +2102,23 @@ export interface Commands {
   'sync.setShareSecrets': (args: { enabled: boolean }) => void;
   /** The recovery code again, for someone who knows the passphrase. Works offline. */
   'sync.recoveryCode': (args: { passphrase: string }) => string;
+  /**
+   * Email a password-reset link. Needs no sign-in, and answers the same whether or not
+   * the address has an account, so it cannot be used to find out who has one.
+   */
+  'sync.sendPasswordReset': (args: { email: string }) => void;
+  /** Whether the signed-in account's email address has been verified. */
+  'sync.emailVerified': () => boolean;
+  /** Send the verification email again. */
+  'sync.sendVerification': () => void;
+  /**
+   * Delete the sync account: everything the household keeps on the server, then the
+   * account itself, then sign this device out. Needs the account password. Libraries on
+   * every device are untouched; other devices are signed out on their next round.
+   */
+  'sync.deleteAccount': (args: { password: string }) => void;
+  /** Open the privacy policy in the viewer's browser. Takes no URL, like openReleases. */
+  'sync.openPrivacyPolicy': () => void;
 }
 
 export type CommandName = keyof Commands;
