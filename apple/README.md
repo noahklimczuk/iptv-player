@@ -348,6 +348,26 @@ screens. The app can:
   round button, then the page's name goes, then the clock (an iPhone keeps the
   wordmark, search, the switch and the profile).
 
+- the sync account made and deleted inside the app, for the App Store's public. Windows'
+  panel offers "Set up sync" and "Join my household"; here Settings → Sync is a sign-up
+  form, **Create account** and **Sign in**, saying what the account is (an email and
+  password just for Aurora, not an Apple Account), asking for the password twice and
+  for Firebase's six characters, explaining the passphrase, and linking the privacy
+  policy. Sign in has "Forgot the password?", which has Firebase email a reset link
+  (`sync_send_password_reset`). **Delete sync account** takes the password, signs in
+  afresh, deletes every record and the vault, then the Firebase account, and signs the
+  device out (`sync_delete_account`); the App Store requires both (guideline 5.1.1(v)).
+  The calls and rules behind them are Windows' own, from the shared `aurora_sync`.
+- Gemini asks first. Windows turns "Because of what you watch" and the assistant on out
+  of the box with the release's key; the App Store requires asking before personal data
+  goes to a third-party AI (guideline 5.1.2(i)). So the switch starts off on Apple
+  (`gemini.rs` `DEFAULT_ENABLED`, which `mirrors.rs` checks is Windows' on), Home shows a
+  card once saying what is sent with Turn on and Not now (`AIConsent.swift`), and Ask
+  Aurora asks the same way. Settings → Recommendations keeps Windows' switch. Windows'
+  switch syncs with the household, so the agreement is also kept on the device
+  (`gemini.consentedHere`, which never syncs) and both must be on: a household that
+  turned it on on Windows does not turn it on here unasked.
+
 Provider passwords and the TMDB and Gemini keys sync only when the household turns on
 "Also share sign-ins and keys" in Settings → Sync (D34), as on Windows; they go from and
 to the Keychain under the same record names Windows uses.
@@ -458,9 +478,15 @@ nightly the first time. Apple-silicon Macs only need stable.
 
 ### Releasing to TestFlight
 
+**Aurora 2.0 for the App Store:** `AppStore/RELEASE_CHECKLIST.md` is every step from here
+to the store, with the listing (`METADATA.md`), App Review's notes and demo playlist, the
+privacy policy and labels, and export compliance beside it. Both apps are one product
+(universal purchase, bundle ID `tv.aurora.app`), version `MARKETING_VERSION` in
+`project.yml`.
+
 `apple/scripts/testflight.sh` builds every device slice of the core, archives the
 iPhone/iPad and Apple TV apps (the Top Shelf goes inside the TV app), and uploads both
-to TestFlight, signing with an App Store Connect API key so nobody has to be signed in
+platforms of the one app to TestFlight, signing with an App Store Connect API key so nobody has to be signed in
 to Xcode. It needs `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH` and `DEVELOPMENT_TEAM`
 (the top of the script says what each is), plus `BUILD_NUMBER` when it should be the CI
 run number. `--tv`, `--mobile` and `--no-upload` narrow it.
@@ -504,7 +530,7 @@ Store Connect. Read plan §2.6 on licensing before inviting testers beyond the h
 ### Trying it without tapping (debug builds)
 
 ```sh
-xcrun simctl launch <device> tv.aurora.tv \
+xcrun simctl launch <device> tv.aurora.app \
   -AuroraDemoPlaylist http://127.0.0.1:8000/demo.m3u   # imports it, live TV only
   -AuroraAutoplay YES                                  # then plays the first channel
   -AuroraMpvLog v                                      # mpv's full log, to the system log

@@ -25,7 +25,9 @@ use std::time::Duration;
 
 use aurora_db::rusqlite::Connection;
 use aurora_ingest::credentials::{credential_ref, CredentialStore};
-use aurora_sync::firebase::{Body, FirebaseConfig, Http, Method, Reply, ReqwestHttp};
+use aurora_sync::firebase::{
+    Body, FirebaseConfig, FirestoreTransport, Http, Method, Reply, ReqwestHttp,
+};
 use aurora_sync::household::{
     Account, Household, Joined, Pacer, Problem, Secrets, Status, Unlock, Waiting,
 };
@@ -203,6 +205,60 @@ fn sync_error(e: SyncError) -> AuroraError {
     }
 }
 
+/// The server half of [`AuroraCore::sync_delete_account`], in the order that leaves
+/// nothing behind: an account deleted first would leave its documents where nobody
+/// could reach them again. Each step is safe to repeat, so a failure part way is
+/// finished by trying again.
+fn delete_account(http: &AnyHttp, cfg: &FirebaseConfig, email: &str, password: &str) -> Result<()> {
+    let session = aurora_sync::firebase::sign_in(http, cfg, email, password).map_err(sync_error)?;
+    let (uid, id_token) = (session.uid.clone(), session.id_token.clone());
+    FirestoreTransport::new(http.clone(), cfg.clone(), session)
+        .delete_records()
+        .map_err(sync_error)?;
+    let firestore = format!(
+        "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents",
+        cfg.project_id
+    );
+    let vault = format!(
+        "projects/{}/databases/(default)/documents/users/{uid}/meta/vault",
+        cfg.project_id
+    );
+    let failed = |what: &str, status: u16| {
+        AuroraError::other(format!(
+            "The sync service would not delete {what} (error {status}). This device is \
+             still signed in; try again."
+        ))
+    };
+    let reply = http
+        .send(
+            Method::Post,
+            &format!("{firestore}:commit"),
+            Some(&id_token),
+            Some(&Body::Json(
+                serde_json::json!({ "writes": [{ "delete": vault }] }),
+            )),
+        )
+        .map_err(sync_error)?;
+    if reply.status != 200 {
+        return Err(failed("the account's data", reply.status));
+    }
+    let reply = http
+        .send(
+            Method::Post,
+            &format!(
+                "https://identitytoolkit.googleapis.com/v1/accounts:delete?key={}",
+                cfg.api_key
+            ),
+            None,
+            Some(&Body::Json(serde_json::json!({ "idToken": id_token }))),
+        )
+        .map_err(sync_error)?;
+    if reply.status != 200 {
+        return Err(failed("the account", reply.status));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------
 // The host
 
@@ -367,6 +423,10 @@ pub(crate) struct SyncHost {
     /// `None` only when the HTTPS client could not be built, or there is no credential
     /// namespace.
     household: Option<Household<AnyHttp>>,
+    /// The household's client and project again, for deleting the account, which
+    /// `Household` has no call for (App Store guideline 5.1.1(v), Apple only).
+    http: Option<AnyHttp>,
+    cfg: Option<FirebaseConfig>,
     library: PathBuf,
     /// Opened on first use, so a library that never signs in never opens it. Held for a
     /// whole round and by every account call, so two never run at once. Never taken
@@ -401,6 +461,7 @@ impl SyncHost {
         http: Option<AnyHttp>,
         cfg: Option<FirebaseConfig>,
     ) -> Self {
+        let endpoint = (http.clone(), cfg.clone());
         let household = match (aurora_ingest::credentials::namespace(db), http) {
             (Ok(ns), Some(http)) => Some(
                 Household::new(
@@ -424,6 +485,8 @@ impl SyncHost {
         };
         Self {
             household,
+            http: endpoint.0,
+            cfg: endpoint.1,
             library,
             conn: Mutex::new(None),
             pacer: Mutex::new(Pacer::default()),
@@ -707,6 +770,79 @@ impl AuroraCore {
         Ok(())
     }
 
+    /// Delete the household's sync account and everything it keeps on the server: every
+    /// record and the vault, then the account itself, and sign this device out. The
+    /// library here is untouched, as after Sign out. Other devices stop syncing at their
+    /// next round, as after a password change.
+    ///
+    /// Windows has no such call. The App Store requires an app that creates an account
+    /// to delete it from inside the app (guideline 5.1.1(v)), so the Apple host does it
+    /// with the shared crate's own Firebase calls. It signs in afresh with the password
+    /// first: that proves it is the account holder, and Firebase deletes an account only
+    /// for a recent sign-in.
+    pub fn sync_delete_account(&self, password: String) -> Result<()> {
+        // Behind Settings: refused while they are locked (F-38, `require_settings`).
+        crate::parental::require_settings(&self.db.lock())?;
+        let (Some(http), Some(cfg)) = (&self.sync.http, &self.sync.cfg) else {
+            return Err(AuroraError::other("This build has no sync."));
+        };
+        self.sync.with_conn(|household, conn| {
+            let status = household.status(conn).map_err(sync_error)?;
+            let email = status
+                .email
+                .filter(|_| status.signed_in)
+                .ok_or_else(|| AuroraError::other("This device is not signed in to sync."))?;
+            delete_account(http, cfg, &email, &password)?;
+            household.sign_out(conn).map_err(sync_error)
+        })?;
+        *self.sync.pacer.lock() = Pacer::default();
+        Ok(())
+    }
+
+    /// "Forgot the password?": Firebase emails a link to choose a new account password.
+    /// The sync passphrase is not the password and is untouched. Firebase answers the
+    /// same whether or not the address has an account, so neither does this.
+    pub fn sync_send_password_reset(&self, email: String) -> Result<()> {
+        let (Some(http), Some(cfg)) = (&self.sync.http, &self.sync.cfg) else {
+            return Err(AuroraError::other("This build has no sync."));
+        };
+        let email = email.trim();
+        if !email.contains('@') {
+            return Err(AuroraError::other("Enter the account's email address."));
+        }
+        let reply = http
+            .send(
+                Method::Post,
+                &format!(
+                    "https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={}",
+                    cfg.api_key
+                ),
+                None,
+                Some(&Body::Json(serde_json::json!({
+                    "requestType": "PASSWORD_RESET",
+                    "email": email,
+                }))),
+            )
+            .map_err(sync_error)?;
+        match reply.status {
+            200 => Ok(()),
+            // Without enumeration protection Firebase says when there is no account;
+            // saying so here would tell anyone which addresses have one.
+            400 if reply.body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("EMAIL_NOT_FOUND")) =>
+            {
+                Ok(())
+            }
+            429 => Err(AuroraError::other(
+                "Too many reset emails were asked for. Try again later.",
+            )),
+            status => Err(AuroraError::other(format!(
+                "The sync service would not send the email (error {status})."
+            ))),
+        }
+    }
+
     /// Share provider passwords and the TMDB and Gemini keys with the household's other
     /// devices, or stop sending them (§3.4, D34). Off stops the sending; what was sent
     /// stays until sync is reset. `aurora-app/src/sync.rs` `sync_set_share_secrets`.
@@ -966,6 +1102,141 @@ mod tests {
         let before = fb.requests().len();
         d.core.sync_tick();
         assert_eq!(fb.requests().len(), before);
+    }
+
+    /// The in-memory Firebase, which has no `accounts:delete`: this answers it and
+    /// notes which ID token asked, passing everything else through.
+    #[derive(Clone)]
+    struct DeletesAccounts {
+        fb: FakeFirebase,
+        deleted: Arc<parking_lot::Mutex<Vec<String>>>,
+    }
+
+    impl Http for DeletesAccounts {
+        fn send(
+            &self,
+            method: Method,
+            url: &str,
+            bearer: Option<&str>,
+            body: Option<&Body>,
+        ) -> aurora_sync::Result<Reply> {
+            if url.contains("accounts:delete") {
+                let token = match body {
+                    Some(Body::Json(v)) => v["idToken"].as_str().unwrap_or_default().to_string(),
+                    _ => String::new(),
+                };
+                self.deleted.lock().push(token);
+                return Ok(Reply {
+                    status: 200,
+                    body: serde_json::json!({}),
+                });
+            }
+            self.fb.send(method, url, bearer, body)
+        }
+    }
+
+    #[test]
+    fn deleting_the_account_empties_the_server_and_signs_out_but_keeps_the_library() {
+        let fb = FakeFirebase::new();
+        let http = DeletesAccounts {
+            fb: fb.clone(),
+            deleted: Default::default(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let keychain = Arc::new(MemorySecrets::default());
+        let core = core_with_sync(dir.path(), &http, keychain.clone());
+        core.db
+            .lock()
+            .execute_batch(
+                "INSERT INTO providers (id,name,kind,base_url,username,created_at)
+                      VALUES (1,'Line','xtream','http://panel.example','viewer',0);
+                 INSERT INTO channels (id,provider_id,provider_key,name,match_key,last_seen_at)
+                      VALUES (10,1,'501','BBC One','bbcone',0);",
+            )
+            .unwrap();
+        core.sync_create_account(
+            "home@example.com".into(),
+            "hunter22".into(),
+            PASS.into(),
+            "Living room".into(),
+        )
+        .unwrap();
+        core.toggle_favorite(1, 10, None).unwrap();
+        core.sync_now().unwrap();
+        assert!(!fb.document_names().is_empty());
+
+        // The wrong password deletes nothing and keeps the device signed in.
+        assert!(core.sync_delete_account("not it".into()).is_err());
+        assert!(http.deleted.lock().is_empty());
+        assert!(core.sync_status().unwrap().signed_in);
+        assert!(!fb.document_names().is_empty());
+
+        core.sync_delete_account("hunter22".into()).unwrap();
+        assert!(
+            fb.document_names().is_empty(),
+            "records and vault gone: {:?}",
+            fb.document_names()
+        );
+        assert_eq!(
+            http.deleted.lock().len(),
+            1,
+            "the account itself was deleted"
+        );
+        assert!(!http.deleted.lock()[0].is_empty(), "with a fresh ID token");
+        assert!(!core.sync_status().unwrap().signed_in);
+        assert!(keychain.dump().is_empty(), "the Keychain items are gone");
+        let favourites: i64 = core
+            .db
+            .lock()
+            .query_row("SELECT count(*) FROM favorites", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(favourites, 1, "the library is untouched");
+        assert!(core.sync_delete_account("hunter22".into()).is_err());
+    }
+
+    #[test]
+    fn forgot_password_asks_firebase_for_a_reset_email_and_never_says_who_has_an_account() {
+        /// Answers `sendOobCode` as Firebase does without enumeration protection.
+        #[derive(Clone)]
+        struct Resets(Arc<parking_lot::Mutex<Vec<serde_json::Value>>>);
+        impl Http for Resets {
+            fn send(
+                &self,
+                _: Method,
+                url: &str,
+                _: Option<&str>,
+                body: Option<&Body>,
+            ) -> aurora_sync::Result<Reply> {
+                assert!(url.contains("accounts:sendOobCode?key=k"), "{url}");
+                let Some(Body::Json(v)) = body else {
+                    panic!("no body")
+                };
+                self.0.lock().push(v.clone());
+                let known = v["email"] == "home@example.com";
+                Ok(Reply {
+                    status: if known { 200 } else { 400 },
+                    body: if known {
+                        serde_json::json!({ "email": v["email"] })
+                    } else {
+                        serde_json::json!({ "error": { "message": "EMAIL_NOT_FOUND" } })
+                    },
+                })
+            }
+        }
+        let sent = Resets(Default::default());
+        let dir = tempfile::tempdir().unwrap();
+        let core = core_with_sync(dir.path(), &sent, Arc::new(MemorySecrets::default()));
+        core.sync_send_password_reset(" home@example.com ".into())
+            .unwrap();
+        core.sync_send_password_reset("nobody@example.com".into())
+            .unwrap();
+        assert!(core
+            .sync_send_password_reset("not an address".into())
+            .is_err());
+        let sent = sent.0.lock();
+        assert_eq!(sent.len(), 2, "nothing sent for a non-address");
+        assert_eq!(sent[0]["requestType"], "PASSWORD_RESET");
+        assert_eq!(sent[0]["email"], "home@example.com", "trimmed");
     }
 
     #[test]

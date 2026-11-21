@@ -19,13 +19,16 @@ struct SyncSection: View {
     @State private var useCode = false
     @State private var email = ""
     @State private var password = ""
+    @State private var confirmPassword = ""
     @State private var passphrase = ""
     @State private var confirm = ""
     @State private var code = ""
     @State private var deviceName = UIDevice.current.name
     @State private var showCodeFor = ""
+    /// The account password, typed again to delete the account.
+    @State private var deletePassword = ""
 
-    private enum Confirm { case signOut, reset }
+    private enum Confirm { case signOut, reset, deleteAccount }
     /// Pairing (`Pairing.swift`): the TV showing its code, the phone setting a TV up.
     @State private var pairing = false
 
@@ -153,9 +156,27 @@ struct SyncSection: View {
                 }
             }
             Button("Keep") { confirming = nil }
+        case .some(.deleteAccount):
+            // Not on Windows: the App Store requires an app that makes an account to
+            // delete it too (guideline 5.1.1(v)). `sync_delete_account` in the core.
+            Text("Delete the sync account \(status.email ?? "") and everything it keeps on the server, for every device in the household? Each device keeps its own library, but none of them syncs again until someone sets sync up afresh. This cannot be undone.")
+                .font(.ui(.caption)).foregroundStyle(.red)
+            SecureField("Account password", text: $deletePassword)
+                .textContentType(.password)
+            Button("Delete the account", role: .destructive) {
+                let typed = deletePassword
+                deletePassword = ""
+                run("Could not delete the account") { core in
+                    try core.syncDeleteAccount(password: typed)
+                    return "The sync account is deleted. This device keeps everything it has."
+                }
+            }
+            .disabled(busy || deletePassword.isEmpty)
+            Button("Keep") { confirming = nil; deletePassword = "" }
         case nil:
             Button("Sign out", role: .destructive) { confirming = .signOut }
             Button("Reset sync from this device…") { confirming = .reset }
+            Button("Delete sync account…", role: .destructive) { confirming = .deleteAccount }
         }
     }
 
@@ -182,26 +203,41 @@ struct SyncSection: View {
         return ("Up to date. Last synced \(ago).", .secondary)
     }
 
-    // MARK: Setting up and joining
+    // MARK: Creating an account and signing in
 
+    /// Where the privacy policy is published: this repository's copy, which the App
+    /// Store listing links to as well (AppStore/PRIVACY_POLICY.md).
+    static let privacyPolicy = URL(string: "https://github.com/noahklimczuk/iptv-player/blob/main/apple/AppStore/PRIVACY_POLICY.md")!
+    /// Firebase Authentication refuses a shorter password (`WEAK_PASSWORD`).
+    private static let minPassword = 6
+    /// The core's `check_passphrase`.
+    private static let minPassphrase = 8
+
+    /// Windows' panel says "Set up sync" and "Join my household", written for someone
+    /// who built the app. The App Store's public needs to be told it is making an
+    /// account, what the account is for and how to delete it, so this is laid out as a
+    /// sign-up form; the calls and the rules behind it are Windows' (README departures).
     @ViewBuilder
     private func form(_ status: SyncStatus) -> some View {
         let again = status.signedIn && status.problem == .signInAgain
+        let creating = !joining && !again
         Text("Keeps favourites, My List, watch progress, profiles, parental settings and recording rules the same on every device in the household. Everything is encrypted on this device before it is uploaded, with a passphrase only your devices know. Playlist passwords and API keys stay on each device unless you choose to share them too.")
             .font(.ui(.caption)).foregroundStyle(.secondary)
         if !again {
-            Segments(options: [(false, "Set up sync"), (true, "Join my household")], selection: $joining)
+            Segments(options: [(false, "Create account"), (true, "Sign in")], selection: $joining)
         }
-        Text(again
-             ? "The sync account needs its password again. Nothing on this device has been lost."
-             : joining
-                ? "For a device joining a household that already set sync up on another one."
-                : "For the first device in the household. Every other device then joins with the same email, password and passphrase.")
-            .font(.ui(.caption)).foregroundStyle(.secondary)
-        let joiningNow = joining || again
+        if again {
+            Text("The sync account needs its password again. Nothing on this device has been lost.")
+                .font(.ui(.caption)).foregroundStyle(.secondary)
+        } else if creating {
+            createIntro
+        } else {
+            Text("Already have an Aurora sync account? Sign in with its email and password, then unlock it with your sync passphrase.")
+                .font(.ui(.caption)).foregroundStyle(.secondary)
+        }
         #if os(tvOS)
-        // Joining from a remote is a lot of typing: a phone that already syncs can do it.
-        if joiningNow {
+        // Typing with a remote is slow: a phone that already syncs can do it.
+        if !creating {
             Button("Sign in with your iPhone", systemImage: "iphone") { pairing = true }
                 .disabled(busy)
         }
@@ -213,43 +249,112 @@ struct SyncSection: View {
             .keyboardType(.emailAddress)
             .textInputAutocapitalization(.never)
             #endif
-        SecureField("Account password", text: $password)
-            .textContentType(.password)
-        if joiningNow && useCode {
+        if creating && !email.isEmpty && !Self.looksLikeEmail(email) {
+            hint("That doesn't look like an email address.")
+        }
+        SecureField(creating ? "Choose a password (at least \(Self.minPassword) characters)" : "Account password", text: $password)
+            .textContentType(creating ? .newPassword : .password)
+        if creating {
+            SecureField("Password again", text: $confirmPassword)
+                .textContentType(.newPassword)
+            if !password.isEmpty && password.count < Self.minPassword {
+                hint("The password needs at least \(Self.minPassword) characters.")
+            } else if !confirmPassword.isEmpty && confirmPassword != password {
+                hint("The passwords differ.")
+            }
+        } else if !email.isEmpty {
+            Button("Forgot the password?") { sendPasswordReset() }
+                .disabled(busy || !Self.looksLikeEmail(email))
+        }
+        if !creating && useCode {
             TextField("Recovery code", text: $code)
                 .autocorrectionDisabled()
         } else {
-            SecureField(joiningNow ? "Sync passphrase" : "Sync passphrase (at least 8 characters)", text: $passphrase)
-            if !joiningNow {
+            if creating {
+                Text("Sync passphrase").font(.ui(.subheadline)).fontWeight(.heavy)
+                Text("A second secret, different from the password, that encrypts everything before it leaves this device. It never leaves your devices, so nobody, Aurora included, can read your data or reset it for you. You will get a recovery code in case it is ever forgotten.")
+                    .font(.ui(.caption)).foregroundStyle(.secondary)
+            }
+            SecureField(creating ? "Sync passphrase (at least \(Self.minPassphrase) characters)" : "Sync passphrase", text: $passphrase)
+            if creating {
                 SecureField("Passphrase again", text: $confirm)
-                if !confirm.isEmpty && confirm != passphrase {
-                    Text("The passphrases differ.").font(.ui(.caption)).foregroundStyle(.red)
+                if !passphrase.isEmpty && passphrase.count < Self.minPassphrase {
+                    hint("The passphrase needs at least \(Self.minPassphrase) characters.")
+                } else if !confirm.isEmpty && confirm != passphrase {
+                    hint("The passphrases differ.")
+                } else if !passphrase.isEmpty && passphrase == password {
+                    hint("Use a passphrase that isn't the account password.")
                 }
             }
         }
-        if joiningNow {
+        if !creating {
             Button(useCode ? "Use the passphrase instead" : "Forgot the passphrase? Use the recovery code") {
                 useCode.toggle()
             }
         }
         TextField("Call this device", text: $deviceName)
-        Button(busy ? (joiningNow ? "Signing in…" : "Setting up…")
-               : again ? "Sign in again" : joiningNow ? "Join" : "Set up sync") {
-            submit(joining: joiningNow)
+        if creating {
+            policyNote
         }
-        .disabled(busy || !formReady(joining: joiningNow))
+        Button(busy ? (creating ? "Creating your account…" : "Signing in…")
+               : again ? "Sign in again" : creating ? "Create account" : "Sign in") {
+            submit(joining: !creating)
+        }
+        .disabled(busy || !formReady(joining: !creating))
+    }
+
+    /// What the account is, before anyone types into the form.
+    @ViewBuilder
+    private var createIntro: some View {
+        Text("One account for the household, made once, on the first device. It is an email and a password just for Aurora, not your Apple Account, and every other device then signs in with the same email, password and passphrase.")
+            .font(.ui(.caption)).foregroundStyle(.secondary)
+        #if os(tvOS)
+        Text("Easier on an iPhone or iPad: create the account in Aurora there, then choose Sign in here and Sign in with your iPhone.")
+            .font(.ui(.caption)).foregroundStyle(.secondary)
+        #endif
+    }
+
+    /// The privacy policy and the way out, said before the account exists.
+    @ViewBuilder
+    private var policyNote: some View {
+        Text("Creating an account stores its email address with Google Firebase, which runs sync. You can delete the account, and everything it keeps on the server, from here at any time.")
+            .font(.ui(.caption)).foregroundStyle(.secondary)
+        #if os(tvOS)
+        // A TV has no browser to open it in.
+        Text("Privacy policy: github.com/noahklimczuk/iptv-player, apple/AppStore/PRIVACY_POLICY.md")
+            .font(.ui(.caption)).foregroundStyle(.secondary)
+        #else
+        Link("Privacy policy", destination: Self.privacyPolicy)
+            .font(.ui(.caption))
+        #endif
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text).font(.ui(.caption)).foregroundStyle(.red)
+    }
+
+    /// Enough to catch a typo before Firebase does; Firebase has the last word.
+    private static func looksLikeEmail(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard let at = t.firstIndex(of: "@"), at != t.startIndex else { return false }
+        let domain = t[t.index(after: at)...]
+        return domain.contains(".") && !domain.hasPrefix(".") && !domain.hasSuffix(".") && !t.contains(" ")
     }
 
     private func formReady(joining: Bool) -> Bool {
         guard !email.isEmpty, !password.isEmpty, !deviceName.isEmpty else { return false }
         if joining { return useCode ? !code.isEmpty : !passphrase.isEmpty }
-        return passphrase.count >= 8 && passphrase == confirm
+        return Self.looksLikeEmail(email)
+            && password.count >= Self.minPassword && password == confirmPassword
+            && passphrase.count >= Self.minPassphrase && passphrase == confirm
+            && passphrase != password
     }
 
     private func submit(joining: Bool) {
         let (email, password, passphrase, code, device, useCode) =
-            (self.email, self.password, self.passphrase, self.code, self.deviceName, self.useCode)
-        run(joining ? "Could not sign in" : "Could not set up sync") { core in
+            (self.email.trimmingCharacters(in: .whitespaces), self.password, self.passphrase,
+             self.code, self.deviceName, self.useCode)
+        run(joining ? "Could not sign in" : "Could not create the account") { core in
             let joined = joining
                 ? try core.syncSignIn(email: email, password: password,
                                       passphrase: useCode ? nil : passphrase,
@@ -261,9 +366,20 @@ struct SyncSection: View {
                 ?? (joined.problem == nil ? "Signed in." : "Signed in. The first sync will finish when the service can be reached.")
         }
         self.password = ""
+        self.confirmPassword = ""
         self.passphrase = ""
         self.confirm = ""
         self.code = ""
+    }
+
+    /// Firebase emails a link to choose a new password. The passphrase is untouched:
+    /// it is not the password, and nobody can reset it.
+    private func sendPasswordReset() {
+        let email = self.email.trimmingCharacters(in: .whitespaces)
+        run("Could not send the email") { core in
+            try core.syncSendPasswordReset(email: email)
+            return "If \(email) has an Aurora sync account, an email is on its way with a link to choose a new password. Your sync passphrase stays the same."
+        }
     }
 
     // MARK: The recovery code
