@@ -154,7 +154,7 @@ Paste into *Submission options → Notes for certification*:
 >
 > https://raw.githubusercontent.com/noahklimczuk/iptv-player/main/docs/store/reviewer-demo.m3u
 >
-> It lists public test streams from Apple, Mux and Akamai, which are free to play. No
+> It lists public test streams from Apple and Mux, which are free to play. No
 > account or sign-in is needed for anything except the optional sync feature (Settings →
 > Account and sync), which can be tested by creating an account with any email address.
 >
