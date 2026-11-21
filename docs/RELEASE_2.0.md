@@ -34,17 +34,17 @@ stranger needs on top of it:
 
 | | Item | Status |
 |---|---|---|
-| 2a | **A real "Create account" section**: confirm the password, show the rules for it, agree to the privacy policy, explain the sync passphrase (it encrypts everything and cannot be recovered by anyone). | Next |
-| 2b | **Verify the email address** after sign-up, and say so until it is verified. | Next |
-| 2c | **Forgot password** — a reset email from the sign-in form. | Next |
-| 2d | **Delete account** in the app: the household's data in Firestore, then the Firebase user. Apple requires it of any app that lets people create accounts (guideline 5.1.1(v)); it is right on Windows too. | Next |
+| 2a | **A real "Create account" section**: Settings → **Account and sync**, its own entry in the Settings index. Create account / Sign in tabs; the password twice and at least eight characters; a passphrase that must differ from the password; agreement to the privacy policy (opened by the host from a constant URL). | Done |
+| 2b | **Verify the email address**: a verification email goes out at sign-up, and the signed-in card asks for confirmation until Firebase says it is verified, with "send again". | Done |
+| 2c | **Forgot password** — a reset email from the sign-in form, worded the same whether or not the address has an account. | Done |
+| 2d | **Delete account** in the app, behind the account password: every record and the vault in Firestore, then the Firebase user, then this device signs out with its library intact. A fresh sign-in does the deleting, because Firebase refuses a refreshed token for it. Apple requires this of any app that creates accounts (guideline 5.1.1(v)); the shared crate has it, so the Apple side only needs a button. | Done |
 | 2e | **Firebase plan.** The project is on Spark. Its free Firestore quota (50k reads a day) is shared by every user of the app; a public release needs Blaze with a budget alert, and the security rules reviewed for multi-tenant use. | Yours |
 
 ## 3. Privacy and policy
 
 | | Item | Status |
 |---|---|---|
-| 3a | **Privacy policy for the public.** `docs/PRIVACY.md` is accurate but written for one user; it needs accounts, Firebase, deletion and contact details, at a stable URL for both store listings. | Open |
+| 3a | **Privacy policy for the public.** `docs/PRIVACY.md` now covers the account, the two emails, deletion and a contact route. Still wanted: a stable URL of its own (GitHub Pages) rather than a link into the repository. | Partly done |
 | 3b | **The compiled-in Gemini key.** Anyone with the binary can extract it and spend on it. Before 2.0: restrict the key to the Generative Language API with a daily quota in Google Cloud, or move the assistant to a key the user supplies. | Yours (decision) |
 | 3c | **Content policy.** Aurora ships with no channels, playlists or provider; the listing must say it plays the user's own subscription. Store reviewers test this — a demo M3U of legal streams in the reviewer notes avoids a rejection. | Open |
 | 3d | **Age rating** (IARC questionnaire in Partner Center). Parental controls exist; say so. | Yours |
