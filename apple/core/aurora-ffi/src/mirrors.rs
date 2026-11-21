@@ -541,9 +541,13 @@ fn gemini_keeps_its_key_cache_and_switch_where_windows_does() {
         app_const("gemini.rs", "HISTORY_FOR_PROMPT"),
         HISTORY_FOR_PROMPT.to_string()
     );
+    // A departure, not drift: Windows is on out of the box, and Apple asks first
+    // (App Store guideline 5.1.2(i), `AIConsent.swift`). Fails if Windows changes.
+    assert_eq!(app_const("gemini.rs", "DEFAULT_ENABLED"), "true");
     assert_eq!(
-        app_const("gemini.rs", "DEFAULT_ENABLED"),
-        DEFAULT_ENABLED.to_string()
+        DEFAULT_ENABLED.to_string(),
+        "false",
+        "Apple asks before anything goes to Gemini"
     );
     assert_eq!(app_const("library.rs", "RAIL_SIZE"), RAIL_SIZE.to_string());
     // The fingerprint is Windows' own, so a cache written by either reads the same.

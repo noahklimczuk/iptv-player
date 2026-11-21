@@ -48,8 +48,17 @@ pub(crate) const CACHE_KEY: &str = "gemini.cache";
 /// Whether these features may talk to Google at all.
 pub(crate) const ENABLED_KEY: &str = "gemini.enabled";
 
-/// On, because a release ships a key and the rail is meant to work out of the box.
-pub(crate) const DEFAULT_ENABLED: bool = true;
+/// Off on Apple, where Windows has it on: the App Store requires asking before personal
+/// data goes to a third-party AI (guideline 5.1.2(i)), so the viewer turns it on from
+/// Home's card, Ask Aurora or Settings (`AIConsent.swift`). `mirrors.rs` checks that
+/// Windows' default is still on, so this stays a known departure.
+pub(crate) const DEFAULT_ENABLED: bool = false;
+
+/// That this device's viewer agreed, here. `gemini.enabled` syncs with the household
+/// (`aurora_core::sync_settings`: Personal), so a household that turned it on on
+/// Windows would otherwise switch it on here unasked. This key is not in that table,
+/// so it stays on the device: both have to be on. Apple only.
+pub(crate) const CONSENT_KEY: &str = "gemini.consentedHere";
 
 /// Cards on the rail (Windows' `library::RAIL_SIZE`).
 pub(crate) const RAIL_SIZE: usize = 24;
@@ -213,7 +222,9 @@ fn resolve(
 
 impl AuroraCore {
     fn gemini_enabled(&self) -> bool {
-        settings::get_or(&self.db.lock(), ENABLED_KEY, DEFAULT_ENABLED).unwrap_or(DEFAULT_ENABLED)
+        let db = self.db.lock();
+        settings::get_or(&db, ENABLED_KEY, DEFAULT_ENABLED).unwrap_or(DEFAULT_ENABLED)
+            && settings::get_or(&db, CONSENT_KEY, false).unwrap_or(false)
     }
 
     /// The key to use, preferring the viewer's own; none when switched off.
@@ -344,7 +355,11 @@ impl AuroraCore {
     pub fn set_gemini_enabled(&self, enabled: bool) -> Result<()> {
         // Behind Settings: refused while they are locked (F-38, `require_settings`).
         crate::parental::require_settings(&self.db.lock())?;
-        settings::set(&self.db.lock(), ENABLED_KEY, &enabled)?;
+        {
+            let db = self.db.lock();
+            settings::set(&db, ENABLED_KEY, &enabled)?;
+            settings::set(&db, CONSENT_KEY, &enabled)?;
+        }
         if !enabled {
             self.drop_gemini_cache();
         }
@@ -565,6 +580,10 @@ mod tests {
     fn the_viewers_key_is_saved_used_and_cleared_and_the_switch_beats_it() {
         let (core, _dir) = core();
         core.set_gemini_key("  mine  ".into()).unwrap();
+        // Off until the viewer agrees (`DEFAULT_ENABLED`): a key alone sends nothing.
+        assert_eq!(core.gemini_key(), None);
+        assert!(!core.gemini_status(1).unwrap().enabled);
+        core.set_gemini_enabled(true).unwrap();
         assert_eq!(core.gemini_key().as_deref(), Some("mine"));
         let status = core.gemini_status(1).unwrap();
         assert!(status.has_key && status.enabled && !status.key_is_built_in);
@@ -582,6 +601,23 @@ mod tests {
         core.set_gemini_enabled(true).unwrap();
         core.set_gemini_key(String::new()).unwrap();
         assert_eq!(core.gemini_key().as_deref(), built_in());
+    }
+
+    #[test]
+    fn switched_on_by_another_device_it_stays_off_until_this_one_agrees() {
+        let (core, _dir) = core();
+        core.set_gemini_key("mine".into()).unwrap();
+        // What a sync from a Windows household that has it on writes.
+        settings::set(&core.db.lock(), ENABLED_KEY, &true).unwrap();
+        assert!(!core.gemini_status(1).unwrap().enabled);
+        assert_eq!(core.gemini_key(), None, "nothing goes to Google");
+        assert_eq!(
+            aurora_core::sync_settings::classify(CONSENT_KEY),
+            None,
+            "the consent never leaves this device"
+        );
+        core.set_gemini_enabled(true).unwrap();
+        assert_eq!(core.gemini_key().as_deref(), Some("mine"));
     }
 
     // Windows' own tests of the pure parts, kept word for word in what they assert.

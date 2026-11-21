@@ -1,0 +1,20 @@
+#EXTM3U
+# Aurora TV's demo playlist, for App Review and the store screenshots.
+#
+# Every stream here is a public test stream its owner publishes for players to test
+# with, or an open film under Creative Commons. No broadcaster's channel and no
+# copyrighted artwork, so it is safe to show in screenshots and to hand to App Review.
+# Check each one still plays before a submission: test streams do move.
+#
+# Add it in Aurora with: Settings > Providers > Add another provider > paste
+#   https://raw.githubusercontent.com/noahklimczuk/iptv-player/main/apple/AppStore/review-playlist.m3u
+#EXTINF:-1 tvg-id="aurora.live.akamai" tvg-chno="1" group-title="Live",Live test channel
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
+#EXTINF:-1 tvg-id="aurora.apple.bipbop" tvg-chno="2" group-title="Test cards",Apple test pattern
+https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+#EXTINF:-1 tvg-id="aurora.apple.bipbop169" tvg-chno="3" group-title="Test cards",Apple HLS sample
+https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8
+#EXTINF:-1 tvg-id="aurora.open.bbb" tvg-chno="4" group-title="Open films",Big Buck Bunny (CC BY 3.0, Blender Foundation)
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+#EXTINF:-1 tvg-id="aurora.open.tos" tvg-chno="5" group-title="Open films",Tears of Steel (CC BY 3.0, Blender Foundation)
+https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8

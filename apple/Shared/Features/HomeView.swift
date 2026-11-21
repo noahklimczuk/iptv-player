@@ -23,6 +23,8 @@ struct HomeView: View {
     @State private var hidden: Set<String> = []
     @State private var askedForSignals = false
     @State private var ai: Rail?
+    /// Asking before anything goes to Gemini (`AIConsentCard`): until it is answered.
+    @State private var offerAI = false
     @State private var movie: Movie?
     @State private var series: Int64?
     /// The billboard's six, kept for the visit (Windows' `decidedOnOpen`).
@@ -49,6 +51,8 @@ struct HomeView: View {
                 }
                 .task(id: AiKey(library: model.libraryVersion, profile: model.profileId,
                                 version: model.aiVersion)) {
+                    let status = await model.geminiStatus()
+                    offerAI = !AIConsentCard.wasAnswered && status.map { !$0.enabled } == true
                     ai = await model.aiPicks().flatMap(Self.rail)
                 }
                 .sheet(item: $movie) { MovieDetail(movie: $0).auroraAppearance() }
@@ -82,6 +86,10 @@ struct HomeView: View {
                         bento(rails)
                             // In line with the rails' headings.
                             .padding(.horizontal)
+                        if offerAI {
+                            AIConsentCard { offerAI = false }
+                                .padding(.horizontal)
+                        }
                         ForEach(shown, id: \.id) { rail in
                             RailRow(rail: rail, hidden: hidden, open: open,
                                     dismiss: dismissAction(for: rail),
