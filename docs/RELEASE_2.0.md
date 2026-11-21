@@ -46,7 +46,7 @@ stranger needs on top of it:
 |---|---|---|
 | 3a | **Privacy policy for the public.** `docs/PRIVACY.md` now covers the account, the two emails, deletion and a contact route. Still wanted: a stable URL of its own (GitHub Pages) rather than a link into the repository. | Partly done |
 | 3b | **The compiled-in Gemini key.** Anyone with the binary can extract it and spend on it. Before 2.0: restrict the key to the Generative Language API with a daily quota in Google Cloud, or move the assistant to a key the user supplies. | Yours (decision) |
-| 3c | **Content policy.** Aurora ships with no channels, playlists or provider; the listing must say it plays the user's own subscription. Store reviewers test this — a demo M3U of legal streams in the reviewer notes avoids a rejection. | Open |
+| 3c | **Content policy.** Aurora ships with no channels, playlists or provider; the listing must say it plays the user's own subscription. Store reviewers test this — a demo M3U of legal streams in the reviewer notes avoids a rejection. `docs/store/microsoft-store.md` says so up front, and `docs/store/reviewer-demo.m3u` holds three public test streams. | Done |
 | 3d | **Age rating** (IARC questionnaire in Partner Center). Parental controls exist; say so. | Yours |
 
 ## 4. Product polish for 2.0
@@ -57,7 +57,7 @@ From the roadmap's "not built" list, the two a public user will miss first:
 |---|---|---|
 | 4a | **Media keys and the Windows media overlay** (System Media Transport Controls): play/pause, next/previous channel, now-playing title and artwork. | Open |
 | 4b | **Backup and restore** of settings, favourites and profiles to a file, for people who do not use sync. | Open |
-| 4c | **First-run setup offers sync** — sign in or create an account as the last step of the wizard. | Open |
+| 4c | **First-run setup offers sync** — the last step of the wizard offers a free account when sync is available and nobody is signed in, and opens Settings at **Account and sync**. Not offered when adding a second provider. | Done |
 | 4d | Install, upgrade and uninstall verified on a clean Windows account (`AUDIT/release-checklist.md` item 5). | Open |
 
 Not in 2.0, by choice: Stalker portals, drag-to-reorder, custom logos, named favourite
@@ -67,7 +67,7 @@ lists, the user-defined rules engine, tray.
 
 | | Item | Status |
 |---|---|---|
-| 5a | Microsoft Store listing text, feature list, search terms, reviewer notes — `docs/store/microsoft-store.md`. | Open |
+| 5a | Microsoft Store listing text, feature list, search terms, reviewer notes — `docs/store/microsoft-store.md`. | Done |
 | 5b | Screenshots at 1920×1080 from the e2e journeys (`screenshots/`), without any provider's logos or channel names. | Open |
 | 5c | **Apple App Store** (Apple agent): note that the project is GPL-3.0, and the GPL's terms and the App Store's usage rules are widely held to conflict (VLC was withdrawn in 2011 over exactly this). Every copyright holder can grant an App Store exception; that needs deciding before an Apple submission. | Yours (decision) |
 
