@@ -4,7 +4,7 @@
  */
 import type {
   CatalogItem, ChatItem, ChatMessage, Channel, CommandArgs, CommandName, CommandResult,
-  ParentalClockEvent,
+  MediaButton, ParentalClockEvent,
   DetectedSource,
   ArtworkCacheStatus, ArtworkPrefetchReport, CreditEntry, DvrStorage,
   MetadataReport, MetadataStatus, MosaicBudget, MosaicLayout, MosaicRect,
@@ -368,6 +368,19 @@ function timeLeft(): number | null {
     .filter((m): m is number => m != null);
   if (limits.length === 0 || mockMasterPin == null || mockUnlockedUntil > nowSecs()) return null;
   return Math.min(...limits) * 60 - (mockWatched.get(watching?.id ?? 0) ?? 0);
+}
+
+const mediaListeners = new Set<(b: MediaButton) => void>();
+
+/** The host's `media.button` event. */
+export function onMediaButton(fn: (b: MediaButton) => void): () => void {
+  mediaListeners.add(fn);
+  return () => mediaListeners.delete(fn);
+}
+
+/** Press a media key, as Windows would hand it to the host. */
+export function pressMediaMock(b: MediaButton): void {
+  for (const fn of mediaListeners) fn(b);
 }
 
 const clockListeners = new Set<(e: ParentalClockEvent) => void>();

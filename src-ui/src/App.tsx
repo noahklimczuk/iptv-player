@@ -55,7 +55,7 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { saveProgress, useWatchProgress } from '@/hooks/useWatchProgress';
 import { useHotkeys } from '@/hooks/useHotkeys';
 import { useZapper } from '@/hooks/useZapper';
-import { invoke, onMosaicState, onParentalClock, onSleepFired } from '@/ipc';
+import { invoke, onMediaButton, onMosaicState, onParentalClock, onSleepFired } from '@/ipc';
 import { notify, report } from '@/lib/errors';
 import { installScrollingFlag } from '@/lib/scrolling';
 import { useMarks } from '@/state/marks';
@@ -504,6 +504,38 @@ export default function App() {
   closePlayerNow.current = closePlayer;
   useEffect(() => onSleepFired((d) => {
     if (d.action === 'stopPlayback') closePlayerNow.current();
+  }), []);
+
+  /**
+   * A media key, a headset button or the Windows media overlay (`media_keys.rs`).
+   *
+   * Windows sends play and pause rather than a toggle, from what it was last told, so
+   * each is done only when it would change something: a second press arriving before
+   * the state caught up does not undo the first. Loading counts as playing, as it does
+   * for Space (C6). Next and previous are channel up and down, and only on live TV.
+   */
+  const zapperNow = useRef(zapper);
+  zapperNow.current = zapper;
+  useEffect(() => onMediaButton((b) => {
+    const p = useUi.getState().player;
+    if (!p || p.status === 'idle' || p.status === 'error') return;
+    switch (b.button) {
+      case 'play':
+        if (p.status === 'paused') control.resume();
+        break;
+      case 'pause':
+        if (p.status !== 'paused') control.pause();
+        break;
+      case 'next':
+        if (p.isLive) zapperNow.current.step(1);
+        break;
+      case 'previous':
+        if (p.isLive) zapperNow.current.step(-1);
+        break;
+      case 'seek':
+        if (!p.isLive) control.seekTo(b.positionSecs);
+        break;
+    }
   }), []);
 
   // The daily limit (F-37): the host keeps the time and has already stopped playback

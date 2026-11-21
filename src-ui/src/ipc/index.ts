@@ -219,6 +219,15 @@ export function onParentalClock(fn: (e: Events['parental.clock']) => void): () =
   return subscribe<Events['parental.clock']>('parental.clock', fn);
 }
 
+/**
+ * A media key, a headset button or the Windows media overlay. The page does with it what
+ * its own key for the same thing does.
+ */
+export function onMediaButton(fn: (b: Events['media.button']) => void): () => void {
+  if (!isNativeHost()) return viaMock((m) => m.onMediaButton, fn);
+  return subscribe<Events['media.button']>('media.button', fn);
+}
+
 /** How far the update installer has got (docs/DECISIONS.md D17). */
 export function onUpdateDownload(fn: (d: Events['update.download']) => void): () => void {
   if (!isNativeHost()) return viaMock((m) => m.onUpdateDownload, fn);

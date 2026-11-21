@@ -59,6 +59,8 @@ function installMockHooks(m: Awaited<ReturnType<typeof loadMock>>): void {
     m.setPlayerErrorMock;
   // …and hold it opening or refilling, which is when the spinner is meant to show (C24).
   (window as unknown as { __auroraPlayerStatus?: unknown }).__auroraPlayerStatus = m.setPlayerStatusMock;
+  // …and press a media key, which only Windows can do for real.
+  (window as unknown as { __auroraMediaKey?: unknown }).__auroraMediaKey = m.pressMediaMock;
   // How long the profile watching has watched today, as the host's heartbeat counts it (F-37).
   (window as unknown as { __auroraWatched?: unknown }).__auroraWatched = m.setWatchedTodayMock;
   // …and hold back the first frame, which is when the window used to turn see-through.
