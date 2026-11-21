@@ -175,33 +175,8 @@ pub enum Verdict {
 /// Something that is not in the library at all is `Allowed`: the resolver is the one that
 /// can say it has gone, in words that help.
 pub fn check(conn: &Connection, target: Target, now: i64) -> Result<Verdict> {
-    let (kind, table, id) = match target {
-        Target::Channel(id) => (Kind::Live, "channels", id),
-        Target::Recording(id) => {
-            let channel: Option<i64> = conn
-                .query_row(
-                    "SELECT channel_id FROM recordings WHERE id = ?1",
-                    [id],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match channel {
-                Some(channel) => (Kind::Live, "channels", channel),
-                None => return Ok(Verdict::Allowed),
-            }
-        }
-        Target::Movie(id) => (Kind::Movies, "movies", id),
-        Target::Episode(id) => {
-            let series: Option<i64> = conn
-                .query_row("SELECT series_id FROM episodes WHERE id = ?1", [id], |r| {
-                    r.get(0)
-                })
-                .optional()?;
-            match series {
-                Some(series) => (Kind::Series, "series", series),
-                None => return Ok(Verdict::Allowed),
-            }
-        }
+    let Some((kind, table, id)) = judged_by(conn, target)? else {
+        return Ok(Verdict::Allowed);
     };
     let (certification, rated) = match kind {
         Kind::Live => ("NULL".to_string(), 0),
@@ -229,6 +204,67 @@ pub fn check(conn: &Connection, target: Target, now: i64) -> Result<Verdict> {
         Some((true, true, false)) => Verdict::Locked,
         Some(_) => Verdict::Allowed,
     })
+}
+
+/// Whether what `target` is should be kept off screens anybody can read: the Windows
+/// media overlay and the lock screen, which show what is playing to whoever walks past.
+///
+/// True for something a parent has locked behind the PIN -- whether or not the PIN has
+/// been entered just now, since the lock screen outlasts the unlock -- and for anything
+/// filed in an adult category, locked or not. Something not in the library is not.
+pub fn is_private(conn: &Connection, target: Target) -> Result<bool> {
+    let Some((kind, table, id)) = judged_by(conn, target)? else {
+        return Ok(false);
+    };
+    let row: Option<(Option<String>, bool)> = conn
+        .query_row(
+            &format!(
+                "SELECT {group},
+                        EXISTS (SELECT 1 FROM parental_locks pl WHERE {locks})
+                          AND (SELECT master_pin FROM parental WHERE id = 1) IS NOT NULL
+                   FROM {table} x
+                  WHERE x.id = ?1",
+                group = group_sql(kind, "x"),
+                locks = lock_match_sql(kind, "x"),
+            ),
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(row.is_some_and(|(group, locked)| locked || parental::looks_adult(group.as_deref())))
+}
+
+/// The row `target` is judged by -- a recording by its channel, an episode by its show --
+/// as its kind, table and id. `None` when that row is not in the library.
+fn judged_by(conn: &Connection, target: Target) -> Result<Option<(Kind, &'static str, i64)>> {
+    Ok(Some(match target {
+        Target::Channel(id) => (Kind::Live, "channels", id),
+        Target::Recording(id) => {
+            let channel: Option<i64> = conn
+                .query_row(
+                    "SELECT channel_id FROM recordings WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match channel {
+                Some(channel) => (Kind::Live, "channels", channel),
+                None => return Ok(None),
+            }
+        }
+        Target::Movie(id) => (Kind::Movies, "movies", id),
+        Target::Episode(id) => {
+            let series: Option<i64> = conn
+                .query_row("SELECT series_id FROM episodes WHERE id = ?1", [id], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            match series {
+                Some(series) => (Kind::Series, "series", series),
+                None => return Ok(None),
+            }
+        }
+    }))
 }
 
 /* ── Daily viewing time ──────────────────────────────────────────────────── */
@@ -947,6 +983,33 @@ mod tests {
             Verdict::Allowed
         );
         assert_eq!(ids(&conn, Kind::Live), [10, 12]);
+    }
+
+    #[test]
+    fn locked_and_adult_titles_stay_private_even_while_unlocked() {
+        let conn = library();
+        set_lock(&conn, LockKind::Channel, "10", true).unwrap();
+        set_lock(&conn, LockKind::Category, "Kids", true).unwrap();
+
+        assert!(is_private(&conn, Target::Channel(10)).unwrap());
+        // The PIN opens it for a while; the lock screen is still somebody else's to read.
+        unlock(&conn, NOW).unwrap();
+        assert!(is_private(&conn, Target::Channel(10)).unwrap());
+        // An episode by its show, a category lock across kinds.
+        assert!(is_private(&conn, Target::Episode(1)).unwrap());
+        assert!(is_private(&conn, Target::Channel(12)).unwrap());
+        // Adult categories, with no lock on them at all.
+        assert!(is_private(&conn, Target::Channel(11)).unwrap());
+        assert!(is_private(&conn, Target::Movie(4)).unwrap());
+
+        assert!(!is_private(&conn, Target::Movie(1)).unwrap());
+        assert!(!is_private(&conn, Target::Episode(2)).unwrap());
+        assert!(!is_private(&conn, Target::Movie(99)).unwrap());
+
+        // A lock with no PIN to open it with is not a lock.
+        profiles::set_master_pin(&conn, None, 0).unwrap();
+        assert!(!is_private(&conn, Target::Channel(10)).unwrap());
+        assert!(is_private(&conn, Target::Channel(11)).unwrap());
     }
 
     #[test]
