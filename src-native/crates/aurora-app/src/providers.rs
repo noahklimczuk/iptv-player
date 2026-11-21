@@ -1098,8 +1098,10 @@ pub fn refresh_provider(
     drop(db);
 
     // Records from other devices that named something this library did not have yet
-    // are parked; an import is when they may finally have somewhere to go.
+    // are parked; an import is when they may finally have somewhere to go. The same for
+    // a restored backup's, which wait whether or not anybody uses sync.
     services.sync.wake();
+    crate::backup::retry_parked(services);
 
     // Posters, cast and ratings for everything just imported. Enrichment was only ever
     // started by a button in Settings, so a library imported through the wizard was a

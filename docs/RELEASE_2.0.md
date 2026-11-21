@@ -56,7 +56,7 @@ From the roadmap's "not built" list, the two a public user will miss first:
 | | Item | Status |
 |---|---|---|
 | 4a | **Media keys and the Windows media overlay** (System Media Transport Controls): play/pause, next/previous channel, now-playing title and artwork. | Open |
-| 4b | **Backup and restore** of settings, favourites and profiles to a file, for people who do not use sync. | Open |
+| 4b | **Backup and restore** of settings, favourites and profiles to a file, for people who do not use sync. Settings → Account and sync → Backup saves everything sync would carry (`aurora_sync::backup`) to `Documents\Aurora TV\Backups`, never a password; restoring shows what a file holds first, overwrites only what it names, and what names a channel or title not imported yet waits in `restore_pending` until the next refresh. Behind the Settings lock and the parental PIN. | Done |
 | 4c | **First-run setup offers sync** — the last step of the wizard offers a free account when sync is available and nobody is signed in, and opens Settings at **Account and sync**. Not offered when adding a second provider. | Done |
 | 4d | Install, upgrade and uninstall verified on a clean Windows account (`AUDIT/release-checklist.md` item 5). | Open |
 

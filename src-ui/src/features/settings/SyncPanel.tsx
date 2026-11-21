@@ -24,8 +24,8 @@ import { invoke } from '@/ipc';
 /** How often the panel re-reads the status while it is open and signed in. */
 const POLL_MS = 5_000;
 
-const MUTED = { color: 'var(--text-muted)', fontSize: 'var(--fs-sm)', lineHeight: 1.5 } as const;
-const CARD = {
+export const MUTED = { color: 'var(--text-muted)', fontSize: 'var(--fs-sm)', lineHeight: 1.5 } as const;
+export const CARD = {
   display: 'grid', gap: 'var(--sp-2)', padding: 'var(--sp-3)', borderRadius: 'var(--r-md)',
   background: 'var(--surface)', border: '1px solid var(--border)',
 } as const;
@@ -81,7 +81,7 @@ function Field(props: {
   );
 }
 
-function Message({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+export function Message({ ok, children }: { ok: boolean; children: React.ReactNode }) {
   return (
     <div
       role={ok ? 'status' : 'alert'}
