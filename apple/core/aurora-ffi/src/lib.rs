@@ -257,7 +257,7 @@ pub(crate) mod testing {
     /// derivation. Opened again on the same folder and Keychain, it is a restart.
     pub(crate) fn core_with_sync(
         dir: &std::path::Path,
-        fb: &aurora_sync::firebase::fake::FakeFirebase,
+        fb: &(impl aurora_sync::firebase::Http + Clone + 'static),
         keychain: Arc<secrets::tests::MemorySecrets>,
     ) -> Arc<AuroraCore> {
         let fb = fb.clone();

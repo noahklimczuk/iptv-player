@@ -6,6 +6,8 @@ import SwiftUI
 struct AssistantView: View {
     @Environment(AppModel.self) private var model
     @State private var status: AssistantStatus?
+    /// Settings → Recommendations' switch, which starts off on Apple until asked.
+    @State private var aiOn: Bool?
     @State private var messages: [ChatMessage] = []
     @State private var draft = ""
     @State private var thinking = false
@@ -44,7 +46,24 @@ struct AssistantView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let status, !status.hasKey {
+        if aiOn == false {
+            // Asking first (`AIConsent.swift`): nothing goes to Google until this is on.
+            VStack(alignment: .leading, spacing: 16) {
+                PageHeading("Ask Aurora")
+                AIConsentText()
+                Button("Turn on Suggestions and the assistant") {
+                    Task {
+                        UserDefaults.standard.set(true, forKey: AIConsentCard.answeredKey)
+                        await model.setGeminiEnabled(true)
+                        await load()
+                    }
+                }
+                .buttonStyle(DaylightButtonStyle(variant: .primary))
+                Spacer()
+            }
+            .padding()
+            .frame(maxWidth: 760, alignment: .leading)
+        } else if let status, !status.hasKey {
             ContentUnavailableView("The assistant needs a key", systemImage: "sparkles",
                                    description: Text("Add a Gemini API key in Settings → Recommendations, and this becomes a conversation about your own library."))
         } else {
@@ -108,6 +127,7 @@ struct AssistantView: View {
     }
 
     private func load() async {
+        aiOn = await model.geminiStatus()?.enabled
         status = await model.assistantStatus()
         messages = await model.assistantHistory()
         // A question handed over by the rail, asked once and only with a key: without

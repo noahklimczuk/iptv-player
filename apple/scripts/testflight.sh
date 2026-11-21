@@ -17,10 +17,11 @@
 # The keys the core compiles in (AURORA_TMDB_KEY and the rest) are read from the
 # environment by build-core.sh, as for any build.
 #
-# Before the first upload, App Store Connect needs the two apps (tv.aurora.mobile and
-# tv.aurora.tv), and the developer account the app group group.tv.aurora.shared; Xcode
-# makes the profiles itself (-allowProvisioningUpdates). Read plan §2.6 on licensing
-# before inviting anyone outside the household.
+# Before the first upload, App Store Connect needs one app, tv.aurora.app, with both
+# iOS and tvOS platforms (universal purchase: AURORA_BUNDLE_ID in project.yml), and the
+# developer account the app group group.tv.aurora.shared; Xcode makes the profiles
+# itself (-allowProvisioningUpdates). AppStore/RELEASE_CHECKLIST.md has every step,
+# licensing (plan §2.6) first.
 #
 # Only touches apple/. A CI job runs it on a macOS runner after build-core.sh's
 # prerequisites (Rust, XcodeGen) are installed; README "Releasing" says how.
