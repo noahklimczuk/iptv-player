@@ -1953,6 +1953,16 @@ const mockSyncAccounts = new Map<string, { password: string; passphrase: string;
 let mockSync: {
   email: string; deviceName: string; lastSyncAt: number | null; pending: number;
 } | null = null;
+/**
+ * `?syncSignInAgain` — this device is in the household, but the account wants its
+ * password again (changed on another device), until a sign-in succeeds.
+ */
+let mockNeedsPassword =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('syncSignInAgain');
+if (mockNeedsPassword) {
+  mockSync = { email: 'home@example.com', deviceName: 'LIVING-ROOM-PC', lastSyncAt: null, pending: 0 };
+}
 
 const mockRecoveryCode = () =>
   Array.from({ length: 11 }, () =>
@@ -1974,9 +1984,11 @@ function mockSyncStatus(): SyncStatus {
     pending: mockSync?.pending ?? 0,
     parked: 0,
     lastSyncAt: mockSync?.lastSyncAt ?? null,
-    problem: mockSync && SYNC_OFFLINE
-      ? { kind: 'offline', message: 'no network' }
-      : null,
+    problem: mockSync && mockNeedsPassword
+      ? { kind: 'signInAgain' }
+      : mockSync && SYNC_OFFLINE
+        ? { kind: 'offline', message: 'no network' }
+        : null,
     secretsPersistent: false,
     usage: mockSync ? { reads: 46, writes: 43 } : { reads: 0, writes: 0 },
     thrifty: false,
@@ -3370,6 +3382,7 @@ const handlers: { [K in CommandName]: Handler<K> } = {
         "That passphrase does not match the one this household's sync was set up with",
       );
     }
+    mockNeedsPassword = false;
     return mockSyncJoin(email, deviceName, null);
   },
   'sync.now': () => {
