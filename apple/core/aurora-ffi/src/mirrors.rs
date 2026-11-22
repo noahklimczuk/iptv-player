@@ -1384,6 +1384,81 @@ fn setup_offers_an_account_as_windows_does() {
     }
 }
 
+/// Sync is set up in Windows' step-by-step wizard (`SyncSetupWizard.tsx`): the same steps,
+/// choices and words, the same strength guide, and a refusal sent back to the same step.
+/// The first-run wizard's "Set up sync" opens it straight away, as `?setup=sync` does.
+#[test]
+fn sync_setup_is_windows_wizard() {
+    let windows = ui_src("features/settings/SyncSetupWizard.tsx");
+    let features = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features");
+    let swift = std::fs::read_to_string(features.join("SyncSetupWizard.swift")).unwrap();
+    for words in [
+        "Sync your devices",
+        "Create your Aurora account",
+        "Sign in to your household",
+        "Choose a sync passphrase",
+        "About this device",
+        "Save your recovery code",
+        "Confirm your email address",
+        "Sync is on",
+        "This is my first device",
+        "I already use sync on another device",
+        "Why a second secret?",
+        "Forgot the passphrase? Use the recovery code",
+        "Show the passphrase",
+        "I have saved my recovery code somewhere safe",
+        "Adding another device",
+        "Fair: longer is safer. Three or four words is easy to remember",
+    ] {
+        assert!(
+            windows.contains(words),
+            "Windows' wizard no longer says {words:?}"
+        );
+        assert!(swift.contains(words), "SyncSetupWizard must say {words:?}");
+    }
+    // The strength guide's thresholds, written the same way in both.
+    for rule in [
+        "chars >= 20 || (words >= 4 && chars >= 16)",
+        "chars >= 12 || words >= 3",
+    ] {
+        assert!(
+            windows.contains(rule),
+            "Windows' passphraseStrength changed: {rule:?}"
+        );
+        assert!(
+            swift.contains(rule),
+            "SyncSetupWizard.strength must use {rule:?}"
+        );
+    }
+    // Which step a refusal goes back to.
+    for word in [
+        "passphrase",
+        "recovery code",
+        "email",
+        "password",
+        "account",
+    ] {
+        assert!(windows.contains(&format!("m.includes('{word}')")));
+        assert!(swift.contains(&format!("m.contains(\"{word}\")")));
+    }
+    let setup = ui_src("features/setup/SetupWizard.tsx");
+    assert!(
+        setup.contains("&setup=sync"),
+        "Windows' setup no longer opens the wizard"
+    );
+    let root = std::fs::read_to_string(features.join("RootView.swift")).unwrap();
+    assert!(root.contains("model.syncSetupRequested = true"));
+    let panel = ui_src("features/settings/SyncPanel.tsx");
+    let section = std::fs::read_to_string(features.join("SyncSection.swift")).unwrap();
+    for words in [
+        "Set up sync",
+        "The sync account needs its password again. Nothing on this device has been lost.",
+    ] {
+        assert!(panel.contains(words), "SyncPanel no longer says {words:?}");
+        assert!(section.contains(words), "SyncSection must say {words:?}");
+    }
+}
+
 /// Settings lists Windows' sections in Windows' order, less the two an Apple device has
 /// no use for (apple/README.md): a new Windows section, or a reordering, fails here.
 #[test]
