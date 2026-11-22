@@ -50,6 +50,7 @@ struct AuroraIcon: View {
     case alert
     case sun
     case moon
+    case more
 
         /// The path, in Windows' 24-point view box.
         var path: String {
@@ -98,6 +99,8 @@ struct AuroraIcon: View {
         case .alert: "M12 9v5M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"
         case .sun: "M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"
         case .moon: "M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"
+        // Apple's own: the phone's More tab (Windows' window has room for every tab).
+        case .more: "M5 10.6a1.4 1.4 0 100 2.8 1.4 1.4 0 000-2.8zM12 10.6a1.4 1.4 0 100 2.8 1.4 1.4 0 000-2.8zM19 10.6a1.4 1.4 0 100 2.8 1.4 1.4 0 000-2.8z"
             }
         }
     }

@@ -145,7 +145,17 @@ final class MPVPlayerController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // The layer's frame and its pixels together, unanimated. A CAMetalLayer does not
+        // resize its drawable when its frame changes, and mpv draws into the drawable:
+        // turned sideways on a phone, the picture stayed portrait-sized in a corner.
+        let scale = view.window?.screen.scale ?? view.traitCollection.displayScale
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         metalLayer.frame = view.bounds
+        metalLayer.contentsScale = scale
+        metalLayer.drawableSize = CGSize(width: (view.bounds.width * scale).rounded(),
+                                         height: (view.bounds.height * scale).rounded())
+        CATransaction.commit()
     }
 
     deinit {

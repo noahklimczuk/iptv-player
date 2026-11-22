@@ -604,8 +604,7 @@ private struct SyncOffer: View {
         Group {
             if offer, let onSync {
                 Button("Watching on more than one device? Create a free account to sync", action: onSync)
-                    .buttonStyle(.daylight(.ghost))
-                    .multilineTextAlignment(.center)
+                    .buttonStyle(.daylight(.ghost, wraps: true))
                     .frame(maxWidth: .infinity)
             } else {
                 // Something to hang the check on: an empty view never runs its task.
