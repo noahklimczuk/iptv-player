@@ -36,6 +36,9 @@ final class MPVPlayerController: UIViewController {
 
     private let metalLayer = MetalLayer()
     private var mpv: OpaquePointer?
+    /// What mpv's wakeup callback holds: this controller, weakly. Retained for mpv until
+    /// the handle is destroyed.
+    private var sink: Unmanaged<WakeupSink>?
     /// mpv's events are drained here, and all session state below is touched only here.
     private let queue = DispatchQueue(label: "tv.aurora.mpv", qos: .userInitiated)
 
@@ -160,11 +163,18 @@ final class MPVPlayerController: UIViewController {
 
     deinit {
         guard let handle = mpv else { return }
-        // The wakeup callback holds this controller unretained. Detach it first, then let
-        // any drain already queued finish, so nothing touches `self` after it is gone.
+        // The wakeup callback reaches this controller only through the sink's weak
+        // reference, so a drain still queued finds nothing and stops. mpv is torn down on
+        // its own queue, after those, rather than here: waiting for them made the main
+        // thread wait on mpv's lower-priority event thread (Xcode's "Hang Risk"), and
+        // the teardown itself can take a while. The layer it draws into lives until then.
         mpv_set_wakeup_callback(handle, nil, nil)
-        queue.sync {}
-        mpv_terminate_destroy(handle)
+        let (sink, layer) = (self.sink, metalLayer)
+        queue.async {
+            mpv_terminate_destroy(handle)
+            withExtendedLifetime(layer) {}
+            sink?.release()
+        }
     }
 
     // MARK: Playing
@@ -767,8 +777,9 @@ final class MPVPlayerController: UIViewController {
             return
         }
         mpv = handle
-        var layer = metalLayer
-        mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &layer)
+        // mpv's `wid` is the layer's address, as a 64-bit integer.
+        var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(metalLayer).toOpaque()))
+        mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &wid)
         mpv_set_option_string(handle, "vo", "gpu-next")
         mpv_set_option_string(handle, "gpu-api", "vulkan")
         mpv_set_option_string(handle, "gpu-context", "moltenvk")
@@ -812,11 +823,14 @@ final class MPVPlayerController: UIViewController {
         mpv_observe_property(handle, Observed.tracks.rawValue, "track-list", MPV_FORMAT_NONE)
         mpv_observe_property(handle, Observed.tracks.rawValue, "aid", MPV_FORMAT_NONE)
         mpv_observe_property(handle, Observed.tracks.rawValue, "sid", MPV_FORMAT_NONE)
+        let sink = Unmanaged.passRetained(WakeupSink(self))
+        self.sink = sink
         mpv_set_wakeup_callback(handle, { context in
-            guard let context else { return }
-            let controller = Unmanaged<MPVPlayerController>.fromOpaque(context).takeUnretainedValue()
+            guard let context,
+                  let controller = Unmanaged<WakeupSink>.fromOpaque(context).takeUnretainedValue().controller
+            else { return }
             controller.queue.async { controller.drainEvents() }
-        }, Unmanaged.passUnretained(self).toOpaque())
+        }, sink.toOpaque())
     }
 
     /// On `queue`.
@@ -883,6 +897,13 @@ final class MPVPlayerController: UIViewController {
         defer { cArgs.forEach { free(UnsafeMutableRawPointer(mutating: $0)) } }
         return mpv_command(mpv, &cArgs)
     }
+}
+
+/// mpv's wakeup callback's hold on the player: weak, so a wakeup that arrives while the
+/// player is going away finds nothing, and the player never waits for one.
+private final class WakeupSink: @unchecked Sendable {
+    weak var controller: MPVPlayerController?
+    init(_ controller: MPVPlayerController) { self.controller = controller }
 }
 
 /// A `CAMetalLayer` that ignores MoltenVK's 1x1 drawable size, which otherwise causes

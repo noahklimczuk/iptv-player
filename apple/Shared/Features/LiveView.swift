@@ -696,8 +696,7 @@ private struct LiveChannelRow: View {
                     }
                     if let quality = channel.quality { DaylightBadge(quality) }
                 }
-                (Text(guide?.now.map { "\(clockTime(unix: $0.start)) \($0.title)" } ?? "No guide data")
-                 + Text(guide?.next.map { "  ·  Next: \($0.title)" } ?? "").foregroundStyle(theme.textFaint))
+                Text("\(guide?.now.map { "\(clockTime(unix: $0.start)) \($0.title)" } ?? "No guide data")\(Text(guide?.next.map { "  ·  Next: \($0.title)" } ?? "").foregroundStyle(theme.textFaint))")
                     .font(.ui(size: Daylight.px(13)))
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
