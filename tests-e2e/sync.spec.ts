@@ -333,6 +333,28 @@ test('an account that wants its password again asks for just that, not the wizar
   await expect(page.getByTestId('sync-state')).toContainText('Up to date');
 });
 
+test('opening a film catches up with the other devices and offers their position', async ({ page }) => {
+  await openSync(page, '?syncRemoteProgress');
+  await signInHome(page);
+  await expect(page.getByTestId('sync-signed-in')).toBeVisible();
+
+  // Client-side, so the signed-in mock survives: the TV stopped this film at 41:00.
+  await page.getByRole('link', { name: 'Movies', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  await page.locator('[role="button"]').first().click();
+  const sheet = page.getByRole('dialog');
+  await expect(sheet.getByRole('button', { name: 'Resume from 41:00' })).toBeVisible();
+});
+
+test('signed out, opening a film changes nothing', async ({ page }) => {
+  await page.goto('/?syncRemoteProgress#/movies');
+  await expect(page.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  await page.locator('[role="button"]').first().click();
+  const sheet = page.getByRole('dialog');
+  await expect(sheet.getByRole('button', { name: /^(Play|Resume from)/ })).toBeVisible();
+  await expect(sheet.getByRole('button', { name: 'Resume from 41:00' })).toHaveCount(0);
+});
+
 test('a verified account is not nagged about its email', async ({ page }) => {
   await openSync(page);
   await signInHome(page);

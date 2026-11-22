@@ -42,6 +42,31 @@ export function DetailModal({
    */
   const watch = useSeriesProgress(item?.kind === 'series' ? item.id : 0);
 
+  /*
+   * Opening a title catches up with the household's other devices there and then, so
+   * stopping a film on the TV and opening it here a minute later offers to resume where
+   * the TV stopped -- not at the next round of the background loop, up to two minutes
+   * on. When anything arrived, the title reads its progress and marks again.
+   */
+  const profileId = useProfile((s) => s.active?.id ?? 1);
+  const loadMarks = useMarks((s) => s.load);
+  const { reload } = watch;
+  const kind = item?.kind;
+  const id = item?.id;
+  useEffect(() => {
+    if (kind === undefined || id === undefined) return;
+    let live = true;
+    invoke('sync.catchUp', { profileId, kind, id })
+      .then((applied) => {
+        if (!live || applied === 0) return;
+        void reload();
+        void loadMarks(profileId);
+      })
+      // Opening a title is not where sync's problems are told; the panel tells them.
+      .catch(() => {});
+    return () => { live = false; };
+  }, [kind, id, profileId, reload, loadMarks]);
+
   /**
    * Keep focus in here while it is open, and give it back on the way out.
    *
@@ -766,7 +791,7 @@ function useSeriesProgress(seriesId: number) {
     }
   }, [profileId, load]);
 
-  return { get: (id: number) => seen.get(id), setWatched, version };
+  return { get: (id: number) => seen.get(id), setWatched, version, reload: load };
 }
 
 type Watch = ReturnType<typeof useSeriesProgress>;
