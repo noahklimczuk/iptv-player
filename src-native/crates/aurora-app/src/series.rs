@@ -169,25 +169,7 @@ pub fn sweep(
                 // Written before the counters, because this is the part that has to
                 // survive: a show that produced nothing and is not recorded is a show
                 // the next batch asks about again (R-83).
-                let attempt = match &outcome {
-                    Ok(0) => Some(library::ListingAttempt::Empty),
-                    Ok(_) => None,
-                    Err(_) => Some(library::ListingAttempt::Failed),
-                };
-                {
-                    let db = services.db.lock();
-                    let wrote = match attempt {
-                        Some(attempt) => {
-                            library::record_listing_attempt(&db, series_id, attempt, now)
-                        }
-                        None => library::clear_listing_attempt(&db, series_id),
-                    };
-                    // Not fatal: the cost of losing one of these is one extra request
-                    // on a later sweep, which is what the whole sweep is made of.
-                    if let Err(e) = wrote {
-                        tracing::warn!(series = series_id, "could not record the attempt: {e}");
-                    }
-                }
+                note_attempt(services, series_id, &outcome, now);
                 {
                     let mut report = report.lock();
                     report.asked += 1;
@@ -315,6 +297,77 @@ fn fetch_now(services: &Services, series_id: i64) -> Result<usize> {
     let written = library::upsert_episodes(&mut db, series_id, &episodes, crate::now_unix())?;
     tracing::info!(series = series_id, written, "episode listing stored");
     Ok(written)
+}
+
+/// Remember how asking a panel about a show went, so a show that produced nothing waits
+/// [`LISTING_RETRY_AFTER_SECS`] before it is asked again.
+fn note_attempt(services: &Services, series_id: i64, outcome: &Result<usize>, now: i64) {
+    let attempt = match outcome {
+        Ok(0) => Some(library::ListingAttempt::Empty),
+        Ok(_) => None,
+        Err(_) => Some(library::ListingAttempt::Failed),
+    };
+    let db = services.db.lock();
+    let wrote = match attempt {
+        Some(attempt) => library::record_listing_attempt(&db, series_id, attempt, now),
+        None => library::clear_listing_attempt(&db, series_id),
+    };
+    // Not fatal: the cost of losing one of these is one extra request later.
+    if let Err(e) = wrote {
+        tracing::warn!(series = series_id, "could not record the attempt: {e}");
+    }
+}
+
+/// Shows asked about per sync tick for the records sync has parked. A tick is three
+/// seconds, so a household's whole Continue Watching arrives within a minute or so,
+/// without a burst of requests against the viewer's own panel.
+const SYNC_FETCH_PER_TICK: u32 = 4;
+
+/// Fetch the episode listings that parked sync records are waiting for, then let them
+/// apply ([`library::series_waited_on_by_sync`]).
+///
+/// Progress on a show from another device names one of its episodes, and a panel's
+/// episodes are only stored once a show is opened. Without this, a show half-watched on
+/// the TV reached the PC's Continue Watching only if somebody happened to open it there
+/// first -- which they would not, because it was not on Continue Watching.
+///
+/// Run on the sync thread after each tick. With nothing waiting it is one query on two
+/// tables that are empty on most libraries.
+pub fn fetch_for_sync(services: &Services) {
+    let now = crate::now_unix();
+    let ids = {
+        let db = services.db.lock();
+        library::series_waited_on_by_sync(&db, SYNC_FETCH_PER_TICK, now - LISTING_RETRY_AFTER_SECS)
+    };
+    let ids = match ids {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!("could not read what sync is waiting for: {e}");
+            return;
+        }
+    };
+    let mut stored = 0;
+    for series_id in ids {
+        // Listed recently and the episode still is not there: the panel does not list it
+        // (yet), and asking again now would get the same answer.
+        if listing_is_fresh(series_id) {
+            continue;
+        }
+        let outcome = fetch_episodes(services, series_id);
+        note_attempt(services, series_id, &outcome, now);
+        match outcome {
+            Ok(n) => stored += n,
+            Err(e) => tracing::debug!(series = series_id, "no listing for sync: {e}"),
+        }
+    }
+    if stored > 0 {
+        tracing::info!(
+            episodes = stored,
+            "stored the episodes synced progress names"
+        );
+        services.sync.wake();
+        crate::backup::retry_parked(services);
+    }
 }
 
 /// How many batches the background sweep will work through before giving up the thread.

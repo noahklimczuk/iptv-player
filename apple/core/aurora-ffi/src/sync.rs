@@ -778,6 +778,9 @@ impl AuroraCore {
     /// scene is active, off the main actor; it returns at once when nothing is due.
     pub fn sync_tick(&self) {
         self.sync.tick(crate::now_unix());
+        // Synced progress on a show waits for its episodes, which a panel only lists
+        // once asked (Windows' `series::fetch_for_sync`, after its tick).
+        self.fetch_for_sync();
     }
 
     /// How often to call [`Self::sync_tick`], in seconds.

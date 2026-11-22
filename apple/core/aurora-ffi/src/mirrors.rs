@@ -237,6 +237,16 @@ fn episode_listing_waits_and_batches_as_windows_does() {
         "std::time::Duration::from_secs(6 * 3600)"
     );
     assert_eq!(crate::series::LISTING_FRESH_FOR.as_secs(), 6 * 3600);
+    // Parked sync records ask for their shows' listings, this many per tick, after
+    // every tick.
+    assert_eq!(
+        app_const("series.rs", "SYNC_FETCH_PER_TICK"),
+        crate::series::SYNC_FETCH_PER_TICK.to_string()
+    );
+    assert!(app_src("main.rs").contains("aurora_app::series::fetch_for_sync(&services);"));
+    let ours =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sync.rs")).unwrap();
+    assert!(ours.contains("self.fetch_for_sync();"));
 }
 
 /// `const NAME: TYPE = EXPR;` (public or not) in an `aurora-app` source, as EXPR's text.

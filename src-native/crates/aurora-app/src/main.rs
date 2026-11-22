@@ -618,6 +618,9 @@ fn main() {
                         supervised("sync", || {
                             if let Some(services) = sync_handle.try_state::<Services>() {
                                 services.sync.tick(now_unix());
+                                // Synced progress on a show waits for its episodes, which
+                                // a panel only lists once asked.
+                                aurora_app::series::fetch_for_sync(&services);
                             }
                         });
                         std::thread::sleep(aurora_app::sync::TICK);
