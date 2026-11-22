@@ -34,6 +34,7 @@ use aurora_sync::{Report, SyncError};
 use parking_lot::Mutex;
 
 use crate::error::{AuroraError, Result};
+use crate::mylist::ListKind;
 use crate::vod::VodKind;
 use crate::AuroraCore;
 
@@ -531,6 +532,37 @@ impl SyncHost {
         }
     }
 
+    /// Opening a title: catch up with the household's other devices now rather than at
+    /// the next round. `aurora-app/src/sync.rs` `Sync::catch_up` (`Household::catch_up`:
+    /// a whole round when none ran in the last 15 s, else only a film's or an episode's
+    /// position). Returns how many of their changes it applied. Never an error: a failed
+    /// round is recorded for the Sync screen and restarts the pacer's backoff.
+    pub(crate) fn catch_up(&self, now: i64, profile_id: i64, kind: &str, id: i64) -> usize {
+        match &self.household {
+            Some(h) if h.is_available() => {}
+            _ => return 0,
+        }
+        let outcome = self
+            .with_conn(|household, conn| Ok(household.catch_up(conn, now, profile_id, kind, id)));
+        match outcome {
+            Ok(Ok(caught)) => {
+                if caught.round {
+                    self.restart_pacing(now, None);
+                }
+                caught.applied
+            }
+            Ok(Err(e)) => {
+                tracing::info!("catching up on opening a title did not work: {e}");
+                self.restart_pacing(now, Some(&Problem::of(&e)));
+                0
+            }
+            Err(e) => {
+                tracing::warn!("sync could not run: {e}");
+                0
+            }
+        }
+    }
+
     /// One tick: sync if signed in and the pacer says a round is due.
     /// `aurora-app/src/sync.rs` `Sync::tick`.
     pub(crate) fn tick(&self, now: i64) {
@@ -786,6 +818,21 @@ impl AuroraCore {
     /// How often to call [`Self::sync_tick`], in seconds.
     pub fn sync_tick_secs(&self) -> u64 {
         TICK_SECS
+    }
+
+    /// Opening a film's or a show's page: what the household's other devices changed,
+    /// now rather than at the next round, so stopping a film on the TV and opening it
+    /// here a moment later offers to resume where the TV stopped. Windows'
+    /// `sync.catchUp`, from its `DetailModal`. Returns how many of their changes it
+    /// applied: more than none means the page should read its progress and marks again.
+    /// Never an error; the Sync screen says what is wrong. Call it off the main actor.
+    pub fn sync_catch_up(&self, profile_id: i64, kind: ListKind, id: i64) -> u32 {
+        let kind = match kind {
+            ListKind::Movie => "movie",
+            ListKind::Series => "series",
+        };
+        let applied = self.sync.catch_up(crate::now_unix(), profile_id, kind, id);
+        u32::try_from(applied).unwrap_or(u32::MAX)
     }
 }
 

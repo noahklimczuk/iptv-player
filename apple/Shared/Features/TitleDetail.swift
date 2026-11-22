@@ -77,6 +77,15 @@ struct TitleDetail: View {
         }
         .background(theme.surface)
         .task { await loadOnce() }
+        // What the household's other devices changed, now rather than at the next round
+        // (Windows' `DetailModal`): stop a film on the TV, open it here a moment later,
+        // and it offers to resume where the TV stopped. Anything new, and the page reads
+        // its progress and marks again.
+        .task(id: item.key) {
+            guard await model.syncCatchUp(item.listKind, id: item.id) else { return }
+            marks = await model.marks(item.listKind, id: item.id)
+            await loadProgress()
+        }
         // Again after playing: the position, the episode to resume and the ticks moved.
         .task(id: playing == nil) { await loadProgress() }
         // A finished sweep may have just found this title's cast.
