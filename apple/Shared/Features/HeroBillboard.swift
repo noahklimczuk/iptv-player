@@ -447,6 +447,13 @@ private struct Drift<Art: View>: UIViewRepresentable {
         host.on = on
     }
 
+    /// Whatever it is offered, as the `GeometryReader` it holds would take: in Home's
+    /// scroll view no height is offered, and a UIKit view left to size itself there
+    /// came out as tall as it liked, which broke the page.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: Host, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
     final class Host: UIView {
         let controller: UIHostingController<Art>
         var on = true { didSet { if on != oldValue { start() } } }
@@ -457,9 +464,14 @@ private struct Drift<Art: View>: UIViewRepresentable {
             clipsToBounds = true
             controller.view.backgroundColor = .clear
             controller.safeAreaRegions = []
-            controller.view.frame = bounds
-            controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             addSubview(controller.view)
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            // Bounds and centre, not frame: the drift scales this view's layer.
+            controller.view.bounds = CGRect(origin: .zero, size: bounds.size)
+            controller.view.center = CGPoint(x: bounds.midX, y: bounds.midY)
         }
 
         @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

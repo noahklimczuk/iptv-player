@@ -34,7 +34,7 @@ struct OnNowTile: View {
                     .foregroundStyle(.secondary)
             }
             // Progress is about the clock, so it has to move on its own (every 30 s).
-            TimelineView(.periodic(from: .now, by: 30)) { context in
+            Ticking(every: 30) { context in
                 VStack(spacing: rowSpacing) {
                     ForEach(channels ?? [], id: \.id) { channel in
                         row(channel, now: context.date)

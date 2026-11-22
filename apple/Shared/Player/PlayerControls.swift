@@ -1085,7 +1085,7 @@ private struct ProgressRow: View {
     /// Live with no buffer: the programme's start, "Live" and the time, its end, and a
     /// bar for how far through it is.
     private var onAir: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        Ticking(every: 1) { context in
             let prog = session.liveGuide?.now
             let now = context.date.timeIntervalSince1970
             let through = prog.map { (now - Double($0.start)) / Double(max(1, $0.stop - $0.start)) } ?? 1
@@ -1730,7 +1730,7 @@ private struct UpNextCard: View {
 
     var body: some View {
         let dock = DockTokens(theme)
-        TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+        Ticking(every: 0.25) { _ in
             let left = session.upNextLeft
             let total = Double(session.menus.upNextCountdownSecs)
             VStack(alignment: .leading, spacing: 0) {
@@ -1911,7 +1911,7 @@ private struct ChannelBannerView: View {
     #endif
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        Ticking(every: 1) { context in
             content(now: context.date)
         }
     }

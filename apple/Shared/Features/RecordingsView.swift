@@ -468,7 +468,7 @@ private struct ScheduledRow: View {
     var body: some View {
         RowShell(accent: live ? theme.live : nil) {
             TitleBlock(rec: rec)
-            TimelineView(.periodic(from: .now, by: 1)) { context in
+            Ticking(every: 1) { context in
                 HStack(spacing: 8) {
                     if live {
                         Label("Recording", systemImage: "record.circle.fill")

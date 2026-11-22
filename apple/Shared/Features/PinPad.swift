@@ -28,7 +28,7 @@ struct PinPad: View {
                 }
             }
             .accessibilityLabel("\(digits.count) of 4 digits entered")
-            TimelineView(.periodic(from: .now, by: 1)) { context in
+            Ticking(every: 1) { context in
                 if let until = lockedUntil, until > context.date {
                     Text("Too many attempts. Try again in \(Int(until.timeIntervalSince(context.date).rounded(.up)))s")
                         .foregroundStyle(.orange)
