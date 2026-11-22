@@ -149,7 +149,7 @@ struct AuroraTopBar: View {
 
     /// The time, in the viewer's 12- or 24-hour choice; Windows' redraws every 15 seconds.
     private var clock: some View {
-        TimelineView(.periodic(from: .now, by: 15)) { context in
+        Ticking(every: 15) { context in
             Text(clockTime(context.date))
                 .font(.ui(size: clockSize, weight: .heavy))
                 .monospacedDigit()
