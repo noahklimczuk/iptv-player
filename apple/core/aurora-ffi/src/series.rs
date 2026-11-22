@@ -32,6 +32,11 @@ pub(crate) const LISTING_RETRY_AFTER_SECS: i64 = 6 * 3600;
 /// Listings asked for at once: the viewer's own panel, which is also where their video
 /// comes from, so a few to hide the latency and no more.
 pub(crate) const SWEEP_CONCURRENCY: usize = 4;
+/// Shows asked about per sync tick for the records sync has parked (Windows'
+/// `SYNC_FETCH_PER_TICK`). A tick is three seconds, so a household's whole Continue
+/// Watching arrives within a minute or so, without a burst of requests against the
+/// viewer's own panel.
+pub(crate) const SYNC_FETCH_PER_TICK: u32 = 4;
 /// How long a stored listing is trusted before opening the show asks again.
 pub(crate) const LISTING_FRESH_FOR: Duration = Duration::from_secs(6 * 3600);
 /// Batches one background sweep works through before giving up (Windows'
@@ -223,6 +228,75 @@ impl AuroraCore {
         )?)
     }
 
+    /// Remember how asking the panel about a show went, so a show that produced nothing
+    /// waits [`LISTING_RETRY_AFTER_SECS`] before it is asked again (Windows'
+    /// `note_attempt`).
+    fn note_attempt(&self, series_id: i64, outcome: &Result<usize>, now: i64) {
+        let attempt = match outcome {
+            Ok(0) => Some(library::ListingAttempt::Empty),
+            Ok(_) => None,
+            Err(_) => Some(library::ListingAttempt::Failed),
+        };
+        let db = self.db.lock();
+        let wrote = match attempt {
+            Some(attempt) => library::record_listing_attempt(&db, series_id, attempt, now),
+            None => library::clear_listing_attempt(&db, series_id),
+        };
+        // Not fatal: the cost of losing one of these is one extra request later.
+        if let Err(e) = wrote {
+            tracing::warn!(series = series_id, "could not record the attempt: {e}");
+        }
+    }
+
+    /// Fetch the episode listings that parked sync records are waiting for, so they can
+    /// apply: Windows' `fetch_for_sync`, run after each sync tick
+    /// ([`library::series_waited_on_by_sync`]).
+    ///
+    /// Progress on a show from another device names one of its episodes, and a panel's
+    /// episodes are stored only once the show is opened. Without this, a show half-watched
+    /// on the PC reached this device's Continue Watching only if somebody opened it here
+    /// first -- which they would not, because it was not on Continue Watching. With
+    /// nothing waiting it is one query on two tables that are empty on most libraries.
+    pub(crate) fn fetch_for_sync(&self) {
+        let now = now_unix();
+        let ids = {
+            let db = self.db.lock();
+            library::series_waited_on_by_sync(
+                &db,
+                SYNC_FETCH_PER_TICK,
+                now - LISTING_RETRY_AFTER_SECS,
+            )
+        };
+        let ids = match ids {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("could not read what sync is waiting for: {e}");
+                return;
+            }
+        };
+        let mut stored = 0;
+        for series_id in ids {
+            // Listed recently and the episode still is not there: the panel does not
+            // list it (yet), and asking again now would get the same answer.
+            if listing_is_fresh(series_id) {
+                continue;
+            }
+            let outcome = self.fetch_episodes(series_id);
+            self.note_attempt(series_id, &outcome, now);
+            match outcome {
+                Ok(n) => stored += n,
+                Err(e) => tracing::debug!(series = series_id, "no listing for sync: {e}"),
+            }
+        }
+        if stored > 0 {
+            tracing::info!(
+                episodes = stored,
+                "stored the episodes synced progress names"
+            );
+            self.sync.wake();
+        }
+    }
+
     /// One batch of the background sweep: shows with no listing that are not in their
     /// retry cooldown, several at once. Each attempt is recorded so a show that will not
     /// list leaves the queue rather than being asked again by the next batch.
@@ -257,24 +331,7 @@ impl AuroraCore {
                         return;
                     };
                     let outcome = self.fetch_episodes(series_id);
-                    let attempt = match &outcome {
-                        Ok(0) => Some(library::ListingAttempt::Empty),
-                        Ok(_) => None,
-                        Err(_) => Some(library::ListingAttempt::Failed),
-                    };
-                    {
-                        let db = self.db.lock();
-                        let wrote = match attempt {
-                            Some(attempt) => {
-                                library::record_listing_attempt(&db, series_id, attempt, now)
-                            }
-                            None => library::clear_listing_attempt(&db, series_id),
-                        };
-                        // Losing one costs one extra request on a later sweep.
-                        if let Err(e) = wrote {
-                            tracing::warn!(series = series_id, "could not record the attempt: {e}");
-                        }
-                    }
+                    self.note_attempt(series_id, &outcome, now);
                     {
                         let mut report = report.lock();
                         report.asked += 1;
