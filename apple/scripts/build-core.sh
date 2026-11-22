@@ -6,11 +6,14 @@
 #   apple/scripts/build-core.sh --debug          faster, unoptimised
 #   apple/scripts/build-core.sh --ios            iOS slices only (skip tvOS)
 #   apple/scripts/build-core.sh --debug --sim    day-to-day: only this Mac's simulators
+#   apple/scripts/build-core.sh --ios --device   your own iPhone from Xcode: the device
+#                                                slice and this Mac's simulator only
 #
 # --sim builds one slice per platform instead of three (no device builds, and only the
 # simulator architecture this Mac runs), so it is the fast loop for working in the
 # simulator. A framework built with --sim cannot run on a real iPhone or Apple TV:
-# build without it for that.
+# build without it for that. --device keeps the device slices but builds only this
+# Mac's simulator architecture, so a run on your own phone needs about half the disk.
 #
 # Output, both git-ignored and rebuilt from source:
 #   apple/Frameworks/AuroraCore.xcframework
@@ -40,11 +43,13 @@ PROFILE=release
 CARGO_PROFILE_FLAG=(--release)
 WANT_TVOS=1
 SIM_ONLY=0
+HOST_SIM_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --debug) PROFILE=debug; CARGO_PROFILE_FLAG=() ;;
     --ios) WANT_TVOS=0 ;;
     --sim) SIM_ONLY=1 ;;
+    --device) HOST_SIM_ONLY=1 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -107,6 +112,8 @@ fi
 if (( SIM_ONLY )); then
   IOS_DEVICE=()
   TVOS_DEVICE=()
+fi
+if (( SIM_ONLY || HOST_SIM_ONLY )); then
   if [[ "$HOST_ARCH" == "x86_64" ]]; then
     IOS_SIM=(x86_64-apple-ios)
     TVOS_SIM=()                      # this Mac's tvOS simulator is the Tier 3 one
