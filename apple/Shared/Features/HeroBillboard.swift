@@ -197,7 +197,7 @@ struct HeroBillboard: View {
                 }
             } label: {
                 Label("My List", systemImage: listed ? "checkmark" : "plus")
-                    .labelStyle(iconsOnly ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleAndIcon))
+                    .labelStyle(iconOnly: iconsOnly)
             }
             .accessibilityAddTraits(listed ? .isSelected : [])
             .focused($focused, equals: .myList)
@@ -206,7 +206,7 @@ struct HeroBillboard: View {
             #endif
             Button { open(item) } label: {
                 Label("More Info", systemImage: "info.circle")
-                    .labelStyle(iconsOnly ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleAndIcon))
+                    .labelStyle(iconOnly: iconsOnly)
             }
             .focused($focused, equals: .info)
             #if !os(tvOS)
@@ -399,11 +399,13 @@ struct BentoRow: Layout {
     }
 }
 
-/// A label style chosen at run time.
-private struct AnyLabelStyle: LabelStyle {
-    private let make: (Configuration) -> AnyView
-    init(_ style: some LabelStyle) { make = { AnyView(style.makeBody(configuration: $0)) } }
-    func makeBody(configuration: Configuration) -> some View { make(configuration) }
+/// Icon only or icon and title, chosen at run time. The style is applied to the view
+/// rather than wrapped, because calling a system style's `makeBody` by hand reads its
+/// environment outside a view (Xcode's "Accessing Environment" warning).
+private extension View {
+    @ViewBuilder func labelStyle(iconOnly on: Bool) -> some View {
+        if on { labelStyle(.iconOnly) } else { labelStyle(.titleAndIcon) }
+    }
 }
 
 extension CatalogItem {
