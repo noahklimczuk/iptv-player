@@ -668,6 +668,81 @@ pub fn series_needing_episodes(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Shows whose episode listing a parked sync record is waiting for.
+///
+/// A panel's episodes are stored only once somebody opens the show, or once the
+/// background sweep reaches it -- hours, on a 28,000-show library, and the sweep puts
+/// first only shows with progress *already here*. Watch progress from another device
+/// names an episode (`ep:sr:{provider}:{show}:s1e4`), and until that episode exists the
+/// record is parked. So a show half-watched on the TV never reached the PC's Continue
+/// Watching, while films, which an import stores whole, did.
+///
+/// These are the shows to ask about: a record parked by sync (`sync_pending`) or by a
+/// restored backup (`restore_pending`) names one of their episodes, and it is not stored
+/// here. A show whose listing came back empty or failed after `retry_before` waits, as
+/// it does in [`series_needing_episodes`].
+pub fn series_waited_on_by_sync(
+    conn: &Connection,
+    limit: u32,
+    retry_before: i64,
+) -> Result<Vec<i64>> {
+    // Sealed records keep their ident in the clear: it is what a device resolves before
+    // it can decrypt anything, so `$.i.item` reads the same either way.
+    let keys = conn
+        .prepare(
+            "SELECT json_extract(record, '$.i.item') AS item FROM sync_pending
+              WHERE item LIKE 'ep:sr:%'
+             UNION
+             SELECT json_extract(ident, '$.item') AS item FROM restore_pending
+              WHERE item LIKE 'ep:sr:%'",
+        )?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut out = Vec::new();
+    for key in keys {
+        if out.len() >= limit as usize {
+            break;
+        }
+        let Some((provider, show, season, episode)) = episode_key_parts(&key) else {
+            continue;
+        };
+        let waiting: Option<(i64, bool)> = conn
+            .query_row(
+                "SELECT s.id,
+                        EXISTS (SELECT 1 FROM episodes e
+                                 WHERE e.series_id = s.id AND e.season = ?3
+                                   AND e.episode = ?4)
+                   FROM series s JOIN providers p ON p.id = s.provider_id
+                  WHERE p.sync_id = ?1 AND s.provider_key = ?2
+                    AND NOT EXISTS (SELECT 1 FROM series_listing_attempts a
+                                     WHERE a.series_id = s.id AND a.attempted_at > ?5)",
+                params![provider, show, season, episode, retry_before],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        // A show not imported here is waiting for a refresh, not a listing; one whose
+        // episode is stored has a record that applies on the next round anyway.
+        if let Some((id, false)) = waiting {
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `ep:sr:{provider}:{show}:s{season}e{episode}` into its parts. The show's own key may
+/// hold colons (`series:1234`), so the provider is cut from the front and the place from
+/// the back -- the same reading as `aurora_sync::local::item`.
+fn episode_key_parts(key: &str) -> Option<(&str, &str, i64, i64)> {
+    let rest = key.strip_prefix("ep:sr:")?;
+    let (provider, rest) = rest.split_once(':')?;
+    let (show, place) = rest.rsplit_once(':')?;
+    let (season, episode) = place.strip_prefix('s')?.split_once('e')?;
+    Some((provider, show, season.parse().ok()?, episode.parse().ok()?))
+}
+
 /// Why a show's episode listing produced nothing, for the queue above.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListingAttempt {
@@ -1311,6 +1386,100 @@ pub fn following_episode(conn: &Connection, episode_id: i64) -> Result<Option<Ep
             },
         )
         .optional()?)
+}
+
+#[cfg(test)]
+mod waited_on_by_sync {
+    use super::*;
+
+    /// Two shows from one panel line, neither with any episode stored.
+    fn line() -> Connection {
+        let conn = crate::open_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (id,name,kind,base_url,sync_id,created_at)
+                  VALUES (1,'Line','xtream','http://panel.example/','abc',0);
+             INSERT INTO series (id,provider_id,provider_key,title,match_key,last_seen_at)
+                  VALUES (7,1,'series:7','Lost','lost',0),
+                         (8,1,'series:8','Dark','dark',0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn park(conn: &Connection, item: &str) {
+        let record = serde_json::json!({
+            "k": format!("progress:{item}"), "n": "progress",
+            "i": { "pf": "pf:x", "item": item },
+        });
+        conn.execute(
+            "INSERT INTO sync_pending (sync_key, record, parked_at) VALUES (?1, ?2, 0)",
+            params![format!("progress:{item}"), record.to_string()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_show_is_named_when_a_parked_record_waits_for_one_of_its_episodes() {
+        let conn = line();
+        assert!(series_waited_on_by_sync(&conn, 10, 0).unwrap().is_empty());
+
+        park(&conn, "ep:sr:abc:series:7:s2e5");
+        park(&conn, "ep:sr:abc:series:7:s2e6");
+        // Not an episode, another line's show, and a key that does not parse.
+        park(&conn, "mv:abc:9001");
+        park(&conn, "ep:sr:zzz:series:8:s1e1");
+        park(&conn, "ep:sr:abc:series:8:nonsense");
+        assert_eq!(
+            series_waited_on_by_sync(&conn, 10, 0).unwrap(),
+            vec![7],
+            "once"
+        );
+
+        // A restored backup waits the same way.
+        conn.execute(
+            "INSERT INTO restore_pending (sync_key, kind, ident, fields, parked_at)
+                  VALUES ('progress:x', 'progress',
+                          '{\"pf\":\"pf:x\",\"item\":\"ep:sr:abc:series:8:s1e1\"}', '{}', 0)",
+            [],
+        )
+        .unwrap();
+        let mut both = series_waited_on_by_sync(&conn, 10, 0).unwrap();
+        both.sort_unstable();
+        assert_eq!(both, vec![7, 8]);
+        assert_eq!(
+            series_waited_on_by_sync(&conn, 1, 0).unwrap().len(),
+            1,
+            "a limit"
+        );
+    }
+
+    #[test]
+    fn a_show_is_not_named_once_the_episode_is_stored_or_while_its_listing_rests() {
+        let conn = line();
+        park(&conn, "ep:sr:abc:series:7:s2e5");
+
+        // Listed, but without that episode: still waiting.
+        conn.execute(
+            "INSERT INTO episodes (series_id,season,episode,url) VALUES (7,2,4,'u')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(series_waited_on_by_sync(&conn, 10, 0).unwrap(), vec![7]);
+
+        // A listing that failed an hour ago waits out its six hours, as the sweep does.
+        record_listing_attempt(&conn, 7, ListingAttempt::Failed, 1_000).unwrap();
+        assert!(series_waited_on_by_sync(&conn, 10, 900).unwrap().is_empty());
+        assert_eq!(series_waited_on_by_sync(&conn, 10, 1_100).unwrap(), vec![7]);
+
+        conn.execute(
+            "INSERT INTO episodes (series_id,season,episode,url) VALUES (7,2,5,'u')",
+            [],
+        )
+        .unwrap();
+        assert!(series_waited_on_by_sync(&conn, 10, 1_100)
+            .unwrap()
+            .is_empty());
+    }
 }
 
 #[cfg(test)]

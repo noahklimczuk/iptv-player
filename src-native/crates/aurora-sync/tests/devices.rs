@@ -253,6 +253,58 @@ fn a_reference_to_something_not_imported_yet_is_parked_then_applied() {
     assert_eq!(b.count("SELECT COUNT(*) FROM sync_pending"), 0);
 }
 
+/// A show half-watched on one device reaches the other's Continue Watching, although
+/// the other has never opened the show and so has none of its episodes stored.
+///
+/// A panel's episodes are listed only on request, so the TV had the show and not the
+/// episode: the progress parked, and nothing asked for the listing, because the show was
+/// not on Continue Watching to be opened. `series_waited_on_by_sync` is what names the
+/// show to ask about (the app fetches it on the sync thread, `series::fetch_for_sync`).
+#[test]
+fn progress_on_a_show_the_other_device_has_not_opened_reaches_continue_watching() {
+    let server = MemoryTransport::new();
+    let mut a = device(&server, "pc", 0, true);
+    let mut b = device(&server, "tv", 100, true);
+    // The TV imported the line but nobody has opened Lost there: no episodes stored.
+    b.conn.execute("DELETE FROM episodes", []).unwrap();
+    a.join();
+    b.join();
+
+    progress::save(&a.conn, 1, progress::ItemKind::Episode, 40, 300, 2400, 1).unwrap();
+    a.sync();
+    let report = b.sync();
+    assert_eq!(
+        report.parked, 1,
+        "the progress has no episode to land on yet"
+    );
+    assert!(progress::continue_watching(&b.conn, 1, 20)
+        .unwrap()
+        .is_empty());
+
+    // What sync is waiting for is Lost's listing, and only that.
+    let waiting = aurora_db::repo::library::series_waited_on_by_sync(&b.conn, 10, 0).unwrap();
+    assert_eq!(waiting, vec![130]);
+
+    // The listing arrives (what `fetch_episodes` stores) and the next round applies it.
+    b.conn
+        .execute(
+            "INSERT INTO episodes (id,series_id,season,episode,url)
+                  VALUES (140,130,1,2,'http://x/lost.mkv')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(b.engine.retry_pending(&mut b.conn).unwrap(), 1);
+    let rail = progress::continue_watching(&b.conn, 1, 20).unwrap();
+    assert_eq!(rail.len(), 1, "Lost is on the TV's Continue Watching");
+    assert_eq!(rail[0].item_id, 140);
+    assert_eq!(rail[0].position_secs, 300);
+    assert!(
+        aurora_db::repo::library::series_waited_on_by_sync(&b.conn, 10, 0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[test]
 fn personal_settings_travel_and_device_settings_do_not() {
     let (_, mut a, mut b) = household();
