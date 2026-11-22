@@ -797,6 +797,16 @@ final class AppModel {
         return try await guarded { try $0.homeRails(profileId: profile, seed: seed) }
     }
 
+    /// Opening a film's or a show's page: catch up with the household's other devices
+    /// now, not at the next round (Windows' `sync.catchUp`). True when any of their
+    /// changes arrived, so the page reads its progress and marks again. Quiet: sync's
+    /// problems are the Sync screen's to say.
+    func syncCatchUp(_ kind: ListKind, id: Int64) async -> Bool {
+        guard let core else { return false }
+        let profile = profileId
+        return await Task.detached { core.syncCatchUp(profileId: profile, kind: kind, id: id) }.value > 0
+    }
+
     func railPage(_ railId: String, offset: Int) async -> RailPage? {
         let profile = profileId, seed = homeSeed
         return await call(nil) {

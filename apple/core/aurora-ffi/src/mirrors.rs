@@ -1537,3 +1537,28 @@ fn settings_sections_follow_windows_order() {
         "Settings' index must list Windows' sections, in Windows' order"
     );
 }
+
+/// Opening a title catches up with the household's other devices on both (PR 253):
+/// Windows' `DetailModal` asks `sync.catchUp`, Apple's `TitleDetail` asks
+/// `sync_catch_up`, and both go through the shared `Household::catch_up`.
+#[test]
+fn opening_a_title_catches_up_as_windows_does() {
+    assert!(app_src("main.rs").contains("sync::sync_catch_up,"));
+    assert!(app_src("sync.rs").contains("household.catch_up(conn, now"));
+    let modal = ui_src("components/DetailModal.tsx");
+    assert!(
+        modal.contains("invoke('sync.catchUp'"),
+        "Windows' title page no longer catches up on opening"
+    );
+    let ours =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sync.rs")).unwrap();
+    assert!(ours.contains("household.catch_up(conn, now, profile_id, kind, id)"));
+    let detail = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features/TitleDetail.swift"),
+    )
+    .unwrap();
+    assert!(
+        detail.contains("await model.syncCatchUp(item.listKind, id: item.id)"),
+        "TitleDetail must catch up on opening, as Windows' DetailModal does"
+    );
+}
