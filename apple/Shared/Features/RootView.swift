@@ -12,6 +12,8 @@ struct RootView: View {
     @State private var showingSearch = false
     /// The top bar's height, with the connection strip when it shows.
     @State private var headerHeight: CGFloat = AuroraTopBar.height
+    /// The phone's More panel is open over the page.
+    @State private var moreOpen = false
     #if os(tvOS)
     /// The tab the focus is on in the bar, or nil while it is on the page.
     @FocusState private var barFocus: AppTab?
@@ -124,7 +126,11 @@ struct RootView: View {
                 AuroraTopBar(title: pageTitle)
                 ConnectionBudget()
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+            // Only a real change: a fraction of a point either way is layout noise, and
+            // each change lays every page out again (see `StackInset.Probe.apply`).
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if abs(height - headerHeight) >= 0.5 { headerHeight = height }
+            }
         }
         // Search opens over the page from Home's toolbar, as Windows' opens from its top
         // bar; every other destination is a tab, on a phone as well.
@@ -185,6 +191,23 @@ struct RootView: View {
                 // so the system's own). A stack's pushed page still goes back first.
                 .onExitCommand(perform: barFocus == nil ? { barFocus = tab } : nil)
                 #endif
+                #if os(iOS)
+                // More's panel is open: the page dims a little, and a tap on it closes the
+                // panel rather than reaching the page.
+                .overlay {
+                    if moreOpen {
+                        Color.black.opacity(0.22)
+                            .ignoresSafeArea()
+                            .contentShape(Rectangle())
+                            .onTapGesture { moreOpen = false }
+                            .transition(.opacity)
+                            .accessibilityLabel("Close More")
+                            .accessibilityAddTraits(.isButton)
+                    }
+                }
+                .animation(.easeOut(duration: 0.2), value: moreOpen)
+                .onChange(of: tab) { moreOpen = false }
+                #endif
                 .overlay(alignment: .bottom) {
                     tabBar.offset(y: barDrop(edge))
                 }
@@ -199,7 +222,8 @@ struct RootView: View {
         #if os(tvOS)
         AuroraTabBar(items: navItems, selection: $tab, focus: $barFocus)
         #else
-        AuroraTabBar(items: navItems, selection: $tab)
+        // A phone fits the bar to its screen and puts the rest under More.
+        AuroraTabBar(items: navItems, selection: $tab, more: compact ? $moreOpen : nil)
         #endif
     }
 
@@ -382,12 +406,24 @@ private struct StackInset: UIViewRepresentable {
             apply()
         }
 
+        /// Sets the insets only when they really change. A measured height jitters by a
+        /// fraction of a point from one layout pass to the next; setting the stacks'
+        /// insets for that lays the whole page out again, which measures again. On a
+        /// phone with a large library that loop froze Home's scrolling for seconds at a
+        /// time (UIKit-runloop hang reports, 2026-11-22).
         func apply() {
             guard let root = window?.rootViewController else { return }
+            let scale = window?.screen.scale ?? 3
+            let top = (self.top * scale).rounded() / scale
+            let bottom = (self.bottom * scale).rounded() / scale
             func walk(_ vc: UIViewController) {
                 if let stack = vc as? UINavigationController {
-                    if stack.additionalSafeAreaInsets.top != top { stack.additionalSafeAreaInsets.top = top }
-                    if stack.additionalSafeAreaInsets.bottom != bottom { stack.additionalSafeAreaInsets.bottom = bottom }
+                    var insets = stack.additionalSafeAreaInsets
+                    if abs(insets.top - top) >= 0.5 || abs(insets.bottom - bottom) >= 0.5 {
+                        insets.top = top
+                        insets.bottom = bottom
+                        stack.additionalSafeAreaInsets = insets
+                    }
                 }
                 vc.children.forEach(walk)
             }

@@ -133,6 +133,9 @@ struct DaylightButtonStyle: ButtonStyle {
     var size: Size = .md
     /// An icon-only button: square rather than padded.
     var iconOnly = false
+    /// A long label that wraps onto more lines rather than widening the page past the
+    /// screen (a phone's width is not Windows' window).
+    var wraps = false
 
     @Environment(\.auroraTheme) private var theme
     @Environment(\.isEnabled) private var enabled
@@ -148,11 +151,14 @@ struct DaylightButtonStyle: ButtonStyle {
         let label = configuration.label
             .font(.ui(size: Daylight.px(fontSize), weight: .heavy))
             .labelStyle(.titleAndIcon)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
+            .lineLimit(wraps ? nil : 1)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: !wraps, vertical: wraps)
             .padding(.horizontal, iconOnly ? 0 : Daylight.px(padding))
+            .padding(.vertical, wraps ? Daylight.px(8) : 0)
             .frame(minWidth: iconOnly ? Daylight.px(height) : nil)
-            .frame(height: Daylight.px(height))
+            .frame(minHeight: wraps ? Daylight.px(height) : nil)
+            .frame(height: wraps ? nil : Daylight.px(height))
             .foregroundStyle(foreground)
             .contentShape(shape)
         return Group {
@@ -210,8 +216,8 @@ struct DaylightButtonStyle: ButtonStyle {
 extension ButtonStyle where Self == DaylightButtonStyle {
     static func daylight(_ variant: DaylightButtonStyle.Variant = .secondary,
                          _ size: DaylightButtonStyle.Size = .md,
-                         iconOnly: Bool = false) -> DaylightButtonStyle {
-        DaylightButtonStyle(variant: variant, size: size, iconOnly: iconOnly)
+                         iconOnly: Bool = false, wraps: Bool = false) -> DaylightButtonStyle {
+        DaylightButtonStyle(variant: variant, size: size, iconOnly: iconOnly, wraps: wraps)
     }
 }
 
