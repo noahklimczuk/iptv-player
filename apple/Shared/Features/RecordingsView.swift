@@ -214,9 +214,7 @@ private struct ConflictNotice: View {
                 Text(conflicts.count == 1 ? "A recording clashes" : "\(conflicts.count) clashes").bold()
                 ForEach(conflicts.prefix(2), id: \.start) { c in
                     // The tail of the priority-ordered list is what loses, so name it.
-                    (Text("\(Format.dayLabel(c.start)) \(Format.clock(c.start))–\(Format.clock(c.stop)): \(c.slotIds.count) at once, \(c.overBy) more than your subscription allows. ")
-                     + Text(titleOf(c.slotIds.last ?? 0)).italic()
-                     + Text(" will be dropped."))
+                    Text("\(Format.dayLabel(c.start)) \(Format.clock(c.start))–\(Format.clock(c.stop)): \(c.slotIds.count) at once, \(c.overBy) more than your subscription allows. \(Text(titleOf(c.slotIds.last ?? 0)).italic()) will be dropped.")
                         .foregroundStyle(theme.textMuted)
                 }
             }
@@ -275,8 +273,7 @@ private struct TitleBlock: View {
         HStack(spacing: 12) {
             ChannelTile(name: rec.channelName ?? rec.title, number: nil, logo: rec.channelLogo, size: 40)
             VStack(alignment: .leading, spacing: 2) {
-                (Text(rec.title).fontWeight(.heavy)
-                 + Text(episode.map { " · \($0)" } ?? "").foregroundStyle(theme.textFaint))
+                Text("\(Text(rec.title).fontWeight(.heavy))\(Text(episode.map { " · \($0)" } ?? "").foregroundStyle(theme.textFaint))")
                     .lineLimit(1)
                 Text(whenAired(rec)).font(.ui(.callout)).foregroundStyle(theme.textMuted)
             }

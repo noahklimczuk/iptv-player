@@ -346,12 +346,11 @@ private struct ConnectionBudget: View {
                 let what = names.count == 1 ? names[0] : "\(names.count) recordings"
                 HStack(spacing: 8) {
                     Image(systemName: "record.circle.fill").font(.ui(.caption))
-                    (Text(what).bold().foregroundStyle(.primary)
-                     + Text(" ")
-                     + Text(allowed == 1
-                            ? "is using the only stream this subscription allows"
-                            : "are using all \(allowed) streams this subscription allows")
-                     + Text(". Starting something now may stop \(names.count == 1 ? "it" : "one of them")."))
+                    let using = allowed == 1
+                        ? "is using the only stream this subscription allows"
+                        : "are using all \(allowed) streams this subscription allows"
+                    let stop = names.count == 1 ? "it" : "one of them"
+                    Text("\(Text(what).bold().foregroundStyle(.primary)) \(using). Starting something now may stop \(stop).")
                 }
                 .font(.ui(.callout))
                 .foregroundStyle(.secondary)
