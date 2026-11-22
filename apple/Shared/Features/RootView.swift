@@ -386,24 +386,38 @@ private struct StackInset: UIViewRepresentable {
     func updateUIView(_ probe: Probe, context: Context) {
         probe.top = top
         probe.bottom = bottom
-        probe.apply()
+        probe.applySoon()
     }
 
+    /// Never sets the insets inside a layout pass. Setting a stack's insets lays out
+    /// its page, its page lays out ours, and when that ran in the same pass (from
+    /// `layoutSubviews`, or `updateUIView`, which SwiftUI calls while laying out) Core
+    /// Animation went round that loop in one flush: Home froze for nine seconds at a
+    /// time on an iPhone (UIKit-runloop hang reports, 2026-11-22, all in
+    /// `_UIHostingView.layoutSubviews` and `_updateContentOverlayInsetsFromParent`).
+    /// Here each change waits for the pass to finish, and several in one pass are one.
     final class Probe: UIView {
         var top: CGFloat = 0
         var bottom: CGFloat = 0
+        private var pending = false
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            apply()
+            guard window != nil else { return }
+            applySoon()
+            // A stack can appear a little after this view does.
             for delay in [0.05, 0.3, 1.0] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.apply() }
             }
         }
 
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            apply()
+        func applySoon() {
+            guard !pending else { return }
+            pending = true
+            DispatchQueue.main.async { [weak self] in
+                self?.pending = false
+                self?.apply()
+            }
         }
 
         /// Sets the insets only when they really change. A measured height jitters by a

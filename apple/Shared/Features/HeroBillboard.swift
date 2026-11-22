@@ -16,7 +16,6 @@ struct HeroBillboard: View {
     @State private var index = 0
     @State private var onMyList: Set<String> = []
     @State private var playing: PlayerItem?
-    @State private var drift = false
     @FocusState private var focused: Control?
 
     private enum Control: Hashable { case play, myList, info }
@@ -63,7 +62,12 @@ struct HeroBillboard: View {
 
     /// The backdrop, or the poster blown out behind glass when there is none, or
     /// Windows' `--art-1` with its disc when there is neither.
-    @ViewBuilder private func artwork(_ item: CatalogItem) -> some View {
+    private func artwork(_ item: CatalogItem) -> some View {
+        // A slow drift, so a title waiting its turn is not a screenshot.
+        Drift(on: animations, art: art(item))
+    }
+
+    private func art(_ item: CatalogItem) -> some View {
         GeometryReader { box in
             Group {
                 if let backdrop = item.backdrop.flatMap(URL.init(string:)) {
@@ -84,12 +88,7 @@ struct HeroBillboard: View {
                 }
             }
             .frame(width: box.size.width, height: box.size.height)
-            // A slow drift, so a title waiting its turn is not a screenshot.
-            .scaleEffect(animations && drift ? 1.08 : 1)
-            .animation(animations ? .linear(duration: 24) : nil, value: drift)
-            .clipped()
         }
-        .onAppear { drift = false; DispatchQueue.main.async { drift = true } }
     }
 
     /// `--scrim` and `--scrim-side`: always ink, so white type reads on any backdrop.
@@ -428,4 +427,60 @@ extension CatalogItem {
 
 extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+/// The billboard's slow drift (Windows' 24-second scale to 1.08), run by Core Animation.
+/// As a SwiftUI animation it was worked out on the main thread every frame, for as long
+/// as the billboard existed, scrolled out of sight or not: on an iPhone that update was
+/// a quarter of the time Home's scrolling stalled for (hang reports, 2026-11-22). Here
+/// the artwork is drawn in a small host of its own, whose layer the render server
+/// scales; the main thread never hears of it. The artwork reads nothing from the
+/// environment, so it loses nothing by having its own.
+private struct Drift<Art: View>: UIViewRepresentable {
+    let on: Bool
+    let art: Art
+
+    func makeUIView(context: Context) -> Host { Host(UIHostingController(rootView: art)) }
+
+    func updateUIView(_ host: Host, context: Context) {
+        host.controller.rootView = art
+        host.on = on
+    }
+
+    final class Host: UIView {
+        let controller: UIHostingController<Art>
+        var on = true { didSet { if on != oldValue { start() } } }
+
+        init(_ controller: UIHostingController<Art>) {
+            self.controller = controller
+            super.init(frame: .zero)
+            clipsToBounds = true
+            controller.view.backgroundColor = .clear
+            controller.safeAreaRegions = []
+            controller.view.frame = bounds
+            controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(controller.view)
+        }
+
+        @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            start()
+        }
+
+        private func start() {
+            let layer = controller.view.layer
+            layer.removeAnimation(forKey: "drift")
+            guard on, window != nil else { return }
+            let drift = CABasicAnimation(keyPath: "transform.scale")
+            drift.fromValue = 1
+            drift.toValue = 1.08
+            drift.duration = 24
+            drift.timingFunction = CAMediaTimingFunction(name: .linear)
+            drift.fillMode = .forwards
+            drift.isRemovedOnCompletion = false
+            layer.add(drift, forKey: "drift")
+        }
+    }
 }

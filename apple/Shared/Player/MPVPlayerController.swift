@@ -137,8 +137,8 @@ final class MPVPlayerController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
-        metalLayer.frame = view.bounds
-        metalLayer.contentsScale = view.traitCollection.displayScale
+        // Sized in `viewDidLayoutSubviews`, before mpv draws its first frame.
+        metalLayer.contentsScale = 1
         metalLayer.framebufferOnly = true
         metalLayer.backgroundColor = UIColor.black.cgColor
         view.layer.addSublayer(metalLayer)
@@ -146,18 +146,37 @@ final class MPVPlayerController: UIViewController {
         createMpv()
     }
 
+    /// mpv's canvas in pixels: 16:9, fixed for the player's life.
+    private var canvas: CGSize?
+
+    /// mpv's iOS output (`context_moltenvk.m`, mpv 0.41) reads the layer's size only when
+    /// a video starts, and never hears of a rotation. Resizing the layer then gave mpv a
+    /// bigger surface that it went on drawing the old size into, top left: turned
+    /// sideways on a phone, the picture sat in a corner (seen on an iPhone, 2026-11-22).
+    /// So mpv gets one 16:9 canvas, as wide as the view's longer side, and never another;
+    /// Core Animation scales it to fit the view and centres it, whichever way up. The
+    /// layer's bounds and drawable stay in step at a scale of 1, so MoltenVK never finds
+    /// the surface changed under it.
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // The layer's frame and its pixels together, unanimated. A CAMetalLayer does not
-        // resize its drawable when its frame changes, and mpv draws into the drawable:
-        // turned sideways on a phone, the picture stayed portrait-sized in a corner.
-        let scale = view.window?.screen.scale ?? view.traitCollection.displayScale
+        let bounds = view.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        metalLayer.frame = view.bounds
-        metalLayer.contentsScale = scale
-        metalLayer.drawableSize = CGSize(width: (view.bounds.width * scale).rounded(),
-                                         height: (view.bounds.height * scale).rounded())
+        let size: CGSize
+        if let canvas {
+            size = canvas
+        } else {
+            let scale = view.window?.screen.scale ?? view.traitCollection.displayScale
+            let width = (max(bounds.width, bounds.height) * scale).rounded()
+            size = CGSize(width: width, height: (width * 9 / 16).rounded())
+            canvas = size
+            metalLayer.bounds = CGRect(origin: .zero, size: size)
+            metalLayer.drawableSize = size
+        }
+        let fit = min(bounds.width / size.width, bounds.height / size.height)
+        metalLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        metalLayer.setAffineTransform(CGAffineTransform(scaleX: fit, y: fit))
         CATransaction.commit()
     }
 
