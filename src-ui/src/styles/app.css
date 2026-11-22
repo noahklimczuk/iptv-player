@@ -458,3 +458,17 @@ body {
   font: inherit; font-size: var(--fs-xs); font-weight: 800; white-space: nowrap;
 }
 .dl-seg > button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Sync setup (features/settings/SyncSetupWizard.tsx): the two first choices, and the
+   spinner while the account is made. The spinner is small and above the scrim, not
+   under a backdrop-filter, so it does not re-blur anything as it turns. */
+.sync-choice { transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease); }
+.sync-choice:hover { border-color: var(--accent); background: var(--surface-hover); }
+.sync-choice:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--accent); }
+.sync-working {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  animation: sync-spin 0.9s linear infinite;
+}
+@keyframes sync-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sync-working { animation: none; border-top-color: var(--accent); } }

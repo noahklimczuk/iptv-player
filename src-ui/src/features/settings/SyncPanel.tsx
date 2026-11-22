@@ -16,10 +16,12 @@
  * deleted -- server copy and all -- from here (App Store guideline 5.1.1(v)).
  */
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { SyncProblem, SyncStatus } from '@shared/ipc';
 import { Button, FIELD } from '@/components/Primitives';
 import { useCommand } from '@/hooks/useCommand';
 import { invoke } from '@/ipc';
+import { SyncSetupWizard } from '@/features/settings/SyncSetupWizard';
 
 /** How often the panel re-reads the status while it is open and signed in. */
 const POLL_MS = 5_000;
@@ -59,7 +61,7 @@ function describe(status: SyncStatus): { text: string; tone: 'ok' | 'warn' | 'ba
   return { text: `Up to date. Last synced ${ago(status.lastSyncAt)}.`, tone: 'ok' };
 }
 
-function Field(props: {
+export function Field(props: {
   label: string; value: string; onChange: (v: string) => void;
   type?: string; placeholder?: string; testId?: string; autoComplete?: string;
 }) {
@@ -124,26 +126,20 @@ function RecoveryCode({ code, onDone }: { code: string; onDone: () => void }) {
   );
 }
 
-type Mode = 'create' | 'join';
-
 /** Our rule, stricter than Firebase's six: an account guards a household's sync. */
-const MIN_PASSWORD = 8;
+export const MIN_PASSWORD = 8;
 
-function SignInForm({ status, onJoined }: {
+/**
+ * Signed in, but the account wants its password again (a password changed on another
+ * device, a revoked session). Everything else goes through `SyncSetupWizard`.
+ */
+function SignInAgainForm({ status, onJoined }: {
   status: SyncStatus;
   onJoined: (recoveryCode: string | null, problem: SyncProblem | null) => void;
 }) {
-  const again = status.signedIn && status.problem?.kind === 'signInAgain';
-  const [mode, setMode] = useState<Mode>(again ? 'join' : 'create');
   const [email, setEmail] = useState(status.email ?? '');
   const [password, setPassword] = useState('');
-  const [password2, setPassword2] = useState('');
-  const [agreed, setAgreed] = useState(false);
-  const [resetSent, setResetSent] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [useCode, setUseCode] = useState(false);
-  const [code, setCode] = useState('');
   const [deviceName, setDeviceName] = useState(status.deviceName ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,183 +149,42 @@ function SignInForm({ status, onJoined }: {
     invoke('sync.deviceName', undefined).then(setDeviceName).catch(() => {});
   }, [deviceName]);
 
-  const creating = mode === 'create';
-  const mismatch = creating && confirm.length > 0 && confirm !== passphrase;
-  const passwordShort = creating && password.length > 0 && password.length < MIN_PASSWORD;
-  const passwordMismatch = creating && password2.length > 0 && password2 !== password;
-  const samePassphrase = creating && passphrase.length > 0 && passphrase === password;
-  const ready = email.trim() && password
-    && (creating
-      ? password.length >= MIN_PASSWORD && password === password2 && agreed
-        && passphrase.length >= 8 && passphrase === confirm && !samePassphrase
-      : (useCode ? code.trim() : passphrase));
-
-  const forgot = useCallback(async () => {
-    setError(null);
-    setResetSent(null);
-    try {
-      await invoke('sync.sendPasswordReset', { email });
-      setResetSent(email.trim());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [email]);
+  const ready = email.trim() && password && passphrase;
 
   const submit = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      const joined = mode === 'create'
-        ? await invoke('sync.createAccount', { email, password, passphrase, deviceName })
-        : await invoke('sync.signIn', {
-          email, password, deviceName,
-          ...(useCode ? { recoveryCode: code } : { passphrase }),
-        });
+      const joined = await invoke('sync.signIn', { email, password, deviceName, passphrase });
       setPassword('');
-      setPassword2('');
       setPassphrase('');
-      setConfirm('');
-      setCode('');
       onJoined(joined.recoveryCode, joined.problem);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [mode, email, password, passphrase, deviceName, useCode, code, onJoined]);
+  }, [email, password, passphrase, deviceName, onJoined]);
 
   return (
     <form
       style={{ display: 'grid', gap: 'var(--sp-3)', maxWidth: 520 }}
       onSubmit={(e) => { e.preventDefault(); if (ready && !busy) void submit(); }}
     >
-      {!again && (
-        <div role="tablist" style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-          <Button
-            type="button" size="sm" role="tab" aria-selected={mode === 'create'}
-            variant={mode === 'create' ? 'primary' : 'secondary'}
-            onClick={() => { setMode('create'); setError(null); setResetSent(null); }}
-          >
-            Create account
-          </Button>
-          <Button
-            type="button" size="sm" role="tab" aria-selected={mode === 'join'}
-            variant={mode === 'join' ? 'primary' : 'secondary'}
-            onClick={() => { setMode('join'); setError(null); }}
-          >
-            Sign in
-          </Button>
-        </div>
-      )}
-
       <div style={MUTED}>
-        {again
-          ? 'The sync account needs its password again. Nothing on this device has been lost.'
-          : creating
-            ? 'A free Aurora account, for the first device in your household. Every other '
-              + 'device then signs in with the same email, password and passphrase.'
-            : 'For a device joining a household that already has an Aurora account.'}
+        The sync account needs its password again. Nothing on this device has been lost.
       </div>
-
       <Field label="Email" value={email} onChange={setEmail} type="email"
         autoComplete="username" testId="sync-email" />
       <Field label="Account password" value={password} onChange={setPassword}
-        type="password" autoComplete={creating ? 'new-password' : 'current-password'}
-        placeholder={creating ? `At least ${MIN_PASSWORD} characters` : undefined}
-        testId="sync-password" />
-      {creating && (
-        <Field label="Password again" value={password2} onChange={setPassword2}
-          type="password" autoComplete="new-password" testId="sync-password-again" />
-      )}
-      {passwordShort && (
-        <div style={{ ...MUTED, color: 'var(--danger)' }}>
-          The password needs at least {MIN_PASSWORD} characters.
-        </div>
-      )}
-      {passwordMismatch && (
-        <div style={{ ...MUTED, color: 'var(--danger)' }}>The passwords differ.</div>
-      )}
-      {mode === 'join' && !again && (
-        <div>
-          <Button type="button" size="sm" variant="ghost" disabled={!email.includes('@')}
-            onClick={() => void forgot()} data-testid="sync-forgot-password">
-            Forgot the password?
-          </Button>
-        </div>
-      )}
-      {resetSent && (
-        <Message ok>
-          If there is an Aurora account for {resetSent}, an email with a link to choose a
-          new password is on its way. Check the spam folder if it does not arrive.
-        </Message>
-      )}
-
-      {mode === 'join' && useCode ? (
-        <Field label="Recovery code" value={code} onChange={setCode}
-          placeholder="XXXXX-XXXXX-…" testId="sync-code" />
-      ) : (
-        <Field label="Sync passphrase" value={passphrase} onChange={setPassphrase}
-          type="password" testId="sync-passphrase"
-          placeholder={mode === 'create' ? 'At least 8 characters' : undefined} />
-      )}
-      {mode === 'create' && (
-        <>
-          <Field label="Passphrase again" value={confirm} onChange={setConfirm}
-            type="password" testId="sync-confirm" />
-          <div style={MUTED}>
-            Different from the password, and it never leaves your devices: it is what
-            encrypts everything before it is uploaded. Each device asks for it once.
-          </div>
-        </>
-      )}
-      {mismatch && <div style={{ ...MUTED, color: 'var(--danger)' }}>The passphrases differ.</div>}
-      {samePassphrase && (
-        <div style={{ ...MUTED, color: 'var(--danger)' }}>
-          Use a passphrase that is not the account password: the password is checked by
-          the sync service, the passphrase must never reach it.
-        </div>
-      )}
-      {mode === 'join' && !again && (
-        <div>
-          <Button type="button" size="sm" variant="ghost" onClick={() => setUseCode(!useCode)}>
-            {useCode ? 'Use the passphrase instead' : 'Forgot the passphrase? Use the recovery code'}
-          </Button>
-        </div>
-      )}
-
+        type="password" autoComplete="current-password" testId="sync-password" />
+      <Field label="Sync passphrase" value={passphrase} onChange={setPassphrase}
+        type="password" testId="sync-passphrase" />
       <Field label="Call this device" value={deviceName} onChange={setDeviceName}
         testId="sync-device-name" />
-
-      {creating && (
-        <label style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'start', ...MUTED }}>
-          <input
-            type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)}
-            data-testid="sync-agree" style={{ marginTop: 3 }}
-          />
-          <span>
-            I agree to the{' '}
-            <button
-              type="button" className="link-button"
-              onClick={() => void invoke('sync.openPrivacyPolicy', undefined).catch(() => {})}
-              style={{
-                background: 'none', border: 0, padding: 0, color: 'var(--accent)',
-                textDecoration: 'underline', cursor: 'pointer', font: 'inherit',
-              }}
-            >
-              privacy policy
-            </button>
-            . Aurora stores your email address and your encrypted library with Google
-            Firebase; it cannot read the library, and you can delete the account and
-            everything in it at any time from this page.
-          </span>
-        </label>
-      )}
-
       <div>
         <Button type="submit" variant="primary" disabled={!ready || busy}>
-          {busy
-            ? (creating ? 'Creating account…' : 'Signing in…')
-            : again ? 'Sign in again' : creating ? 'Create account' : 'Sign in'}
+          {busy ? 'Signing in…' : 'Sign in again'}
         </Button>
       </div>
       {error && <Message ok={false}>{error}</Message>}
@@ -352,6 +207,18 @@ export function SyncPanel() {
   const [verifyNote, setVerifyNote] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
   const [codePassphrase, setCodePassphrase] = useState('');
+  // `?setup=sync` opens the wizard straight away: how the first-run wizard hands over.
+  const [params, setParams] = useSearchParams();
+  const [setup, setSetup] = useState(() => params.get('setup') === 'sync');
+  const closeSetup = useCallback(() => {
+    setSetup(false);
+    if (params.get('setup')) {
+      const next = new URLSearchParams(params);
+      next.delete('setup');
+      setParams(next, { replace: true });
+    }
+    reload();
+  }, [params, setParams, reload]);
 
   // Keep "3 changes waiting" and "last synced" honest while the panel is open.
   const signedIn = status?.signedIn ?? false;
@@ -429,11 +296,29 @@ export function SyncPanel() {
     </div>
   );
 
-  if (!status.signedIn || status.problem?.kind === 'signInAgain') {
+  if (!status.signedIn) {
+    return (
+      <div style={{ display: 'grid', gap: 'var(--sp-3)' }} data-testid="sync-signed-out">
+        {/* What signed this device out (a deleted account, a reset), said here. */}
+        {result && <Message ok={result.ok}>{result.text}</Message>}
+        {intro}
+        <div>
+          <Button variant="primary" onClick={() => { setResult(null); setSetup(true); }}
+            data-testid="sync-setup-start">
+            Set up sync
+          </Button>
+        </div>
+        {setup && <SyncSetupWizard status={status} onClose={closeSetup} />}
+      </div>
+    );
+  }
+
+  // Signed in, but the account wants its password again: one field, not the wizard.
+  if (status.problem?.kind === 'signInAgain') {
     return (
       <div style={{ display: 'grid', gap: 'var(--sp-3)' }}>
         {intro}
-        <SignInForm
+        <SignInAgainForm
           status={status}
           onJoined={(code, problem) => {
             if (code) setRecovery(code);

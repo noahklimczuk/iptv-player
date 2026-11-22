@@ -252,7 +252,7 @@ export function SetupWizard({
                 // provider has already seen it, and may well have an account.
                 onSync={additional ? undefined : () => {
                   onFinished();
-                  navigate(`/settings?section=${encodeURIComponent('Account and sync')}`);
+                  navigate(`/settings?section=${encodeURIComponent('Account and sync')}&setup=sync`);
                 }}
               />
             )}

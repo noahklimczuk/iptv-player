@@ -167,7 +167,9 @@ test('the last step offers an account for sync, and goes straight to it', async 
   });
 
   await page.getByTestId('wizard-sync').click();
-  await expect(page.getByRole('tab', { name: 'Create account' })).toBeInViewport();
+  // Straight into the sync wizard, with Settings open at the section behind it.
+  await expect(page.getByRole('dialog', { name: 'Sync your devices' })).toBeVisible();
+  await page.getByTestId('sync-path-create').click();
   await expect(page.getByTestId('sync-email')).toBeVisible();
 });
 
