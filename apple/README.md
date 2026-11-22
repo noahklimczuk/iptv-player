@@ -128,8 +128,10 @@ screens. The app can:
   each episode with its still, resume bar and played tick), More Like This and Details.
   A film opens as a sheet with Windows' close button, a show as a pushed page. Trailer
   beside Play plays it above the title with sound and YouTube's controls, and Stop
-  trailer goes back (iPhone and iPad; not on an Apple TV, as above); on an iPhone the
-  poster sits above the rest,
+  trailer goes back (iPhone and iPad). On an Apple TV, Trailer opens it in the YouTube
+  app (`youtube://watch/<id>`, the link developers find works; YouTube documents none),
+  and Back returns to Aurora; without the YouTube app it says to install it. On an
+  iPhone the poster sits above the rest,
 - "On now" at the top of Home, as Windows' `OnNowTile`: the first six favourite
   channels, what each is airing with its times and progress, and a tap to tune; with no
   favourites, a line saying how to add some. Channels without a logo get Windows'

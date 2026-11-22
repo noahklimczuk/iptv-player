@@ -1600,4 +1600,6 @@ fn trailers_play_as_windows_does() {
     let swift_detail = std::fs::read_to_string(features.join("TitleDetail.swift")).unwrap();
     assert!(swift_detail.contains("\"Stop trailer\""));
     assert!(swift_detail.contains("Button(\"Trailer\""));
+    // An Apple TV has no web view: its Trailer opens the YouTube app instead.
+    assert!(swift_detail.contains("youtube://watch/"));
 }
