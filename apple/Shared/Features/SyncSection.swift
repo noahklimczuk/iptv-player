@@ -16,16 +16,13 @@ struct SyncSection: View {
     @State private var recoveryCode: String?
     @State private var confirming: Confirm?
 
-    // The form.
-    @State private var joining = false
-    @State private var useCode = false
+    /// The step-by-step setup (`SyncSetupWizard`), over the page.
+    @State private var setup = false
+
+    // Signing in again.
     @State private var email = ""
     @State private var password = ""
-    @State private var confirmPassword = ""
-    @State private var agreed = false
     @State private var passphrase = ""
-    @State private var confirm = ""
-    @State private var code = ""
     @State private var deviceName = UIDevice.current.name
     @State private var showCodeFor = ""
     /// The account password, typed again to delete the account.
@@ -51,14 +48,24 @@ struct SyncSection: View {
                 Text(message).font(.ui(.caption)).foregroundStyle(.secondary)
             }
         }
-        .task { await reload() }
+        .task {
+            await reload()
+            openRequestedSetup()
+        }
+        .onChange(of: model.syncSetupRequested) { openRequestedSetup() }
         .task(id: status?.signedIn == true ? status?.email : nil) { await checkVerified() }
         #if os(tvOS)
+        .fullScreenCover(isPresented: $setup, onDismiss: { Task { await reload() } }) {
+            if let status { SyncSetupWizard(status: status).auroraAppearance() }
+        }
         .fullScreenCover(isPresented: $pairing) {
             PairWithPhoneView(deviceName: deviceName) { Task { await reload() } }
                 .auroraAppearance()
         }
         #else
+        .sheet(isPresented: $setup, onDismiss: { Task { await reload() } }) {
+            if let status { SyncSetupWizard(status: status).auroraAppearance() }
+        }
         .sheet(isPresented: $pairing) {
             SetUpAppleTVView(email: status?.email ?? email).auroraAppearance()
         }
@@ -72,8 +79,10 @@ struct SyncSection: View {
                 .font(.ui(.caption)).foregroundStyle(.secondary)
         } else if let recoveryCode {
             recovery(recoveryCode)
-        } else if !status.signedIn || status.problem == .signInAgain {
-            form(status)
+        } else if !status.signedIn {
+            signedOut
+        } else if status.problem == .signInAgain {
+            signInAgain
         } else {
             signedIn(status)
         }
@@ -231,42 +240,45 @@ struct SyncSection: View {
         return ("Up to date. Last synced \(ago).", .secondary)
     }
 
-    // MARK: Creating an account and signing in
+    // MARK: Signed out, and signing in again
 
     /// Where the privacy policy is published: this repository's copy, which the App
     /// Store listing links to as well (AppStore/PRIVACY_POLICY.md).
     static let privacyPolicy = URL(string: "https://github.com/noahklimczuk/iptv-player/blob/main/apple/AppStore/PRIVACY_POLICY.md")!
-    /// Windows' `MIN_PASSWORD`: stricter than Firebase's six, since an account guards
-    /// a household's sync.
-    private static let minPassword = 8
-    /// The core's `check_passphrase`.
-    private static let minPassphrase = 8
 
-    /// Windows' `SignInForm`, in its words: Create account and Sign in, the password
-    /// twice, agreement to the privacy policy, and "Forgot the password?".
+    /// Windows' signed-out panel: what sync is, and one button into the wizard.
     @ViewBuilder
-    private func form(_ status: SyncStatus) -> some View {
-        let again = status.signedIn && status.problem == .signInAgain
-        let creating = !joining && !again
-        if !again {
-            Segments(options: [(false, "Create account"), (true, "Sign in")], selection: $joining)
-        }
-        Text(again
-             ? "The sync account needs its password again. Nothing on this device has been lost."
-             : creating
-             ? "A free Aurora account, for the first device in your household. Every other device then signs in with the same email, password and passphrase."
-             : "For a device joining a household that already has an Aurora account.")
+    private var signedOut: some View {
+        Text("Keeps favourites, My List, watch progress, profiles, parental settings and recording rules the same on every device in the household. Everything is encrypted on this device before it is uploaded, with a passphrase only your devices know. Playlist passwords and API keys stay on each device unless you choose to share them too.")
             .font(.ui(.caption)).foregroundStyle(.secondary)
+        Button("Set up sync") {
+            message = nil
+            setup = true
+        }
+        .buttonStyle(.daylight(.primary))
+        .disabled(busy)
         #if os(tvOS)
         // Typing with a remote is slow: a phone that already syncs can do it.
-        if creating {
-            Text("Easier on an iPhone or iPad: create the account in Aurora there, then choose Sign in here and Sign in with your iPhone.")
-                .font(.ui(.caption)).foregroundStyle(.secondary)
-        } else {
-            Button("Sign in with your iPhone", systemImage: "iphone") { pairing = true }
-                .disabled(busy)
-        }
+        Button("Sign in with your iPhone", systemImage: "iphone") { pairing = true }
+            .disabled(busy)
+        Text("Easier on an iPhone or iPad: set sync up in Aurora there, then choose Sign in with your iPhone here.")
+            .font(.ui(.caption)).foregroundStyle(.secondary)
         #endif
+    }
+
+    /// The first-run wizard asked for setup: open it once the status says signed out.
+    private func openRequestedSetup() {
+        guard model.syncSetupRequested, let status else { return }
+        model.syncSetupRequested = false
+        if status.available && !status.signedIn { setup = true }
+    }
+
+    /// Windows' `SignInAgainForm`: signed in, but the account wants its password again (a
+    /// password changed on another device, a revoked session). One form, not the wizard.
+    @ViewBuilder
+    private var signInAgain: some View {
+        Text("The sync account needs its password again. Nothing on this device has been lost.")
+            .font(.ui(.caption)).foregroundStyle(.secondary)
         TextField("Email", text: $email)
             .textContentType(.username)
             .autocorrectionDisabled()
@@ -274,104 +286,26 @@ struct SyncSection: View {
             .keyboardType(.emailAddress)
             .textInputAutocapitalization(.never)
             #endif
-        SecureField(creating ? "Account password (at least \(Self.minPassword) characters)" : "Account password", text: $password)
-            .textContentType(creating ? .newPassword : .password)
-        if creating {
-            SecureField("Password again", text: $confirmPassword)
-                .textContentType(.newPassword)
-            if !password.isEmpty && password.count < Self.minPassword {
-                hint("The password needs at least \(Self.minPassword) characters.")
-            }
-            if !confirmPassword.isEmpty && confirmPassword != password {
-                hint("The passwords differ.")
-            }
-        } else if !again {
-            Button("Forgot the password?") { sendPasswordReset() }
-                .disabled(busy || !email.contains("@"))
-        }
-        if !creating && useCode {
-            TextField("Recovery code", text: $code)
-                .autocorrectionDisabled()
-        } else {
-            SecureField(creating ? "Sync passphrase (at least \(Self.minPassphrase) characters)" : "Sync passphrase", text: $passphrase)
-        }
-        if creating {
-            SecureField("Passphrase again", text: $confirm)
-            Text("Different from the password, and it never leaves your devices: it is what encrypts everything before it is uploaded. Each device asks for it once.")
-                .font(.ui(.caption)).foregroundStyle(.secondary)
-            if !confirm.isEmpty && confirm != passphrase {
-                hint("The passphrases differ.")
-            }
-            if !passphrase.isEmpty && passphrase == password {
-                hint("Use a passphrase that is not the account password: the password is checked by the sync service, the passphrase must never reach it.")
-            }
-        }
-        if !creating && !again {
-            Button(useCode ? "Use the passphrase instead" : "Forgot the passphrase? Use the recovery code") {
-                useCode.toggle()
-            }
-        }
+        SecureField("Account password", text: $password)
+            .textContentType(.password)
+        SecureField("Sync passphrase", text: $passphrase)
         TextField("Call this device", text: $deviceName)
-        if creating {
-            agreement
-        }
-        Button(busy ? (creating ? "Creating account…" : "Signing in…")
-               : again ? "Sign in again" : creating ? "Create account" : "Sign in") {
-            submit(joining: !creating)
-        }
-        .disabled(busy || !formReady(joining: !creating))
+        Button(busy ? "Signing in…" : "Sign in again") { signInAgainNow() }
+            .disabled(busy || email.isEmpty || password.isEmpty || passphrase.isEmpty)
     }
 
-    /// Windows' "I agree to the privacy policy" box, which Create account waits for.
-    @ViewBuilder
-    private var agreement: some View {
-        Toggle(isOn: $agreed) {
-            Text("I agree to the privacy policy. Aurora stores your email address and your encrypted library with Google Firebase; it cannot read the library, and you can delete the account and everything in it at any time from this page.")
-                .font(.ui(.caption))
-        }
-        .accessibilityLabel("I agree to the privacy policy")
-        #if os(tvOS)
-        // A TV has no browser to open it in.
-        Text("Privacy policy: github.com/noahklimczuk/iptv-player, apple/AppStore/PRIVACY_POLICY.md")
-            .font(.ui(.caption)).foregroundStyle(.secondary)
-        #else
-        Link("Read the privacy policy", destination: Self.privacyPolicy)
-            .font(.ui(.caption))
-        #endif
-    }
-
-    private func hint(_ text: String) -> some View {
-        Text(text).font(.ui(.caption)).foregroundStyle(.red)
-    }
-
-    private func formReady(joining: Bool) -> Bool {
-        guard !email.isEmpty, !password.isEmpty, !deviceName.isEmpty else { return false }
-        if joining { return useCode ? !code.isEmpty : !passphrase.isEmpty }
-        return password.count >= Self.minPassword && password == confirmPassword && agreed
-            && passphrase.count >= Self.minPassphrase && passphrase == confirm
-            && passphrase != password
-    }
-
-    private func submit(joining: Bool) {
-        let (email, password, passphrase, code, device, useCode) =
-            (self.email.trimmingCharacters(in: .whitespaces), self.password, self.passphrase,
-             self.code, self.deviceName, self.useCode)
-        run(joining ? "Could not sign in" : "Could not create the account") { core in
-            let joined = joining
-                ? try core.syncSignIn(email: email, password: password,
-                                      passphrase: useCode ? nil : passphrase,
-                                      recoveryCode: useCode ? code : nil,
-                                      deviceName: device)
-                : try core.syncCreateAccount(email: email, password: password,
-                                             passphrase: passphrase, deviceName: device)
+    private func signInAgainNow() {
+        let (email, password, passphrase, device) =
+            (self.email.trimmingCharacters(in: .whitespaces), self.password, self.passphrase, self.deviceName)
+        run("Could not sign in") { core in
+            let joined = try core.syncSignIn(email: email, password: password,
+                                             passphrase: passphrase, recoveryCode: nil,
+                                             deviceName: device)
             return joined.recoveryCode.map { "code:\($0)" }
                 ?? (joined.problem == nil ? "Signed in." : "Signed in. The first sync will finish when the service can be reached.")
         }
         self.password = ""
-        self.confirmPassword = ""
         self.passphrase = ""
-        self.confirm = ""
-        self.code = ""
     }
 
     /// Windows' `recheck`: asks the account whether its address is confirmed. With
@@ -404,14 +338,6 @@ struct SyncSection: View {
                 verifyNote = "Could not send the email: \(error.viewerMessage)"
             }
             busy = false
-        }
-    }
-
-    private func sendPasswordReset() {
-        let email = self.email.trimmingCharacters(in: .whitespaces)
-        run("Could not send the email") { core in
-            try core.syncSendPasswordReset(email: email)
-            return "If there is an Aurora account for \(email), an email with a link to choose a new password is on its way. Check the spam folder if it does not arrive."
         }
     }
 

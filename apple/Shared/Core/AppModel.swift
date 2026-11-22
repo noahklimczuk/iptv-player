@@ -39,6 +39,9 @@ final class AppModel {
     private(set) var activeProfile: Profile?
     /// "Who's watching?" is up. True until a profile is chosen, as on Windows.
     var picking = true
+    /// The first-run wizard's "Set up sync": Settings → Account and sync opens its setup
+    /// sheet straight away, then clears this (Windows' `?setup=sync`).
+    var syncSetupRequested = false
     /// The picker's question has been asked of the core, however it was answered. Until
     /// then the first screen isn't known, so nothing is shown rather than the wrong one.
     private(set) var profilesLoaded = false

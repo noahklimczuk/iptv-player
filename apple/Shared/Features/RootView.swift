@@ -54,6 +54,7 @@ struct RootView: View {
                                 setupFinished = true
                                 tab = .settings
                                 settingsSection = SyncSection.title
+                                model.syncSetupRequested = true
                             })
                     .onAppear { setupShown = true }
             } else if model.picking && !model.profiles.isEmpty {
