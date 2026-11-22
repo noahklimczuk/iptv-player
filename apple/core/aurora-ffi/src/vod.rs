@@ -93,6 +93,9 @@ pub struct Movie {
     pub cast: Vec<String>,
     /// The language the provider's group named.
     pub lang: Option<String>,
+    /// The trailer's YouTube id, once the metadata sweep has found one (Windows'
+    /// `Movie.trailerKey`).
+    pub trailer_key: Option<String>,
 }
 
 impl From<library::MovieRow> for Movie {
@@ -111,6 +114,7 @@ impl From<library::MovieRow> for Movie {
             certification: m.certification,
             cast: m.cast,
             lang: m.lang,
+            trailer_key: m.trailer_key,
         }
     }
 }
@@ -136,6 +140,8 @@ pub struct Series {
     /// Season numbers that have episodes. Empty until the episode listing has been
     /// fetched for this show.
     pub seasons: Vec<u16>,
+    /// See [`Movie::trailer_key`].
+    pub trailer_key: Option<String>,
 }
 
 impl From<library::SeriesRow> for Series {
@@ -154,6 +160,7 @@ impl From<library::SeriesRow> for Series {
             cast: s.cast,
             lang: s.lang,
             seasons: s.seasons,
+            trailer_key: s.trailer_key,
         }
     }
 }

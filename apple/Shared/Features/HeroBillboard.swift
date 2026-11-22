@@ -4,8 +4,9 @@ import SwiftUI
 /// over its backdrop with Play, My List and More Info. It moves on every 12 seconds, and
 /// holds while one of its buttons has the focus, as Windows holds under the pointer.
 ///
-/// Not here: the trailer that Windows plays over the backdrop after two seconds. It is a
-/// YouTube embed, which tvOS cannot show (apple/README.md).
+/// On a phone or an iPad, after two seconds a title with a trailer fades into it, muted,
+/// as Windows' does (`TrailerFrame`). Not on an Apple TV: the trailer is a YouTube embed,
+/// and tvOS has no web view to show one in (apple/README.md).
 struct HeroBillboard: View {
     let items: [CatalogItem]
     let open: (CatalogItem) -> Void
@@ -16,16 +17,26 @@ struct HeroBillboard: View {
     @State private var index = 0
     @State private var onMyList: Set<String> = []
     @State private var playing: PlayerItem?
+    /// The trailer is up (Windows' `trailer`): only ever with a key to play.
+    @State private var trailer = false
+    @State private var muted = true
+    @AppStorage(AppearanceKey.hoverPreviews) private var hoverPreviews = true
     @FocusState private var focused: Control?
 
     private enum Control: Hashable { case play, myList, info }
 
     private static let rotateEvery: Duration = .seconds(12)
+    /// Once a trailer is playing: cutting away a few seconds in is worse than a long
+    /// wait (Windows' `ROTATE_WITH_TRAILER_MS`).
+    private static let rotateWithTrailer: Duration = .seconds(32)
+    /// Windows' `TRAILER_DELAY_MS`.
+    private static let trailerDelay: Duration = .seconds(2)
 
     var body: some View {
         if let item = items[safe: index] ?? items.first {
             ZStack(alignment: .bottomLeading) {
                 artwork(item)
+                    .overlay { trailerLayer(item) }
                     .id(item.key)
                     .transition(.opacity)
                 scrims
@@ -33,16 +44,22 @@ struct HeroBillboard: View {
                     .padding(EdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset))
                     .frame(maxWidth: textWidth, alignment: .leading)
             }
-            .overlay(alignment: .topTrailing) { dots.padding(inset - 4) }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 12) {
+                    muteButton
+                    dots
+                }
+                .padding(inset - 4)
+            }
             .frame(maxWidth: .infinity, minHeight: minHeight, maxHeight: .infinity)
             .background(Self.art)
             .clipShape(RoundedRectangle(cornerRadius: 24))
             .environment(\.colorScheme, .dark)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Featured")
-            .task(id: RotateKey(index: index, held: focused != nil, animations: animations)) {
+            .task(id: RotateKey(index: index, held: focused != nil, animations: animations, trailer: trailer)) {
                 guard animations, focused == nil, items.count > 1 else { return }
-                try? await Task.sleep(for: Self.rotateEvery)
+                try? await Task.sleep(for: trailer ? Self.rotateWithTrailer : Self.rotateEvery)
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeInOut(duration: 0.5)) { index = (index + 1) % items.count }
             }
@@ -52,6 +69,19 @@ struct HeroBillboard: View {
                 } else {
                     onMyList.remove(item.key)
                 }
+            }
+            // Each title starts still and silent, however the last was left: a Home that
+            // suddenly made a noise about a film nobody asked about would be worse.
+            .task(id: TrailerKey(item: item.key, animations: animations, previews: hoverPreviews,
+                                 playing: playing != nil)) {
+                trailer = false
+                muted = true
+                #if os(iOS)
+                guard animations, hoverPreviews, playing == nil, item.trailerKey != nil else { return }
+                try? await Task.sleep(for: Self.trailerDelay)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.6)) { trailer = true }
+                #endif
             }
             .onChange(of: items.map(\.key)) { index = 0 }
             .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
@@ -118,6 +148,18 @@ struct HeroBillboard: View {
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(.white, in: Capsule())
                 .padding(.bottom, 14)
+            // Only while one plays, so the claim is never made about a title without one.
+            if trailer, item.trailerKey != nil {
+                HStack(spacing: 6) {
+                    Circle().fill(.red).frame(width: 6, height: 6)
+                    Text("NOW PLAYING TRAILER")
+                        .font(.ui(.caption2).weight(.heavy))
+                        .tracking(0.7)
+                        .foregroundStyle(.white)
+                }
+                .padding(.bottom, 8)
+                .transition(.opacity)
+            }
             Text(item.title)
                 .displayFont(size: titleSize)
                 .foregroundStyle(.white)
@@ -238,6 +280,44 @@ struct HeroBillboard: View {
         #endif
     }
 
+    // MARK: Trailer
+
+    /// Over the artwork rather than in place of it: the video is 16:9 and the billboard
+    /// is not, so the artwork fills what the video cannot and stays if the embed never
+    /// loads. Scaled past the edges to keep YouTube's own letterboxing off it (Windows'
+    /// `scale(1.35)`), and never touched: a tap is the billboard's.
+    @ViewBuilder private func trailerLayer(_ item: CatalogItem) -> some View {
+        #if os(iOS)
+        if trailer, let key = item.trailerKey {
+            TrailerFrame(key: key, muted: muted)
+                .scaleEffect(1.35)
+                .clipped()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .transition(.opacity)
+        }
+        #endif
+    }
+
+    /// Windows' speaker button, beside the dots while a trailer plays.
+    @ViewBuilder private var muteButton: some View {
+        #if os(iOS)
+        if trailer, items[safe: index]?.trailerKey != nil {
+            Button { muted.toggle() } label: {
+                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(.black.opacity(0.35), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(muted ? "Unmute trailer" : "Mute trailer")
+            .transition(.opacity)
+        }
+        #endif
+    }
+
     // MARK: Playing
 
     /// A film from where it was left; a show from the episode left unfinished or the first
@@ -315,6 +395,14 @@ struct HeroBillboard: View {
         let index: Int
         let held: Bool
         let animations: Bool
+        let trailer: Bool
+    }
+
+    private struct TrailerKey: Equatable {
+        let item: String
+        let animations: Bool
+        let previews: Bool
+        let playing: Bool
     }
 
     /// `--art-1`: what the billboard is when a title has no artwork at all.

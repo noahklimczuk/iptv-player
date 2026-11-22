@@ -395,4 +395,12 @@ extension CatalogItem {
         case .series: .series
         }
     }
+
+    /// The trailer's YouTube id, once the metadata sweep has found one.
+    var trailerKey: String? {
+        switch self {
+        case .movie(let m): m.trailerKey
+        case .series(let s): s.trailerKey
+        }
+    }
 }

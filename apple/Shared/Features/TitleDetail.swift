@@ -8,8 +8,8 @@ import SwiftUI
 /// with the cast, director, genres and rating beside them; then a well of tabs: a show's
 /// episodes, More Like This, and the details.
 ///
-/// Departures (apple/README.md): no Trailer button, as the Apple apps have no player for
-/// YouTube; on a phone the poster sits above the rest rather than beside it.
+/// Departures (apple/README.md): no Trailer button on an Apple TV, which has no web view
+/// for YouTube's embed; on a phone the poster sits above the rest rather than beside it.
 struct TitleDetail: View {
     @Environment(AppModel.self) private var model
     @Environment(\.auroraTheme) private var theme
@@ -44,6 +44,10 @@ struct TitleDetail: View {
     @State private var credits: [Credit] = []
     @State private var similar: [CatalogItem]?
     @State private var playing: PlayerItem?
+    /// The trailer, when asked for (Windows' `playingTrailer`). Never by itself here: the
+    /// page is opened to read about the title, and a video starting under the text would
+    /// interrupt that. With sound and YouTube's controls, as it is what is being watched.
+    @State private var playingTrailer = false
     /// The season is placed on the viewer's episode once, not every time it changes.
     @State private var placed = false
 
@@ -88,6 +92,8 @@ struct TitleDetail: View {
         }
         // Again after playing: the position, the episode to resume and the ticks moved.
         .task(id: playing == nil) { await loadProgress() }
+        // Never a trailer under the player.
+        .onChange(of: playing != nil) { _, open in if open { playingTrailer = false } }
         // A finished sweep may have just found this title's cast.
         .task(id: model.libraryVersion) { credits = await model.credits(item.listKind, id: item.id) }
         .fullScreenCover(item: $playing) { PlayerScreen(item: $0) }
@@ -134,6 +140,31 @@ struct TitleDetail: View {
 
     private var hero: some View {
         VStack(alignment: .leading, spacing: 0) {
+            #if os(iOS)
+            if playingTrailer, let key = item.trailerKey {
+                TrailerFrame(key: key, muted: false, controls: true, loop: false)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .padding(.bottom, 16)
+                // Just a way back, clear of YouTube's own controls along the bottom.
+                Button("Stop trailer", systemImage: "xmark") { playingTrailer = false }
+                    .buttonStyle(.daylight(.secondary, .lg))
+            } else {
+                heroText
+            }
+            #else
+            heroText
+            #endif
+        }
+        .padding(.trailing, close != nil && wide ? 64 : 0)
+        .overlay(alignment: .topTrailing) {
+            if wide { closeButton.offset(x: 8) }
+        }
+    }
+
+    private var heroText: some View {
+        VStack(alignment: .leading, spacing: 0) {
             FlowLayout(spacing: 8) {
                 ForEach(Array(item.genres.prefix(2)), id: \.self) { Chip(text: $0) }
                 if let rating = item.rating { Chip(text: String(format: "%.1f", rating), accent: true) }
@@ -156,10 +187,6 @@ struct TitleDetail: View {
             }
             actions
         }
-        .padding(.trailing, close != nil && wide ? 64 : 0)
-        .overlay(alignment: .topTrailing) {
-            if wide { closeButton.offset(x: 8) }
-        }
     }
 
     @ViewBuilder private var closeButton: some View {
@@ -179,10 +206,14 @@ struct TitleDetail: View {
         HStack(spacing: 16) { playButton; listButton; likeButton }
         #else
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { playButton; listButton; likeButton }
+            HStack(spacing: 8) { playButton; trailerButton; listButton; likeButton }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) { playButton; trailerButton }
+                HStack(spacing: 8) { listButton; likeButton }
+            }
             VStack(alignment: .leading, spacing: 8) {
                 playButton
-                HStack(spacing: 8) { listButton; likeButton }
+                HStack(spacing: 8) { trailerButton; listButton; likeButton }
             }
         }
         #endif
@@ -209,6 +240,17 @@ struct TitleDetail: View {
                 : "Play \(Self.code(episode))"
         }
         return "Play"
+    }
+
+    /// Only when there is one: a disabled button would promise what the library cannot
+    /// give until the metadata sweep reaches this title.
+    @ViewBuilder private var trailerButton: some View {
+        #if os(iOS)
+        if item.trailerKey != nil {
+            Button("Trailer", systemImage: "play") { playingTrailer = true }
+                .buttonStyle(.daylight(.secondary, .lg))
+        }
+        #endif
     }
 
     private var listButton: some View {
