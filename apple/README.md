@@ -114,8 +114,11 @@ screens. The app can:
   with Play (resuming where left off), My List and More Info; it moves on every 12
   seconds and holds while one of its buttons has the focus. Beside it in seven columns of
   twelve, as Windows' bento, or above it on an iPhone, where My List and More Info show
-  only their icons. Windows plays the trailer over the backdrop after two seconds: not
-  here, as it is a YouTube embed and tvOS has no web view,
+  only their icons. On an iPhone or iPad, after two seconds a title with a trailer fades
+  into it, muted, with Windows' "NOW PLAYING TRAILER" and a mute button by the dots, and
+  stays 32 seconds rather than 12 (`TrailerFrame.swift`, YouTube's `-nocookie` embed in a
+  web view; Settings → Appearance → Trailer previews turns it off, as Windows' "Hover
+  previews" does). Not on an Apple TV, which has no web view for the embed,
 - a film's or a show's page, as Windows' `DetailModal` (`TitleDetail.swift`): the
   poster beside the hero (two genres and the rating as chips, the title, how far into a
   film you are, Play / Resume from 12:34 / Resume S01E03 from 4:10, My List and Like),
@@ -123,8 +126,10 @@ screens. The app can:
   available as" for the other providers' copies, and the cast, director, genres and
   rating beside them; then Episodes (the show's skip and autoplay switches, the season,
   each episode with its still, resume bar and played tick), More Like This and Details.
-  A film opens as a sheet with Windows' close button, a show as a pushed page. No Trailer
-  button, as above; on an iPhone the poster sits above the rest,
+  A film opens as a sheet with Windows' close button, a show as a pushed page. Trailer
+  beside Play plays it above the title with sound and YouTube's controls, and Stop
+  trailer goes back (iPhone and iPad; not on an Apple TV, as above); on an iPhone the
+  poster sits above the rest,
 - "On now" at the top of Home, as Windows' `OnNowTile`: the first six favourite
   channels, what each is airing with its times and progress, and a tap to tune; with no
   favourites, a line saying how to add some. Channels without a logo get Windows'

@@ -1562,3 +1562,42 @@ fn opening_a_title_catches_up_as_windows_does() {
         "TitleDetail must catch up on opening, as Windows' DetailModal does"
     );
 }
+
+/// The billboard's trailer and the title page's Trailer button follow Windows'
+/// `HeroBillboard` and `TrailerFrame` (iPhone and iPad; tvOS has no web view).
+#[test]
+fn trailers_play_as_windows_does() {
+    let hero = ui_src("components/HeroBillboard.tsx");
+    assert!(hero.contains("const TRAILER_DELAY_MS = 2000;"));
+    assert!(hero.contains("const ROTATE_WITH_TRAILER_MS = 32000;"));
+    assert!(hero.contains("scale(1.35)"));
+    assert!(hero.contains("NOW PLAYING TRAILER"));
+    let frame = ui_src("components/TrailerFrame.tsx");
+    assert!(frame.contains("const EMBED_ORIGIN = 'https://www.youtube-nocookie.com';"));
+    for param in [
+        "autoplay=1",
+        "modestbranding=1&rel=0&playsinline=1&disablekb=1&iv_load_policy=3&enablejsapi=1",
+    ] {
+        assert!(
+            frame.contains(param),
+            "Windows' embed no longer asks {param:?}"
+        );
+    }
+    let features = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Shared/Features");
+    let swift_hero = std::fs::read_to_string(features.join("HeroBillboard.swift")).unwrap();
+    assert!(swift_hero.contains("trailerDelay: Duration = .seconds(2)"));
+    assert!(swift_hero.contains("rotateWithTrailer: Duration = .seconds(32)"));
+    assert!(swift_hero.contains(".scaleEffect(1.35)"));
+    assert!(swift_hero.contains("NOW PLAYING TRAILER"));
+    let swift_frame = std::fs::read_to_string(features.join("TrailerFrame.swift")).unwrap();
+    assert!(swift_frame.contains("\"https://www.youtube-nocookie.com\""));
+    assert!(swift_frame.contains("autoplay=1"));
+    assert!(swift_frame.contains(
+        "&modestbranding=1&rel=0&playsinline=1&disablekb=1&iv_load_policy=3&enablejsapi=1"
+    ));
+    let detail = ui_src("components/DetailModal.tsx");
+    assert!(detail.contains("Stop trailer"));
+    let swift_detail = std::fs::read_to_string(features.join("TitleDetail.swift")).unwrap();
+    assert!(swift_detail.contains("\"Stop trailer\""));
+    assert!(swift_detail.contains("Button(\"Trailer\""));
+}

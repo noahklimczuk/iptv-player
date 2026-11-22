@@ -67,6 +67,8 @@ enum AppearanceKey {
     static let theme = "AuroraTheme"
     static let use24h = "AuroraUse24h"
     static let animations = "AuroraAnimations"
+    /// Windows' `hoverPreviews`: whether trailers play by themselves.
+    static let hoverPreviews = "AuroraHoverPreviews"
 }
 
 /// A time of day in the viewer's chosen style (Windows' `clockTime`): 21:30, or 9:30 PM
@@ -181,6 +183,7 @@ struct AppearanceSection: View {
     @AppStorage(AppearanceKey.theme) private var theme: AuroraTheme = .dark
     @AppStorage(AppearanceKey.use24h) private var use24h = true
     @AppStorage(AppearanceKey.animations) private var animations = true
+    @AppStorage(AppearanceKey.hoverPreviews) private var hoverPreviews = true
 
     static let id = "appearance.theme"
 
@@ -193,8 +196,20 @@ struct AppearanceSection: View {
             .id(Self.id)
             Toggle(isOn: $animations) {
                 Text("Animations").fontWeight(.heavy)
+                #if os(iOS)
+                Text("Disables trailer autoplay and transitions.")
+                #else
                 Text("Disables transitions.")
+                #endif
             }
+            #if os(iOS)
+            // Windows' "Hover previews". A phone has no pointer to hover with, so it names
+            // what it does here: the trailer the billboard plays by itself.
+            Toggle(isOn: $hoverPreviews) {
+                Text("Trailer previews").fontWeight(.heavy)
+                Text("Plays the featured title's trailer on Home, muted.")
+            }
+            #endif
             Toggle(isOn: $use24h) {
                 Text("24-hour clock").fontWeight(.heavy)
                 Text("Off shows times as 9:30 PM rather than 21:30.")
