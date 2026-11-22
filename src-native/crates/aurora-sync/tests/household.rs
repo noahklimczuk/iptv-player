@@ -168,6 +168,95 @@ fn opening_a_film_fetches_where_another_device_stopped_without_a_round() {
     assert_eq!(fb.requests().len(), before);
 }
 
+/// Opening a title catches up with the household there and then: a round when none ran
+/// lately, and while one has, the film's own position with a single query.
+#[test]
+fn opening_a_title_catches_up_with_a_round_or_with_its_own_position() {
+    use aurora_sync::household::CATCH_UP_GAP_SECS;
+
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    let mut tv = device(&fb, 100);
+    let pc_film = add_film(&pc.conn, 0);
+    let tv_film = add_film(&tv.conn, 100);
+    pc.household
+        .create_account(&mut pc.conn, &account("PC"), PASS)
+        .unwrap();
+    tv.household
+        .sign_in(
+            &mut tv.conn,
+            &account("TV"),
+            Unlock::Passphrase(PASS.into()),
+        )
+        .unwrap();
+
+    // On the TV: the film watched to 40 minutes, and a channel favourited.
+    progress::save(
+        &tv.conn,
+        1,
+        progress::ItemKind::Movie,
+        tv_film,
+        2_400,
+        6_000,
+        1,
+    )
+    .unwrap();
+    lists::toggle_favorite(&tv.conn, 1, 110, None, 1).unwrap();
+    tv.household.sync(&mut tv.conn).unwrap();
+
+    // The PC signed in a moment ago, so a round is fresh: opening the film fetches its
+    // position, one query, and not the favourite.
+    let synced = pc.household.status(&pc.conn).unwrap().last_sync_at.unwrap();
+    let before = fb.requests().len();
+    let caught = pc
+        .household
+        .catch_up(&mut pc.conn, synced, 1, "movie", pc_film)
+        .unwrap();
+    assert_eq!((caught.round, caught.applied), (false, 1));
+    assert_eq!(position(&pc.conn, pc_film), Some(2_400));
+    assert_eq!(
+        fb.requests().len() - before,
+        1,
+        "{:?}",
+        &fb.requests()[before..]
+    );
+    assert_eq!(favourites(&pc.conn, 10), 0);
+
+    // A show while the round is fresh asks nothing: it has no one record to ask for.
+    let before = fb.requests().len();
+    let caught = pc
+        .household
+        .catch_up(&mut pc.conn, synced, 1, "series", 30)
+        .unwrap();
+    assert_eq!(caught, Default::default());
+    assert_eq!(fb.requests().len(), before);
+
+    // Once the gap is up, opening anything runs a whole round, and the favourite lands.
+    let caught = pc
+        .household
+        .catch_up(&mut pc.conn, synced + CATCH_UP_GAP_SECS, 1, "series", 30)
+        .unwrap();
+    assert!(caught.round);
+    // Both of the TV's records arrive with the pull; the position, already here, applies
+    // again to the same value.
+    assert_eq!(caught.applied, 2);
+    assert_eq!(favourites(&pc.conn, 10), 1);
+}
+
+/// Signed out, nothing is asked of the server however often a title is opened.
+#[test]
+fn opening_a_title_signed_out_asks_the_server_nothing() {
+    let fb = FakeFirebase::new();
+    let mut pc = device(&fb, 0);
+    let film = add_film(&pc.conn, 0);
+    let caught = pc
+        .household
+        .catch_up(&mut pc.conn, 1_000_000, 1, "movie", film)
+        .unwrap();
+    assert_eq!(caught, Default::default());
+    assert!(fb.requests().is_empty());
+}
+
 #[test]
 fn every_document_read_and_written_is_counted_and_a_sign_out_does_not_reset_it() {
     let fb = FakeFirebase::new();

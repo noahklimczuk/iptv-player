@@ -320,6 +320,34 @@ impl Sync {
         }
     }
 
+    /// See [`sync_catch_up`].
+    pub fn catch_up(&self, now: i64, args: &CatchUpArgs) -> usize {
+        match &self.household {
+            Some(h) if h.is_available() => {}
+            _ => return 0,
+        }
+        let outcome = self.with_conn(|household, conn| {
+            Ok(household.catch_up(conn, now, args.profile_id, &args.kind, args.id))
+        });
+        match outcome {
+            Ok(Ok(caught)) => {
+                if caught.round {
+                    self.restart_pacing(now, None);
+                }
+                caught.applied
+            }
+            Ok(Err(e)) => {
+                tracing::info!("catching up on opening a title did not work: {e}");
+                self.restart_pacing(now, Some(&Problem::of(&e)));
+                0
+            }
+            Err(e) => {
+                tracing::warn!("sync could not run: {e}");
+                0
+            }
+        }
+    }
+
     /// Ask for a round soon: an import may have brought in what parked records were
     /// waiting for. Ignored while a failure is being waited out.
     pub fn wake(&self) {
@@ -512,6 +540,26 @@ pub fn sync_now(services: State<'_, Services>) -> Result<Report> {
     let problem = outcome.as_ref().err().map(Problem::of);
     services.sync.restart_pacing(now_unix(), problem.as_ref());
     outcome.map_err(sync_error)
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatchUpArgs {
+    pub profile_id: i64,
+    /// `movie`, `series` or `episode`.
+    pub kind: String,
+    pub id: i64,
+}
+
+/// Opening a title: what the other devices changed, now rather than at the next round
+/// (`Household::catch_up`). Returns how many of their changes it applied, so the title
+/// knows whether to read itself again.
+///
+/// Never an error to the viewer. Opening a film is not the place to say sync is offline;
+/// the panel says that, and the round that failed is recorded for it.
+#[tauri::command(async)]
+pub fn sync_catch_up(services: State<'_, Services>, args: CatchUpArgs) -> Result<usize> {
+    Ok(services.sync.catch_up(now_unix(), &args))
 }
 
 /// Throw away the household's server copy and upload this PC's library in its place.

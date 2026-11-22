@@ -1931,6 +1931,13 @@ const SYNC_OFFLINE =
   && new URLSearchParams(window.location.search).has('syncOffline');
 /** Whether the mock household shares sign-ins and keys. Off, as a real one starts. */
 let mockShareSecrets = false;
+/**
+ * `?syncRemoteProgress` — another device has stopped the film that is opened next at
+ * 41:00, and catching up on opening it brings that here (`sync.catchUp`).
+ */
+const SYNC_REMOTE_PROGRESS =
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).has('syncRemoteProgress');
 /** `?syncUnreadable` — the household holds two records only a newer Aurora can read. */
 const SYNC_UNREADABLE =
   typeof window !== 'undefined'
@@ -3384,6 +3391,19 @@ const handlers: { [K in CommandName]: Handler<K> } = {
     }
     mockNeedsPassword = false;
     return mockSyncJoin(email, deviceName, null);
+  },
+  'sync.catchUp': ({ kind, id }) => {
+    if (!SYNC_AVAILABLE || !mockSync || mockNeedsPassword || SYNC_OFFLINE) return 0;
+    mockSync.lastSyncAt = Math.floor(Date.now() / 1000);
+    if (!SYNC_REMOTE_PROGRESS || kind !== 'movie') return 0;
+    const key = `movie:${id}`;
+    if (progress.get(key)?.positionSecs === 2460) return 0;
+    const durationSecs = (fx.movies.find((m) => m.id === id)?.runtimeMins ?? 100) * 60;
+    progress.set(key, {
+      itemKind: 'movie', itemId: id, positionSecs: 2460, durationSecs,
+      completed: false, updatedAt: Math.floor(Date.now() / 1000),
+    });
+    return 1;
   },
   'sync.now': () => {
     mockSyncAvailable();

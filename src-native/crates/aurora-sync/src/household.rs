@@ -415,6 +415,55 @@ impl<H: Http + Clone> Household<H> {
         outcome
     }
 
+    /// What opening a title does: catch up with the other devices now, rather than at the
+    /// next round of the background loop, which can be two minutes away.
+    ///
+    /// A whole round when none ran in the last [`CATCH_UP_GAP_SECS`]: one pull brings
+    /// everything new for the title -- its progress, a show's episodes' progress, My List,
+    /// a per-show setting -- at the cost of one read when nothing changed, and what it
+    /// reads the next round would have read anyway. Asking record by record could not
+    /// cover a show, which has a record per episode watched.
+    ///
+    /// Within the gap -- somebody flicking through a row of titles -- only what opening a
+    /// film or an episode most needs, its position, with one query ([`Self::refresh_progress`]).
+    ///
+    /// Nothing when sync is off, signed out, or has a problem: a device that cannot sync
+    /// now will not on a click either, and the background loop retries on its own
+    /// schedule while the panel says why.
+    pub fn catch_up(
+        &self,
+        conn: &mut Connection,
+        now: i64,
+        profile_id: i64,
+        item_kind: &str,
+        item_id: i64,
+    ) -> Result<CatchUp> {
+        if !self.is_available() || !db::is_enabled(conn)? {
+            return Ok(CatchUp::default());
+        }
+        let status = self.status(conn)?;
+        if !status.signed_in || status.problem.is_some() {
+            return Ok(CatchUp::default());
+        }
+        let gap = if status.thrifty {
+            THRIFTY_SECS
+        } else {
+            CATCH_UP_GAP_SECS
+        };
+        if status.last_sync_at.is_none_or(|at| now - at >= gap) {
+            let report = self.sync(conn)?;
+            return Ok(CatchUp {
+                round: true,
+                applied: report.applied,
+            });
+        }
+        let applied = self.refresh_progress(conn, profile_id, item_kind, item_id)?;
+        Ok(CatchUp {
+            round: false,
+            applied: usize::from(applied),
+        })
+    }
+
     /// What opening a film or an episode does before offering to resume (§3.6): fetch
     /// this profile's position in it from the other devices, so stopping on the TV and
     /// opening the same film here a minute later resumes where the TV stopped rather than
@@ -692,6 +741,19 @@ pub const QUOTA_WRITES: u64 = 20_000;
 /// only what it spent itself, so each takes an equal share of the 70% of the quota at
 /// which §3.7 says to slow down.
 const PLANNED_DEVICES: u64 = 3;
+/// How soon after a round opening a title starts another. Flicking through a row of
+/// titles is one round, not one each.
+pub const CATCH_UP_GAP_SECS: i64 = 15;
+
+/// What [`Household::catch_up`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CatchUp {
+    /// Whether a whole round ran, so the background loop's schedule starts from now.
+    pub round: bool,
+    /// Changes from other devices it applied here.
+    pub applied: usize,
+}
+
 /// With a thrifty device, progress and the look for others' changes wait this long.
 /// Any other edit -- a favourite, a setting -- still goes after [`DEBOUNCE_SECS`].
 pub const THRIFTY_SECS: i64 = 600;

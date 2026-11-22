@@ -2088,6 +2088,14 @@ export interface Commands {
   /** A round now, whatever the schedule says. */
   'sync.now': () => SyncRound;
   /**
+   * Opening a title: catch up with the other devices now rather than at the next round.
+   * A whole round when none ran in the last 15 seconds; otherwise just this film's or
+   * episode's position. Returns how many of their changes it applied -- more than none
+   * means the title should read itself again. Never fails: sync's problems are the
+   * panel's to say.
+   */
+  'sync.catchUp': (args: { profileId: number; kind: 'movie' | 'series' | 'episode'; id: number }) => number;
+  /**
    * Delete everything the household has on the server and upload this device's library
    * in its place. Other devices keep their own libraries.
    */

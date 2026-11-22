@@ -824,6 +824,7 @@ fn main() {
             sync::sync_create_account,
             sync::sync_sign_in,
             sync::sync_now,
+            sync::sync_catch_up,
             sync::sync_reset,
             sync::sync_sign_out,
             sync::sync_set_share_secrets,
