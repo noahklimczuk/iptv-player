@@ -8,8 +8,9 @@ import SwiftUI
 /// with the cast, director, genres and rating beside them; then a well of tabs: a show's
 /// episodes, More Like This, and the details.
 ///
-/// Departures (apple/README.md): no Trailer button on an Apple TV, which has no web view
-/// for YouTube's embed; on a phone the poster sits above the rest rather than beside it.
+/// Departures (apple/README.md): on an Apple TV, Trailer opens the YouTube app, as tvOS
+/// has no web view for YouTube's embed; on a phone the poster sits above the rest rather
+/// than beside it.
 struct TitleDetail: View {
     @Environment(AppModel.self) private var model
     @Environment(\.auroraTheme) private var theme
@@ -48,6 +49,11 @@ struct TitleDetail: View {
     /// page is opened to read about the title, and a video starting under the text would
     /// interrupt that. With sound and YouTube's controls, as it is what is being watched.
     @State private var playingTrailer = false
+    #if os(tvOS)
+    @Environment(\.openURL) private var openURL
+    /// The YouTube app would not open: not installed on this Apple TV.
+    @State private var noYouTube = false
+    #endif
     /// The season is placed on the viewer's episode once, not every time it changes.
     @State private var placed = false
 
@@ -203,7 +209,12 @@ struct TitleDetail: View {
 
     private var actions: some View {
         #if os(tvOS)
-        HStack(spacing: 16) { playButton; listButton; likeButton }
+        HStack(spacing: 16) { playButton; trailerButton; listButton; likeButton }
+            .alert("Watch trailers in YouTube", isPresented: $noYouTube) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Install YouTube from the App Store on this Apple TV, then choose Trailer again.")
+            }
         #else
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { playButton; trailerButton; listButton; likeButton }
@@ -250,8 +261,36 @@ struct TitleDetail: View {
             Button("Trailer", systemImage: "play") { playingTrailer = true }
                 .buttonStyle(.daylight(.secondary, .lg))
         }
+        #elseif os(tvOS)
+        if let key = item.trailerKey {
+            Button("Trailer", systemImage: "play") { openInYouTube(key) }
+                .buttonStyle(.bordered)
+                .accessibilityHint("Opens the trailer in the YouTube app")
+        }
         #endif
     }
+
+    #if os(tvOS)
+    /// tvOS has no web view for YouTube's embed, so the trailer plays in YouTube's own app
+    /// and the remote's Back button returns here. YouTube documents no link for its Apple
+    /// TV app: `youtube://watch/<id>` is the one developers find works, and the web form
+    /// is tried after it. Neither opening means the app is not installed.
+    private func openInYouTube(_ key: String) {
+        let id = key.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(.init(charactersIn: "-_"))) ?? key
+        let links = ["youtube://watch/\(id)", "youtube://www.youtube.com/watch?v=\(id)"]
+            .compactMap(URL.init(string:))
+        func attempt(_ i: Int) {
+            guard i < links.count else {
+                noYouTube = true
+                return
+            }
+            openURL(links[i]) { opened in
+                if !opened { attempt(i + 1) }
+            }
+        }
+        attempt(0)
+    }
+    #endif
 
     private var listButton: some View {
         let on = marks?.inMyList == true
